@@ -1,0 +1,53 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Build outputs
+target/
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Test artifacts
+test-results/
+coverage/
+
+# IDE
+.idea/
+*.iml
+
+# Runtime data
+.m2-local/
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp files
+tmp_*
+tmp_diff.txt
+debug.log
+
+# Qoder
+.qoder/

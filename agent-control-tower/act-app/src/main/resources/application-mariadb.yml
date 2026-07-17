@@ -1,0 +1,77 @@
+# MariaDB Profile for Docker deployment
+# Run with: --spring.profiles.active=mariadb
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+  datasource:
+    url: jdbc:mariadb://${DB_HOST:mariadb}:${DB_PORT:3306}/${DB_NAME:aria_conductor}
+    username: ${DB_USER:aria}
+    password: ${DB_PASSWORD:change-me}
+    driver-class-name: org.mariadb.jdbc.Driver
+    hikari:
+      maximum-pool-size: 15
+      minimum-idle: 2
+      connection-timeout: 15000
+      idle-timeout: 300000
+      leak-detection-threshold: 20000
+
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: none
+    database-platform: org.hibernate.dialect.MariaDBDialect
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    url: ${spring.datasource.url}
+    user: ${spring.datasource.username}
+    password: ${spring.datasource.password}
+    repair-on-migrate: true
+
+llm:
+  provider:
+    base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
+    api-key: ${LLM_PROVIDER_API_KEY:}
+    model: ${LLM_PROVIDER_MODEL:gpt-4o}
+    max-tokens: 4096
+
+adk:
+  default-provider: langchain
+  runtime:
+    langchain:
+      host: ${ADK_HOST:langchain-adk}
+      port-range-start: ${ADK_PORT:9300}
+      port-range-end: ${ADK_PORT:9300}
+      mode: remote
+      shutdown-timeout-ms: 10000
+      llm-base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
+      llm-default-model: ${LLM_PROVIDER_MODEL:gpt-4o}
+
+circuit-breaker:
+  max-tokens-per-run: 100000
+  max-iterations: 50
+  error-rate-threshold: 0.5
+  max-iteration-latency-ms: 300000
+
+aria:
+  system-prompt: |
+    You are Aria, the AI operator assistant for Aria Conductor.
+    You help operators manage their fleet of AI agents.
+  max-history-turns: 20
+  session-ttl-minutes: 60
+
+knowledge:
+  storage:
+    base-path: /app/data/knowledge
+  git:
+    base-path: /app/data/knowledge-repos
+  mirror:
+    path: /app/data/knowledge-mirror
+    stale-threshold-seconds: 120
+
+sandbox:
+  health:
+    enabled: false

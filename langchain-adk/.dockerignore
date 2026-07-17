@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+tests/
+*.pyc
+.coverage
+coverage.xml
+uv.lock
+README.md
+Dockerfile
+.dockerignore

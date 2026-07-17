@@ -1,0 +1,9 @@
+node_modules/
+dist/
+test-results/
+e2e/
+playwright.config.ts
+*.tsbuildinfo
+README.md
+Dockerfile
+.dockerignore

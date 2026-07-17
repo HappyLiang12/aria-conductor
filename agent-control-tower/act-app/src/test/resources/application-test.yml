@@ -1,0 +1,55 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  datasource:
+    url: jdbc:h2:mem:act_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  h2:
+    console:
+      enabled: false
+  jpa:
+    show-sql: false
+    hibernate:
+      ddl-auto: none
+  flyway:
+    enabled: true
+    url: ${spring.datasource.url}
+    user: ${spring.datasource.username}
+    password: ${spring.datasource.password}
+    locations: classpath:db/migration
+
+llm:
+  provider:
+    base-url: https://localhost:9999/mock
+    api-key: test-key
+    model: test-model
+    max-tokens: 100
+
+adk:
+  default-provider: langchain
+  runtime:
+    langchain:
+      host: 127.0.0.1
+      port-range-start: 9300
+      port-range-end: 9400
+      health-check-interval-ms: 30000
+      shutdown-timeout-ms: 10000
+      max-restart-backoff-ms: 30000
+      pid-dir: ./target/test-adk-pids
+
+circuit-breaker:
+  max-tokens-per-run: 100000
+  max-iterations: 50
+  error-rate-threshold: 0.5
+  max-iteration-latency-ms: 300000
+
+aria:
+  system-prompt: "Test Aria prompt"
+  max-history-turns: 20
+  session-ttl-minutes: 60
+
+knowledge:
+  storage:
+    base-path: ./target/test-knowledge

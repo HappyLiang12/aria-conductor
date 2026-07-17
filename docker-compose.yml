@@ -1,0 +1,102 @@
+name: aria-conductor
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: aria-mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-me-root}
+      MYSQL_DATABASE: ${DB_NAME:-aria_conductor}
+      MYSQL_USER: ${DB_USER:-aria}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-change-me}
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - aria-network
+
+  backend:
+    build:
+      context: ./agent-control-tower
+      dockerfile: Dockerfile
+    container_name: aria-backend
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: mariadb
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-aria_conductor}
+      DB_USER: ${DB_USER:-aria}
+      DB_PASSWORD: ${DB_PASSWORD:-change-me}
+      LLM_PROVIDER_API_KEY: ${LLM_API_KEY:-}
+      LLM_PROVIDER_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_PROVIDER_MODEL: ${LLM_MODEL:-gpt-4o}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      ADK_HOST: langchain-adk
+      ADK_PORT: 9300
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - knowledge_data:/app/data
+    networks:
+      - aria-network
+
+  langchain-adk:
+    build:
+      context: ./langchain-adk
+      dockerfile: Dockerfile
+    container_name: aria-adk
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "9300"
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_DEFAULT_MODEL: ${LLM_MODEL:-gpt-4o}
+    ports:
+      - "127.0.0.1:${ADK_PORT:-9300}:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9300/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - aria-network
+
+  frontend:
+    build:
+      context: ./agent-control-tower/act-dashboard
+      dockerfile: Dockerfile
+    container_name: aria-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - aria-network
+
+volumes:
+  mariadb_data:
+  knowledge_data:
+
+networks:
+  aria-network:
+    driver: bridge

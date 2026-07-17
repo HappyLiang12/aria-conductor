@@ -1,0 +1,96 @@
+# H2 Persistent File Database Profile (MySQL Compatibility Mode)
+# Schema and seed data are managed by Flyway (V1-V23).
+# data-h2.sql is no longer used - all initialization is handled by Flyway migrations.
+# To reset: stop the app and delete data/act_db.mv.db.
+# Uses MODE=MySQL so Flyway migrations run directly on H2.
+# Run with: java -jar act-app/target/act-app-0.1.0-SNAPSHOT.jar --spring.profiles.active=h2
+# H2 Console: http://localhost:8080/h2-console (JDBC URL: jdbc:h2:file:./data/act_db)
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+  datasource:
+    url: jdbc:h2:file:./data/act_db;MODE=MySQL;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+    hikari:
+      maximum-pool-size: 8
+      minimum-idle: 2
+      connection-timeout: 15000
+      idle-timeout: 300000
+      leak-detection-threshold: 20000
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: false
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: none
+    database-platform: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: true
+    repair-on-migrate: true
+    locations: classpath:db/migration
+    url: ${spring.datasource.url}
+    user: ${spring.datasource.username}
+    password: ${spring.datasource.password}
+
+llm:
+  provider:
+    base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
+    api-key: ${LLM_PROVIDER_API_KEY:}
+    model: ${LLM_PROVIDER_MODEL:gpt-4o}
+    max-tokens: 4096
+
+adk:
+  default-provider: langchain
+  runtime:
+    langchain:
+      host: 127.0.0.1
+      port-range-start: 9300
+      port-range-end: 9400
+      python-path: ${PYTHON_PATH:python3}
+      server-script: ../langchain-adk/src/server.py
+      shutdown-timeout-ms: 10000
+      max-restart-backoff-ms: 30000
+      pid-dir: ./data/adk-pids
+      llm-base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
+      llm-default-model: ${LLM_PROVIDER_MODEL:gpt-4o}
+
+circuit-breaker:
+  max-tokens-per-run: 100000
+  max-iterations: 50
+  error-rate-threshold: 0.5
+  max-iteration-latency-ms: 300000
+
+aria:
+  system-prompt: |
+    You are Aria, the AI operator assistant for the Aria Conductor.
+    You help operators manage their fleet of AI agents.
+  max-history-turns: 20
+  session-ttl-minutes: 60
+
+knowledge:
+  storage:
+    base-path: ./data/knowledge
+  git:
+    base-path: ./data/knowledge-repos
+  mirror:
+    path: ./data/knowledge-mirror
+    stale-threshold-seconds: 120
+
+
+sandbox:
+  health:
+    enabled: false
+
+
+
+
+

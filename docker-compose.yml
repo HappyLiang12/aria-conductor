@@ -45,6 +45,8 @@ services:
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}
       ADK_HOST: langchain-adk
       ADK_PORT: 9300
+      PROJECT_ROOT: /project
+      TOOLS_SHELL_WHITELIST: "git,ls,cat,find,echo,mvn,npm,pnpm"
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:
@@ -55,6 +57,7 @@ services:
       start_period: 60s
     volumes:
       - knowledge_data:/app/data
+      - ${PROJECT_SOURCE:-.}:/project:ro
     networks:
       - aria-network
 

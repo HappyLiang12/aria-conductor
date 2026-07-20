@@ -551,6 +551,14 @@ public class AgentLoopEngine {
                 log.warn("Failed to resolve tools for agent {}: {}", ctx.getAgentId(), e.getMessage());
             }
 
+            // Anti-hallucination guard: when agent has no tools, prevent it from claiming file access
+            if (toolsPayload.isEmpty()) {
+                messages.add(LlmMessage.system(
+                        "You have NO tools available. You MUST NOT claim to have read, written, or executed any file. "
+                        + "Only provide analysis and recommendations based on information in this conversation. "
+                        + "If asked to read a file, state that you cannot access files and suggest the operator do it."));
+            }
+
             LlmResponse response = adkProvider.call(ctx.getAgentId(), messages, toolsPayload);
 
             // Update token tracking
@@ -653,6 +661,34 @@ public class AgentLoopEngine {
                 if (result.status() == ActionResult.Status.FAILED) {
                     ctx.addError("Action " + action.name() + " failed: " + result.error());
                 }
+            }
+
+            // Consecutive same-error early termination: prevents infinite retry loops
+            // (e.g., "File not found" repeated 15 times wasting 100K+ tokens)
+            boolean allSameError = !results.isEmpty() && results.stream()
+                    .allMatch(r -> r.status() == ActionResult.Status.FAILED);
+            if (allSameError) {
+                String firstError = results.get(0).error() != null ? results.get(0).error() : "";
+                boolean allIdentical = results.stream()
+                        .allMatch(r -> firstError.equals(r.error() != null ? r.error() : ""));
+                if (allIdentical && !firstError.isEmpty()) {
+                    if (firstError.equals(ctx.getLastToolError())) {
+                        ctx.setConsecutiveSameErrorCount(ctx.getConsecutiveSameErrorCount() + 1);
+                    } else {
+                        ctx.setLastToolError(firstError);
+                        ctx.setConsecutiveSameErrorCount(1);
+                    }
+                    if (ctx.getConsecutiveSameErrorCount() >= 3) {
+                        log.warn("Run {} hit 3 consecutive identical tool errors — terminating early: {}",
+                                ctx.getRunId(), firstError);
+                        ctx.setLastAssistantResponse("Stopped: repeated tool failure — " + firstError
+                                + "\nPlease check the configuration or provide the correct path.");
+                        return false; // exit the iteration loop
+                    }
+                }
+            } else {
+                ctx.setLastToolError(null);
+                ctx.setConsecutiveSameErrorCount(0);
             }
 
             // Update session

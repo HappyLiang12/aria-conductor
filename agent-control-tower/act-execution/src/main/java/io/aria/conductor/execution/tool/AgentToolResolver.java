@@ -26,6 +26,11 @@ public class AgentToolResolver {
         }
         String role = agent.getRole() != null ? agent.getRole() : "WORKER";
         List<String> templateToolIds = roleTemplateRepo.findDefaultToolIdsByRole(role);
+        if (templateToolIds.isEmpty() && !"WORKER".equals(role)) {
+            // Role is free-text description (e.g. "Researches topics...") — fallback to WORKER template
+            log.info("Role '{}' has no tool template; falling back to WORKER for agent {}", role, agentId);
+            templateToolIds = roleTemplateRepo.findDefaultToolIdsByRole("WORKER");
+        }
         if (!templateToolIds.isEmpty()) {
             return toolRepo.findAllById(templateToolIds).stream().filter(ToolDefinition::isEnabled).toList();
         }

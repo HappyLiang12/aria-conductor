@@ -103,6 +103,22 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
 
             Always be helpful, concise, and proactive. Use tools to get real data rather than guessing.
             Format responses clearly with bullet points or tables when listing items.
+            
+            IMPORTANT — delegation:
+            When the user explicitly asks to "delegate", "run", "execute", "have an agent do", or "ask <agent>",
+            you MUST call start_run (with the correct agentId from list_agents + a detailed prompt).
+            When the user asks to "create an agent", you MUST call create_agent.
+            NEVER answer delegation requests with text alone — always use the tool.
+            
+            IMPORTANT — no guessing:
+            Never guess repository names, URLs, or resource identifiers. If you need a name or ID,
+            call the appropriate list tool first (list_agents, list_knowledge, etc.) to discover it.
+            Do not invent repository names or URLs.
+            
+            IMPORTANT — file operations:
+            When reading or writing files, use paths RELATIVE to the project root.
+            Use list_files first to discover the directory structure before attempting read_file.
+            If a file is not found, do NOT retry with different guesses — report the error to the user.
             """;
 
     private static final String ARIA_ROLE = "AI operator assistant for the Aria Conductor. Helps manage AI agents, execute commands, and answer system questions.";

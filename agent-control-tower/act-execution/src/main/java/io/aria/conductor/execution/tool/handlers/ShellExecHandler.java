@@ -26,10 +26,9 @@ public class ShellExecHandler implements ToolHandler {
         if (command.isEmpty()) return "Error: Missing required parameter: command";
 
         if (!shellEnabled) {
-            // Security: reject shell metacharacters (command chaining)
-            if (command.contains(";") || command.contains("&&") || command.contains("||")
-                    || command.contains("`") || command.contains("$(")) {
-                return "Error: Shell execution is disabled. Command chaining is not allowed.";
+            // Security: reject ALL shell metacharacters that enable chaining/piping/redirection
+            if (command.matches(".*[;|&`$<>\\\\\\n\\r].*")) {
+                return "Error: Shell execution is disabled. Special characters are not allowed.";
             }
             // Check whitelist: allow specific commands even when globally disabled
             String cmd = command.trim().split("\\s+")[0].toLowerCase();

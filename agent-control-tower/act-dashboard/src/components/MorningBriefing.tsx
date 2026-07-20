@@ -3,6 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
 import { listKanbanItems } from '../api/kanban';
 
+function getTimeGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Morning Briefing';
+  if (hour < 17) return 'Afternoon Briefing';
+  return 'Evening Briefing';
+}
+
 function formatNow(): string {
   return new Date().toLocaleString([], {
     weekday: 'short',
@@ -41,7 +48,7 @@ export default function MorningBriefing() {
   return (
     <section className="panel" id="panel-briefing">
       <h2>
-        <span>Morning Briefing</span>
+        <span>{getTimeGreeting()}</span>
         <span className="accent">· Auto-generated</span>
       </h2>
       <div

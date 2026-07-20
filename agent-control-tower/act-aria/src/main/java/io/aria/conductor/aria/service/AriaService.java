@@ -118,7 +118,7 @@ public class AriaService {
         Run run = Run.builder()
                 .agentId(AriaConstants.ARIA_AGENT_ID)
                 .promptSeed(request.getMessage())
-                .maxIterations(parseMaxIterationsFromConfig(aria, 15))
+                .maxIterations(parseMaxIterationsFromConfig(aria, 0))
                 .status(RunStatus.PENDING)
                 .conversationId(conversationId)
                 .build();

@@ -167,14 +167,22 @@ public class AgentLoopEngine {
         Agent agent = agentRepository.findById(run.getAgentId())
                 .orElseThrow(() -> new ResourceNotFoundException("Agent", run.getAgentId()));
 
+        // Resolve the effective maxIterations: an explicit run-level value (>0, set by the caller)
+        // is a hard cap over the agent's configured maxToolCallRounds; a value of 0 means "not set",
+        // in which case the agent config (or a global default) is used. Persist the resolved value
+        // back onto the run so the stored record and UI reflect the effective cap.
+        int maxIterations = parseMaxIterationsFromConfig(agent, run.getMaxIterations());
+        if (run.getMaxIterations() != maxIterations) {
+            run.setMaxIterations(maxIterations);
+        }
+
         // Update run status to INITIALIZING
         updateRunStatus(run, RunStatus.INITIALIZING);
 
         // Create/load session
         AgentSession session = sessionStateManager.loadOrCreateSession(runId, agent.getId());
 
-        // Create run context — resolve maxIterations from Agent.config if present
-        int maxIterations = parseMaxIterationsFromConfig(agent, run.getMaxIterations());
+        // Create run context with the resolved maxIterations
         RunContext ctx = new RunContext(runId, agent.getId(), agent, session, maxIterations, run.getConversationId());
         if (intent != null) {
             ctx.setIntent(intent);
@@ -251,6 +259,11 @@ public class AgentLoopEngine {
         updateRunStatusDirect(runId, RunStatus.CANCELLED);
         sessionStateManager.updateSessionStatus(runId, SessionStatus.CANCELLED);
         log.info("Run cancelled: runId={}", runId);
+    }
+
+    /** Check if a run has an active execution context (used by ZombieRunReaper). */
+    public boolean hasActiveContext(UUID runId) {
+        return activeContexts.containsKey(runId);
     }
 
     /**
@@ -929,11 +942,29 @@ public class AgentLoopEngine {
         log.info("Completing run: runId={}, status={}, iterations={}, tokens={}",
                 ctx.getRunId(), finalStatus, ctx.getIterationCount(), ctx.getTotalTokensUsed());
 
+        // Tracks whether an external actor (e.g. RunService.cancelRun) already moved this run to a
+        // terminal state AND published its RunCompletedEvent. In that case we must neither overwrite
+        // the status nor publish a second (duplicate / contradictory) event.
+        java.util.concurrent.atomic.AtomicBoolean alreadyTerminatedExternally = new java.util.concurrent.atomic.AtomicBoolean(false);
+
         // Persist the Run entity FIRST — this is the authoritative status/output read by callers
         // (AriaService, dashboard). Doing it before session bookkeeping ensures a session-persistence
         // hiccup can never leave the run stuck in RUNNING.
         try {
             runRepository.findById(ctx.getRunId()).ifPresent(run -> {
+                // Guard: do not overwrite a terminal state already set externally (e.g. CANCELLED by RunService)
+                if (run.getStatus() == RunStatus.CANCELLED && finalStatus != RunStatus.CANCELLED) {
+                    log.info("Run {} already CANCELLED externally, skipping overwrite with {}", ctx.getRunId(), finalStatus);
+                    alreadyTerminatedExternally.set(true);
+                    return;
+                }
+                // Guard: if the run was already CANCELLED (REST cancel path), RunService has already
+                // published the CANCELLED event — persist nothing and publish nothing to avoid a duplicate.
+                if (run.getStatus() == RunStatus.CANCELLED) {
+                    log.info("Run {} already CANCELLED externally, skipping duplicate completion event", ctx.getRunId());
+                    alreadyTerminatedExternally.set(true);
+                    return;
+                }
                 run.setStatus(finalStatus);
                 run.setIterationCount(ctx.getIterationCount());
                 run.setTotalTokensUsed(ctx.getTotalTokensUsed());
@@ -965,12 +996,14 @@ public class AgentLoopEngine {
             log.warn("Session finalization failed for {} (non-fatal): {}", ctx.getRunId(), e.getMessage());
         }
 
-        // Publish run completed event for live dashboard updates
-        try {
-            eventPublisher.publishEvent(new RunCompletedEvent(
-                    this, ctx.getRunId(), ctx.getAgentId(), finalStatus, ctx.getLastAssistantResponse()));
-        } catch (Exception e) {
-            log.warn("Failed to publish run completed event: {}", e.getMessage());
+        // Publish run completed event for live dashboard updates — skip if an external actor already did.
+        if (!alreadyTerminatedExternally.get()) {
+            try {
+                eventPublisher.publishEvent(new RunCompletedEvent(
+                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus, ctx.getLastAssistantResponse()));
+            } catch (Exception e) {
+                log.warn("Failed to publish run completed event: {}", e.getMessage());
+            }
         }
 
         // Cancel any pending approvals
@@ -999,27 +1032,31 @@ public class AgentLoopEngine {
         }
     }
 
-    public static int parseMaxIterationsFromConfig(Agent agent, int fallback) {
+    public static int parseMaxIterationsFromConfig(Agent agent, int runMaxIterations) {
         String config = agent.getConfig();
         if (config == null || config.isBlank()) {
-            return fallback;
+            return runMaxIterations > 0 ? runMaxIterations : 50;
         }
         try {
             ObjectMapper mapper = new ObjectMapper();
             Map<String, Object> configMap = mapper.readValue(config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
             Object maxToolCallRounds = configMap.get("maxToolCallRounds");
             if (maxToolCallRounds instanceof Number num) {
-                int value = num.intValue();
-                if (value <= 0) {
-                    log.warn("Agent {} config.maxToolCallRounds <= 0, using fallback {}", agent.getId(), fallback);
-                    return fallback;
+                int configValue = num.intValue();
+                if (configValue <= 0) {
+                    log.warn("Agent {} config.maxToolCallRounds <= 0, using run-level {}", agent.getId(), runMaxIterations);
+                    return runMaxIterations > 0 ? runMaxIterations : 50;
                 }
-                return value;
+                // Run-level maxIterations is a hard cap over agent config
+                if (runMaxIterations > 0) {
+                    return Math.min(configValue, runMaxIterations);
+                }
+                return configValue;
             }
         } catch (Exception e) {
             log.warn("Failed to parse Agent.config for agent {}: {}", agent.getId(), e.getMessage());
         }
-        return fallback;
+        return runMaxIterations > 0 ? runMaxIterations : 50;
     }
 
     private String getSystemPromptFromConfig(Agent agent) {

@@ -74,7 +74,7 @@ public class AriaStreamService {
                     .orElseThrow(() -> new IllegalStateException(
                             "Aria agent not found"));
 
-            int maxIterations = parseMaxIterationsFromConfig(aria, 15);
+            int maxIterations = parseMaxIterationsFromConfig(aria, 0);
 
             run = Run.builder()
                     .agentId(ARIA_AGENT_ID)

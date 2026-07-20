@@ -67,7 +67,7 @@ public class RunService {
         Run run = Run.builder()
                 .agentId(request.getAgentId())
                 .promptSeed(request.getPromptSeed())
-                .maxIterations(request.getMaxIterations() > 0 ? request.getMaxIterations() : 50)
+                .maxIterations(request.getMaxIterations() > 0 ? request.getMaxIterations() : 0)
                 .status(RunStatus.PENDING)
                 .build();
 

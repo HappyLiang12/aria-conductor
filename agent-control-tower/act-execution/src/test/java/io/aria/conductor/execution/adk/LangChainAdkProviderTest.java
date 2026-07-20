@@ -90,14 +90,18 @@ class LangChainAdkProviderTest {
     }
 
     @Test
-    void call_throwsWhenInstanceUnhealthy() {
+    void call_throwsFast_whenSubprocessFailsToStart() {
         UUID agentId = UUID.randomUUID();
+        // Force a subprocess startup failure: a nonexistent python binary makes ProcessBuilder.start()
+        // throw IOException, so startNewInstance records an instance with process==null and healthy=false.
+        // call() must then fail fast instead of polling a dead port for 60s.
+        properties.setPythonPath("nonexistent-python-binary-for-test");
         provider.putInstanceForTest(agentId,
                 new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), false, 0));
 
         assertThatThrownBy(() -> provider.call(agentId, List.of(LlmMessage.user("test")), List.of()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("ADK subprocess unavailable for agent");
+                .hasMessageContaining("ADK subprocess failed to start for agent");
     }
 
     @Test

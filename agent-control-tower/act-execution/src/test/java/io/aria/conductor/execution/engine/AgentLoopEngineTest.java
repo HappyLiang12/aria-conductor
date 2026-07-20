@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.engine;
 
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -85,5 +86,52 @@ class AgentLoopEngineTest {
         assertThat(parsed).hasSize(2);
         assertThat(parsed.get(0).id()).isEqualTo("id1");
         assertThat(parsed.get(1).id()).isEqualTo("id2");
+    }
+
+    // ── parseMaxIterationsFromConfig: run-level value is a hard cap ─────
+
+    private static Agent agentWithConfig(String config) {
+        Agent agent = new Agent();
+        agent.setConfig(config);
+        return agent;
+    }
+
+    @Test
+    void runLevelMaxIterationsShouldCapAgentConfig() {
+        // P0 regression: user sets maxIterations=1 but agent config says 15 -> must be 1
+        Agent agent = agentWithConfig("{\"maxToolCallRounds\":15}");
+        assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 1)).isEqualTo(1);
+    }
+
+    @Test
+    void runLevelMaxIterationsShouldCapLargerAgentConfig() {
+        Agent agent = agentWithConfig("{\"maxToolCallRounds\":200}");
+        assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 50)).isEqualTo(50);
+    }
+
+    @Test
+    void zeroRunMaxIterationsShouldUseAgentConfig() {
+        // 0 means "not set by caller" -> fall back to agent config value
+        Agent agent = agentWithConfig("{\"maxToolCallRounds\":15}");
+        assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 0)).isEqualTo(15);
+    }
+
+    @Test
+    void zeroRunMaxIterationsAndNoConfigShouldUseGlobalDefault() {
+        Agent agent = agentWithConfig(null);
+        assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 0)).isEqualTo(50);
+    }
+
+    @Test
+    void agentConfigUsedWhenLargerThanRunLevel() {
+        // run-level cap only lowers, never raises, the agent config value
+        Agent agent = agentWithConfig("{\"maxToolCallRounds\":5}");
+        assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 100)).isEqualTo(5);
+    }
+
+    @Test
+    void invalidConfigShouldFallBackToRunLevel() {
+        Agent agent = agentWithConfig("not json");
+        assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 7)).isEqualTo(7);
     }
 }

@@ -113,13 +113,23 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
     @Override
     public LlmResponse call(UUID agentId, List<LlmMessage> messages, List<Map<String, Object>> tools) {
         AdkInstance instance = getOrStartInstance(agentId);
-        if (instance.port() == 0 || !instance.healthy()) {
-            throw new IllegalStateException("ADK subprocess unavailable for agent " + agentId);
+        if (instance.port() == 0) {
+            throw new IllegalStateException("ADK subprocess unavailable (port=0) for agent " + agentId);
         }
-
-        // Only await readiness for freshly-started instances; skip for pre-warmed ones
-        if (instance.consecutiveFailures() > 0 || !instance.healthy()) {
+        // Wait for readiness if not yet confirmed healthy (new instances start with healthy=false)
+        if (!instance.healthy()) {
+            // Distinguish "subprocess failed to start" (process==null in non-remote mode) from
+            // "subprocess just spawned and is still booting". In remote mode process is always null
+            // (ADK runs in a standalone container), so we must still wait for readiness there.
+            boolean remoteMode = "remote".equalsIgnoreCase(properties.getMode());
+            if (instance.process() == null && !remoteMode) {
+                throw new IllegalStateException("ADK subprocess failed to start for agent " + agentId);
+            }
             waitForReady(instance, agentId);
+            instance = instances.get(agentId); // re-fetch after waitForReady updates health
+            if (instance == null || !instance.healthy()) {
+                throw new IllegalStateException("ADK subprocess unavailable for agent " + agentId);
+            }
         }
         log.info("Calling LangChain ADK for agent {} on port {}", agentId, instance.port());
         return callViaHttp(agentId, instance.port(), messages, tools);

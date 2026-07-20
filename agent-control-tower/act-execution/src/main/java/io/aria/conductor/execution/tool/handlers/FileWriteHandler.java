@@ -2,6 +2,7 @@ package io.aria.conductor.execution.tool.handlers;
 
 import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +12,9 @@ import java.util.Objects;
 @Slf4j
 @Component("fileWriteHandler")
 public class FileWriteHandler implements ToolHandler {
+
+    @Value("${tools.file.workspace-dir:data/workspace}")
+    private String workspaceDir;
 
     @Override
     public String execute(Map<String, Object> arguments) {
@@ -22,7 +26,7 @@ public class FileWriteHandler implements ToolHandler {
             return "Error: Absolute paths are not allowed. Use a relative path within the workspace.";
         }
         try {
-            Path baseDir = Path.of("data/workspace").toAbsolutePath().normalize();
+            Path baseDir = Path.of(workspaceDir).toAbsolutePath().normalize();
             Files.createDirectories(baseDir);
             Path target = baseDir.resolve(path).normalize();
             if (!target.startsWith(baseDir)) {

@@ -33,6 +33,10 @@ public class RunContext {
     private List<UUID> currentTurnToolCallIds;
     private List<String> cachedSkillNames;
 
+    // Consecutive same-error tracking (prevents infinite retry loops)
+    private String lastToolError;
+    private int consecutiveSameErrorCount;
+
     public RunContext(UUID runId, UUID agentId, Agent agent, AgentSession session) {
         this(runId, agentId, agent, session, 50);
     }
@@ -94,6 +98,11 @@ public class RunContext {
 
     public List<String> getCachedSkillNames() { return cachedSkillNames; }
     public void setCachedSkillNames(List<String> names) { this.cachedSkillNames = names; }
+
+    public String getLastToolError() { return lastToolError; }
+    public void setLastToolError(String e) { this.lastToolError = e; }
+    public int getConsecutiveSameErrorCount() { return consecutiveSameErrorCount; }
+    public void setConsecutiveSameErrorCount(int c) { this.consecutiveSameErrorCount = c; }
 
     /**
      * Pause the run — creates a new CompletableFuture that blocks the loop.

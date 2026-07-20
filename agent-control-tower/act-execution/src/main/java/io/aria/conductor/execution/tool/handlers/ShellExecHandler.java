@@ -4,8 +4,11 @@ import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component("shellExecHandler")
@@ -14,14 +17,29 @@ public class ShellExecHandler implements ToolHandler {
     @Value("${tools.shell.enabled:false}")
     private boolean shellEnabled;
 
+    @Value("${tools.shell.whitelist:git,ls,cat,find,echo,mvn,npm,pnpm}")
+    private String whitelist;
+
     @Override
     public String execute(Map<String, Object> arguments) {
-        if (!shellEnabled) {
-            log.warn("shell_exec invoked but shell execution is disabled (set tools.shell.enabled=true to allow).");
-            return "Error: Shell execution is disabled by default for security. Set tools.shell.enabled=true to enable.";
-        }
         String command = Objects.toString(arguments.get("command"), "");
         if (command.isEmpty()) return "Error: Missing required parameter: command";
+
+        if (!shellEnabled) {
+            // Security: reject ALL shell metacharacters that enable chaining/piping/redirection
+            if (command.matches(".*[;|&`$<>\\\\\\n\\r].*")) {
+                return "Error: Shell execution is disabled. Special characters are not allowed.";
+            }
+            // Check whitelist: allow specific commands even when globally disabled
+            String cmd = command.trim().split("\\s+")[0].toLowerCase();
+            Set<String> allowed = Arrays.stream(whitelist.split(","))
+                    .map(String::trim).filter(s -> !s.isEmpty())
+                    .map(String::toLowerCase).collect(Collectors.toSet());
+            if (!allowed.contains(cmd)) {
+                return "Error: Shell execution is disabled. Allowed commands: " + whitelist
+                        + ". Set tools.shell.enabled=true for unrestricted access.";
+            }
+        }
         try {
             ProcessBuilder pb;
             String os = System.getProperty("os.name").toLowerCase();

@@ -159,10 +159,26 @@ public class AriaService {
             try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             polls++;
         }
-        // Timeout: do NOT cancel — the run is bounded by the circuit breaker and finishes in the
-        // background (slower "thinking" models routinely exceed the sync window). Its result is available
-        // via the Runs dashboard and the streaming endpoint; cancelling here would discard a near-complete answer.
-        log.warn("Aria sync chat exceeded the sync window for run {} — returning; run continues in background", run.getId());
+        // Timeout: grace wait for budget exhaustion summary (takes 2-5s for LLM call)
+        log.warn("Aria sync chat exceeded the sync window for run {} — grace wait for final output", run.getId());
+        try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        Run finalCheck = runRepository.findById(run.getId()).orElse(null);
+        if (finalCheck != null && (finalCheck.getStatus() == RunStatus.COMPLETED
+                || finalCheck.getStatus() == RunStatus.FAILED)) {
+            String output = finalCheck.getFinalOutput();
+            if (output != null && !output.isBlank()) {
+                return AriaChatResponse.builder()
+                        .runId(run.getId().toString())
+                        .conversationId(conversationId)
+                        .message(output)
+                        .intent(intent)
+                        .actionsTaken(buildActionsTaken(run.getId()))
+                        .timestamp(Instant.now())
+                        .build();
+            }
+        }
+        // Still not done — return "Still working" as before
+        log.warn("Aria sync chat: run {} still not complete after grace wait", run.getId());
         return AriaChatResponse.builder()
                 .runId(run.getId().toString())
                 .conversationId(conversationId)
@@ -270,11 +286,16 @@ public class AriaService {
         try {
             List<Run> priorRuns = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
             if (priorRuns.isEmpty()) return List.of();
-            List<UUID> priorRunIds = priorRuns.stream().map(Run::getId).toList();
+            // Exclude FAILED runs to prevent error-loop pollution of context
+            List<UUID> priorRunIds = priorRuns.stream()
+                    .filter(r -> r.getStatus() != RunStatus.FAILED)
+                    .map(Run::getId).toList();
+            if (priorRunIds.isEmpty()) return List.of();
             List<SessionTrajectory> trajectories = trajectoryRepository
                     .findByRunIdInOrderByTurnNumberAsc(priorRunIds);
             return trajectories.stream()
                     .filter(t -> "user".equals(t.getRole()) || "assistant".equals(t.getRole()))
+                    .filter(t -> t.getContent() != null && !t.getContent().isBlank())
                     .map(t -> "user".equals(t.getRole())
                             ? LlmMessage.user(t.getContent())
                             : LlmMessage.assistant(t.getContent()))

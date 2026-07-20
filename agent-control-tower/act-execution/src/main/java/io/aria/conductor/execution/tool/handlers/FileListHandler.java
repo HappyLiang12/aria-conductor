@@ -2,6 +2,7 @@ package io.aria.conductor.execution.tool.handlers;
 
 import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,11 +14,15 @@ import java.util.stream.Stream;
 @Slf4j
 @Component("fileListHandler")
 public class FileListHandler implements ToolHandler {
+
+    @Value("${tools.file.project-root:.}")
+    private String projectRoot;
+
     @Override
     public String execute(Map<String, Object> arguments) {
         String path = Objects.toString(arguments.get("path"), ".");
         try {
-            Path baseDir = Path.of("data/workspace").toAbsolutePath().normalize();
+            Path baseDir = Path.of(projectRoot).toAbsolutePath().normalize();
             Path dirPath = baseDir.resolve(path).normalize();
             if (!dirPath.startsWith(baseDir)) {
                 return "Error: Path traversal denied: " + path;

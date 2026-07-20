@@ -50,7 +50,6 @@ body.afterhours {
   backdrop-filter: blur(10px);
   position: sticky; top: 0; z-index: 50;
   flex-wrap: wrap;
-  overflow: hidden;
 }
 .brand { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; }
 .logo {
@@ -1933,7 +1932,10 @@ body.light .ai-compose .row { background: #ffffff; }
 /* ============================================================
    PRESERVED UTILITIES (loading spinner)
    ============================================================ */
-.loading-spinner,
+.loading-spinner {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 32px; color: var(--text-dim); font-size: 12.5px;
+}
 .spinner {
   display: inline-block;
   width: 18px; height: 18px;
@@ -1942,7 +1944,7 @@ body.light .ai-compose .row { background: #ffffff; }
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
-.loading-spinner.lg { width: 32px; height: 32px; border-width: 3px; }
+.loading-spinner.lg .spinner { width: 32px; height: 32px; border-width: 3px; }
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
@@ -2253,21 +2255,11 @@ body.light .ai-compose .row { background: #ffffff; }
 .error-text { font-size: 11px; color: #ff8d99; }
 .form-actions { display: flex; gap: 10px; margin-top: 16px; grid-column: 1 / -1; }
 
-/* Empty / Loading / Error states */
+/* Empty / Error states */
 .empty-state {
   text-align: center; padding: 48px 20px; color: var(--text-mute);
   font-size: 13px; border: 1px dashed var(--line-2); border-radius: 12px;
 }
-.loading-spinner {
-  display: flex; align-items: center; justify-content: center; gap: 10px;
-  padding: 32px; color: var(--text-dim); font-size: 12.5px;
-}
-.spinner {
-  width: 18px; height: 18px; border: 2px solid var(--line-2);
-  border-top-color: var(--brand-2); border-radius: 50%;
-  animation: spin .7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 .error-state {
   text-align: center; padding: 24px; color: #ff8d99;
   font-size: 12.5px; border: 1px solid rgba(255,107,122,.3);
@@ -2285,3 +2277,8 @@ body.light .form-field input,
 body.light .form-field select,
 body.light .form-field textarea { background: #ffffff; border-color: var(--line); color: var(--text); }
 body.light .empty-state { border-color: var(--line-2); }
+/* Darken error/urgent colors on white for WCAG AA contrast */
+body.light .error-text,
+body.light .error-state,
+body.light .btn-danger { color: #c2273a; }
+body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }

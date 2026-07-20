@@ -118,6 +118,13 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
         }
         // Wait for readiness if not yet confirmed healthy (new instances start with healthy=false)
         if (!instance.healthy()) {
+            // Distinguish "subprocess failed to start" (process==null in non-remote mode) from
+            // "subprocess just spawned and is still booting". In remote mode process is always null
+            // (ADK runs in a standalone container), so we must still wait for readiness there.
+            boolean remoteMode = "remote".equalsIgnoreCase(properties.getMode());
+            if (instance.process() == null && !remoteMode) {
+                throw new IllegalStateException("ADK subprocess failed to start for agent " + agentId);
+            }
             waitForReady(instance, agentId);
             instance = instances.get(agentId); // re-fetch after waitForReady updates health
             if (instance == null || !instance.healthy()) {

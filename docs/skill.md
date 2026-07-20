@@ -185,9 +185,9 @@ The MCP server (`packages/mcp-server/`) exposes these tool categories:
 |-----------|-----------|
 | No authentication | Bind to 127.0.0.1 only; use reverse proxy for production |
 | `shell_exec` disabled | Set `tools.shell.enabled=true` in config |
-| New agents may fail ADK connection | Ensure ADK service is healthy; check agent `config` field |
-| maxIterations may not be strictly enforced | Rely on token budget (100K default) as backstop |
-| Cancel may not immediately stop execution | Monitor token consumption after cancel |
+| New agent ADK cold start | First run on a fresh agent waits up to 60s for the ADK subprocess to become ready |
+| Cancel is cooperative | Takes effect at the next iteration boundary; terminal state is protected from overwrite |
+| Zombie run cleanup | Runs stuck RUNNING with no active context are auto-reaped after `run.reaper.timeout-minutes` (default 120) |
 
 ## Monitoring Checklist
 

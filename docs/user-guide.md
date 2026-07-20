@@ -11,17 +11,16 @@ After opening `http://localhost:3000`, you'll see:
 | Area | What it does |
 |------|-------------|
 | **TopBar** | Live KPIs: Active Agents, Running Runs, Approvals Pending, Tokens Today |
-| **RailNav** (left sidebar) | 8 navigation buttons + Settings gear |
+| **RailNav** (left sidebar) | 10 navigation buttons + Settings gear |
 | **Main panel** | Content area for the selected view |
 | **Aria FAB** (bottom-right) | Opens the Aria AI assistant panel |
 
 ### Navigation
 
-The sidebar provides: **Overview · Crew · Knowledge · Reports · Chat · Workflows · Ops · Jobs**
+The sidebar provides: **Overview · Crew · Runs · Knowledge · Reports · Chat · Workflows · Approvals · Ops · Jobs**
 
-Two important pages are **not** in the sidebar — access them directly:
-- **Runs**: `http://localhost:3000/runs` — Start, monitor, pause, resume, cancel agent executions
-- **Approvals**: `http://localhost:3000/approvals` — Review and decide on pending actions
+- **Runs**: Start, monitor, pause, resume, cancel agent executions
+- **Approvals**: Review and decide on pending actions
 
 ---
 
@@ -173,7 +172,6 @@ Navigate to **Reports** in the sidebar.
 | **WebSocket updates** | TopBar KPIs update in real-time via WebSocket. If WS disconnects, data may appear stale — refresh the page |
 | **Theme toggle** | TopBar right — switch between dark and light mode |
 | **Notifications bell** | Shows unread system events (run completed, approval needed, etc.) |
-| **Runs/Approvals not in sidebar** | These pages exist at `/runs` and `/approvals` but aren't in the RailNav |
 
 ---
 

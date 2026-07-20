@@ -253,6 +253,11 @@ public class AgentLoopEngine {
         log.info("Run cancelled: runId={}", runId);
     }
 
+    /** Check if a run has an active execution context (used by ZombieRunReaper). */
+    public boolean hasActiveContext(UUID runId) {
+        return activeContexts.containsKey(runId);
+    }
+
     /**
      * Execute a workflow directly from a YAML template, bypassing Aria LLM orchestration.
      * Each step creates a Run that executes sequentially on a virtual thread.
@@ -934,6 +939,11 @@ public class AgentLoopEngine {
         // hiccup can never leave the run stuck in RUNNING.
         try {
             runRepository.findById(ctx.getRunId()).ifPresent(run -> {
+                // Guard: do not overwrite a terminal state already set externally (e.g. CANCELLED by RunService)
+                if (run.getStatus() == RunStatus.CANCELLED && finalStatus != RunStatus.CANCELLED) {
+                    log.info("Run {} already CANCELLED externally, skipping overwrite with {}", ctx.getRunId(), finalStatus);
+                    return;
+                }
                 run.setStatus(finalStatus);
                 run.setIterationCount(ctx.getIterationCount());
                 run.setTotalTokensUsed(ctx.getTotalTokensUsed());
@@ -999,27 +1009,31 @@ public class AgentLoopEngine {
         }
     }
 
-    public static int parseMaxIterationsFromConfig(Agent agent, int fallback) {
+    public static int parseMaxIterationsFromConfig(Agent agent, int runMaxIterations) {
         String config = agent.getConfig();
         if (config == null || config.isBlank()) {
-            return fallback;
+            return runMaxIterations > 0 ? runMaxIterations : 50;
         }
         try {
             ObjectMapper mapper = new ObjectMapper();
             Map<String, Object> configMap = mapper.readValue(config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
             Object maxToolCallRounds = configMap.get("maxToolCallRounds");
             if (maxToolCallRounds instanceof Number num) {
-                int value = num.intValue();
-                if (value <= 0) {
-                    log.warn("Agent {} config.maxToolCallRounds <= 0, using fallback {}", agent.getId(), fallback);
-                    return fallback;
+                int configValue = num.intValue();
+                if (configValue <= 0) {
+                    log.warn("Agent {} config.maxToolCallRounds <= 0, using run-level {}", agent.getId(), runMaxIterations);
+                    return runMaxIterations > 0 ? runMaxIterations : 50;
                 }
-                return value;
+                // Run-level maxIterations is a hard cap over agent config
+                if (runMaxIterations > 0) {
+                    return Math.min(configValue, runMaxIterations);
+                }
+                return configValue;
             }
         } catch (Exception e) {
             log.warn("Failed to parse Agent.config for agent {}: {}", agent.getId(), e.getMessage());
         }
-        return fallback;
+        return runMaxIterations > 0 ? runMaxIterations : 50;
     }
 
     private String getSystemPromptFromConfig(Agent agent) {

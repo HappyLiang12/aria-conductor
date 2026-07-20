@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.listener;
 
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
@@ -30,17 +31,30 @@ public class RunKanbanAutoCreator {
 
     private final KanbanService kanbanService;
     private final KanbanRepository kanbanRepository;
+    private final RunRepository runRepository;
 
-    public RunKanbanAutoCreator(KanbanService kanbanService, KanbanRepository kanbanRepository) {
+    public RunKanbanAutoCreator(KanbanService kanbanService, KanbanRepository kanbanRepository, RunRepository runRepository) {
         this.kanbanService = kanbanService;
         this.kanbanRepository = kanbanRepository;
+        this.runRepository = runRepository;
     }
 
     @EventListener
     public void onRunStarted(RunStartedEvent event) {
         try {
+            // Use the run's promptSeed as a meaningful title (truncated)
+            String title = runRepository.findById(event.getRunId())
+                    .map(run -> {
+                        String seed = run.getPromptSeed();
+                        if (seed != null && !seed.isBlank()) {
+                            return seed.length() > 60 ? seed.substring(0, 57) + "..." : seed;
+                        }
+                        return "Run: " + event.getRunId().toString().substring(0, 8);
+                    })
+                    .orElse("Run: " + event.getRunId().toString().substring(0, 8));
+
             CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
-                    .title("Run: " + event.getRunId().toString().substring(0, 8))
+                    .title(title)
                     .priority(KanbanPriority.MEDIUM)
                     .linkedRunId(event.getRunId().toString())
                     .linkedAgentId(event.getAgentId().toString())

@@ -9,10 +9,12 @@ interface RailItem {
 const ITEMS: RailItem[] = [
   { path: '/', label: 'Overview', icon: '▦' },
   { path: '/crew', label: 'Crew', icon: '👥' },
+  { path: '/runs', label: 'Runs', icon: '▶️' },
   { path: '/knowledge', label: 'Knowledge', icon: '📚' },
   { path: '/reports', label: 'Reports', icon: '📊' },
   { path: '/chat', label: 'Chat', icon: '💬' },
   { path: '/workflows', label: 'Workflows', icon: '🔗' },
+  { path: '/approvals', label: 'Approvals', icon: '✅' },
   { path: '/ops', label: 'Ops', icon: '🛡️' },
   { path: '/scheduled-jobs', label: 'Jobs', icon: '📅' },
 ];

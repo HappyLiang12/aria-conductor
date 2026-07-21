@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { getSummary, getRecentActivity } from '../api/dashboard';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import type { ActivityEvent } from '../types';
 
 export function DashboardPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { lastMessage, isConnected } = useWebSocket();
+  const { lastMessage, isConnected } = useWebSocketContext();
   const [activityFeed, setActivityFeed] = useState<ActivityEvent[]>([]);
 
   const { data: summary, isLoading, error } = useQuery({

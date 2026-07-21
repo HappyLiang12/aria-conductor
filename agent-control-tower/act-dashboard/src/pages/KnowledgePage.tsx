@@ -8,7 +8,7 @@ import {
   getKnowledgeYaml,
 } from '../api/knowledge';
 import { listAgents } from '../api/agents';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import type {
   Agent,
   CreateKnowledgeRequest,
@@ -165,7 +165,7 @@ function ownerOf(item: ExtendedKnowledgeItem, agents: Agent[]): Agent | null {
 
 export function KnowledgePage() {
   const queryClient = useQueryClient();
-  const { lastMessage } = useWebSocket();
+  const { lastMessage } = useWebSocketContext();
 
   // queries
   const { data: itemsRaw, isLoading: loadingItems } = useQuery({

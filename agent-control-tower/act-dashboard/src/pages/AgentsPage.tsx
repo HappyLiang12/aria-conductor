@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, updateAgent, retireAgent, getTemplates } from '../api/agents';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import type { CreateAgentRequest, AgentType, AgentHealthStatus, Agent, AgentTemplate } from '../types';
 
@@ -23,7 +23,7 @@ interface DetailDialogState {
 
 export function AgentsPage() {
   const queryClient = useQueryClient();
-  const { lastMessage } = useWebSocket();
+  const { lastMessage } = useWebSocketContext();
   const [showForm, setShowForm] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
   const [filterHealth, setFilterHealth] = useState<AgentHealthStatus | ''>('');

@@ -48,7 +48,7 @@ export function Layout() {
       <ConfigureModal />
       <TaskDrawer />
       <AgentDrawer />
-      <Toast lastEvent={null} />
+      <Toast />
     </DrawerProvider>
   );
 }

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml } from '../api/workflows';
 import { listAgents } from '../api/agents';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import type { WorkflowChain, WorkflowStepInfo, WorkflowStatus, WorkflowStepStatus } from '../types';
 
 const statusColor = (s: WorkflowStatus): string => {
@@ -171,7 +171,7 @@ function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRe
 
 export function WorkflowsPage() {
   const queryClient = useQueryClient();
-  const { lastMessage } = useWebSocket();
+  const { lastMessage } = useWebSocketContext();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const { data: workflows, isLoading, error } = useQuery({

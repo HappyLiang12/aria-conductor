@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listRuns, createRun, cancelRun, pauseRun, resumeRun, getRunTrajectory, getRunToolCalls } from '../api/runs';
 import { listAgents } from '../api/agents';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import type { CreateRunRequest, RunStatus, SessionTrajectory, ToolCall } from '../types';
 
 export function RunsPage() {
   const queryClient = useQueryClient();
-  const { lastMessage } = useWebSocket();
+  const { lastMessage } = useWebSocketContext();
   const [showForm, setShowForm] = useState(false);
   const [filterStatus, setFilterStatus] = useState<RunStatus | ''>('');
   const [filterAgent, setFilterAgent] = useState<string>('');

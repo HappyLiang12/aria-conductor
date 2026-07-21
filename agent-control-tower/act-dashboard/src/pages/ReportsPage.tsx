@@ -9,7 +9,7 @@ import {
   regenerateReport,
   reportHtmlUrl,
 } from '../api/reports';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import type {
   GenerateReportRequest,
   ReportArtifact,
@@ -84,7 +84,7 @@ function formatRelative(iso: string | null | undefined): string {
 
 export function ReportsPage() {
   const queryClient = useQueryClient();
-  const { lastMessage } = useWebSocket();
+  const { lastMessage } = useWebSocketContext();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewReportForm>(EMPTY_FORM);
   const [createError, setCreateError] = useState<string | null>(null);

@@ -32,6 +32,7 @@ public class RunContext {
     private UUID currentToolCallId;
     private List<UUID> currentTurnToolCallIds;
     private List<String> cachedSkillNames;
+    private String workspaceDir;
 
     // Consecutive same-error tracking (prevents infinite retry loops)
     private String lastToolError;
@@ -103,6 +104,9 @@ public class RunContext {
     public void setLastToolError(String e) { this.lastToolError = e; }
     public int getConsecutiveSameErrorCount() { return consecutiveSameErrorCount; }
     public void setConsecutiveSameErrorCount(int c) { this.consecutiveSameErrorCount = c; }
+
+    public String getWorkspaceDir() { return workspaceDir; }
+    public void setWorkspaceDir(String workspaceDir) { this.workspaceDir = workspaceDir; }
 
     /**
      * Pause the run — creates a new CompletableFuture that blocks the loop.

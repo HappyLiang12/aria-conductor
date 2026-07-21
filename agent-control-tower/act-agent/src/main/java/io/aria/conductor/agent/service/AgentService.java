@@ -13,10 +13,16 @@ import io.aria.conductor.common.model.AgentTool;
 import io.aria.conductor.common.model.AgentToolId;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.ToolDefinition;
+import io.aria.conductor.common.model.AgentSkill;
+import io.aria.conductor.common.model.AgentSkillId;
 import io.aria.conductor.common.repository.AgentToolRepository;
+import io.aria.conductor.common.repository.AgentSkillRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
+import io.aria.conductor.common.repository.RoleToolTemplateRepository;
+import io.aria.conductor.common.repository.RoleSkillTemplateRepository;
 import io.aria.conductor.common.service.SkillContextProvider;
 import io.aria.conductor.common.model.SkillContext;
+import io.aria.conductor.agent.dto.RoleDefaultsResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -38,19 +44,28 @@ public class AgentService {
     private final AgentToolRepository agentToolRepository;
     private final ToolDefinitionRepository toolDefinitionRepository;
     private final SkillContextProvider skillProvider;
+    private final AgentSkillRepository agentSkillRepository;
+    private final RoleToolTemplateRepository roleToolTemplateRepository;
+    private final RoleSkillTemplateRepository roleSkillTemplateRepository;
 
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
                         ObjectMapper objectMapper,
                         AgentToolRepository agentToolRepository,
                         ToolDefinitionRepository toolDefinitionRepository,
-                        SkillContextProvider skillProvider) {
+                        SkillContextProvider skillProvider,
+                        AgentSkillRepository agentSkillRepository,
+                        RoleToolTemplateRepository roleToolTemplateRepository,
+                        RoleSkillTemplateRepository roleSkillTemplateRepository) {
         this.agentRepository = agentRepository;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
         this.agentToolRepository = agentToolRepository;
         this.toolDefinitionRepository = toolDefinitionRepository;
         this.skillProvider = skillProvider;
+        this.agentSkillRepository = agentSkillRepository;
+        this.roleToolTemplateRepository = roleToolTemplateRepository;
+        this.roleSkillTemplateRepository = roleSkillTemplateRepository;
     }
 
     @Transactional
@@ -167,6 +182,105 @@ public class AgentService {
         List<String> toolIds = agentToolRepository.findToolIdsByAgentId(agentId.toString());
         if (toolIds.isEmpty()) return List.of();
         return toolDefinitionRepository.findAllById(toolIds);
+    }
+
+    @Transactional
+    public void assignSkill(UUID agentId, String skillId) {
+        Agent agent = findAgentOrThrow(agentId);
+        // Governance: only enabled + SKILL-stage skills may be assigned (mirrors tool governance).
+        if (skillProvider.getEnabledSkillsByIds(List.of(skillId)).isEmpty()) {
+            throw new IllegalStateException(
+                    "Skill '" + skillId + "' is not an approved/enabled SKILL and cannot be assigned");
+        }
+        AgentSkillId id = new AgentSkillId(agent.getId().toString(), skillId);
+        if (!agentSkillRepository.existsById(id)) {
+            agentSkillRepository.save(AgentSkill.builder().id(id).build());
+            log.info("Assigned skill {} to agent {}", skillId, agentId);
+        }
+    }
+
+    @Transactional
+    public void unassignSkill(UUID agentId, String skillId) {
+        Agent agent = findAgentOrThrow(agentId);
+        AgentSkillId id = new AgentSkillId(agent.getId().toString(), skillId);
+        if (agentSkillRepository.existsById(id)) {
+            agentSkillRepository.deleteById(id);
+            log.info("Unassigned skill {} from agent {}", skillId, agentId);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<SkillContext> getAgentSkills(UUID agentId) {
+        findAgentOrThrow(agentId);
+        return skillProvider.getEnabledSkillsByIds(
+                agentSkillRepository.findSkillIdsByAgentId(agentId.toString()));
+    }
+
+    /** Idempotent replace: sets the agent's tools to exactly the given ids (governance-checked). */
+    @Transactional
+    public List<ToolDefinition> setTools(UUID agentId, List<String> toolIds) {
+        Agent agent = findAgentOrThrow(agentId);
+        List<String> ids = toolIds == null ? List.of() : toolIds.stream().distinct().toList();
+        // Validate every id first so a bad/disabled id aborts before we mutate anything.
+        List<ToolDefinition> found = ids.isEmpty() ? List.of() : toolDefinitionRepository.findAllById(ids);
+        for (String toolId : ids) {
+            ToolDefinition tool = found.stream().filter(t -> t.getId().equals(toolId)).findFirst()
+                    .orElseThrow(() -> new ResourceNotFoundException("Tool", toolId));
+            if (!tool.isEnabled()) {
+                throw new IllegalStateException(
+                        "Tool '" + tool.getName() + "' is not approved/enabled and cannot be assigned");
+            }
+        }
+        agentToolRepository.deleteByAgentId(agent.getId().toString());
+        Instant now = Instant.now();
+        for (String toolId : ids) {
+            agentToolRepository.save(AgentTool.builder()
+                    .id(new AgentToolId(agent.getId().toString(), toolId))
+                    .assignedBy("user")
+                    .assignedAt(now)
+                    .build());
+        }
+        log.info("Set {} tools on agent {}", ids.size(), agentId);
+        return getAgentTools(agentId);
+    }
+
+    /** Idempotent replace: sets the agent's skills to exactly the given ids (governance-checked). */
+    @Transactional
+    public List<SkillContext> setSkills(UUID agentId, List<String> skillIds) {
+        Agent agent = findAgentOrThrow(agentId);
+        List<String> ids = skillIds == null ? List.of() : skillIds.stream().distinct().toList();
+        // Validate all ids first: every id must resolve to an enabled SKILL-stage skill.
+        if (skillProvider.getEnabledSkillsByIds(ids).size() != ids.size()) {
+            throw new IllegalStateException(
+                    "One or more skills are not approved/enabled SKILL-stage skills and cannot be assigned");
+        }
+        agentSkillRepository.deleteByAgentId(agent.getId().toString());
+        for (String skillId : ids) {
+            agentSkillRepository.save(AgentSkill.builder()
+                    .id(new AgentSkillId(agent.getId().toString(), skillId))
+                    .build());
+        }
+        log.info("Set {} skills on agent {}", ids.size(), agentId);
+        return getAgentSkills(agentId);
+    }
+
+    /** Recommended default tools + skills for a role (rule-based), with WORKER fallback. */
+    @Transactional(readOnly = true)
+    public RoleDefaultsResponse getRoleDefaults(String role) {
+        String effectiveRole = (role == null || role.isBlank()) ? "WORKER" : role;
+        List<String> toolIds = roleToolTemplateRepository.findDefaultToolIdsByRole(effectiveRole);
+        if (toolIds.isEmpty() && !"WORKER".equals(effectiveRole)) {
+            toolIds = roleToolTemplateRepository.findDefaultToolIdsByRole("WORKER");
+        }
+        List<ToolDefinition> tools = toolIds.isEmpty() ? List.of()
+                : toolDefinitionRepository.findAllById(toolIds).stream()
+                        .filter(ToolDefinition::isEnabled).toList();
+        List<String> skillIds = roleSkillTemplateRepository.findDefaultSkillIdsByRole(effectiveRole);
+        if (skillIds.isEmpty() && !"WORKER".equals(effectiveRole)) {
+            skillIds = roleSkillTemplateRepository.findDefaultSkillIdsByRole("WORKER");
+        }
+        List<SkillContext> skills = skillProvider.getEnabledSkillsByIds(skillIds);
+        return new RoleDefaultsResponse(tools, skills);
     }
 
     Agent findAgentOrThrow(UUID id) {

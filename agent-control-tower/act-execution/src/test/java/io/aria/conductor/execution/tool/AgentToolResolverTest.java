@@ -48,4 +48,19 @@ class AgentToolResolverTest {
         assertThat(tools).hasSize(1);
         assertThat(tools.get(0).getName()).isEqualTo("list_agents");
     }
+
+    @Test
+    void shouldFallbackToWorkerWhenRoleSpecificTemplateEmpty() {
+        UUID agentId = UUID.randomUUID();
+        String workerToolId = UUID.randomUUID().toString();
+        Agent agent = Agent.builder().id(agentId).role("dev").build();
+        when(agentToolRepo.findToolIdsByAgentId(agentId.toString())).thenReturn(List.of());
+        when(roleTemplateRepo.findDefaultToolIdsByRole("dev")).thenReturn(List.of());
+        when(roleTemplateRepo.findDefaultToolIdsByRole("WORKER")).thenReturn(List.of(workerToolId));
+        when(toolRepo.findAllById(List.of(workerToolId))).thenReturn(List.of(
+                ToolDefinition.builder().id(workerToolId).name("read_file").enabled(true).build()));
+        List<ToolDefinition> tools = resolver.resolveForAgent(agent);
+        assertThat(tools).hasSize(1);
+        assertThat(tools.get(0).getName()).isEqualTo("read_file");
+    }
 }

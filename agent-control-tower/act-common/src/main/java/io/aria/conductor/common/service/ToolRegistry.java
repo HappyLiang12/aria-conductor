@@ -3,6 +3,7 @@ package io.aria.conductor.common.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.model.ToolDefinition;
+import io.aria.conductor.common.model.VersionStatus;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ public class ToolRegistry {
     public List<Map<String, Object>> buildToolsPayloadForIds(List<String> toolIds) {
         List<ToolDefinition> tools = toolRepo.findAllById(toolIds).stream()
                 .filter(ToolDefinition::isEnabled)
+                .filter(t -> t.getStatus() == null || t.getStatus() == VersionStatus.APPROVED)
                 .toList();
         return buildToolsPayload(tools);
     }

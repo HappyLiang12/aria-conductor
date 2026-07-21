@@ -26,7 +26,10 @@ public class FileWriteHandler implements ToolHandler {
             return "Error: Absolute paths are not allowed. Use a relative path within the workspace.";
         }
         try {
-            Path baseDir = Path.of(workspaceDir).toAbsolutePath().normalize();
+            String runWorkspace = Objects.toString(arguments.get("_workspaceDir"), null);
+            Path baseDir = runWorkspace != null
+                    ? Path.of(runWorkspace).toAbsolutePath().normalize()
+                    : Path.of(workspaceDir).toAbsolutePath().normalize();
             Files.createDirectories(baseDir);
             Path target = baseDir.resolve(path).normalize();
             if (!target.startsWith(baseDir)) {

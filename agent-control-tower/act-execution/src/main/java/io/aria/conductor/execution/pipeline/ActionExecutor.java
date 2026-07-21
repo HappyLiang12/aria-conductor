@@ -34,7 +34,7 @@ public class ActionExecutor {
 
         try {
             Map<String, Object> args = parseArguments(action.arguments());
-            ToolExecutionResult result = toolExecutionEngine.execute(action.name(), args);
+            ToolExecutionResult result = toolExecutionEngine.execute(action.name(), args, ctx);
 
             if (result.isSuccess()) {
                 String output = result.getOutput() != null ? result.getOutput() : "";

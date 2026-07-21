@@ -47,6 +47,10 @@ services:
       ADK_PORT: 9300
       PROJECT_ROOT: /project
       TOOLS_SHELL_WHITELIST: "git,ls,cat,find,echo,mvn,npm,pnpm"
+      TOOLS_FILE_WORKSPACE_DIR: /workspaces
+      TOOLS_SHELL_ENABLED: ${TOOLS_SHELL_ENABLED:-false}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      PACK_CREDENTIAL_KEY: ${PACK_CREDENTIAL_KEY:-}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:
@@ -58,6 +62,7 @@ services:
     volumes:
       - knowledge_data:/app/data
       - ${PROJECT_SOURCE:-.}:/project:ro
+      - aria_workspaces:/workspaces
     networks:
       - aria-network
 
@@ -99,6 +104,7 @@ services:
 volumes:
   mariadb_data:
   knowledge_data:
+  aria_workspaces:
 
 networks:
   aria-network:

@@ -15,6 +15,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -32,7 +33,7 @@ class ActionExecutorTest {
         var executor = new ActionExecutor(adkProviderRegistry, toolExecutionEngine);
         Action action = new Action("search", ActionType.READ, "{\"query\":\"test\"}", "call-1");
         RunContext runContext = buildContext();
-        when(toolExecutionEngine.execute(eq("search"), anyMap()))
+        when(toolExecutionEngine.execute(eq("search"), anyMap(), any()))
                 .thenReturn(ToolExecutionResult.success("found 3 results"));
 
         ActionResult result = executor.execute(action, runContext);
@@ -46,7 +47,7 @@ class ActionExecutorTest {
         var executor = new ActionExecutor(adkProviderRegistry, toolExecutionEngine);
         Action action = new Action("delete", ActionType.WRITE, "{}", "call-2");
         RunContext runContext = buildContext();
-        when(toolExecutionEngine.execute(eq("delete"), anyMap()))
+        when(toolExecutionEngine.execute(eq("delete"), anyMap(), any()))
                 .thenReturn(ToolExecutionResult.failed("permission denied"));
 
         ActionResult result = executor.execute(action, runContext);
@@ -60,7 +61,7 @@ class ActionExecutorTest {
         var executor = new ActionExecutor(adkProviderRegistry, toolExecutionEngine);
         Action action = new Action("search", ActionType.READ, "{}", "call-3");
         RunContext runContext = buildContext();
-        when(toolExecutionEngine.execute(eq("search"), anyMap()))
+        when(toolExecutionEngine.execute(eq("search"), anyMap(), any()))
                 .thenReturn(ToolExecutionResult.success(null));
 
         ActionResult result = executor.execute(action, runContext);
@@ -74,7 +75,7 @@ class ActionExecutorTest {
         var executor = new ActionExecutor(adkProviderRegistry, toolExecutionEngine);
         Action action = new Action("list", ActionType.READ, null, "call-4");
         RunContext runContext = buildContext();
-        when(toolExecutionEngine.execute(eq("list"), eq(Map.of())))
+        when(toolExecutionEngine.execute(eq("list"), eq(Map.of()), any()))
                 .thenReturn(ToolExecutionResult.success("ok"));
 
         ActionResult result = executor.execute(action, runContext);

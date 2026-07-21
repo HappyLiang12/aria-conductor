@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.AgentTool;
 import io.aria.conductor.common.model.AgentToolId;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.ToolDefinition;
+import io.aria.conductor.common.model.VersionStatus;
 import io.aria.conductor.common.model.AgentSkill;
 import io.aria.conductor.common.model.AgentSkillId;
 import io.aria.conductor.common.repository.AgentToolRepository;
@@ -226,7 +227,7 @@ public class AgentService {
         for (String toolId : ids) {
             ToolDefinition tool = found.stream().filter(t -> t.getId().equals(toolId)).findFirst()
                     .orElseThrow(() -> new ResourceNotFoundException("Tool", toolId));
-            if (!tool.isEnabled()) {
+            if (!isApprovedOrEnabled(tool)) {
                 throw new IllegalStateException(
                         "Tool '" + tool.getName() + "' is not approved/enabled and cannot be assigned");
             }
@@ -274,7 +275,7 @@ public class AgentService {
         }
         List<ToolDefinition> tools = toolIds.isEmpty() ? List.of()
                 : toolDefinitionRepository.findAllById(toolIds).stream()
-                        .filter(ToolDefinition::isEnabled).toList();
+                        .filter(this::isApprovedOrEnabled).toList();
         List<String> skillIds = roleSkillTemplateRepository.findDefaultSkillIdsByRole(effectiveRole);
         if (skillIds.isEmpty() && !"WORKER".equals(effectiveRole)) {
             skillIds = roleSkillTemplateRepository.findDefaultSkillIdsByRole("WORKER");
@@ -286,6 +287,15 @@ public class AgentService {
     Agent findAgentOrThrow(UUID id) {
         return agentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Agent", id));
+    }
+
+    /**
+     * Governance parity with the runtime {@code AgentToolResolver}: a tool is assignable /
+     * recommendable only when enabled AND approved (legacy tools with null status are allowed).
+     */
+    private boolean isApprovedOrEnabled(ToolDefinition tool) {
+        return tool.isEnabled()
+                && (tool.getStatus() == null || tool.getStatus() == VersionStatus.APPROVED);
     }
 
     private AgentResponse toResponse(Agent agent) {

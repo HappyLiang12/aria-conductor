@@ -1,7 +1,10 @@
 -- V34: Role-based default tool sets for worker roles (ba/dev/qa) + role_skill_templates table.
 --
--- Fixes the live gap where role_tool_templates was seeded only for ARIA/WORKER (V22),
--- leaving ba/dev/qa agents with ZERO default tools at runtime. Idempotent
+-- Before this migration role_tool_templates was seeded only for ARIA/WORKER (V22), so
+-- ba/dev/qa agents silently fell back to the generic WORKER TIER_1 set at runtime. This
+-- migration gives each role its own curated defaults. Note: for ba this REMOVES
+-- write_file/http_request/shell_exec relative to the old WORKER fallback, while dev/qa gain
+-- role-specific tools (dev also receives the git pack tools seeded in V33). Idempotent
 -- (INSERT ... SELECT ... WHERE NOT EXISTS), H2 + MariaDB compatible (no MySQL-specific
 -- syntax). Tool ids are selected by name to stay UUID-agnostic across environments.
 

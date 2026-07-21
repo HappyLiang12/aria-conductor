@@ -52,6 +52,13 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
+        // Governance rejections (e.g. assigning a disabled/non-approved tool or non-SKILL skill)
+        // are client input conflicts, not server errors — return 4xx instead of falling through to 500.
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
     @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(
             org.springframework.web.bind.MethodArgumentNotValidException ex) {

@@ -8,6 +8,10 @@ import { AgentCatalog } from '../components/AgentCatalog';
 import { ManageToolsDialog } from '../components/ManageToolsDialog';
 import { estimateCost } from '../utils/pricing';
 
+interface CreateAgentError extends Error {
+  agentCreated?: boolean;
+}
+
 /**
  * Crew view — a "control room" for the agent roster.
  *
@@ -67,10 +71,11 @@ export default function CrewPage() {
   });
 
   // Pre-check the role's recommended tools + skills when the dialog opens or the role changes.
+  // Reset to the (possibly still-loading) defaults so a stale prior-role selection is never persisted.
   useEffect(() => {
-    if (!dialogOpen || !roleDefaults) return;
-    setSelectedTools(new Set(roleDefaults.tools.map((t) => t.id)));
-    setSelectedSkills(new Set(roleDefaults.skills.map((s) => s.id)));
+    if (!dialogOpen) return;
+    setSelectedTools(new Set((roleDefaults?.tools ?? []).map((t) => t.id)));
+    setSelectedSkills(new Set((roleDefaults?.skills ?? []).map((s) => s.id)));
   }, [dialogOpen, roleDefaults]);
 
   const {
@@ -84,13 +89,21 @@ export default function CrewPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (body: CreateAgentRequest) => {
+    mutationFn: async (body: CreateAgentRequest): Promise<Agent> => {
       const agent = await createAgent(body);
-      // Persist the confirmed recommendations via the bulk-replace endpoints.
-      await Promise.all([
-        setAgentTools(agent.id, [...selectedTools]),
-        setAgentSkills(agent.id, [...selectedSkills]),
-      ]);
+      try {
+        // Persist the confirmed recommendations via the bulk-replace endpoints.
+        await Promise.all([
+          setAgentTools(agent.id, [...selectedTools]),
+          setAgentSkills(agent.id, [...selectedSkills]),
+        ]);
+      } catch (e) {
+        // The agent WAS created; only applying recommendations failed. Surface that
+        // accurately (and let onSuccess reveal the agent) instead of "Failed to create".
+        const err = (e instanceof Error ? e : new Error(String(e))) as CreateAgentError;
+        err.agentCreated = true;
+        throw err;
+      }
       return agent;
     },
     onSuccess: () => {
@@ -100,8 +113,15 @@ export default function CrewPage() {
       setError(null);
     },
     onError: (err: unknown) => {
-      const message = err instanceof Error ? err.message : 'Failed to create agent';
-      setError(message);
+      const e = err as CreateAgentError;
+      if (e?.agentCreated) {
+        queryClient.invalidateQueries({ queryKey: ['agents'], refetchType: 'active' });
+        setDialogOpen(false);
+        setForm(EMPTY_FORM);
+        setError('Agent created, but applying the recommended tools/skills failed. Adjust them in Manage Tools.');
+      } else {
+        setError(e?.message ?? 'Failed to create agent');
+      }
     },
   });
 
@@ -141,6 +161,8 @@ export default function CrewPage() {
   const openDialog = () => {
     setForm(EMPTY_FORM);
     setError(null);
+    setSelectedTools(new Set());
+    setSelectedSkills(new Set());
     setDialogOpen(true);
   };
 

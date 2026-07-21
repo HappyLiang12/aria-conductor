@@ -61,4 +61,40 @@ test.describe('Agent tool & skill recommendations', () => {
       .poll(async () => manage.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
       .toBeGreaterThanOrEqual(preChecked);
   });
+
+  test('Apply role defaults restores the recommended set in Manage', async ({ page }) => {
+    const unique = `RecApply-${Date.now()}`;
+    await page.getByRole('button', { name: '+ Add Agent' }).click();
+    const addDialog = page.locator('.mini-dialog.open');
+    await expect(addDialog).toBeVisible();
+    await expect
+      .poll(async () => addDialog.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
+      .toBeGreaterThan(0);
+    await addDialog.locator('#add-agent-name').fill(unique);
+    await addDialog.getByRole('button', { name: 'Hire Agent' }).click();
+    await expect(addDialog).toBeHidden({ timeout: 15_000 });
+
+    const card = page.locator('.crew-card', { hasText: unique });
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await card.getByRole('button', { name: /tools/i }).first().click();
+
+    const manage = page.locator('.mini-dialog.open');
+    await expect(manage).toBeVisible();
+    // The Skills section is rendered alongside Tools.
+    await expect(manage.getByText('Skills', { exact: true })).toBeVisible();
+
+    await expect
+      .poll(async () => manage.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
+      .toBeGreaterThan(0);
+    const recommended = await manage.locator('input[type="checkbox"]:checked').count();
+
+    // Uncheck the first tool, then re-apply role defaults to restore the recommended set.
+    await manage.locator('input[type="checkbox"]:checked').first().uncheck();
+    expect(await manage.locator('input[type="checkbox"]:checked').count()).toBe(recommended - 1);
+
+    await manage.getByRole('button', { name: 'Apply role defaults' }).click();
+    await expect
+      .poll(async () => manage.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(recommended);
+  });
 });

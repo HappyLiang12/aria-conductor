@@ -36,31 +36,34 @@ The `SystemConfigService` performs simple PK lookups on a ~10-row table — sub-
 
 ### CircuitBreakerProperties
 
-- Remove `@PostConstruct overlayFromDb()` and `SystemConfigService` field injection via `@Autowired`.
-- Inject `SystemConfigService` via constructor.
-- Add explicit getters for all 4 properties that call `systemConfigService.get*()` with the field value as default, wrapped in try-catch for DB failure fallback.
-- Consumers (`CircuitBreaker`, `RuleVerifier`) require no changes.
+- Remove `@PostConstruct overlayFromDb()`.
+- Keep `SystemConfigService` as an `@Autowired` field. (Constructor injection is **not** used: these are `@ConfigurationProperties` beans registered via `@EnableConfigurationProperties`, so a constructor would trigger constructor binding and treat `SystemConfigService` as a bindable property. Field injection avoids that.)
+- Add explicit getters for all 4 properties that call `systemConfigService.get*()` with the field value as default, wrapped in try-catch for DB failure fallback. Each failure is surfaced via a `log.warn` (the class keeps `@Slf4j`).
+- Consumers `CircuitBreaker.check()` / `RuleVerifier.verify()` snapshot all config values into locals once per call, so each key is read from `SystemConfig` a single time per call — this keeps the decision, log message and exception consistent and avoids redundant reads on this hot path. Their public API is unchanged.
 
 ### ReportProperties
 
-- Remove `@PostConstruct overlayFromDb()` and `@Autowired SystemConfigService`.
-- Inject `SystemConfigService` via constructor.
-- Add explicit getters for `generateMaxTokens` and `amendMaxTokens` that read live.
-- Consumer (`ReportService`) requires no changes.
+- Remove `@PostConstruct overlayFromDb()`.
+- Keep `SystemConfigService` as an `@Autowired` field (same rationale as `CircuitBreakerProperties`).
+- Add explicit getters for `generateMaxTokens` and `amendMaxTokens` that read live, logging a `log.warn` on DB failure.
+- Consumer (`ReportService`) requires no changes (it reads each value once per call).
 
 ### AriaProperties
 
 - Remove `@PostConstruct overlayFromDb()`, `@Autowired SystemConfigService`, and the `maxHistoryTurns`/`sessionTtlMinutes` fields entirely — they have zero consumers anywhere in the codebase.
 - Keep only the `systemPrompt` field (YAML/env only, no DB key).
-- Update `ActApplication` to still register the class (it's a `@ConfigurationProperties` bean).
+- `ActApplication` already registers the class via `@EnableConfigurationProperties` — no change needed there.
+- Remove the now-orphaned `aria.max-history-turns` / `aria.session-ttl-minutes` entries from the `application*.yml` profiles and the dashboard Settings UI (`SystemConfigPanel.tsx`), and drop the seeded DB rows in migration `V31__remove_orphaned_aria_session_config.sql` (V14 is left untouched as an applied migration).
 
 ### Tests
 
 Each modified properties class gets or updates tests verifying:
 
 1. Getter returns DB value when `SystemConfigService` provides one.
-2. Getter falls back to field default when `SystemConfigService` throws.
+2. Getter falls back to field default when `SystemConfigService` throws, and emits a `log.warn`.
 3. (For `CircuitBreakerProperties` and `ReportProperties`): no stale values — changing the DB value is reflected on the next getter call without restart.
+
+Fallback (2) and no-stale (3) coverage spans **all** getters of each class, not a representative one. `CircuitBreaker` / `RuleVerifier` additionally have tests asserting each config value is read exactly once per `check()` / `verify()` call.
 
 Remove or update existing `@PostConstruct`-focused tests.
 
@@ -73,6 +76,8 @@ public long getMaxTokensPerRun() {
     try {
         return systemConfigService.getLong("circuit.breaker.max.tokens.per.run", maxTokensPerRun, 1000, 10_000_000);
     } catch (Exception e) {
+        log.warn("Failed to read 'circuit.breaker.max.tokens.per.run' from SystemConfig, using default {}",
+                maxTokensPerRun, e);
         return maxTokensPerRun; // YAML/env default
     }
 }
@@ -85,4 +90,4 @@ If the DB is unreachable, the application continues with YAML/env defaults — m
 - No caching layer in `SystemConfigService`. If DB load becomes measurable in the future, add a TTL cache there — not per-consumer.
 - No event/notification system for config changes. Not needed — live reads are sufficient.
 - No changes to `LlmClientRetryDecorator`'s existing TTL cache. It can be simplified later to use `SystemConfigService` directly, but that's out of scope.
-- No changes to consumers (`CircuitBreaker`, `RuleVerifier`, `ReportService`). Their API surface is unchanged.
+- Consumer API surfaces are unchanged. `CircuitBreaker` / `RuleVerifier` now snapshot config once per call (consistency + fewer reads); `ReportService` reads live per call.

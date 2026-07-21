@@ -47,8 +47,6 @@ circuit-breaker:
 
 aria:
   system-prompt: "Test Aria prompt"
-  max-history-turns: 20
-  session-ttl-minutes: 60
 
 knowledge:
   storage:

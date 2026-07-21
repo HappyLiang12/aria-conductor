@@ -27,17 +27,25 @@ public class CircuitBreaker {
      * @throws BudgetExceededException if any limit is breached
      */
     public void check(RunContext ctx) {
+        // Snapshot config once per check — each value is read from SystemConfig a single
+        // time, so the decision, log message and exception stay consistent and we avoid
+        // redundant DB reads on this hot path.
+        long maxTokensPerRun = properties.getMaxTokensPerRun();
+        int maxIterations = properties.getMaxIterations();
+        double errorRateThreshold = properties.getErrorRateThreshold();
+        long maxIterationLatencyMs = properties.getMaxIterationLatencyMs();
+
         // Token budget check
-        if (ctx.getTotalTokensUsed() > properties.getMaxTokensPerRun()) {
+        if (ctx.getTotalTokensUsed() > maxTokensPerRun) {
             log.error("Circuit breaker tripped: token budget exceeded. used={}, limit={}",
-                    ctx.getTotalTokensUsed(), properties.getMaxTokensPerRun());
-            throw new BudgetExceededException(ctx.getTotalTokensUsed(), properties.getMaxTokensPerRun());
+                    ctx.getTotalTokensUsed(), maxTokensPerRun);
+            throw new BudgetExceededException(ctx.getTotalTokensUsed(), maxTokensPerRun);
         }
 
         // Max iterations check
-        if (ctx.getIterationCount() >= properties.getMaxIterations()) {
+        if (ctx.getIterationCount() >= maxIterations) {
             String msg = String.format("Max iterations reached: %d/%d", ctx.getIterationCount(),
-                    properties.getMaxIterations());
+                    maxIterations);
             log.error("Circuit breaker tripped: {}", msg);
             throw new BudgetExceededException(msg);
         }
@@ -45,9 +53,9 @@ public class CircuitBreaker {
         // Error rate check
         if (!ctx.getErrors().isEmpty() && ctx.getIterationCount() > 0) {
             double errorRate = (double) ctx.getErrors().size() / ctx.getIterationCount();
-            if (errorRate > properties.getErrorRateThreshold()) {
+            if (errorRate > errorRateThreshold) {
                 String msg = String.format("Error rate exceeded: %.2f > %.2f (errors=%d, iterations=%d)",
-                        errorRate, properties.getErrorRateThreshold(),
+                        errorRate, errorRateThreshold,
                         ctx.getErrors().size(), ctx.getIterationCount());
                 log.error("Circuit breaker tripped: {}", msg);
                 throw new BudgetExceededException(msg);
@@ -56,9 +64,9 @@ public class CircuitBreaker {
 
         // Latency check
         long elapsedMs = Duration.between(ctx.getStartTime(), Instant.now()).toMillis();
-        if (elapsedMs > properties.getMaxIterationLatencyMs()) {
+        if (elapsedMs > maxIterationLatencyMs) {
             String msg = String.format("Max latency exceeded: %dms > %dms", elapsedMs,
-                    properties.getMaxIterationLatencyMs());
+                    maxIterationLatencyMs);
             log.error("Circuit breaker tripped: {}", msg);
             throw new BudgetExceededException(msg);
         }

@@ -20,18 +20,25 @@ public class RuleVerifier {
     }
 
     public RuleVerificationResult verify(Action action, ActionClassification classification, RunContext ctx) {
+        // Snapshot config once per verification — each value is read from SystemConfig a
+        // single time, so the deny decision and its reason stay consistent and we avoid
+        // redundant DB reads on this hot path.
+        long maxTokensPerRun = circuitBreakerProperties.getMaxTokensPerRun();
+        int maxIterations = circuitBreakerProperties.getMaxIterations();
+        double errorRateThreshold = circuitBreakerProperties.getErrorRateThreshold();
+
         // Token budget check
-        if (ctx.getTotalTokensUsed() > circuitBreakerProperties.getMaxTokensPerRun()) {
+        if (ctx.getTotalTokensUsed() > maxTokensPerRun) {
             String reason = String.format("Token budget exceeded: %d/%d", ctx.getTotalTokensUsed(),
-                    circuitBreakerProperties.getMaxTokensPerRun());
+                    maxTokensPerRun);
             log.warn("Rule verification denied: {}", reason);
             return RuleVerificationResult.deny(reason);
         }
 
         // Max iterations check
-        if (ctx.getIterationCount() >= circuitBreakerProperties.getMaxIterations()) {
+        if (ctx.getIterationCount() >= maxIterations) {
             String reason = String.format("Max iterations reached: %d/%d", ctx.getIterationCount(),
-                    circuitBreakerProperties.getMaxIterations());
+                    maxIterations);
             log.warn("Rule verification denied: {}", reason);
             return RuleVerificationResult.deny(reason);
         }
@@ -39,9 +46,9 @@ public class RuleVerifier {
         // Error rate check
         if (!ctx.getErrors().isEmpty()) {
             double errorRate = (double) ctx.getErrors().size() / Math.max(ctx.getIterationCount(), 1);
-            if (errorRate > circuitBreakerProperties.getErrorRateThreshold()) {
+            if (errorRate > errorRateThreshold) {
                 String reason = String.format("Error rate too high: %.2f > %.2f", errorRate,
-                        circuitBreakerProperties.getErrorRateThreshold());
+                        errorRateThreshold);
                 log.warn("Rule verification denied: {}", reason);
                 return RuleVerificationResult.deny(reason);
             }

@@ -21,6 +21,8 @@ public class ReportProperties {
         try {
             return systemConfigService.getInt("report.generate.max.tokens", generateMaxTokens, 4000, 131072);
         } catch (Exception e) {
+            log.warn("Failed to read 'report.generate.max.tokens' from SystemConfig, using default {}",
+                    generateMaxTokens, e);
             return generateMaxTokens;
         }
     }
@@ -29,6 +31,8 @@ public class ReportProperties {
         try {
             return systemConfigService.getInt("report.amend.max.tokens", amendMaxTokens, 4000, 131072);
         } catch (Exception e) {
+            log.warn("Failed to read 'report.amend.max.tokens' from SystemConfig, using default {}",
+                    amendMaxTokens, e);
             return amendMaxTokens;
         }
     }

@@ -60,8 +60,6 @@ aria:
   system-prompt: |
     You are Aria, the AI operator assistant for Aria Conductor.
     You help operators manage their fleet of AI agents.
-  max-history-turns: 20
-  session-ttl-minutes: 60
 
 knowledge:
   storage:

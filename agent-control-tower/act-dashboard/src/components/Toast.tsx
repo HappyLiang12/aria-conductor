@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { WsEvent } from '../types';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
 
 interface ToastItem {
@@ -12,12 +11,12 @@ interface ToastItem {
 
 let toastId = 0;
 
-export function Toast({ lastEvent }: { lastEvent: WsEvent | null }) {
+export function Toast() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const wsEvent = useWebSocket();
+  const wsEvent = useWebSocketContext();
   const shownIds = useRef(new Set<string>());
 
-  const eventToUse = lastEvent || wsEvent.lastMessage;
+  const eventToUse = wsEvent.lastMessage;
 
   useEffect(() => {
     if (!eventToUse) return;

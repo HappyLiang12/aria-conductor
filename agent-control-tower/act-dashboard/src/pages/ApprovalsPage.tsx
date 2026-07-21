@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listApprovals, decideApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import type { ApprovalStatus } from '../types';
 
@@ -13,7 +13,7 @@ interface ApprovalWithReason {
 
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
-  const { lastMessage } = useWebSocket();
+  const { lastMessage } = useWebSocketContext();
   const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
   const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
   const [confirmApprove, setConfirmApprove] = useState<ApprovalWithReason | null>(null);

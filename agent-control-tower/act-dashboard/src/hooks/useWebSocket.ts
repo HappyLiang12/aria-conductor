@@ -36,7 +36,18 @@ function parseStompFrame(raw: string): { command: string; headers: Record<string
   return { command, headers, body };
 }
 
-export function useWebSocket(url = 'ws://localhost:8080/ws/events'): UseWebSocketReturn {
+// Derive the WebSocket URL from the current page origin so it works behind the
+// nginx /ws/ proxy in any deployment (Docker, remote host, HTTPS) instead of a
+// hardcoded localhost:8080. Falls back to that literal only if window is absent.
+function defaultWsUrl(): string {
+  if (typeof window === 'undefined' || !window.location) {
+    return 'ws://localhost:8080/ws/events';
+  }
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws/events`;
+}
+
+export function useWebSocket(url = defaultWsUrl()): UseWebSocketReturn {
   const [lastMessage, setLastMessage] = useState<WsEvent | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);

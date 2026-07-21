@@ -3,13 +3,16 @@ import { test, expect } from '@playwright/test';
 /**
  * E2E: role-based tool & skill recommendations.
  *
- * Verifies the full stack for the "Aria recommends, user confirms" flow:
+ * Verifies the full stack for the "recommend, user confirms" flow:
  *  1. Opening "Add Agent" fetches GET /api/v1/agents/role-defaults/{role} and
- *     renders the role's recommended tools PRE-CHECKED (proves V33 seeded the
- *     ba/dev/qa defaults and the resolver returns them end-to-end).
+ *     renders the role's recommended tools PRE-CHECKED (proves the migration
+ *     seeded ba/dev/qa defaults and the resolver returns them end-to-end).
  *  2. Hiring the agent persists the confirmed selection via the bulk PUT, so the
- *     new agent's Manage Capabilities dialog shows those tools already assigned.
- *  3. "Apply role defaults" in the Manage dialog re-applies the recommended set.
+ *     new agent's Manage (Capabilities) dialog shows those tools already assigned.
+ *
+ * Both the Add-Agent and Manage dialogs use the `.mini-dialog` convention and are
+ * both present in the DOM, so locators are scoped to the currently-open dialog
+ * (`.mini-dialog.open`) to avoid role="dialog" ambiguity.
  */
 test.describe('Agent tool & skill recommendations', () => {
   test.beforeEach(async ({ page }) => {
@@ -20,25 +23,22 @@ test.describe('Agent tool & skill recommendations', () => {
   test('Add Agent pre-checks the role recommended tools', async ({ page }) => {
     await page.getByRole('button', { name: '+ Add Agent' }).click();
 
-    const dialog = page.getByRole('dialog');
+    const dialog = page.locator('.mini-dialog.open');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText('Recommended tools')).toBeVisible();
 
-    // The role defaults load async; a dev agent must have at least one pre-checked tool.
+    // Role defaults load async; a dev agent must have at least one pre-checked tool.
     await expect
-      .poll(async () => dialog.locator('input[type="checkbox"]:checked').count(), {
-        timeout: 15_000,
-      })
+      .poll(async () => dialog.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
       .toBeGreaterThan(0);
   });
 
   test('Hiring persists the recommended tools onto the new agent', async ({ page }) => {
     const unique = `Rec-${Date.now()}`;
     await page.getByRole('button', { name: '+ Add Agent' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible();
 
-    // Wait for recommendations to pre-check, then capture the selected count.
+    const dialog = page.locator('.mini-dialog.open');
+    await expect(dialog).toBeVisible();
     await expect
       .poll(async () => dialog.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
       .toBeGreaterThan(0);
@@ -52,10 +52,11 @@ test.describe('Agent tool & skill recommendations', () => {
     const card = page.locator('.crew-card', { hasText: unique });
     await expect(card).toBeVisible({ timeout: 15_000 });
 
-    // Open Manage Tools/Skills for the new agent and confirm the tools were persisted.
-    await card.getByRole('button', { name: /manage|tools|capabilities/i }).first().click();
-    const manage = page.getByRole('dialog');
-    await expect(manage.getByText('Assign', { exact: false }).or(manage.getByText('Capabilities'))).toBeVisible();
+    // Open the Manage (Capabilities) dialog and confirm the tools were persisted.
+    await card.getByRole('button', { name: /tools/i }).first().click();
+    const manage = page.locator('.mini-dialog.open');
+    await expect(manage).toBeVisible();
+    await expect(manage.getByText('Capabilities')).toBeVisible();
     await expect
       .poll(async () => manage.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
       .toBeGreaterThanOrEqual(preChecked);

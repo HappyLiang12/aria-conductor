@@ -40,14 +40,6 @@ const CATEGORIES: CategoryDef[] = [
     ],
   },
   {
-    icon: '💬',
-    title: 'Aria Settings',
-    keys: [
-      { key: 'aria.max.history.turns', label: 'Max History Turns', min: 1, max: 100, step: 1 },
-      { key: 'aria.session.ttl.minutes', label: 'Session TTL', min: 5, max: 1440, step: 1, unit: 'min' },
-    ],
-  },
-  {
     icon: '⚙️',
     title: 'ADK Runtime',
     keys: [

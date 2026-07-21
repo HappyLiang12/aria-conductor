@@ -1,4 +1,4 @@
--- V31: Tool packs (plugin system) + pack credentials + governance columns on tool_definitions
+-- V32: Tool packs (plugin system) + pack credentials + governance columns on tool_definitions
 
 CREATE TABLE tool_packs (
     id              VARCHAR(36)  PRIMARY KEY,

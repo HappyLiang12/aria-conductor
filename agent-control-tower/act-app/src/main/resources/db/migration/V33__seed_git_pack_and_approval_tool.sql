@@ -1,4 +1,4 @@
--- V32: Seed git tool pack + request_approval HITL tool
+-- V33: Seed git tool pack + request_approval HITL tool
 -- Mirrors V22 seed pattern: deterministic IDs, knowledge_items approval proxy, handler_class dispatch.
 
 -- Git pack registration (APPROVED + enabled for immediate use)

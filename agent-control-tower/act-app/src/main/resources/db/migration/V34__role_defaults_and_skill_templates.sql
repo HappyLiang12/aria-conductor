@@ -1,4 +1,4 @@
--- V33: Role-based default tool sets for worker roles (ba/dev/qa) + role_skill_templates table.
+-- V34: Role-based default tool sets for worker roles (ba/dev/qa) + role_skill_templates table.
 --
 -- Fixes the live gap where role_tool_templates was seeded only for ARIA/WORKER (V22),
 -- leaving ba/dev/qa agents with ZERO default tools at runtime. Idempotent

@@ -15,8 +15,16 @@ class CircuitBreakerPropertiesTest {
     @Mock
     SystemConfigService systemConfigService;
 
+    private CircuitBreakerProperties propsWithService(SystemConfigService svc) throws Exception {
+        CircuitBreakerProperties props = new CircuitBreakerProperties();
+        java.lang.reflect.Field field = CircuitBreakerProperties.class.getDeclaredField("systemConfigService");
+        field.setAccessible(true);
+        field.set(props, svc);
+        return props;
+    }
+
     @Test
-    void overlayFromDb_overridesYamlDefaults() throws Exception {
+    void getters_returnDbValues() throws Exception {
         when(systemConfigService.getLong("circuit.breaker.max.tokens.per.run", 100000L, 1000, 10_000_000))
                 .thenReturn(50_000L);
         when(systemConfigService.getInt("circuit.breaker.max.iterations", 50, 1, 500))
@@ -26,11 +34,7 @@ class CircuitBreakerPropertiesTest {
         when(systemConfigService.getLong("circuit.breaker.max.iteration.latency.ms", 300000L, 10000, 3_600_000))
                 .thenReturn(120_000L);
 
-        CircuitBreakerProperties props = new CircuitBreakerProperties();
-        java.lang.reflect.Field field = CircuitBreakerProperties.class.getDeclaredField("systemConfigService");
-        field.setAccessible(true);
-        field.set(props, systemConfigService);
-        props.overlayFromDb();
+        CircuitBreakerProperties props = propsWithService(systemConfigService);
 
         assertThat(props.getMaxTokensPerRun()).isEqualTo(50_000L);
         assertThat(props.getMaxIterations()).isEqualTo(25);
@@ -39,18 +43,24 @@ class CircuitBreakerPropertiesTest {
     }
 
     @Test
-    void overlayFromDb_keepsDefaults_whenServiceThrows() throws Exception {
+    void getters_fallBackToDefaults_whenServiceThrows() throws Exception {
         when(systemConfigService.getLong("circuit.breaker.max.tokens.per.run", 100000L, 1000, 10_000_000))
                 .thenThrow(new RuntimeException("DB down"));
 
-        CircuitBreakerProperties props = new CircuitBreakerProperties();
-        java.lang.reflect.Field field = CircuitBreakerProperties.class.getDeclaredField("systemConfigService");
-        field.setAccessible(true);
-        field.set(props, systemConfigService);
-        // Should not throw, defaults preserved
-        props.overlayFromDb();
+        CircuitBreakerProperties props = propsWithService(systemConfigService);
 
         assertThat(props.getMaxTokensPerRun()).isEqualTo(100000L);
-        assertThat(props.getMaxIterations()).isEqualTo(50);
+    }
+
+    @Test
+    void getters_reflectDbChanges_withoutRestart() throws Exception {
+        when(systemConfigService.getLong("circuit.breaker.max.tokens.per.run", 100000L, 1000, 10_000_000))
+                .thenReturn(100000L)
+                .thenReturn(1_000_000L);
+
+        CircuitBreakerProperties props = propsWithService(systemConfigService);
+
+        assertThat(props.getMaxTokensPerRun()).isEqualTo(100000L);
+        assertThat(props.getMaxTokensPerRun()).isEqualTo(1_000_000L);
     }
 }

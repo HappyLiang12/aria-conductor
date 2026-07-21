@@ -88,13 +88,23 @@ test.describe('Agent tool & skill recommendations', () => {
       .toBeGreaterThan(0);
     const recommended = await manage.locator('input[type="checkbox"]:checked').count();
 
-    // Uncheck the first tool, then re-apply role defaults to restore the recommended set.
-    await manage.locator('input[type="checkbox"]:checked').first().uncheck();
-    expect(await manage.locator('input[type="checkbox"]:checked').count()).toBe(recommended - 1);
+    // Toggle the first tool off, then re-apply role defaults to restore the recommended set.
+    // Use click() + poll (not uncheck()) because each toggle fires an assign/unassign mutation
+    // whose query invalidation re-renders the list, which races uncheck()'s state assertion.
+    const firstCheckbox = manage.locator('input[type="checkbox"]').first();
+    const wasChecked = await firstCheckbox.isChecked();
+    await firstCheckbox.click();
+    await expect
+      .poll(async () => firstCheckbox.isChecked(), { timeout: 15_000 })
+      .toBe(!wasChecked);
 
     await manage.getByRole('button', { name: 'Apply role defaults' }).click();
     await expect
       .poll(async () => manage.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
       .toBeGreaterThanOrEqual(recommended);
+    // Apply restores the first (recommended) tool to checked.
+    await expect
+      .poll(async () => firstCheckbox.isChecked(), { timeout: 15_000 })
+      .toBe(true);
   });
 });

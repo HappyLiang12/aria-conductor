@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.tool.handlers;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.engine.RunContext;
@@ -24,6 +25,7 @@ import java.util.Objects;
 public class RequestApprovalHandler implements ToolHandler {
 
     private final ApprovalGate approvalGate;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Override
     public String execute(Map<String, Object> arguments) {
@@ -41,10 +43,18 @@ public class RequestApprovalHandler implements ToolHandler {
 
         log.info("Agent requests approval: runId={}, summary={}", ctx.getRunId(), summary);
 
+        String actionPayload;
+        try {
+            actionPayload = OBJECT_MAPPER.writeValueAsString(Map.of("summary", summary, "reason", reason));
+        } catch (Exception e) {
+            log.error("Failed to serialize approval action payload", e);
+            return "Error: Failed to build approval request";
+        }
+
         Action action = new Action(
                 "request_approval",
                 ActionType.HIGH_RISK,
-                "{\"summary\":\"" + summary.replace("\"", "'") + "\",\"reason\":\"" + reason.replace("\"", "'") + "\"}",
+                actionPayload,
                 ctx.getCurrentToolCallId() != null ? ctx.getCurrentToolCallId().toString() : null
         );
 

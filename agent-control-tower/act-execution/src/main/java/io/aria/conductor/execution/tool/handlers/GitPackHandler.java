@@ -57,6 +57,16 @@ public class GitPackHandler implements ToolHandler {
             return "Error: git pack requires a run workspace (no _workspaceDir in context)";
         }
 
+        if ("git_clone".equals(toolName)) {
+            try (var files = java.nio.file.Files.list(java.nio.file.Path.of(workspaceDir))) {
+                if (files.findAny().isPresent()) {
+                    return "Error: Workspace is not empty — git clone requires an empty directory";
+                }
+            } catch (Exception e) {
+                return "Error: Cannot check workspace: " + e.getMessage();
+            }
+        }
+
         List<String> argv = buildArgv(toolName, arguments);
         if (argv == null) {
             return "Error: Missing or invalid required parameter for " + toolName;
@@ -144,14 +154,14 @@ public class GitPackHandler implements ToolHandler {
                 }
 
                 Process p = pb.start();
-                // Wait first, then read (prevents infinite block on hung process)
+                // Read output before waitFor to avoid pipe deadlock when output > 64KB
+                byte[] rawOutput = p.getInputStream().readNBytes(MAX_OUTPUT_BYTES);
                 boolean finished = p.waitFor(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
                 if (!finished) {
                     p.destroyForcibly();
                     p.waitFor(2, TimeUnit.SECONDS);
                     return "Error: Git command timed out after " + DEFAULT_TIMEOUT_MS + "ms";
                 }
-                byte[] rawOutput = p.getInputStream().readNBytes(MAX_OUTPUT_BYTES);
                 String output = new String(rawOutput, StandardCharsets.UTF_8);
                 int exitCode = p.exitValue();
                 if (exitCode != 0) {

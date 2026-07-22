@@ -49,6 +49,11 @@ export interface Approval {
   requestedAt: string;
   decidedAt: string | null;
   expiresAt: string;
+  // Enriched fields from GET /api/v1/approvals (#24) — present when the approval is
+  // backed by a tool call; optional for backward compatibility.
+  toolName?: string;
+  arguments?: string;
+  riskTier?: string;
 }
 
 export interface KnowledgeItem {

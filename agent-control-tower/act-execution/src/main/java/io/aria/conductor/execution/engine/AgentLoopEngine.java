@@ -418,10 +418,12 @@ public class AgentLoopEngine {
 
         // Provision per-run workspace (lazy — only creates dir; handlers use it when needed)
         try {
-            String wsDir = workspaceManager.provision(ctx.getRunId());
+            String wsDir = workspaceManager.getOrProvision(ctx.getRunId());
             ctx.setWorkspaceDir(wsDir);
+            log.info("Provisioned run workspace: {}", wsDir);
         } catch (Exception e) {
-            log.warn("Workspace provisioning failed for run {} (non-fatal): {}", ctx.getRunId(), e.getMessage());
+            log.error("Workspace provisioning failed for run {} (use-site fallback will retry): {}",
+                    ctx.getRunId(), e.getMessage());
         }
 
         // Persist initial context as trajectories so buildMessages() always has context.
@@ -465,6 +467,8 @@ public class AgentLoopEngine {
                 if (ctx.isPaused()) {
                     ctx.awaitResume();
                     if (ctx.isCancelled()) break;
+                    // Reset the per-iteration latency timer so time spent paused is not counted (#22)
+                    ctx.markIterationStart();
                 }
 
                 // Check circuit breaker
@@ -541,6 +545,7 @@ public class AgentLoopEngine {
      */
     private boolean executeIteration(RunContext ctx, @Nullable SseEmitter emitter) {
         ctx.incrementIteration();
+        ctx.markIterationStart(); // start the per-iteration latency window (#22)
         int iteration = ctx.getIterationCount();
         log.info("Iteration {} starting: runId={}", iteration, ctx.getRunId());
 

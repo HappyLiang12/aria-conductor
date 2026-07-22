@@ -11,6 +11,22 @@ interface ApprovalWithReason {
   reason: string;
 }
 
+// Map a governance risk tier to a human label + badge class (#24). PUSH/DESTRUCTIVE are high
+// risk; previously the badge was hardcoded to "Medium" for every approval.
+function riskBadge(riskTier?: string): { label: string; cls: string } {
+  switch ((riskTier || '').toUpperCase()) {
+    case 'DESTRUCTIVE':
+    case 'PUSH':
+      return { label: 'High', cls: 'risk-high' };
+    case 'WRITE_LOCAL':
+      return { label: 'Medium', cls: 'risk-medium' };
+    case 'READ':
+      return { label: 'Low', cls: 'risk-low' };
+    default:
+      return { label: riskTier || 'Unknown', cls: 'risk-medium' };
+  }
+}
+
 export function ApprovalsPage() {
   const queryClient = useQueryClient();
   const { lastMessage } = useWebSocketContext();
@@ -107,11 +123,21 @@ export function ApprovalsPage() {
                   <div className="approval-card-body">
                     <div className="approval-info-row">
                       <span className="approval-label">Tool/Action</span>
-                      <span className="cell-mono">{approval.toolCallId.slice(0, 8)}</span>
+                      <span className="cell-mono">{approval.toolName ?? approval.toolCallId.slice(0, 8)}</span>
                     </div>
+                    {approval.arguments && (
+                      <div className="approval-info-row">
+                        <span className="approval-label">Arguments</span>
+                        <span className="cell-mono approval-args" title={approval.arguments}>
+                          {approval.arguments.length > 160 ? approval.arguments.slice(0, 160) + '…' : approval.arguments}
+                        </span>
+                      </div>
+                    )}
                     <div className="approval-info-row">
                       <span className="approval-label">Risk Level</span>
-                      <span className="risk-badge">Medium</span>
+                      <span className={`risk-badge ${riskBadge(approval.riskTier).cls}`}>
+                        {riskBadge(approval.riskTier).label}
+                      </span>
                     </div>
                     {approval.reason && (
                       <div className="approval-reason-text">{approval.reason}</div>

@@ -78,7 +78,17 @@ export default function ReviewQueue() {
                 </span>
               </div>
               <div className="ttl">
-                Run · <span className="cell-mono">{approval.runId.slice(0, 8)}</span>
+                {approval.toolName ? (
+                  <>
+                    <span className="cell-mono">{approval.toolName}</span>
+                    {' · Run '}
+                    <span className="cell-mono">{approval.runId.slice(0, 8)}</span>
+                  </>
+                ) : (
+                  <>
+                    Run · <span className="cell-mono">{approval.runId.slice(0, 8)}</span>
+                  </>
+                )}
               </div>
               <div className="desc">
                 {approval.reason || 'Awaiting human verification before tool execution proceeds.'}

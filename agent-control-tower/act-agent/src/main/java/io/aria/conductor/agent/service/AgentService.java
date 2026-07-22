@@ -179,10 +179,47 @@ public class AgentService {
 
     @Transactional(readOnly = true)
     public List<ToolDefinition> getAgentTools(UUID agentId) {
-        findAgentOrThrow(agentId);
+        Agent agent = findAgentOrThrow(agentId);
         List<String> toolIds = agentToolRepository.findToolIdsByAgentId(agentId.toString());
-        if (toolIds.isEmpty()) return List.of();
-        return toolDefinitionRepository.findAllById(toolIds);
+        if (!toolIds.isEmpty()) {
+            return toolDefinitionRepository.findAllById(toolIds);
+        }
+        // No explicit grants: surface the role-template defaults the runtime AgentToolResolver
+        // would apply (incl. free-text role keyword mapping), so the API/dashboard reflect the
+        // tools a delegated worker can actually use (#25).
+        List<String> templateIds = resolveRoleTemplateToolIds(agent.getRole());
+        if (templateIds.isEmpty()) return List.of();
+        return toolDefinitionRepository.findAllById(templateIds).stream()
+                .filter(ToolDefinition::isEnabled)
+                .filter(this::isApprovedOrEnabled)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Mirror of the runtime role-template resolution: exact role match first, then a keyword
+     * mapping for free-text role descriptions (dev/qa/ba), then the generic WORKER fallback.
+     */
+    private List<String> resolveRoleTemplateToolIds(String role) {
+        String effectiveRole = (role != null && !role.isBlank()) ? role : "WORKER";
+        List<String> ids = roleToolTemplateRepository.findDefaultToolIdsByRole(effectiveRole);
+        if (ids.isEmpty() && !"WORKER".equals(effectiveRole)) {
+            String keywordRole = matchKeywordRole(effectiveRole);
+            if (keywordRole != null) {
+                ids = roleToolTemplateRepository.findDefaultToolIdsByRole(keywordRole);
+            }
+        }
+        if (ids.isEmpty() && !"WORKER".equals(effectiveRole)) {
+            ids = roleToolTemplateRepository.findDefaultToolIdsByRole("WORKER");
+        }
+        return ids;
+    }
+
+    private String matchKeywordRole(String role) {
+        String lower = role.toLowerCase();
+        if (lower.contains("dev")) return "dev";
+        if (lower.contains("qa") || lower.contains("tester")) return "qa";
+        if (lower.contains("ba") || lower.contains("analyst")) return "ba";
+        return null;
     }
 
     @Transactional

@@ -54,7 +54,10 @@ public class GitPackHandler implements ToolHandler {
 
         String workspaceDir = Objects.toString(arguments.get("_workspaceDir"), null);
         if (workspaceDir == null || workspaceDir.isBlank()) {
-            return "Error: git pack requires a run workspace (no _workspaceDir in context)";
+            String runId = Objects.toString(arguments.get("_runId"), "unknown");
+            return "Error: git pack requires a run workspace but none was provisioned (runId=" + runId
+                    + "). Check the server log for workspace provisioning errors and the tools.file.workspace-dir / "
+                    + "TOOLS_FILE_WORKSPACE_DIR configuration.";
         }
 
         if ("git_clone".equals(toolName)) {
@@ -72,7 +75,14 @@ public class GitPackHandler implements ToolHandler {
             return "Error: Missing or invalid required parameter for " + toolName;
         }
 
-        return executeInWorkspace(argv, workspaceDir, arguments);
+        String result = executeInWorkspace(argv, workspaceDir, arguments);
+        // Surface the clone destination + relative-path convention so the model knows where the
+        // repo lives and how to address files (#23).
+        if ("git_clone".equals(toolName) && !result.startsWith("Error:") && !result.startsWith("Exit code:")) {
+            result = result + "\nRepository cloned into workspace root: " + workspaceDir
+                    + ". Use RELATIVE paths (e.g. agent-control-tower/...) with read_file/write_file/list_files.";
+        }
+        return result;
     }
 
     /** Build argument array (no shell interpretation — prevents command injection). */

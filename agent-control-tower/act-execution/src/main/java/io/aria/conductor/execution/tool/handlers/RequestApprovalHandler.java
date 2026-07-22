@@ -1,11 +1,13 @@
 package io.aria.conductor.execution.tool.handlers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.engine.RunContext;
 import io.aria.conductor.execution.pipeline.Action;
 import io.aria.conductor.execution.pipeline.ActionType;
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +27,7 @@ import java.util.Objects;
 public class RequestApprovalHandler implements ToolHandler {
 
     private final ApprovalGate approvalGate;
+    private final RunRepository runRepository;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Override
@@ -58,12 +61,32 @@ public class RequestApprovalHandler implements ToolHandler {
                 ctx.getCurrentToolCallId() != null ? ctx.getCurrentToolCallId().toString() : null
         );
 
-        ApprovalDecision decision = approvalGate.requestApproval(action, ctx);
+        // This handler bypasses the ActionExecutionPipeline gate, so set the run status to PAUSED
+        // here for dashboard accuracy while blocked, then restore RUNNING after the decision (#24).
+        setRunStatus(ctx, RunStatus.PAUSED);
+        ApprovalDecision decision;
+        try {
+            decision = approvalGate.requestApproval(action, ctx);
+        } finally {
+            if (!ctx.isCancelled()) setRunStatus(ctx, RunStatus.RUNNING);
+        }
 
         if (decision.isApproved()) {
             return "APPROVED: " + (decision.reason() != null ? decision.reason() : "Human approved the request.");
         } else {
             return "DENIED: " + (decision.reason() != null ? decision.reason() : "Human denied the request.");
+        }
+    }
+
+    /** Best-effort run status update (mirrors ActionExecutionPipeline.setRunStatus). */
+    private void setRunStatus(RunContext ctx, RunStatus status) {
+        try {
+            runRepository.findById(ctx.getRunId()).ifPresent(run -> {
+                run.setStatus(status);
+                runRepository.save(run);
+            });
+        } catch (Exception e) {
+            log.debug("Failed to set run {} status to {} (cosmetic): {}", ctx.getRunId(), status, e.getMessage());
         }
     }
 }

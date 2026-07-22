@@ -130,16 +130,17 @@ class CircuitBreakerTest {
     }
 
     @Test
-    void totalRunDurationCap_trips_independently() {
+    void totalRunDurationCap_trips_independently() throws InterruptedException {
         // Even with a fresh (fast) iteration, the overall wall-clock cap still applies.
         when(properties.getMaxTokensPerRun()).thenReturn(100_000L);
         when(properties.getMaxIterations()).thenReturn(50);
         when(properties.getErrorRateThreshold()).thenReturn(0.5);
         when(properties.getMaxIterationLatencyMs()).thenReturn(3_600_000L);
-        when(properties.getMaxRunDurationMs()).thenReturn(1L); // tiny total cap
+        when(properties.getMaxRunDurationMs()).thenReturn(5L); // tiny total cap
         CircuitBreaker breaker = new CircuitBreaker(properties);
         RunContext ctx = newContext();
         ctx.markIterationStart();
+        Thread.sleep(20); // ensure total wall-clock exceeds the 5ms cap deterministically
 
         assertThatThrownBy(() -> breaker.check(ctx))
                 .isInstanceOf(BudgetExceededException.class)

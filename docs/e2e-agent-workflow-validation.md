@@ -1,0 +1,1 @@
+E2E validation: this note was added by an Aria worker agent through the governed git tool-pack (clone, edit, commit, push, PR) to validate the workflow introduced in PR #21. Safe to close after review.

@@ -56,6 +56,35 @@ export interface Approval {
   riskTier?: string;
 }
 
+// === Harness Profiles (customisable agent-loop tuning) ===
+export interface HarnessProfileSteering {
+  shellExecToGitPack: boolean;
+}
+
+export interface HarnessProfileSelfVerify {
+  enabled: boolean;
+  escalateTiers: string[];
+  maxResponseTokens: number;
+  promptOverride: string | null;
+}
+
+export interface HarnessProfile {
+  name: string;
+  toolDenylist: string[];
+  steering: HarnessProfileSteering;
+  selfVerify: HarnessProfileSelfVerify;
+  maxToolCallRounds: number;
+  maxToolOutputChars: number;
+}
+
+export interface WorkspaceDiff {
+  runId: string;
+  hasWorkspace: boolean;
+  summary: string;
+  diff: string;
+  truncated: boolean;
+}
+
 export interface KnowledgeItem {
   id: string;
   name: string;

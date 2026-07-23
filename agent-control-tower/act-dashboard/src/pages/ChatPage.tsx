@@ -2,6 +2,9 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listRuns, getRunTrajectory, injectRunMessage } from '../api/runs';
 import { listAgents } from '../api/agents';
+import WorkflowStepper from '../components/WorkflowStepper';
+import DelegationTree from '../components/DelegationTree';
+import ReviewQueue from '../components/ReviewQueue';
 import type { Run, Agent, SessionTrajectory } from '../types';
 
 // ---------- Types ----------
@@ -355,6 +358,19 @@ export default function ChatPage() {
                 <span className="dot" /> audited
               </span>
             </header>
+
+            {activeRun && (
+              <div
+                className="chat-run-context"
+                style={{ padding: '8px 12px', borderBottom: '1px solid var(--line-2, #26304d)' }}
+              >
+                <WorkflowStepper runId={activeRun.id} />
+                <DelegationTree runId={activeRun.id} agentName={activeAgent?.name} />
+                <div className="chat-inline-approvals" style={{ marginTop: 6 }}>
+                  <ReviewQueue runId={activeRun.id} />
+                </div>
+              </div>
+            )}
 
             <div className="chat-stack" ref={stackRef}>
               {!activeThread && (

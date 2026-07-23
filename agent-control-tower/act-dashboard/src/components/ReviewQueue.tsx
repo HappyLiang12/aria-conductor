@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
+import DiffPreview from './DiffPreview';
 
 function timeAgo(iso: string): string {
   const then = new Date(iso).getTime();
@@ -14,11 +15,11 @@ function timeAgo(iso: string): string {
   return `${d}d ago`;
 }
 
-export default function ReviewQueue() {
+export default function ReviewQueue({ runId }: { runId?: string } = {}) {
   const queryClient = useQueryClient();
 
   const { data: approvals, isLoading, error } = useQuery({
-    queryKey: ['approvals', 'PENDING'],
+    queryKey: ['approvals', 'PENDING', runId ?? 'all'],
     queryFn: () => listApprovals('PENDING'),
     refetchInterval: 10000,
   });
@@ -39,7 +40,7 @@ export default function ReviewQueue() {
     },
   });
 
-  const items = approvals ?? [];
+  const items = (approvals ?? []).filter((a) => !runId || a.runId === runId);
 
   return (
     <section className="panel" id="panel-queue">
@@ -93,6 +94,8 @@ export default function ReviewQueue() {
               <div className="desc">
                 {approval.reason || 'Awaiting human verification before tool execution proceeds.'}
               </div>
+              {(approval.toolName === 'git_push' || approval.toolName === 'git_create_pr'
+                || approval.riskTier === 'PUSH') && <DiffPreview runId={approval.runId} />}
               <div className="row">
                 <button
                   className="btn primary"

@@ -163,6 +163,15 @@ public class ApprovalGate {
      * - Timeout expires (auto-reject)
      */
     public ApprovalDecision requestApproval(Action action, RunContext ctx) {
+        return requestApproval(action, ctx, null);
+    }
+
+    /**
+     * Request approval for an action, optionally with an escalation note explaining WHY the action
+     * was routed to a human (e.g. AI self-verification reasoning). Blocks the virtual thread until
+     * the approval is decided or the timeout expires.
+     */
+    public ApprovalDecision requestApproval(Action action, RunContext ctx, String escalationNote) {
         UUID approvalId = UUID.randomUUID();
 
         // Find existing ToolCall entity (created by AgentLoopEngine before pipeline execution),
@@ -184,7 +193,7 @@ public class ApprovalGate {
                 .runId(ctx.getRunId())
                 .toolCallId(toolCallId)
                 .status(ApprovalStatus.PENDING)
-                .reason(buildApprovalReason(action))
+                .reason(buildApprovalReason(action, escalationNote))
                 .expiresAt(now.plusSeconds(APPROVAL_TIMEOUT_MINUTES * 60))
                 .build();
         approvalRepository.save(approval);
@@ -270,12 +279,16 @@ public class ApprovalGate {
      * Build a human-readable approval reason that surfaces the tool name and a truncated
      * arguments preview, so operators can make an informed decision in the UI (#24).
      */
-    private String buildApprovalReason(Action action) {
+    private String buildApprovalReason(Action action, String escalationNote) {
         String args = action.arguments() != null ? action.arguments() : "";
         if (args.length() > 200) {
             args = args.substring(0, 200) + "…";
         }
-        return "Agent requests approval to execute " + action.name() + (args.isBlank() ? "" : " " + args);
+        String base = "Agent requests approval to execute " + action.name() + (args.isBlank() ? "" : " " + args);
+        if (escalationNote != null && !escalationNote.isBlank()) {
+            return "AI escalated for human review: " + escalationNote.trim() + " — " + base;
+        }
+        return base;
     }
 
     /**

@@ -77,16 +77,23 @@ public class ActionExecutionPipeline {
             log.info("Pipeline: action '{}' AI WARN — proceeding: {}",
                     action.name(), aiResult.reasoning());
         }
+        // ESCALATE routes the action to a human gate even when static classification would allow it.
+        boolean forceApproval = aiResult.isEscalate();
+        if (forceApproval) {
+            log.info("Pipeline: action '{}' AI ESCALATE — forcing human approval: {}",
+                    action.name(), aiResult.reasoning());
+        }
 
         // Stage 4 — approval gate (single-action; turn-level batching handled by callers
-        // via ApprovalGate.requestTurnApproval).
-        if (classification.requiresApproval()) {
+        // via ApprovalGate.requestTurnApproval). Enter when static policy requires it OR the AI
+        // self-verification escalated this action.
+        if (classification.requiresApproval() || forceApproval) {
             log.info("Pipeline: action '{}' requires approval", action.name());
             // Cosmetic: set Run.status=PAUSED for dashboard accuracy during blocking gate
             setRunStatus(ctx, RunStatus.PAUSED);
             try {
                 io.aria.conductor.execution.approval.ApprovalDecision decision =
-                        approvalGate.requestApproval(action, ctx);
+                        approvalGate.requestApproval(action, ctx, forceApproval ? aiResult.reasoning() : null);
                 if (!ctx.isCancelled()) setRunStatus(ctx, RunStatus.RUNNING);
                 if (!decision.isApproved()) {
                     log.warn("Pipeline: action '{}' denied by approval gate: {}",

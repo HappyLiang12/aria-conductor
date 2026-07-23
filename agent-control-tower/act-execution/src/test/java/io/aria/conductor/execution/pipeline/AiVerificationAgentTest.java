@@ -2,6 +2,8 @@ package io.aria.conductor.execution.pipeline;
 
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
+import io.aria.conductor.common.model.HarnessProfile;
+import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.execution.engine.RunContext;
 import io.aria.conductor.execution.llm.LlmClient;
 import io.aria.conductor.execution.llm.LlmRequest;
@@ -30,13 +32,15 @@ class AiVerificationAgentTest {
 
     @Mock private LlmClient llmClient;
     @Mock private ObjectProvider<LlmClient> llmClientProvider;
+    @Mock private ToolRiskResolver riskResolver;
 
     private AiVerificationAgent agent;
 
     @BeforeEach
     void setUp() {
         lenient().when(llmClientProvider.getIfAvailable()).thenReturn(llmClient);
-        agent = new AiVerificationAgent(llmClientProvider);
+        lenient().when(riskResolver.resolve(any())).thenReturn(RiskTier.READ);
+        agent = new AiVerificationAgent(llmClientProvider, riskResolver);
     }
 
     @Test
@@ -148,6 +152,70 @@ class AiVerificationAgentTest {
         AiVerificationResult result = agent.parse("MAYBE?\nnot sure");
         assertThat(result.isPass()).isTrue();
         assertThat(result.reasoning()).contains("Unparsed");
+    }
+
+    @Test
+    void parse_escalateFirstLine_returnsEscalate() {
+        AiVerificationResult result = agent.parse("ESCALATE\nNeeds a human.");
+        assertThat(result.isEscalate()).isTrue();
+        assertThat(result.reasoning()).contains("Needs a human");
+    }
+
+    @Test
+    void verify_escalate_honoredWhenTierGated() {
+        when(llmClient.complete(any(LlmRequest.class)))
+                .thenReturn(new LlmResponse("ESCALATE\nPushing code needs human review.", 5, 5, "stop", List.of()));
+        when(riskResolver.resolve("git_push")).thenReturn(RiskTier.PUSH);
+
+        RunContext context = ctx();
+        context.setHarnessProfile(profileWithEscalate(List.of("PUSH")));
+
+        AiVerificationResult result = agent.verify(
+                new Action("git_push", ActionType.EXECUTE, "{}", "tc-esc"),
+                ActionClassification.mediumRisk("EXECUTE"),
+                context);
+
+        assertThat(result.isEscalate()).isTrue();
+    }
+
+    @Test
+    void verify_escalate_downgradedToWarnWhenTierNotGated() {
+        when(llmClient.complete(any(LlmRequest.class)))
+                .thenReturn(new LlmResponse("ESCALATE\nLooks risky.", 5, 5, "stop", List.of()));
+        when(riskResolver.resolve("write_file")).thenReturn(RiskTier.WRITE_LOCAL);
+
+        RunContext context = ctx();
+        // Profile only gates PUSH, so a WRITE_LOCAL escalate must be downgraded to WARN (proceed).
+        context.setHarnessProfile(profileWithEscalate(List.of("PUSH")));
+
+        AiVerificationResult result = agent.verify(
+                new Action("write_file", ActionType.WRITE, "{}", "tc-esc2"),
+                ActionClassification.mediumRisk("WRITE"),
+                context);
+
+        assertThat(result.outcome()).isEqualTo(AiVerificationResult.VerificationOutcome.WARN);
+    }
+
+    @Test
+    void verify_defaultProfile_neverEscalates() {
+        when(llmClient.complete(any(LlmRequest.class)))
+                .thenReturn(new LlmResponse("ESCALATE\nrisky", 5, 5, "stop", List.of()));
+        when(riskResolver.resolve("git_push")).thenReturn(RiskTier.PUSH);
+
+        // No profile on ctx → defaults() with empty escalateTiers → escalate is downgraded to WARN.
+        AiVerificationResult result = agent.verify(
+                new Action("git_push", ActionType.EXECUTE, "{}", "tc-esc3"),
+                ActionClassification.mediumRisk("EXECUTE"),
+                ctx());
+
+        assertThat(result.isEscalate()).isFalse();
+    }
+
+    private HarnessProfile profileWithEscalate(List<String> tiers) {
+        return new HarnessProfile("test", List.of(),
+                new HarnessProfile.Steering(false),
+                new HarnessProfile.SelfVerify(true, tiers, 200, null),
+                0, 16000);
     }
 
     private RunContext ctx() {

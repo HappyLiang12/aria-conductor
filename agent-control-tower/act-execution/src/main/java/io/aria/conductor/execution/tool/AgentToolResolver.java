@@ -57,6 +57,11 @@ public class AgentToolResolver {
         return List.of();
     }
 
+    /** True when the agent has explicit tool grants (which override role-template defaults). */
+    public boolean hasExplicitTools(Agent agent) {
+        return !agentToolRepo.findToolIdsByAgentId(agent.getId().toString()).isEmpty();
+    }
+
     /** Map a free-text role description to a canonical worker role key by keyword (#25). */
     private String matchKeywordRole(String role) {
         String lower = role.toLowerCase();

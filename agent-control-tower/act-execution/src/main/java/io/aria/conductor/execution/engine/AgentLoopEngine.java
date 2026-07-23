@@ -6,6 +6,7 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -23,6 +24,8 @@ import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.pipeline.Action;
 import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
 import io.aria.conductor.execution.pipeline.ActionResult;
+import io.aria.conductor.execution.harness.ToolSteeringGuard;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.PromptCallRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
@@ -78,6 +81,9 @@ public class AgentLoopEngine {
     private final ToolRegistry toolRegistry;
     private final KnowledgeContextProvider knowledgeProvider;
     private final WorkspaceManager workspaceManager;
+    private final HarnessProfileService harnessProfileService;
+    private final ToolSteeringGuard toolSteeringGuard;
+    private final ApprovalRepository approvalRepository;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -99,7 +105,10 @@ public class AgentLoopEngine {
                            AgentSkillResolver agentSkillResolver,
                            ToolRegistry toolRegistry,
                            KnowledgeContextProvider knowledgeProvider,
-                           WorkspaceManager workspaceManager) {
+                           WorkspaceManager workspaceManager,
+                           HarnessProfileService harnessProfileService,
+                           ToolSteeringGuard toolSteeringGuard,
+                           ApprovalRepository approvalRepository) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -118,6 +127,9 @@ public class AgentLoopEngine {
         this.toolRegistry = toolRegistry;
         this.knowledgeProvider = knowledgeProvider;
         this.workspaceManager = workspaceManager;
+        this.harnessProfileService = harnessProfileService;
+        this.toolSteeringGuard = toolSteeringGuard;
+        this.approvalRepository = approvalRepository;
     }
 
     /**
@@ -175,7 +187,16 @@ public class AgentLoopEngine {
         // is a hard cap over the agent's configured maxToolCallRounds; a value of 0 means "not set",
         // in which case the agent config (or a global default) is used. Persist the resolved value
         // back onto the run so the stored record and UI reflect the effective cap.
+        // Resolve the harness profile once per run (tool steering, self-verify escalation, budgets).
+        HarnessProfile harnessProfile = harnessProfileService.resolve(agent);
+
         int maxIterations = parseMaxIterationsFromConfig(agent, run.getMaxIterations());
+        // If the agent set no explicit round cap but the profile does, apply the (tighter) profile
+        // cap so a weak model terminates sooner. The default profile leaves rounds unset (no change).
+        if (harnessProfile.maxToolCallRounds() > 0 && !hasExplicitMaxToolCallRounds(agent)) {
+            int cap = harnessProfile.maxToolCallRounds();
+            maxIterations = run.getMaxIterations() > 0 ? Math.min(cap, run.getMaxIterations()) : cap;
+        }
         if (run.getMaxIterations() != maxIterations) {
             run.setMaxIterations(maxIterations);
         }
@@ -188,6 +209,7 @@ public class AgentLoopEngine {
 
         // Create run context with the resolved maxIterations
         RunContext ctx = new RunContext(runId, agent.getId(), agent, session, maxIterations, run.getConversationId());
+        ctx.setHarnessProfile(harnessProfile);
         if (intent != null) {
             ctx.setIntent(intent);
         }
@@ -234,10 +256,28 @@ public class AgentLoopEngine {
             log.warn("Cannot resume run — no active context: runId={}", runId);
             return;
         }
+        // #28: never let a raw resume bypass a pending human approval gate. The legitimate unblock
+        // path is ApprovalGate.decideApproval; a pending approval must be decided, not resumed past.
+        if (hasPendingApproval(runId)) {
+            log.warn("Refusing to resume run {} — a human approval is still pending; decide it instead", runId);
+            throw new IllegalStateException(
+                    "Run " + runId + " is waiting for human approval; decide the approval instead of resuming.");
+        }
         ctx.resume();
         updateRunStatusDirect(runId, RunStatus.RUNNING);
         sessionStateManager.updateSessionStatus(runId, SessionStatus.ACTIVE);
         log.info("Run resumed: runId={}", runId);
+    }
+
+    /** True when the run has at least one PENDING approval (HITL gate not yet decided). */
+    private boolean hasPendingApproval(UUID runId) {
+        try {
+            return approvalRepository.findByRunId(runId).stream()
+                    .anyMatch(a -> a.getStatus() == ApprovalStatus.PENDING);
+        } catch (Exception e) {
+            log.debug("Could not check pending approvals for run {}: {}", runId, e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -560,6 +600,12 @@ public class AgentLoopEngine {
             List<Map<String, Object>> toolsPayload = List.of();
             try {
                 List<ToolDefinition> agentTools = agentToolResolver.resolveForAgent(ctx.getAgent());
+                // Explicit user tool assignments are authoritative (UI-controlled); the profile
+                // denylist only hardens role-template DEFAULTS (e.g. weak-model-safe removes
+                // shell_exec from the dev template), so skip it when the agent has explicit grants.
+                if (!agentToolResolver.hasExplicitTools(ctx.getAgent())) {
+                    agentTools = harnessProfileService.applyDenylist(agentTools, ctx.getHarnessProfile());
+                }
                 if (!agentTools.isEmpty()) {
                     toolsPayload = toolRegistry.buildToolsPayloadForIds(
                             agentTools.stream().map(ToolDefinition::getId).toList());
@@ -633,9 +679,12 @@ public class AgentLoopEngine {
                         "status", "executing"
                 ));
 
-                // 2. Execute through pipeline (may block on approval)
+                // 2. Execute through pipeline (may block on approval). First, steer ungoverned
+                //    git/gh-via-shell_exec calls to the governed git pack (weak-model safety); a
+                //    steering nudge short-circuits the pipeline and is surfaced back to the model.
                 long start = System.currentTimeMillis();
-                ActionResult result = actionPipeline.execute(action, ctx);
+                ActionResult result = toolSteeringGuard.intercept(action, ctx.getHarnessProfile())
+                        .orElseGet(() -> actionPipeline.execute(action, ctx));
                 long end = System.currentTimeMillis();
 
                 // Reload tool call from DB — ApprovalGate may have updated status to DENIED
@@ -1117,6 +1166,20 @@ public class AgentLoopEngine {
             log.warn("Failed to parse Agent.config for agent {}: {}", agent.getId(), e.getMessage());
         }
         return runMaxIterations > 0 ? runMaxIterations : 50;
+    }
+
+    /** True when the agent explicitly set a positive maxToolCallRounds in its config JSON. */
+    private static boolean hasExplicitMaxToolCallRounds(Agent agent) {
+        String config = agent.getConfig();
+        if (config == null || config.isBlank()) return false;
+        try {
+            Map<String, Object> configMap = new ObjectMapper().readValue(
+                    config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            Object v = configMap.get("maxToolCallRounds");
+            return v instanceof Number num && num.intValue() > 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private String getSystemPromptFromConfig(Agent agent) {

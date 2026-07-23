@@ -45,7 +45,7 @@ public class ActionExecutor {
 
             if (result.isSuccess()) {
                 String output = result.getOutput() != null ? result.getOutput() : "";
-                output = truncateOutput(output);
+                output = truncateOutput(output, ctx);
                 log.debug("Action executed successfully: name={}, outputLength={}", action.name(), output.length());
                 return ActionResult.success(output);
             } else {
@@ -68,10 +68,13 @@ public class ActionExecutor {
         }
     }
 
-    /** Cap a tool output so oversized results don't bloat the model context (#perf). */
-    private String truncateOutput(String output) {
-        if (output == null || output.length() <= MAX_TOOL_OUTPUT_CHARS) return output;
-        int omitted = output.length() - MAX_TOOL_OUTPUT_CHARS;
-        return output.substring(0, MAX_TOOL_OUTPUT_CHARS) + "\n… [output truncated: " + omitted + " more chars omitted]";
+    /** Cap a tool output so oversized results don't bloat the model context (#perf). Profile-tunable. */
+    private String truncateOutput(String output, RunContext ctx) {
+        int cap = (ctx != null && ctx.getHarnessProfile() != null)
+                ? ctx.getHarnessProfile().effectiveOutputCap(MAX_TOOL_OUTPUT_CHARS)
+                : MAX_TOOL_OUTPUT_CHARS;
+        if (output == null || output.length() <= cap) return output;
+        int omitted = output.length() - cap;
+        return output.substring(0, cap) + "\n… [output truncated: " + omitted + " more chars omitted]";
     }
 }

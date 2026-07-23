@@ -12,6 +12,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentTool;
 import io.aria.conductor.common.model.AgentToolId;
 import io.aria.conductor.common.model.HealthStatus;
+import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.model.VersionStatus;
 import io.aria.conductor.common.model.AgentSkill;
@@ -48,6 +49,7 @@ public class AgentService {
     private final AgentSkillRepository agentSkillRepository;
     private final RoleToolTemplateRepository roleToolTemplateRepository;
     private final RoleSkillTemplateRepository roleSkillTemplateRepository;
+    private final HarnessProfileService harnessProfileService;
 
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
@@ -57,7 +59,8 @@ public class AgentService {
                         SkillContextProvider skillProvider,
                         AgentSkillRepository agentSkillRepository,
                         RoleToolTemplateRepository roleToolTemplateRepository,
-                        RoleSkillTemplateRepository roleSkillTemplateRepository) {
+                        RoleSkillTemplateRepository roleSkillTemplateRepository,
+                        HarnessProfileService harnessProfileService) {
         this.agentRepository = agentRepository;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
@@ -67,6 +70,7 @@ public class AgentService {
         this.agentSkillRepository = agentSkillRepository;
         this.roleToolTemplateRepository = roleToolTemplateRepository;
         this.roleSkillTemplateRepository = roleSkillTemplateRepository;
+        this.harnessProfileService = harnessProfileService;
     }
 
     @Transactional
@@ -81,7 +85,7 @@ public class AgentService {
                 .model(request.getModel())
                 .provider(request.getProvider())
                 .adkProvider(request.getAdkProvider() != null ? request.getAdkProvider() : "langchain")
-                .config(serializeConfig(request.getConfig()))
+                .config(serializeConfig(withDefaultHarnessProfile(request.getConfig(), request.getRole())))
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
 
@@ -180,8 +184,11 @@ public class AgentService {
     @Transactional(readOnly = true)
     public List<ToolDefinition> getAgentTools(UUID agentId) {
         Agent agent = findAgentOrThrow(agentId);
+        HarnessProfile profile = harnessProfileService.resolve(agent);
         List<String> toolIds = agentToolRepository.findToolIdsByAgentId(agentId.toString());
         if (!toolIds.isEmpty()) {
+            // Explicit user tool assignments are authoritative (UI-controlled); the profile denylist
+            // only hardens role-template DEFAULTS, so it is NOT applied to explicit grants.
             return toolDefinitionRepository.findAllById(toolIds);
         }
         // No explicit grants: surface the role-template defaults the runtime AgentToolResolver
@@ -189,10 +196,11 @@ public class AgentService {
         // tools a delegated worker can actually use (#25).
         List<String> templateIds = resolveRoleTemplateToolIds(agent.getRole());
         if (templateIds.isEmpty()) return List.of();
-        return toolDefinitionRepository.findAllById(templateIds).stream()
+        List<ToolDefinition> tools = toolDefinitionRepository.findAllById(templateIds).stream()
                 .filter(ToolDefinition::isEnabled)
                 .filter(this::isApprovedOrEnabled)
                 .collect(Collectors.toList());
+        return harnessProfileService.applyDenylist(tools, profile);
     }
 
     /**
@@ -220,6 +228,26 @@ public class AgentService {
         if (lower.contains("qa") || lower.contains("tester")) return "qa";
         if (lower.contains("ba") || lower.contains("analyst")) return "ba";
         return null;
+    }
+
+    /**
+     * Weak models are far more reliable under the "weak-model-safe" harness profile, so newly
+     * created worker/dev agents adopt it unless the caller pinned a profile explicitly. The
+     * orchestrator and other roles keep the global default; existing agents are never modified.
+     */
+    private Map<String, Object> withDefaultHarnessProfile(Map<String, Object> requested, String role) {
+        Map<String, Object> config = requested == null
+                ? new java.util.HashMap<>() : new java.util.HashMap<>(requested);
+        if (config.containsKey("harnessProfile") || role == null || role.isBlank()) {
+            return config;
+        }
+        // Worker/dev roles adopt weak-model-safe: dev/qa/ba by keyword, or an explicit worker role.
+        // The orchestrator and other roles keep the global default.
+        boolean workerLike = role.toLowerCase().contains("worker") || matchKeywordRole(role) != null;
+        if (workerLike) {
+            config.put("harnessProfile", "weak-model-safe");
+        }
+        return config;
     }
 
     @Transactional

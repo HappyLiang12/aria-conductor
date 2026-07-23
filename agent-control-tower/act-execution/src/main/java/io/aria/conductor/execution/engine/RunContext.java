@@ -34,6 +34,7 @@ public class RunContext {
     private List<UUID> currentTurnToolCallIds;
     private List<String> cachedSkillNames;
     private String workspaceDir;
+    private io.aria.conductor.common.model.HarnessProfile harnessProfile;
 
     // Per-iteration latency tracking (#22): iterationStartTime is reset at the start of each
     // iteration; blockedWaitMillis accumulates human approval/pause wait so it is excluded
@@ -133,6 +134,14 @@ public class RunContext {
 
     public String getWorkspaceDir() { return workspaceDir; }
     public void setWorkspaceDir(String workspaceDir) { this.workspaceDir = workspaceDir; }
+
+    /**
+     * The resolved harness profile for this run (tool steering, self-verify escalation, budgets).
+     * May be null for runs created before profile resolution; callers should fall back to
+     * {@link io.aria.conductor.common.model.HarnessProfile#defaults()}.
+     */
+    public io.aria.conductor.common.model.HarnessProfile getHarnessProfile() { return harnessProfile; }
+    public void setHarnessProfile(io.aria.conductor.common.model.HarnessProfile harnessProfile) { this.harnessProfile = harnessProfile; }
 
     /**
      * Pause the run — creates a new CompletableFuture that blocks the loop.

@@ -3,8 +3,11 @@ package io.aria.conductor.aria.tools.handlers;
 import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,10 +23,14 @@ import static org.mockito.Mockito.*;
 class RunToolHandlerTest {
     @Mock private RunService runService;
     @Mock private RunRepository runRepository;
+    @Mock private ApprovalRepository approvalRepository;
     private RunToolHandler handler;
 
     @BeforeEach
-    void setUp() { handler = new RunToolHandler(runService, runRepository); }
+    void setUp() {
+        lenient().when(approvalRepository.findByRunId(any())).thenReturn(List.of());
+        handler = new RunToolHandler(runService, runRepository, approvalRepository);
+    }
 
     @Test void startRunShouldReturnText() {
         UUID agentId = UUID.randomUUID();
@@ -72,6 +79,15 @@ class RunToolHandlerTest {
         String result = handler.execute(Map.of("toolName","resume_run","id",id.toString()));
         verify(runService).resumeRun(eq(id), any());
         assertThat(result).contains("resumed");
+    }
+
+    @Test void resumeRunBlockedWhenApprovalPending() {
+        UUID id = UUID.randomUUID();
+        Approval pending = Approval.builder().runId(id).status(ApprovalStatus.PENDING).build();
+        when(approvalRepository.findByRunId(id)).thenReturn(List.of(pending));
+        String result = handler.execute(Map.of("toolName","resume_run","id",id.toString()));
+        assertThat(result).contains("waiting for human approval");
+        verify(runService, never()).resumeRun(any(), any());
     }
 
     @Test void cancelRunShouldReturnText() {

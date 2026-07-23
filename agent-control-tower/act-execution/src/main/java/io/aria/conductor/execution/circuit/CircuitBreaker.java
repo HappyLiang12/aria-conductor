@@ -34,6 +34,7 @@ public class CircuitBreaker {
         int maxIterations = properties.getMaxIterations();
         double errorRateThreshold = properties.getErrorRateThreshold();
         long maxIterationLatencyMs = properties.getMaxIterationLatencyMs();
+        long maxRunDurationMs = properties.getMaxRunDurationMs();
 
         // Token budget check
         if (ctx.getTotalTokensUsed() > maxTokensPerRun) {
@@ -62,17 +63,30 @@ public class CircuitBreaker {
             }
         }
 
-        // Latency check
-        long elapsedMs = Duration.between(ctx.getStartTime(), Instant.now()).toMillis();
-        if (elapsedMs > maxIterationLatencyMs) {
-            String msg = String.format("Max latency exceeded: %dms > %dms", elapsedMs,
+        // Per-iteration latency check (#22): measures compute time for the current iteration,
+        // excluding human approval/pause wait (blockedWait). This prevents HITL runs from being
+        // killed while waiting for an operator decision (the approval window is far longer).
+        long iterationElapsedMs = Math.max(0L,
+                Duration.between(ctx.getIterationStartTime(), Instant.now()).toMillis() - ctx.getBlockedWaitMillis());
+        if (iterationElapsedMs > maxIterationLatencyMs) {
+            String msg = String.format("Max iteration latency exceeded: %dms > %dms", iterationElapsedMs,
                     maxIterationLatencyMs);
             log.error("Circuit breaker tripped: {}", msg);
             throw new BudgetExceededException(msg);
         }
 
-        log.debug("Circuit breaker check passed: tokens={}, iterations={}, errors={}, latencyMs={}",
+        // Total run duration guard: independent safety cap on overall wall-clock time (includes
+        // approval wait). Defaults well above the approval window so legitimate HITL runs survive.
+        long totalElapsedMs = Duration.between(ctx.getStartTime(), Instant.now()).toMillis();
+        if (totalElapsedMs > maxRunDurationMs) {
+            String msg = String.format("Max total run duration exceeded: %dms > %dms", totalElapsedMs,
+                    maxRunDurationMs);
+            log.error("Circuit breaker tripped: {}", msg);
+            throw new BudgetExceededException(msg);
+        }
+
+        log.debug("Circuit breaker check passed: tokens={}, iterations={}, errors={}, iterationLatencyMs={}, totalMs={}",
                 ctx.getTotalTokensUsed(), ctx.getIterationCount(),
-                ctx.getErrors().size(), elapsedMs);
+                ctx.getErrors().size(), iterationElapsedMs, totalElapsedMs);
     }
 }

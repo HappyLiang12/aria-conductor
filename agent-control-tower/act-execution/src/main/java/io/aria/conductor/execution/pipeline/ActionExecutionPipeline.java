@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.pipeline;
 
+import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.engine.RunContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -26,6 +28,7 @@ public class ActionExecutionPipeline {
     private final ShadowCopyManager shadowCopyManager;
     private final ActionExecutor executor;
     private final AuditRecorder auditRecorder;
+    private final RunRepository runRepository;
 
     public ActionExecutionPipeline(ActionClassifier classifier,
                                    RuleVerifier ruleVerifier,
@@ -33,7 +36,8 @@ public class ActionExecutionPipeline {
                                    io.aria.conductor.execution.approval.ApprovalGate approvalGate,
                                    ShadowCopyManager shadowCopyManager,
                                    ActionExecutor executor,
-                                   AuditRecorder auditRecorder) {
+                                   AuditRecorder auditRecorder,
+                                   RunRepository runRepository) {
         this.classifier = classifier;
         this.ruleVerifier = ruleVerifier;
         this.aiVerificationAgent = aiVerificationAgent;
@@ -41,6 +45,7 @@ public class ActionExecutionPipeline {
         this.shadowCopyManager = shadowCopyManager;
         this.executor = executor;
         this.auditRecorder = auditRecorder;
+        this.runRepository = runRepository;
     }
 
     public ActionResult execute(Action action, RunContext ctx) {
@@ -77,9 +82,12 @@ public class ActionExecutionPipeline {
         // via ApprovalGate.requestTurnApproval).
         if (classification.requiresApproval()) {
             log.info("Pipeline: action '{}' requires approval", action.name());
+            // Cosmetic: set Run.status=PAUSED for dashboard accuracy during blocking gate
+            setRunStatus(ctx, RunStatus.PAUSED);
             try {
                 io.aria.conductor.execution.approval.ApprovalDecision decision =
                         approvalGate.requestApproval(action, ctx);
+                if (!ctx.isCancelled()) setRunStatus(ctx, RunStatus.RUNNING);
                 if (!decision.isApproved()) {
                     log.warn("Pipeline: action '{}' denied by approval gate: {}",
                             action.name(), decision.reason());
@@ -89,6 +97,7 @@ public class ActionExecutionPipeline {
                 }
                 log.info("Pipeline: action '{}' approved", action.name());
             } catch (Exception e) {
+                if (!ctx.isCancelled()) setRunStatus(ctx, RunStatus.RUNNING);
                 log.error("Pipeline: approval gate error for action '{}': {}",
                         action.name(), e.getMessage(), e);
                 ActionResult result = ActionResult.denied("Approval process failed: " + e.getMessage());
@@ -113,5 +122,19 @@ public class ActionExecutionPipeline {
 
         log.info("Pipeline: action '{}' completed with status {}", action.name(), result.status());
         return result;
+    }
+
+    /** Cosmetic: update Run.status in DB for dashboard accuracy (non-blocking, best-effort). */
+    private void setRunStatus(RunContext ctx, RunStatus status) {
+        try {
+            if (ctx.getRunId() != null) {
+                runRepository.findById(ctx.getRunId()).ifPresent(run -> {
+                    run.setStatus(status);
+                    runRepository.save(run);
+                });
+            }
+        } catch (Exception e) {
+            log.debug("Could not set run status to {} (non-fatal): {}", status, e.getMessage());
+        }
     }
 }

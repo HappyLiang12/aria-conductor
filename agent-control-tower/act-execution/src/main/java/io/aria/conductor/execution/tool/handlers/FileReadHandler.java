@@ -21,13 +21,24 @@ public class FileReadHandler implements ToolHandler {
         String path = Objects.toString(arguments.get("path"), "");
         if (path.isEmpty()) return "Error: Missing required parameter: path";
         try {
-            Path baseDir = Path.of(projectRoot).toAbsolutePath().normalize();
-            Path filePath = baseDir.resolve(path).normalize();
-            if (!filePath.startsWith(baseDir)) {
-                return "Error: Path traversal denied: " + path;
+            Path filePath;
+            String runWorkspace = Objects.toString(arguments.get("_workspaceDir"), null);
+            if (runWorkspace != null) {
+                // Path-jailed to per-run workspace
+                Path workspace = Path.of(runWorkspace).toAbsolutePath().normalize();
+                filePath = workspace.resolve(path).toAbsolutePath().normalize();
+                if (!filePath.startsWith(workspace)) {
+                    return "Error: Path traversal denied: " + path;
+                }
+            } else {
+                // Fall back to project root
+                Path baseDir = Path.of(projectRoot).toAbsolutePath().normalize();
+                filePath = baseDir.resolve(path).normalize();
+                if (!filePath.startsWith(baseDir)) {
+                    return "Error: Path traversal denied: " + path;
+                }
             }
-            if (!Files.exists(filePath)) return "Error: File not found: " + path
-                    + " (resolved against project root: " + baseDir + ")";
+            if (!Files.exists(filePath)) return "Error: File not found: " + path;
             if (!Files.isReadable(filePath)) return "Error: File not readable: " + path;
             String content = Files.readString(filePath);
             if (content.length() > 512_000) {

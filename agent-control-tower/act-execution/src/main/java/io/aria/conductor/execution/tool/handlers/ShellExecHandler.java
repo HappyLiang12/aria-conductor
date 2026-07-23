@@ -49,6 +49,11 @@ public class ShellExecHandler implements ToolHandler {
                 pb = new ProcessBuilder("sh", "-c", command);
             }
             pb.redirectErrorStream(true);
+            // Set working directory to run workspace when available
+            String workspaceDir = Objects.toString(arguments.get("_workspaceDir"), null);
+            if (workspaceDir != null) {
+                pb.directory(new java.io.File(workspaceDir));
+            }
             Process p = pb.start();
             String output = new String(p.getInputStream().readAllBytes());
             int exitCode = p.waitFor();

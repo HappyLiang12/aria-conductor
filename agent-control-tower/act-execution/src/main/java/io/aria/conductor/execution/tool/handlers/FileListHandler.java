@@ -22,7 +22,10 @@ public class FileListHandler implements ToolHandler {
     public String execute(Map<String, Object> arguments) {
         String path = Objects.toString(arguments.get("path"), ".");
         try {
-            Path baseDir = Path.of(projectRoot).toAbsolutePath().normalize();
+            String runWorkspace = Objects.toString(arguments.get("_workspaceDir"), null);
+            Path baseDir = runWorkspace != null
+                    ? Path.of(runWorkspace).toAbsolutePath().normalize()
+                    : Path.of(projectRoot).toAbsolutePath().normalize();
             Path dirPath = baseDir.resolve(path).normalize();
             if (!dirPath.startsWith(baseDir)) {
                 return "Error: Path traversal denied: " + path;

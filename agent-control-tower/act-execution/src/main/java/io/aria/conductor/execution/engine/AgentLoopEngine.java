@@ -29,9 +29,10 @@ import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
 import io.aria.conductor.execution.tool.AgentToolResolver;
+import io.aria.conductor.execution.tool.AgentSkillResolver;
+import io.aria.conductor.execution.tool.WorkspaceManager;
 import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
-import io.aria.conductor.common.service.SkillContextProvider;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
@@ -73,9 +74,10 @@ public class AgentLoopEngine {
     private final WorkflowService workflowService;
     private final WorkflowChainRepository workflowChainRepository;
     private final AgentToolResolver agentToolResolver;
+    private final AgentSkillResolver agentSkillResolver;
     private final ToolRegistry toolRegistry;
     private final KnowledgeContextProvider knowledgeProvider;
-    private final SkillContextProvider skillProvider;
+    private final WorkspaceManager workspaceManager;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -94,9 +96,10 @@ public class AgentLoopEngine {
                            WorkflowService workflowService,
                            WorkflowChainRepository workflowChainRepository,
                            AgentToolResolver agentToolResolver,
+                           AgentSkillResolver agentSkillResolver,
                            ToolRegistry toolRegistry,
                            KnowledgeContextProvider knowledgeProvider,
-                           SkillContextProvider skillProvider) {
+                           WorkspaceManager workspaceManager) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -111,9 +114,10 @@ public class AgentLoopEngine {
         this.workflowService = workflowService;
         this.workflowChainRepository = workflowChainRepository;
         this.agentToolResolver = agentToolResolver;
+        this.agentSkillResolver = agentSkillResolver;
         this.toolRegistry = toolRegistry;
         this.knowledgeProvider = knowledgeProvider;
-        this.skillProvider = skillProvider;
+        this.workspaceManager = workspaceManager;
     }
 
     /**
@@ -412,6 +416,16 @@ public class AgentLoopEngine {
         // Update to RUNNING
         updateRunStatusDirect(ctx.getRunId(), RunStatus.RUNNING);
 
+        // Provision per-run workspace (lazy — only creates dir; handlers use it when needed)
+        try {
+            String wsDir = workspaceManager.getOrProvision(ctx.getRunId());
+            ctx.setWorkspaceDir(wsDir);
+            log.info("Provisioned run workspace: {}", wsDir);
+        } catch (Exception e) {
+            log.error("Workspace provisioning failed for run {} (use-site fallback will retry): {}",
+                    ctx.getRunId(), e.getMessage());
+        }
+
         // Persist initial context as trajectories so buildMessages() always has context.
         // Streaming path: use frontend-provided history + system prompt from initialContext.
         // Non-streaming path (empty initialContext): fall back to promptSeed.
@@ -453,6 +467,8 @@ public class AgentLoopEngine {
                 if (ctx.isPaused()) {
                     ctx.awaitResume();
                     if (ctx.isCancelled()) break;
+                    // Reset the per-iteration latency timer so time spent paused is not counted (#22)
+                    ctx.markIterationStart();
                 }
 
                 // Check circuit breaker
@@ -529,6 +545,7 @@ public class AgentLoopEngine {
      */
     private boolean executeIteration(RunContext ctx, @Nullable SseEmitter emitter) {
         ctx.incrementIteration();
+        ctx.markIterationStart(); // start the per-iteration latency window (#22)
         int iteration = ctx.getIterationCount();
         log.info("Iteration {} starting: runId={}", iteration, ctx.getRunId());
 
@@ -699,8 +716,8 @@ public class AgentLoopEngine {
                 // Cache skill names once per run (skills don't change mid-execution)
                 if (ctx.getCachedSkillNames() == null) {
                     try {
-                        ctx.setCachedSkillNames(skillProvider.getEnabledSkillsForAgent(
-                                ctx.getAgentId().toString()).stream().map(SkillContext::name).toList());
+                        ctx.setCachedSkillNames(agentSkillResolver.resolveForAgent(ctx.getAgent())
+                                .stream().map(SkillContext::name).toList());
                     } catch (Exception e) {
                         ctx.setCachedSkillNames(List.of());
                     }
@@ -777,7 +794,7 @@ public class AgentLoopEngine {
 
         // Inject enabled SKILL-stage skills assigned to this agent (resolves #56 skills orphan).
         try {
-            List<SkillContext> skills = skillProvider.getEnabledSkillsForAgent(ctx.getAgentId().toString());
+            List<SkillContext> skills = agentSkillResolver.resolveForAgent(ctx.getAgent());
             if (skills != null && !skills.isEmpty()) {
                 systemPrompt.append("## Skills\n");
                 for (SkillContext s : skills) {
@@ -1047,6 +1064,13 @@ public class AgentLoopEngine {
             approvalGate.cancelAllPendingForRun(ctx.getRunId());
         } catch (Exception e) {
             log.warn("Failed to cancel pending approvals for {}: {}", ctx.getRunId(), e.getMessage());
+        }
+
+        // Cleanup per-run workspace
+        try {
+            workspaceManager.cleanup(ctx.getRunId());
+        } catch (Exception e) {
+            log.warn("Workspace cleanup failed for {} (non-fatal): {}", ctx.getRunId(), e.getMessage());
         }
 
         activeContexts.remove(ctx.getRunId());

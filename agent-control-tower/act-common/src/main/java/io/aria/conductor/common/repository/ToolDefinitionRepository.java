@@ -20,7 +20,7 @@ public interface ToolDefinitionRepository extends JpaRepository<ToolDefinition, 
 
     List<ToolDefinition> findByCategoryAndEnabledTrue(String category);
 
-    @Query("SELECT t FROM ToolDefinition t WHERE t.enabled = true AND t.knowledgeItemId IN " +
+    @Query("SELECT t FROM ToolDefinition t WHERE t.enabled = true AND (t.status IS NULL OR t.status = 'APPROVED') AND t.knowledgeItemId IN " +
            "(SELECT cast(k.id as string) FROM KnowledgeItem k WHERE k.status = 'APPROVED')")
     List<ToolDefinition> findAllApprovedAndEnabled();
 }

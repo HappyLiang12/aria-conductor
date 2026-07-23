@@ -23,7 +23,10 @@ RUN mvn package -DskipTests -pl act-app -am -B
 
 # Stage 3: Runtime
 FROM eclipse-temurin:21-jre-jammy AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends git curl && \
+    rm -rf /var/lib/apt/lists/*
 RUN groupadd -r aria && useradd -r -g aria -s /bin/false aria
+RUN mkdir -p /workspaces && chown aria:aria /workspaces
 USER aria
 WORKDIR /app
 COPY --from=build /build/act-app/target/act-app-*.jar /app/aria-conductor.jar

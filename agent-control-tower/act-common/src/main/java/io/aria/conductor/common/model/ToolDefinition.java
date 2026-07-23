@@ -55,6 +55,21 @@ public class ToolDefinition {
     @Column(name = "knowledge_item_id", length = 36)
     private String knowledgeItemId;
 
+    @Column(name = "pack_id", length = 36)
+    private String packId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private PackKind kind;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "risk_tier", length = 20)
+    private RiskTier riskTier;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private VersionStatus status;
+
     @Column(nullable = false)
     private boolean enabled;
 

@@ -51,4 +51,22 @@ class SkillContextProviderImplTest {
         when(agentSkillRepository.findSkillIdsByAgentId("agent-2")).thenReturn(List.of());
         assertThat(provider.getEnabledSkillsForAgent("agent-2")).isEmpty();
     }
+
+    @Test
+    void getEnabledSkillsByIdsFiltersAndProjectsId() {
+        SkillDefinition matched = SkillDefinition.builder()
+                .id("s1").name("triage").description("d")
+                .template("check logs").stage("SKILL").enabled(true).build();
+        SkillDefinition disabled = SkillDefinition.builder()
+                .id("s3").name("old").description("d")
+                .template("x").stage("SKILL").enabled(false).build();
+        when(skillDefinitionRepository.findAllById(List.of("s1", "s3")))
+                .thenReturn(List.of(matched, disabled));
+
+        List<SkillContext> result = provider.getEnabledSkillsByIds(List.of("s1", "s3"));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).id()).isEqualTo("s1");
+        assertThat(result.get(0).name()).isEqualTo("triage");
+    }
 }

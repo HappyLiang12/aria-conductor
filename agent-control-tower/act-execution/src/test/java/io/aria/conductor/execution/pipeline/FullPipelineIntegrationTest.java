@@ -1,8 +1,10 @@
 package io.aria.conductor.execution.pipeline;
 
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
+import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.engine.RunContext;
@@ -44,6 +46,8 @@ class FullPipelineIntegrationTest {
     @Mock private ShadowCopyManager shadowCopyManager;
     @Mock private ActionExecutor executor;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private ToolRiskResolver riskResolver;
+    @Mock private RunRepository runRepository;
 
     private ActionClassifier classifier;
     private AuditRecorder auditRecorder;
@@ -51,8 +55,11 @@ class FullPipelineIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        classifier = new ActionClassifier();
+        classifier = new ActionClassifier(riskResolver);
         auditRecorder = new AuditRecorder(eventPublisher);
+
+        // Default: all tools are READ risk (no approval needed) unless test overrides
+        lenient().when(riskResolver.resolve(any())).thenReturn(RiskTier.READ);
 
         // Default benign collaborators. Each test re-stubs only what it needs.
         lenient().when(ruleVerifier.verify(any(), any(), any())).thenReturn(RuleVerificationResult.allow());
@@ -63,7 +70,7 @@ class FullPipelineIntegrationTest {
 
         pipeline = new ActionExecutionPipeline(
                 classifier, ruleVerifier, aiVerificationAgent, approvalGate,
-                shadowCopyManager, executor, auditRecorder);
+                shadowCopyManager, executor, auditRecorder, runRepository);
     }
 
     @Test

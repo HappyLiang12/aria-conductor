@@ -22,6 +22,13 @@ public class ActionExecutor {
     private final ToolExecutionEngine toolExecutionEngine;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Global cap on a single tool's output that is fed back into the model context. Prevents
+     * large outputs (e.g. web_fetch of a full HTML page, verbose git/shell output) from bloating
+     * the trajectory and burning tokens/latency on every subsequent iteration.
+     */
+    private static final int MAX_TOOL_OUTPUT_CHARS = 16_000;
+
     public ActionExecutor(AdkProviderRegistry adkProviderRegistry,
                           ToolExecutionEngine toolExecutionEngine) {
         this.adkProviderRegistry = adkProviderRegistry;
@@ -34,10 +41,11 @@ public class ActionExecutor {
 
         try {
             Map<String, Object> args = parseArguments(action.arguments());
-            ToolExecutionResult result = toolExecutionEngine.execute(action.name(), args);
+            ToolExecutionResult result = toolExecutionEngine.execute(action.name(), args, ctx);
 
             if (result.isSuccess()) {
                 String output = result.getOutput() != null ? result.getOutput() : "";
+                output = truncateOutput(output);
                 log.debug("Action executed successfully: name={}, outputLength={}", action.name(), output.length());
                 return ActionResult.success(output);
             } else {
@@ -58,5 +66,12 @@ public class ActionExecutor {
             log.warn("Failed to parse action arguments as JSON: {}", e.getMessage());
             throw new IllegalArgumentException("Invalid JSON arguments for tool call: " + e.getMessage(), e);
         }
+    }
+
+    /** Cap a tool output so oversized results don't bloat the model context (#perf). */
+    private String truncateOutput(String output) {
+        if (output == null || output.length() <= MAX_TOOL_OUTPUT_CHARS) return output;
+        int omitted = output.length() - MAX_TOOL_OUTPUT_CHARS;
+        return output.substring(0, MAX_TOOL_OUTPUT_CHARS) + "\n… [output truncated: " + omitted + " more chars omitted]";
     }
 }

@@ -21,7 +21,8 @@ public class CacheConfig {
         cacheManager.setCaches(List.of(
                 buildCache("agents", 100, 10),
                 buildCache("sessions", 200, 5),
-                buildCache("knowledge", 500, 15)
+                buildCache("knowledge", 500, 15),
+                buildCache("tools", 200, 1)
         ));
         return cacheManager;
     }

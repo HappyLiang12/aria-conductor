@@ -135,8 +135,12 @@ public class ApprovalGate {
                 approval.getExpiresAt());
 
         try {
-            return future.get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            long awaitStart = System.currentTimeMillis();
+            ApprovalDecision decision = future.get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            ctx.addBlockedWait(java.time.Duration.ofMillis(System.currentTimeMillis() - awaitStart));
+            return decision;
         } catch (TimeoutException e) {
+            ctx.addBlockedWait(java.time.Duration.ofMinutes(APPROVAL_TIMEOUT_MINUTES));
             log.warn("Turn approval timed out: approvalId={}", approvalId);
             handleTimeout(approval.getId());
             return ApprovalDecision.deny(
@@ -180,6 +184,7 @@ public class ApprovalGate {
                 .runId(ctx.getRunId())
                 .toolCallId(toolCallId)
                 .status(ApprovalStatus.PENDING)
+                .reason(buildApprovalReason(action))
                 .expiresAt(now.plusSeconds(APPROVAL_TIMEOUT_MINUTES * 60))
                 .build();
         approvalRepository.save(approval);
@@ -197,8 +202,12 @@ public class ApprovalGate {
 
         // Block until decision or timeout
         try {
-            return future.get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            long awaitStart = System.currentTimeMillis();
+            ApprovalDecision decision = future.get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            ctx.addBlockedWait(java.time.Duration.ofMillis(System.currentTimeMillis() - awaitStart));
+            return decision;
         } catch (TimeoutException e) {
+            ctx.addBlockedWait(java.time.Duration.ofMinutes(APPROVAL_TIMEOUT_MINUTES));
             log.warn("Approval timed out: approvalId={}", approvalId);
             handleTimeout(approval.getId());
             return ApprovalDecision.deny("Approval request timed out after " + APPROVAL_TIMEOUT_MINUTES + " minutes");
@@ -255,6 +264,18 @@ public class ApprovalGate {
         // Publish event
         eventPublisher.publishEvent(new io.aria.conductor.common.event.ApprovalDecidedEvent(
                 this, approvalId, approval.getStatus()));
+    }
+
+    /**
+     * Build a human-readable approval reason that surfaces the tool name and a truncated
+     * arguments preview, so operators can make an informed decision in the UI (#24).
+     */
+    private String buildApprovalReason(Action action) {
+        String args = action.arguments() != null ? action.arguments() : "";
+        if (args.length() > 200) {
+            args = args.substring(0, 200) + "…";
+        }
+        return "Agent requests approval to execute " + action.name() + (args.isBlank() ? "" : " " + args);
     }
 
     /**

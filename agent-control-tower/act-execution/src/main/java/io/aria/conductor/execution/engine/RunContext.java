@@ -3,6 +3,7 @@ package io.aria.conductor.execution.engine;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,6 +33,13 @@ public class RunContext {
     private UUID currentToolCallId;
     private List<UUID> currentTurnToolCallIds;
     private List<String> cachedSkillNames;
+    private String workspaceDir;
+
+    // Per-iteration latency tracking (#22): iterationStartTime is reset at the start of each
+    // iteration; blockedWaitMillis accumulates human approval/pause wait so it is excluded
+    // from the per-iteration latency budget.
+    private Instant iterationStartTime;
+    private volatile long blockedWaitMillis;
 
     // Consecutive same-error tracking (prevents infinite retry loops)
     private String lastToolError;
@@ -56,6 +64,8 @@ public class RunContext {
         this.totalTokensUsed = 0;
         this.errors = new ArrayList<>();
         this.startTime = Instant.now();
+        this.iterationStartTime = this.startTime;
+        this.blockedWaitMillis = 0L;
         this.paused = false;
         this.cancelled = false;
         this.pauseBlocker = null;
@@ -74,6 +84,23 @@ public class RunContext {
     public long getTotalTokensUsed() { return totalTokensUsed; }
     public List<String> getErrors() { return errors; }
     public Instant getStartTime() { return startTime; }
+
+    /** Start of the current iteration (reset via {@link #markIterationStart()}). */
+    public Instant getIterationStartTime() { return iterationStartTime; }
+
+    /** Reset the per-iteration latency timer to now (call at the start of each iteration / after resume). */
+    public void markIterationStart() { this.iterationStartTime = Instant.now(); }
+
+    /** Accumulated human approval/pause wait (ms) excluded from the per-iteration latency budget. */
+    public long getBlockedWaitMillis() { return blockedWaitMillis; }
+
+    /** Add time spent blocked on human approval/pause so it is excluded from latency accounting. */
+    public void addBlockedWait(Duration duration) {
+        if (duration != null && !duration.isNegative()) {
+            this.blockedWaitMillis += duration.toMillis();
+        }
+    }
+
     public boolean isPaused() { return paused; }
     public boolean isCancelled() { return cancelled; }
 
@@ -103,6 +130,9 @@ public class RunContext {
     public void setLastToolError(String e) { this.lastToolError = e; }
     public int getConsecutiveSameErrorCount() { return consecutiveSameErrorCount; }
     public void setConsecutiveSameErrorCount(int c) { this.consecutiveSameErrorCount = c; }
+
+    public String getWorkspaceDir() { return workspaceDir; }
+    public void setWorkspaceDir(String workspaceDir) { this.workspaceDir = workspaceDir; }
 
     /**
      * Pause the run — creates a new CompletableFuture that blocks the loop.

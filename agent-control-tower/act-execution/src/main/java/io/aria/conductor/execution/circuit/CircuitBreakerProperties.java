@@ -15,6 +15,8 @@ public class CircuitBreakerProperties {
     private int maxIterations = 50;
     private double errorRateThreshold = 0.5;
     private long maxIterationLatencyMs = 300000;
+    /** Total wall-clock cap for a whole run (includes human approval wait). Default 2h. */
+    private long maxRunDurationMs = 7_200_000;
 
     @Autowired
     private SystemConfigService systemConfigService;
@@ -56,6 +58,16 @@ public class CircuitBreakerProperties {
             log.warn("Failed to read 'circuit.breaker.max.iteration.latency.ms' from SystemConfig, using default {}",
                     maxIterationLatencyMs, e);
             return maxIterationLatencyMs;
+        }
+    }
+
+    public long getMaxRunDurationMs() {
+        try {
+            return systemConfigService.getLong("circuit.breaker.max.run.duration.ms", maxRunDurationMs, 60000, 86_400_000);
+        } catch (Exception e) {
+            log.warn("Failed to read 'circuit.breaker.max.run.duration.ms' from SystemConfig, using default {}",
+                    maxRunDurationMs, e);
+            return maxRunDurationMs;
         }
     }
 }

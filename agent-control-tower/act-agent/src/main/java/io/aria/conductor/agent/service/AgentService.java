@@ -187,7 +187,9 @@ public class AgentService {
         HarnessProfile profile = harnessProfileService.resolve(agent);
         List<String> toolIds = agentToolRepository.findToolIdsByAgentId(agentId.toString());
         if (!toolIds.isEmpty()) {
-            return harnessProfileService.applyDenylist(toolDefinitionRepository.findAllById(toolIds), profile);
+            // Explicit user tool assignments are authoritative (UI-controlled); the profile denylist
+            // only hardens role-template DEFAULTS, so it is NOT applied to explicit grants.
+            return toolDefinitionRepository.findAllById(toolIds);
         }
         // No explicit grants: surface the role-template defaults the runtime AgentToolResolver
         // would apply (incl. free-text role keyword mapping), so the API/dashboard reflect the

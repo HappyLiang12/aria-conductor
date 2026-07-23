@@ -600,9 +600,12 @@ public class AgentLoopEngine {
             List<Map<String, Object>> toolsPayload = List.of();
             try {
                 List<ToolDefinition> agentTools = agentToolResolver.resolveForAgent(ctx.getAgent());
-                // Apply the harness profile denylist (e.g. weak-model-safe removes shell_exec) so the
-                // effective tool set matches what getAgentTools()/the dashboard advertise.
-                agentTools = harnessProfileService.applyDenylist(agentTools, ctx.getHarnessProfile());
+                // Explicit user tool assignments are authoritative (UI-controlled); the profile
+                // denylist only hardens role-template DEFAULTS (e.g. weak-model-safe removes
+                // shell_exec from the dev template), so skip it when the agent has explicit grants.
+                if (!agentToolResolver.hasExplicitTools(ctx.getAgent())) {
+                    agentTools = harnessProfileService.applyDenylist(agentTools, ctx.getHarnessProfile());
+                }
                 if (!agentTools.isEmpty()) {
                     toolsPayload = toolRegistry.buildToolsPayloadForIds(
                             agentTools.stream().map(ToolDefinition::getId).toList());

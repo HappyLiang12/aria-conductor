@@ -219,7 +219,7 @@ test('LangChain ADK: configure LLM → create agent → run → verify', async (
   try {
     const runResult = await waitForBackend(
       page,
-      `http://localhost:8080/api/v1/runs?agentId=${langchainAgentId}`,
+      `http://127.0.0.1:8080/api/v1/runs?agentId=${langchainAgentId}`,
       (runs: any[]) => Array.isArray(runs) && runs.some((r: any) =>
         r.status === 'COMPLETED' || r.status === 'FAILED',
       ),

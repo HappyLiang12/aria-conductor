@@ -41,7 +41,7 @@ function parseStompFrame(raw: string): { command: string; headers: Record<string
 // hardcoded localhost:8080. Falls back to that literal only if window is absent.
 function defaultWsUrl(): string {
   if (typeof window === 'undefined' || !window.location) {
-    return 'ws://localhost:8080/ws/events';
+    return 'ws://127.0.0.1:8080/ws/events';
   }
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${window.location.host}/ws/events`;

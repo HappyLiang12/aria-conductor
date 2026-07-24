@@ -18,7 +18,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
-const BACKEND = 'http://localhost:8080/api/v1';
+const BACKEND = 'http://127.0.0.1:8080/api/v1';
 
 async function apiCall(
   page: Page,
@@ -265,6 +265,26 @@ test('10. Execute YAML button → modal dialog appears', async ({ page }) => {
   // Cancel closes the modal.
   await yamlModal.getByRole('button', { name: 'Cancel' }).click();
   await expect(yamlModal).toBeHidden({ timeout: 5000 });
+});
+
+// ── 10b. M2 regression: modals are unmounted when closed (review warnings 1 & 2) ──
+test('10b. modals are unmounted when closed (no hidden autoFocus / Tab targets)', async ({ page }) => {
+  await page.goto('/workflows');
+  await page.waitForLoadState('networkidle');
+
+  // Scoped to this page's modals (a global app modal may also exist). With conditional
+  // rendering these are absent from the DOM until opened — no hidden autoFocus target,
+  // no Tab-into-hidden-controls, and no inherited 720px fixed height.
+  const yamlModal = page.locator('.modal[aria-labelledby="yaml-modal-title"]');
+  const mergeModal = page.locator('.modal[aria-labelledby="merge-modal-title"]');
+  await expect(yamlModal).toHaveCount(0);
+  await expect(mergeModal).toHaveCount(0);
+
+  // Opening Execute YAML mounts the YAML modal; closing unmounts it again.
+  await page.locator('button:has-text("Execute YAML")').click();
+  await expect(yamlModal).toBeVisible({ timeout: 5000 });
+  await yamlModal.getByRole('button', { name: 'Cancel' }).click();
+  await expect(yamlModal).toHaveCount(0, { timeout: 5000 });
 });
 
 // ── 11. Stats badges show counts ────────────────────────────────────

@@ -30,9 +30,9 @@ class ReportPropertiesTest {
 
     @Test
     void getters_returnDbValues() throws Exception {
-        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4096, 131072))
                 .thenReturn(32768);
-        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4096, 131072))
                 .thenReturn(8192);
 
         ReportProperties props = propsWithService(systemConfigService);
@@ -43,9 +43,9 @@ class ReportPropertiesTest {
 
     @Test
     void getters_fallBackToDefaults_whenServiceThrows() throws Exception {
-        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4096, 131072))
                 .thenThrow(new RuntimeException("DB down"));
-        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4096, 131072))
                 .thenThrow(new RuntimeException("DB down"));
 
         ReportProperties props = propsWithService(systemConfigService);
@@ -56,10 +56,10 @@ class ReportPropertiesTest {
 
     @Test
     void getters_reflectDbChanges_withoutRestart() throws Exception {
-        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4096, 131072))
                 .thenReturn(16384)
                 .thenReturn(32768);
-        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4096, 131072))
                 .thenReturn(16384)
                 .thenReturn(8192);
 
@@ -74,9 +74,9 @@ class ReportPropertiesTest {
 
     @Test
     void getters_logWarn_whenServiceThrows() throws Exception {
-        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.generate.max.tokens", 16384, 4096, 131072))
                 .thenThrow(new RuntimeException("DB down"));
-        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4000, 131072))
+        when(systemConfigService.getInt("report.amend.max.tokens", 16384, 4096, 131072))
                 .thenThrow(new RuntimeException("DB down"));
 
         Logger logger = (Logger) LoggerFactory.getLogger(ReportProperties.class);

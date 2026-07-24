@@ -10,7 +10,7 @@ import { test, expect, type Page } from '@playwright/test';
  * - Retry button visibility (FAILED only)
  * - Delete button + confirm dialog
  * - Checkbox selection + Merge button (>=2 selected)
- * - Execute YAML button + prompt dialog
+ * - Execute YAML button + modal dialog (M2)
  * - Stats badges (running/completed counts)
  * - Empty state message
  * - Step card expand/collapse
@@ -214,7 +214,7 @@ test('8. select 2 workflows → "Merge N Workflows" button appears', async ({ pa
   await expect(mergeBtn).toContainText('Merge 2 Workflows');
 });
 
-// ── 9. Click Merge → prompt → merged workflow created ───────────────
+// ── 9. Click Merge → modal → merged workflow created (M2) ───────────────
 test('9. click Merge → prompt for name → merged workflow appears', async ({ page }) => {
   // Create 2 FAILED workflows
   const wf1 = await createWorkflow(page, agentId, `UI MergeSrc C ${Date.now()}`);
@@ -230,37 +230,41 @@ test('9. click Merge → prompt for name → merged workflow appears', async ({ 
   await checkboxes.nth(0).check();
   await checkboxes.nth(1).check();
 
-  // Handle the prompt dialog
+  // M2: the merge name is now entered in a modal dialog (no native prompt).
   const mergeName = `E2E Merged ${Date.now()}`;
-  page.on('dialog', dialog => dialog.accept(mergeName));
 
   // Click merge
   const mergeBtn = page.locator('button:has-text("Merge")');
   await mergeBtn.click();
+
+  // Fill the merge modal and confirm
+  const mergeModal = page.locator('.modal.open');
+  await expect(mergeModal).toBeVisible({ timeout: 5000 });
+  await mergeModal.locator('input').fill(mergeName);
+  await mergeModal.getByRole('button', { name: 'Confirm' }).click();
 
   // Wait for the merged workflow to appear
   await expect(page.locator(`text=${mergeName}`).first()).toBeVisible({ timeout: 10_000 });
 });
 
 // ── 10. Execute YAML button → prompt dialog ─────────────────────────
-test('10. Execute YAML button → prompt dialog appears', async ({ page }) => {
+test('10. Execute YAML button → modal dialog appears', async ({ page }) => {
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
 
-  // Handle the prompt dialog — just dismiss it
-  let dialogHandled = false;
-  page.on('dialog', dialog => {
-    dialogHandled = true;
-    dialog.dismiss();
-  });
-
+  // M2: Execute YAML now opens a modal dialog (was a native prompt)
   const yamlBtn = page.locator('button:has-text("Execute YAML")');
   await expect(yamlBtn).toBeVisible();
   await yamlBtn.click();
 
-  // Wait a bit for dialog
-  await page.waitForTimeout(500);
-  expect(dialogHandled).toBeTruthy();
+  // M2: a modal dialog opens (with a YAML textarea) instead of a native prompt.
+  const yamlModal = page.locator('.modal.open');
+  await expect(yamlModal).toBeVisible({ timeout: 5000 });
+  await expect(yamlModal.locator('textarea')).toBeVisible();
+
+  // Cancel closes the modal.
+  await yamlModal.getByRole('button', { name: 'Cancel' }).click();
+  await expect(yamlModal).toBeHidden({ timeout: 5000 });
 });
 
 // ── 11. Stats badges show counts ────────────────────────────────────

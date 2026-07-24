@@ -29,7 +29,7 @@ export async function sendMessage(
 }
 
 export interface StreamCallbacks {
-  onThinking?: () => void;
+  onThinking?: (runId?: string) => void;
   onToolCall?: (name: string) => void;
   onToolResult?: (name: string, result: string) => void;
   onMessage?: (content: string) => void;
@@ -69,6 +69,7 @@ export async function streamMessage(
   history: Array<{ role: string; content: string }>,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
+  options?: { isCancelled?: () => boolean },
 ): Promise<void> {
   const response = await fetch('/api/v1/aria/chat/stream', {
     method: 'POST',
@@ -125,7 +126,10 @@ export async function streamMessage(
   }
 
   if (!resolved) {
-    callbacks.onError?.('Connection closed unexpectedly. Please try again.');
+    // M1: a user-initiated cancel aborts the stream; don't surface a spurious error in that case.
+    if (!options?.isCancelled?.()) {
+      callbacks.onError?.('Connection closed unexpectedly. Please try again.');
+    }
   }
 }
 
@@ -141,7 +145,7 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
   const p = payload as Record<string, unknown>;
   switch (evt.event) {
     case 'thinking':
-      cb.onThinking?.();
+      cb.onThinking?.(String(p.runId ?? ''));
       break;
     case 'tool_call':
       cb.onToolCall?.(String(p.name ?? 'tool'));

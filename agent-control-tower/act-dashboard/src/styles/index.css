@@ -1121,6 +1121,16 @@ body.light .tline .ev.app::before { box-shadow: 0 0 0 2px #ffffff, 0 0 8px rgba(
 body.light .tline .ev.blk::before { box-shadow: 0 0 0 2px #ffffff, 0 0 8px rgba(255,107,122,.30); }
 body.light .tline .ev.night::before { box-shadow: 0 0 0 2px #ffffff, 0 0 8px rgba(138,107,255,.30); }
 
+/* M3: Aria panel + FAB follow the light theme (no longer a dark shell) */
+body.light {
+  --ai-glass-strong: rgba(255,255,255,0.92);
+  --ai-edge: rgba(20,30,60,0.08);
+  --ai-edge-strong: rgba(20,30,60,0.16);
+}
+body.light .ai-panel { box-shadow: 0 24px 60px rgba(20,30,60,0.18), 0 0 0 1px rgba(20,30,60,0.04) inset; }
+body.light .ai-panel::before { opacity: 0.35; mix-blend-mode: multiply; }
+body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, #d6e0fb 70%); box-shadow: 0 14px 40px rgba(20,30,60,0.22), 0 0 0 1px rgba(58,100,230,0.12) inset; }
+
 /* ============================================================
    APP SHELL + RAIL NAVIGATION
    ============================================================ */

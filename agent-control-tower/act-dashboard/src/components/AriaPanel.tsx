@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
+import { cancelRun } from '../api/runs';
 import type { AriaMessage } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
 
@@ -30,43 +31,85 @@ function loadOpenState(): boolean {
   }
 }
 
-/** Compact, allocation-light markdown renderer for assistant bubbles. */
+/** Compact, allocation-light markdown renderer for assistant bubbles (m2: + tables & horizontal rules). */
 function renderMarkdown(text: string): string {
   if (!text) return '<p></p>';
+  // m2: guard very large payloads — render verbatim to avoid costly regex passes.
+  if (text.length > 10000) {
+    return `<pre>${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+  }
   try {
-    let html = text
+    // Extract fenced code blocks first so their pipes/dashes aren't parsed as tables/rules.
+    const codeBlocks: string[] = [];
+    let src = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+      codeBlocks.push(`<pre class="md-code-block"><code>${String(code).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`);
+      return `\u0000CB${codeBlocks.length - 1}\u0000`;
+    });
+    src = src
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="md-code-block"><code>$2</code></pre>');
-    html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
-    html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    html = html.replace(/^[•\-\*] (.+)$/gm, '<li>$1</li>');
-    html = html.replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>');
-    const lines = html.split('\n');
-    const result: string[] = [];
+    const inline = (s: string): string =>
+      s
+        .replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    const lines = src.split('\n');
+    const out: string[] = [];
     let inList = false;
-    for (const line of lines) {
-      if (line.startsWith('<li>')) {
-        if (!inList) {
-          result.push('<ul>');
-          inList = true;
+    let inTable = false;
+    let tableHeaderDone = false;
+    const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+    const closeTable = () => { if (inTable) { out.push('</tbody></table>'); inTable = false; tableHeaderDone = false; } };
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      const trimmed = line.trim();
+      if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 1) {
+        const cells = trimmed.slice(1, -1).split('|').map((c) => c.trim());
+        const isSeparator = cells.every((c) => /^:?-{2,}:?$/.test(c));
+        if (isSeparator) { continue; }
+        if (!inTable) {
+          closeList();
+          out.push('<table class="md-table"><thead><tr>');
+          for (const c of cells) out.push(`<th>${inline(c)}</th>`);
+          out.push('</tr></thead><tbody>');
+          inTable = true;
+          tableHeaderDone = true;
+        } else {
+          out.push('<tr>');
+          for (const c of cells) out.push(`<td>${inline(c)}</td>`);
+          out.push('</tr>');
         }
-        result.push(line);
-      } else {
-        if (inList) {
-          result.push('</ul>');
-          inList = false;
-        }
-        result.push(line);
+        continue;
       }
+      closeTable();
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        closeList();
+        out.push('<hr/>');
+        continue;
+      }
+      let h = line;
+      h = h.replace(/^### (.+)$/, '<h4>$1</h4>');
+      h = h.replace(/^## (.+)$/, '<h3>$1</h3>');
+      h = h.replace(/^# (.+)$/, '<h2>$1</h2>');
+      h = inline(h);
+      if (/^[•\-\*] (.+)$/.test(h)) {
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push(`<li>${h.replace(/^[•\-\*] /, '')}</li>`);
+        continue;
+      }
+      if (/^\d+\. (.+)$/.test(h)) {
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push(`<li>${h.replace(/^\d+\. /, '')}</li>`);
+        continue;
+      }
+      closeList();
+      if (h.trim() === '') { out.push(''); } else { out.push(h); }
     }
-    if (inList) result.push('</ul>');
-    html = result.join('\n');
+    closeList();
+    closeTable();
+    let html = out.join('\n');
+    html = html.replace(/\u0000CB(\d+)\u0000/g, (_m, i) => codeBlocks[Number(i)] ?? '');
     html = html.replace(/\n\n/g, '</p><p>');
     html = html.replace(/\n/g, '<br/>');
     if (!html.startsWith('<')) html = `<p>${html}</p>`;
@@ -99,6 +142,9 @@ export function AriaPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false); // M1: suppress the false "connection closed" error after a user cancel
+  const activeRunIdRef = useRef<string | null>(null); // M1: run id for server-side cancellation
+  const [toolElapsed, setToolElapsed] = useState(0); // m3: seconds the current tool has been running
 
   const isEmpty = messages.length === 0;
 
@@ -178,6 +224,8 @@ export function AriaPanel() {
 
       // Abort any prior in-flight stream defensively.
       abortRef.current?.abort();
+      cancelledRef.current = false; // M1: reset per-request cancel state
+      activeRunIdRef.current = null;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
@@ -201,7 +249,10 @@ export function AriaPanel() {
         text,
         history,
         {
-          onThinking: () => setActiveTool(null),
+          onThinking: (runId) => {
+            if (runId) activeRunIdRef.current = runId; // M1: capture run id for cancel
+            setActiveTool(null);
+          },
           onToolCall: (name) => setActiveTool(name),
           onToolResult: () => setActiveTool(null),
           onMessage: (content) => {
@@ -225,6 +276,7 @@ export function AriaPanel() {
             setActiveTool(null);
           },
           onError: (msg) => {
+            if (cancelledRef.current) return; // M1: user cancelled — don't show an error bubble
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             setBusy(false);
             setActiveTool(null);
@@ -241,6 +293,7 @@ export function AriaPanel() {
           },
         },
         ctrl.signal,
+        { isCancelled: () => cancelledRef.current },
       );
 
       // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort and show error.
@@ -278,8 +331,14 @@ export function AriaPanel() {
   }, [busy, lastSentMessage, sendStreamed]);
 
   const handleCancel = useCallback(() => {
+    cancelledRef.current = true; // M1: suppress the false close-error bubble
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
+    // M1: cancel the server-side run so it stops consuming tokens (best-effort; runId
+    // is known once the first `thinking` event arrives).
+    if (activeRunIdRef.current) {
+      cancelRun(activeRunIdRef.current).catch(() => {});
+    }
     setBusy(false);
     setActiveTool(null);
     setMessages((prev) => [
@@ -331,6 +390,21 @@ export function AriaPanel() {
     () => messages.length > 0 && !!messages[messages.length - 1].error,
     [messages],
   );
+
+  // m3: show elapsed seconds while a tool is running so long calls don't look dead.
+  useEffect(() => {
+    if (!activeTool) {
+      setToolElapsed(0);
+      return undefined;
+    }
+    const start = Date.now();
+    setToolElapsed(0);
+    const id = window.setInterval(() => setToolElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [activeTool]);
+
+  // m2: memoize rendered markdown so it only recomputes when messages change.
+  const messagesHtml = useMemo(() => messages.map((m) => renderMarkdown(m.content)), [messages]);
 
   return (
     <>
@@ -393,7 +467,7 @@ export function AriaPanel() {
             </button>
           </header>
 
-          <div className="ai-stack" ref={stackRef}>
+          <div className="ai-stack" ref={stackRef} aria-live="polite" aria-relevant="additions">
             {isEmpty && (
               <div className="ai-card ai-empty">
                 <div className="ai-empty-eyebrow">— operator copilot</div>
@@ -407,7 +481,7 @@ export function AriaPanel() {
               </div>
             )}
 
-            {messages.map((msg) => (
+            {messages.map((msg, idx) => (
               <div key={msg.id} className={`ai-msg ai-msg-${msg.role}`}>
                 <div className="ai-msg-avatar" aria-hidden="true">
                   {msg.role === 'user' ? 'You' : 'A'}
@@ -417,7 +491,7 @@ export function AriaPanel() {
                     {msg.role === 'assistant' ? (
                       <div
                         className="ai-msg-md markdown-content"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+                        dangerouslySetInnerHTML={{ __html: messagesHtml[idx] ?? '' }}
                       />
                     ) : (
                       <div className="ai-msg-text">{msg.content}</div>
@@ -455,6 +529,7 @@ export function AriaPanel() {
                       <div className="ai-tool-tag">
                         <span className="ai-tool-spark" aria-hidden="true">⟢</span>
                         Using <code>{activeTool}</code>
+                        <span className="ai-tool-elapsed"> ({toolElapsed}s{toolElapsed >= 30 ? ' · still working…' : ''})</span>
                       </div>
                     ) : (
                       <div className="typing-indicator" aria-label="Aria is thinking">

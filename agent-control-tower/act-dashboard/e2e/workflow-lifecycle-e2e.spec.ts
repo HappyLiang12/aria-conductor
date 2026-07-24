@@ -19,7 +19,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
-const BACKEND = 'http://localhost:8080/api/v1';
+const BACKEND = 'http://127.0.0.1:8080/api/v1';
 
 /** Helper: backend fetch via page context (proxied through Vite). */
 async function apiCall(

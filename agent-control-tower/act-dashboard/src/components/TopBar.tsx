@@ -22,9 +22,14 @@ function formatTokens(tokens: number | undefined): string {
 
 export function TopBar() {
   const [now, setNow] = useState<Date>(() => new Date());
-  const [isLight, setIsLight] = useState<boolean>(() =>
-    typeof document !== 'undefined' && document.body.classList.contains('light'),
-  );
+  // M5: read the persisted theme so the choice survives a refresh.
+  const [isLight, setIsLight] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('aria-theme');
+      if (stored) return stored === 'light';
+    } catch { /* localStorage unavailable */ }
+    return typeof document !== 'undefined' && document.body.classList.contains('light');
+  });
 
   const { data: summary } = useQuery<DashboardSummary>({
     queryKey: ['dashboard-summary'],
@@ -37,10 +42,18 @@ export function TopBar() {
     return () => window.clearInterval(id);
   }, []);
 
+  // M5: apply the persisted theme on mount (avoids resetting to dark on refresh).
+  useEffect(() => {
+    document.body.classList.toggle('light', isLight);
+  }, [isLight]);
+
   const toggleTheme = () => {
     const next = !document.body.classList.contains('light');
     document.body.classList.toggle('light', next);
     setIsLight(next);
+    try {
+      localStorage.setItem('aria-theme', next ? 'light' : 'dark');
+    } catch { /* localStorage unavailable */ }
   };
 
   const activeAgents = summary?.activeAgents ?? 0;

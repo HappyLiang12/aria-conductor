@@ -89,8 +89,9 @@ export function NotificationBell() {
 
   const fmtTime = (iso: string): string => {
     const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso; // c2: guard malformed timestamps
     const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
+    const diffMs = Math.max(0, now.getTime() - d.getTime()); // c2: clamp future/negative diffs
     const diffMin = Math.floor(diffMs / 60000);
     if (diffMin < 1) return 'just now';
     if (diffMin < 60) return `${diffMin}m ago`;
@@ -135,7 +136,7 @@ export function NotificationBell() {
               Mark all read
             </button>
           </div>
-          <div className="notif-dropdown-list">
+          <div className="notif-dropdown-list" aria-live="polite">
             {loading ? (
               <div className="notif-empty">Loading…</div>
             ) : error ? (

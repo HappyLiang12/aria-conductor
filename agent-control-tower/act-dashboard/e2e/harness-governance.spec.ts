@@ -20,7 +20,7 @@ import { test, expect } from '@playwright/test';
  */
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
-const API_URL = process.env.API_URL || 'http://localhost:8080';
+const API_URL = process.env.API_URL || 'http://127.0.0.1:8080';
 
 test.describe('Customisable Harness Governance', () => {
 

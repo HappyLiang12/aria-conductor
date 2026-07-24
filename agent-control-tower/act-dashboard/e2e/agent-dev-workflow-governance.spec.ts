@@ -19,7 +19,7 @@ import { test, expect } from '@playwright/test';
  */
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
-const API_URL = process.env.API_URL || 'http://localhost:8080';
+const API_URL = process.env.API_URL || 'http://127.0.0.1:8080';
 const ARIA_AGENT_ID = '00000000-0000-0000-0000-000000000001';
 
 test.describe('Agent Dev-Workflow Governance', () => {

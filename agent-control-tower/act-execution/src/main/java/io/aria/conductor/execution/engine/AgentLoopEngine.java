@@ -450,8 +450,9 @@ public class AgentLoopEngine {
     private void executeRunLoop(RunContext ctx, Run run, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {
         log.info("Entering run loop: runId={}, agentId={}", ctx.getRunId(), ctx.getAgentId());
 
-        // SSE: notify client that processing has started
-        tryEmit(emitter, "thinking", Map.of("status", "processing"));
+        // SSE: notify client that processing has started. Include the runId so the client
+        // can cancel this run server-side mid-stream (M1).
+        tryEmit(emitter, "thinking", Map.of("status", "processing", "runId", ctx.getRunId().toString()));
 
         // Update to RUNNING
         updateRunStatusDirect(ctx.getRunId(), RunStatus.RUNNING);

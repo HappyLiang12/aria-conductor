@@ -173,6 +173,11 @@ export function WorkflowsPage() {
   const queryClient = useQueryClient();
   const { lastMessage } = useWebSocketContext();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // M2: replace native window.prompt() with accessible modal dialogs.
+  const [mergeModalOpen, setMergeModalOpen] = useState(false);
+  const [yamlModalOpen, setYamlModalOpen] = useState(false);
+  const [mergeName, setMergeName] = useState('');
+  const [yamlContent, setYamlContent] = useState('');
 
   const { data: workflows, isLoading, error } = useQuery({
     queryKey: ['workflows'],
@@ -241,6 +246,18 @@ export function WorkflowsPage() {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
+  // M2: close the merge/YAML modals on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMergeModalOpen(false);
+        setYamlModalOpen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div style={{ padding: '24px 28px', maxWidth: 960, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -269,17 +286,11 @@ export function WorkflowsPage() {
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           {selectedIds.length >= 2 && (
-            <button className="btn primary" onClick={() => {
-              const name = prompt('Name for merged workflow:');
-              if (name) mergeMutation.mutate({ sourceIds: selectedIds, name });
-            }}>
+            <button className="btn primary" onClick={() => { setMergeName(''); setMergeModalOpen(true); }}>
               Merge {selectedIds.length} Workflows
             </button>
           )}
-          <button className="btn" onClick={() => {
-            const yaml = prompt('Paste YAML workflow template:');
-            if (yaml) executeYamlMutation.mutate(yaml);
-          }}>
+          <button className="btn" onClick={() => { setYamlContent(''); setYamlModalOpen(true); }}>
             Execute YAML
           </button>
         </div>
@@ -316,6 +327,92 @@ export function WorkflowsPage() {
           onDelete={(id) => deleteMutation.mutate(id)}
         />
       ))}
+
+      {/* M2: Merge workflow modal (replaces window.prompt). Conditionally rendered so a closed
+          modal is unmounted — no autoFocus steal, no Tab into hidden controls — and uses
+          height:auto instead of the .modal class's fixed 720px (code-review warnings 1 & 2). */}
+      {mergeModalOpen && (
+        <>
+          <div className="modal-scrim open" onClick={() => setMergeModalOpen(false)} />
+          <div
+            className="modal open"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="merge-modal-title"
+            style={{ width: 'min(480px, 94vw)', height: 'auto' }}
+          >
+            <header>
+              <h2 id="merge-modal-title"><b>Merge</b> {selectedIds.length} Workflows</h2>
+              <span className="x" role="button" tabIndex={0} aria-label="Close merge dialog" onClick={() => setMergeModalOpen(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setMergeModalOpen(false); }}>✕</span>
+            </header>
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                Name for merged workflow
+                <input
+                  className="gate-row-input"
+                  value={mergeName}
+                  onChange={(e) => setMergeName(e.target.value)}
+                  placeholder="e.g. Combined onboarding flow"
+                  autoFocus
+                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--line, #334155)', background: 'var(--surface, #0f172a)', color: 'var(--text, #e2e8f0)' }}
+                />
+              </label>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn" onClick={() => setMergeModalOpen(false)}>Cancel</button>
+                <button
+                  className="btn primary"
+                  disabled={!mergeName.trim()}
+                  onClick={() => { mergeMutation.mutate({ sourceIds: selectedIds, name: mergeName.trim() }); setMergeModalOpen(false); }}
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* M2: Execute YAML modal (replaces window.prompt). Conditionally rendered (see merge modal note). */}
+      {yamlModalOpen && (
+        <>
+          <div className="modal-scrim open" onClick={() => setYamlModalOpen(false)} />
+          <div
+            className="modal open"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="yaml-modal-title"
+            style={{ width: 'min(560px, 94vw)', height: 'auto' }}
+          >
+            <header>
+              <h2 id="yaml-modal-title"><b>Execute</b> YAML Workflow</h2>
+              <span className="x" role="button" tabIndex={0} aria-label="Close YAML dialog" onClick={() => setYamlModalOpen(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setYamlModalOpen(false); }}>✕</span>
+            </header>
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                YAML workflow template
+                <textarea
+                  value={yamlContent}
+                  onChange={(e) => setYamlContent(e.target.value)}
+                  placeholder={'name: my-workflow\nsteps:\n  - agent: dev\n    promptTemplate: implement the feature'}
+                  rows={10}
+                  autoFocus
+                  style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--line, #334155)', background: 'var(--surface, #0f172a)', color: 'var(--text, #e2e8f0)', fontFamily: 'monospace', resize: 'vertical' }}
+                />
+              </label>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn" onClick={() => setYamlModalOpen(false)}>Cancel</button>
+                <button
+                  className="btn primary"
+                  disabled={!yamlContent.trim()}
+                  onClick={() => { executeYamlMutation.mutate(yamlContent); setYamlModalOpen(false); }}
+                >
+                  Execute
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -134,7 +134,7 @@ test('Multi-agent lifecycle: Research → Verify → Report via Aria', async ({ 
   // Poll for the run to complete
   const researchRun = await waitForBackend(
     page,
-    `http://localhost:8080/api/v1/runs?agentId=${researchAgentId}`,
+    `http://127.0.0.1:8080/api/v1/runs?agentId=${researchAgentId}`,
     (runs: any[]) => Array.isArray(runs) && runs.some((r: any) => r.status === 'COMPLETED'),
     RUN_TIMEOUT,
   );
@@ -160,7 +160,7 @@ test('Multi-agent lifecycle: Research → Verify → Report via Aria', async ({ 
 
   await waitForBackend(
     page,
-    `http://localhost:8080/api/v1/runs?agentId=${verifyAgentId}`,
+    `http://127.0.0.1:8080/api/v1/runs?agentId=${verifyAgentId}`,
     (runs: any[]) => Array.isArray(runs) && runs.some((r: any) => r.status === 'COMPLETED'),
     RUN_TIMEOUT,
   );
@@ -185,7 +185,7 @@ test('Multi-agent lifecycle: Research → Verify → Report via Aria', async ({ 
 
   await waitForBackend(
     page,
-    `http://localhost:8080/api/v1/runs?agentId=${reportAgentId}`,
+    `http://127.0.0.1:8080/api/v1/runs?agentId=${reportAgentId}`,
     (runs: any[]) => Array.isArray(runs) && runs.some((r: any) => r.status === 'COMPLETED'),
     RUN_TIMEOUT,
   );

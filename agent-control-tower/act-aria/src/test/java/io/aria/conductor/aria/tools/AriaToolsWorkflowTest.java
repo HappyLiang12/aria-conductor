@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -88,6 +89,50 @@ class AriaToolsWorkflowTest {
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getError()).contains("Unknown tool");
+    }
+
+    // ==================== create_workflow (positive dispatch) ====================
+
+    @Test
+    void createWorkflow_shouldDispatchToRealHandlerAndReturnRunningChain() {
+        io.aria.conductor.agent.service.WorkflowService workflowService =
+                org.mockito.Mockito.mock(io.aria.conductor.agent.service.WorkflowService.class);
+        io.aria.conductor.agent.repository.AgentRepository agentRepository =
+                org.mockito.Mockito.mock(io.aria.conductor.agent.repository.AgentRepository.class);
+        UUID devId = UUID.randomUUID();
+        UUID qaId = UUID.randomUUID();
+        when(agentRepository.findByName("dev")).thenReturn(Optional.of(
+                io.aria.conductor.common.model.Agent.builder().id(devId).name("dev")
+                        .healthStatus(io.aria.conductor.common.model.HealthStatus.HEALTHY).build()));
+        when(agentRepository.findByName("qa")).thenReturn(Optional.of(
+                io.aria.conductor.common.model.Agent.builder().id(qaId).name("qa")
+                        .healthStatus(io.aria.conductor.common.model.HealthStatus.HEALTHY).build()));
+        UUID chainId = UUID.randomUUID();
+        when(workflowService.createAndStart(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(io.aria.conductor.agent.dto.WorkflowResponse.builder()
+                        .id(chainId).name("sdd")
+                        .status(io.aria.conductor.common.model.WorkflowChain.Status.RUNNING)
+                        .totalSteps(2).build());
+
+        Map<String, ToolHandler> handlers = new HashMap<>();
+        handlers.put("workflowHandler", new io.aria.conductor.aria.tools.handlers.WorkflowToolHandler(
+                workflowService, agentRepository, objectMapper));
+        ToolExecutionEngine engine = new ToolExecutionEngine(
+                toolDefinitionRepository, sandboxRunner, handlers, workspaceManager);
+
+        String toolName = "create_workflow";
+        when(toolDefinitionRepository.findByName(toolName))
+                .thenReturn(Optional.of(createToolDefinition(toolName, "workflowHandler")));
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("name", "sdd");
+        args.put("steps", List.of(
+                Map.of("agent", "dev", "promptTemplate", "implement"),
+                Map.of("agent", "qa", "promptTemplate", "verify {previousOutput}")));
+        ToolExecutionResult result = engine.execute(toolName, args);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("created and started").contains(chainId.toString());
     }
 
     // ==================== cancel_workflow ====================

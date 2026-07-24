@@ -711,7 +711,11 @@ public class AgentLoopEngine {
                         toolCall.setStatus(ToolCallStatus.FAILED);
                     }
                 }
-                // DENIED status is set by ApprovalGate — leave unchanged
+                // DENIED status is set by ApprovalGate — persist the human reason so it is
+                // surfaced to the model as tool feedback (#32).
+                if (toolCall.getStatus() == ToolCallStatus.DENIED && toolCall.getResult() == null) {
+                    toolCall.setResult(result.error() != null ? result.error() : "Denied by human reviewer.");
+                }
                 toolCall.setLatencyMs((int)(end - start));
                 toolCallRepository.save(toolCall);
 
@@ -729,14 +733,16 @@ public class AgentLoopEngine {
                 }
             }
 
-            // Consecutive same-error early termination: prevents infinite retry loops
-            // (e.g., "File not found" repeated 15 times wasting 100K+ tokens)
-            boolean allSameError = !results.isEmpty() && results.stream()
-                    .allMatch(r -> r.status() == ActionResult.Status.FAILED);
-            if (allSameError) {
+            // Consecutive same-blocker early termination: prevents infinite retry loops
+            // (e.g., "File not found" repeated 15 times, or a human denial re-issued forever — #32).
+            boolean allBlocked = !results.isEmpty() && results.stream()
+                    .allMatch(r -> r.status() == ActionResult.Status.FAILED
+                            || r.status() == ActionResult.Status.DENIED);
+            if (allBlocked) {
                 String firstError = results.get(0).error() != null ? results.get(0).error() : "";
                 boolean allIdentical = results.stream()
                         .allMatch(r -> firstError.equals(r.error() != null ? r.error() : ""));
+                boolean anyDenied = results.stream().anyMatch(r -> r.status() == ActionResult.Status.DENIED);
                 if (allIdentical && !firstError.isEmpty()) {
                     if (firstError.equals(ctx.getLastToolError())) {
                         ctx.setConsecutiveSameErrorCount(ctx.getConsecutiveSameErrorCount() + 1);
@@ -744,11 +750,16 @@ public class AgentLoopEngine {
                         ctx.setLastToolError(firstError);
                         ctx.setConsecutiveSameErrorCount(1);
                     }
-                    if (ctx.getConsecutiveSameErrorCount() >= 3) {
-                        log.warn("Run {} hit 3 consecutive identical tool errors — terminating early: {}",
-                                ctx.getRunId(), firstError);
-                        ctx.setLastAssistantResponse("Stopped: repeated tool failure — " + firstError
-                                + "\nPlease check the configuration or provide the correct path.");
+                    // A human denial should stop sooner (they already said no); plain failures keep 3 strikes.
+                    int limit = anyDenied ? 2 : 3;
+                    if (ctx.getConsecutiveSameErrorCount() >= limit) {
+                        log.warn("Run {} hit {} consecutive identical {} — terminating early: {}",
+                                ctx.getRunId(), ctx.getConsecutiveSameErrorCount(),
+                                anyDenied ? "human denials" : "tool errors", firstError);
+                        ctx.setLastAssistantResponse(anyDenied
+                                ? "Stopped: a human reviewer denied this action — " + firstError
+                                : "Stopped: repeated tool failure — " + firstError
+                                        + "\nPlease check the configuration or provide the correct path.");
                         return false; // exit the iteration loop
                     }
                 }
@@ -1006,19 +1017,39 @@ public class AgentLoopEngine {
         }
     }
 
+    /**
+     * Builds the tool-result message content shown to the model (#32).
+     * A human denial is surfaced as an explicit, non-retryable instruction so the model
+     * does not re-issue the same blocked action; failures keep the generic ERROR prefix.
+     */
+    static String toolResultContent(ActionResult result) {
+        if (result.status() == ActionResult.Status.SUCCESS) {
+            return result.output() != null ? result.output() : "";
+        }
+        if (result.status() == ActionResult.Status.DENIED) {
+            return "DENIED BY HUMAN REVIEWER: "
+                    + (result.error() != null ? result.error() : "no reason given")
+                    + ". This action was NOT executed. Do not retry it — choose a different approach or give your final answer.";
+        }
+        return "ERROR: " + (result.error() != null ? result.error() : "Unknown error");
+    }
+
     private void recordToolResults(RunContext ctx, List<Action> actions, List<ActionResult> results, int baseTurn) {
         try {
             List<SessionTrajectory> toolTrajectories = new ArrayList<>();
             for (int i = 0; i < actions.size(); i++) {
                 String toolCallId = actions.get(i).toolCallId();
-                if (toolCallId == null || toolCallId.isBlank()) {
-                    log.warn("Skipping tool result with null/blank toolCallId: action={}", actions.get(i).name());
-                    continue;
-                }
                 ActionResult result = results.get(i);
-                String content = result.status() == ActionResult.Status.SUCCESS
-                        ? (result.output() != null ? result.output() : "")
-                        : "ERROR: " + (result.error() != null ? result.error() : "Unknown error");
+                boolean denied = result.status() == ActionResult.Status.DENIED;
+                if (toolCallId == null || toolCallId.isBlank()) {
+                    if (!denied) {
+                        log.warn("Skipping tool result with null/blank toolCallId: action={}", actions.get(i).name());
+                        continue;
+                    }
+                    // A human denial must still reach the model even without a tool_call id (#32).
+                    toolCallId = "denied-" + (baseTurn + i);
+                }
+                String content = toolResultContent(result);
                 toolTrajectories.add(SessionTrajectory.builder()
                         .runId(ctx.getRunId())
                         .turnNumber(baseTurn + i)

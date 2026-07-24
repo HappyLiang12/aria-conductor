@@ -87,6 +87,13 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             **Dashboard:**
             - get_dashboard_summary: Get system overview statistics
 
+            **Workflows (multi-agent orchestration):**
+            - create_workflow: Create and START an executable BA->Dev->QA style chain (requires name + a steps[] array of {agent, promptTemplate}, or a yaml definition). USE THIS — not store_knowledge — when the user asks to build or run a multi-step / multi-agent workflow. Each step's agent may be an id, name, or role; use {previousOutput} in a step's promptTemplate to pass the prior step's result forward.
+            - get_workflow: Get a workflow chain's status and per-step progress (requires id)
+            - list_workflows: List all workflow chains
+            - cancel_workflow: Cancel a running/pending workflow (requires id)
+            - retry_workflow_step: Retry a failed step in a failed workflow (requires id, stepIndex)
+
             ## Rules
 
             IMPORTANT — knowledge governance:
@@ -154,6 +161,8 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             "generate_report", "list_reports", "amend_report",
             // dashboard
             "get_dashboard_summary",
+            // workflows (BA->Dev->QA multi-agent orchestration)
+            "create_workflow", "get_workflow", "list_workflows", "cancel_workflow", "retry_workflow_step",
             // web (issue/content discovery for orchestration)
             "web_search", "web_fetch",
             // HITL

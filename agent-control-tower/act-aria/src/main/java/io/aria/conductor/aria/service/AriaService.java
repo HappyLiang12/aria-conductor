@@ -244,6 +244,13 @@ public class AriaService {
                 **Dashboard:**
                 - get_dashboard_summary: Get system overview statistics
 
+                **Workflows (multi-agent orchestration):**
+                - create_workflow: Create and START an executable BA->Dev->QA style chain (requires name + a steps[] array of {agent, promptTemplate}, or a yaml definition). USE THIS — not store_knowledge — when the user asks to build or run a multi-step / multi-agent workflow. Each step's agent may be an id, name, or role; use {previousOutput} in a step's promptTemplate to pass the prior step's result forward.
+                - get_workflow: Get a workflow chain's status and per-step progress (requires id)
+                - list_workflows: List all workflow chains
+                - cancel_workflow: Cancel a running/pending workflow (requires id)
+                - retry_workflow_step: Retry a failed step in a failed workflow (requires id, stepIndex)
+
                 ## Rules
 
                 IMPORTANT — knowledge governance:
@@ -293,18 +300,28 @@ public class AriaService {
             if (priorRunIds.isEmpty()) return List.of();
             List<SessionTrajectory> trajectories = trajectoryRepository
                     .findByRunIdInOrderByTurnNumberAsc(priorRunIds);
-            return trajectories.stream()
+            List<LlmMessage> history = trajectories.stream()
                     .filter(t -> "user".equals(t.getRole()) || "assistant".equals(t.getRole()))
                     .filter(t -> t.getContent() != null && !t.getContent().isBlank())
                     .map(t -> "user".equals(t.getRole())
                             ? LlmMessage.user(t.getContent())
                             : LlmMessage.assistant(t.getContent()))
-                    .limit(40) // ~20 turns (user+assistant pairs)
                     .toList();
+            // Keep the MOST RECENT turns, not the oldest, while preserving chronological order (#36).
+            return keepMostRecent(history, 40); // ~20 user+assistant turns
         } catch (Exception e) {
             log.warn("Failed to load conversation history: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Keeps the most recent {@code max} messages while preserving chronological order (#36).
+     * Prevents long conversations from dropping their newest turns (the old code kept the oldest).
+     */
+    static List<LlmMessage> keepMostRecent(List<LlmMessage> history, int max) {
+        if (history.size() <= max) return history;
+        return new java.util.ArrayList<>(history.subList(history.size() - max, history.size()));
     }
 
     /**

@@ -1,6 +1,7 @@
 package io.aria.conductor.aria.tools.handlers;
 
 import io.aria.conductor.agent.dto.RunResponse;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.model.Approval;
@@ -24,12 +25,13 @@ class RunToolHandlerTest {
     @Mock private RunService runService;
     @Mock private RunRepository runRepository;
     @Mock private ApprovalRepository approvalRepository;
+    @Mock private AgentRepository agentRepository;
     private RunToolHandler handler;
 
     @BeforeEach
     void setUp() {
         lenient().when(approvalRepository.findByRunId(any())).thenReturn(List.of());
-        handler = new RunToolHandler(runService, runRepository, approvalRepository);
+        handler = new RunToolHandler(runService, runRepository, approvalRepository, agentRepository);
     }
 
     @Test void startRunShouldReturnText() {
@@ -39,6 +41,18 @@ class RunToolHandlerTest {
         when(runService.createRun(any())).thenReturn(resp);
         String result = handler.execute(Map.of("toolName","run_agent","agentId",agentId.toString(),"prompt","test"));
         assertThat(result).contains("Run started:").contains(runId.toString());
+    }
+
+    @Test void startRunByAgentNameShouldResolve() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        when(agentRepository.findByName("my-worker")).thenReturn(Optional.of(
+                io.aria.conductor.common.model.Agent.builder().id(agentId).name("my-worker").build()));
+        RunResponse resp = RunResponse.builder().id(runId).status(RunStatus.PENDING).iterationCount(0).build();
+        when(runService.createRun(any())).thenReturn(resp);
+        String result = handler.execute(Map.of("toolName","run_agent","agentId","my-worker","prompt","test"));
+        assertThat(result).contains("Run started:").contains(runId.toString());
+        verify(agentRepository).findByName("my-worker");
     }
 
     @Test void listRunsShouldReturnText() {

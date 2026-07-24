@@ -119,3 +119,26 @@ test('streaming SSE emits expected events with runId + conversationId', async ({
   expect(doneData.runId).toMatch(/^[0-9a-f-]{36}$/);
   expect(doneData.conversationId).toBe('test-conv-stream');
 });
+
+test('conversationId is reused across two turns (#36)', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+
+  const result = await page.evaluate(async () => {
+    const post = (body: unknown) =>
+      fetch('/api/v1/aria/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+
+    const turn1 = await post({ message: 'remember 1', history: [], conversationId: 'reuse-conv-001' });
+    // Turn 2 echoes back the id the server returned on turn 1.
+    const turn2 = await post({ message: 'remember 2', history: [], conversationId: turn1.conversationId });
+    return { c1: turn1.conversationId, c2: turn2.conversationId };
+  });
+
+  expect(result.c1).toBe('reuse-conv-001');
+  // Turn 2 must reuse turn 1's conversationId (no new id minted per turn).
+  expect(result.c2).toBe(result.c1);
+});

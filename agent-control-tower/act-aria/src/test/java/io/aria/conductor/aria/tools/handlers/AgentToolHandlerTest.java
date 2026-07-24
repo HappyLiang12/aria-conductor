@@ -3,10 +3,12 @@ package io.aria.conductor.aria.tools.handlers;
 import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
+import io.aria.conductor.common.model.LlmProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -32,6 +34,9 @@ class AgentToolHandlerTest {
     @Mock
     private AgentRepository agentRepository;
 
+    @Mock
+    private LlmProviderRepository llmProviderRepository;
+
     @InjectMocks
     private AgentToolHandler handler;
 
@@ -50,6 +55,7 @@ class AgentToolHandlerTest {
 
         assertTrue(result.contains("TestAgent"));
         assertTrue(result.contains("Agents"));
+        assertTrue(result.contains(agent.getId().toString()));
         verify(agentRepository).findAll();
     }
 
@@ -84,6 +90,10 @@ class AgentToolHandlerTest {
                 .id(agentId)
                 .name("NewAgent")
                 .build();
+        LlmProvider provider = mock(LlmProvider.class);
+        when(provider.getName()).thenReturn("TestProvider");
+        when(provider.getDefaultModel()).thenReturn("test-model");
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(Optional.of(provider));
         when(agentService.createAgent(any(CreateAgentRequest.class))).thenReturn(response);
 
         String result = handler.execute(Map.of(
@@ -144,5 +154,21 @@ class AgentToolHandlerTest {
         String result = handler.execute(Map.of("toolName", "nonexistent_tool"));
 
         assertTrue(result.startsWith("Error"));
+    }
+
+    @Test
+    void getAgentByNameShouldResolve() {
+        UUID id = UUID.randomUUID();
+        Agent agent = Agent.builder()
+                .id(id).name("named-agent")
+                .agentType(AgentType.NATIVE).healthStatus(HealthStatus.HEALTHY)
+                .role("dev").createdAt(Instant.now()).build();
+        when(agentRepository.findByName("named-agent")).thenReturn(Optional.of(agent));
+        when(agentRepository.findById(id)).thenReturn(Optional.of(agent));
+
+        String result = handler.execute(Map.of("toolName", "get_agent", "id", "named-agent"));
+
+        assertTrue(result.contains("named-agent"));
+        verify(agentRepository).findByName("named-agent");
     }
 }

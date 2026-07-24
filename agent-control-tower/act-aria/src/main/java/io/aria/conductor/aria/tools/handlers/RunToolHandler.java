@@ -2,6 +2,7 @@ package io.aria.conductor.aria.tools.handlers;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
 import io.aria.conductor.agent.dto.RunResponse;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.model.ApprovalStatus;
@@ -21,12 +22,14 @@ public class RunToolHandler implements ToolHandler {
     private final RunService runService;
     private final RunRepository runRepository;
     private final ApprovalRepository approvalRepository;
+    private final AgentRepository agentRepository;
 
     public RunToolHandler(RunService runService, RunRepository runRepository,
-                          ApprovalRepository approvalRepository) {
+                          ApprovalRepository approvalRepository, AgentRepository agentRepository) {
         this.runService = runService;
         this.runRepository = runRepository;
         this.approvalRepository = approvalRepository;
+        this.agentRepository = agentRepository;
     }
 
     @Override
@@ -55,8 +58,11 @@ public class RunToolHandler implements ToolHandler {
         String prompt = Objects.toString(args.get("prompt"), "");
         if (agentId.isEmpty()) return error("Missing required parameter: agentId");
         if (prompt.isEmpty()) return error("Missing required parameter: prompt");
+        // Accept an agent name as well as a UUID (#33).
+        UUID resolvedAgentId = AgentToolHandler.resolveAgentId(agentRepository, agentId);
+        if (resolvedAgentId == null) return error("Agent not found: " + agentId);
         CreateRunRequest req = CreateRunRequest.builder()
-                .agentId(UUID.fromString(agentId))
+                .agentId(resolvedAgentId)
                 .promptSeed(prompt)
                 .build();
         RunResponse resp = runService.createRun(req);

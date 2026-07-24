@@ -43,6 +43,18 @@ class RunToolHandlerTest {
         assertThat(result).contains("Run started:").contains(runId.toString());
     }
 
+    @Test void startRunByAgentNameShouldResolve() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        when(agentRepository.findByName("my-worker")).thenReturn(Optional.of(
+                io.aria.conductor.common.model.Agent.builder().id(agentId).name("my-worker").build()));
+        RunResponse resp = RunResponse.builder().id(runId).status(RunStatus.PENDING).iterationCount(0).build();
+        when(runService.createRun(any())).thenReturn(resp);
+        String result = handler.execute(Map.of("toolName","run_agent","agentId","my-worker","prompt","test"));
+        assertThat(result).contains("Run started:").contains(runId.toString());
+        verify(agentRepository).findByName("my-worker");
+    }
+
     @Test void listRunsShouldReturnText() {
         Run r = new Run();
         UUID rid = UUID.randomUUID();

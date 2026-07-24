@@ -308,14 +308,20 @@ public class AriaService {
                             : LlmMessage.assistant(t.getContent()))
                     .toList();
             // Keep the MOST RECENT turns, not the oldest, while preserving chronological order (#36).
-            int max = 40; // ~20 user+assistant turns
-            return history.size() > max
-                    ? new java.util.ArrayList<>(history.subList(history.size() - max, history.size()))
-                    : history;
+            return keepMostRecent(history, 40); // ~20 user+assistant turns
         } catch (Exception e) {
             log.warn("Failed to load conversation history: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /**
+     * Keeps the most recent {@code max} messages while preserving chronological order (#36).
+     * Prevents long conversations from dropping their newest turns (the old code kept the oldest).
+     */
+    static List<LlmMessage> keepMostRecent(List<LlmMessage> history, int max) {
+        if (history.size() <= max) return history;
+        return new java.util.ArrayList<>(history.subList(history.size() - max, history.size()));
     }
 
     /**

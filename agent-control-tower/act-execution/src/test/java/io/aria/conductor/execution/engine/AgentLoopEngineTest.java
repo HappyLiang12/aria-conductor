@@ -134,4 +134,29 @@ class AgentLoopEngineTest {
         Agent agent = agentWithConfig("not json");
         assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 7)).isEqualTo(7);
     }
+
+    // ── toolResultContent: human-denial feedback (#32) ──────────────────
+
+    @Test
+    void deniedResultShouldProduceExplicitNonRetryableMessage() {
+        String content = AgentLoopEngine.toolResultContent(
+                io.aria.conductor.execution.pipeline.ActionResult.denied("reviewer blocked the push"));
+        assertThat(content).startsWith("DENIED BY HUMAN REVIEWER:");
+        assertThat(content).contains("reviewer blocked the push");
+        assertThat(content).contains("Do not retry");
+    }
+
+    @Test
+    void successResultShouldReturnOutput() {
+        String content = AgentLoopEngine.toolResultContent(
+                io.aria.conductor.execution.pipeline.ActionResult.success("done"));
+        assertThat(content).isEqualTo("done");
+    }
+
+    @Test
+    void failedResultShouldUseErrorPrefix() {
+        String content = AgentLoopEngine.toolResultContent(
+                io.aria.conductor.execution.pipeline.ActionResult.failed("boom"));
+        assertThat(content).isEqualTo("ERROR: boom");
+    }
 }

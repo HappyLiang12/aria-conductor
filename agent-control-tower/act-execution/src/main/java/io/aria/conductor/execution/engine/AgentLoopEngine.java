@@ -1017,6 +1017,23 @@ public class AgentLoopEngine {
         }
     }
 
+    /**
+     * Builds the tool-result message content shown to the model (#32).
+     * A human denial is surfaced as an explicit, non-retryable instruction so the model
+     * does not re-issue the same blocked action; failures keep the generic ERROR prefix.
+     */
+    static String toolResultContent(ActionResult result) {
+        if (result.status() == ActionResult.Status.SUCCESS) {
+            return result.output() != null ? result.output() : "";
+        }
+        if (result.status() == ActionResult.Status.DENIED) {
+            return "DENIED BY HUMAN REVIEWER: "
+                    + (result.error() != null ? result.error() : "no reason given")
+                    + ". This action was NOT executed. Do not retry it — choose a different approach or give your final answer.";
+        }
+        return "ERROR: " + (result.error() != null ? result.error() : "Unknown error");
+    }
+
     private void recordToolResults(RunContext ctx, List<Action> actions, List<ActionResult> results, int baseTurn) {
         try {
             List<SessionTrajectory> toolTrajectories = new ArrayList<>();
@@ -1032,16 +1049,7 @@ public class AgentLoopEngine {
                     // A human denial must still reach the model even without a tool_call id (#32).
                     toolCallId = "denied-" + (baseTurn + i);
                 }
-                String content;
-                if (result.status() == ActionResult.Status.SUCCESS) {
-                    content = result.output() != null ? result.output() : "";
-                } else if (denied) {
-                    content = "DENIED BY HUMAN REVIEWER: "
-                            + (result.error() != null ? result.error() : "no reason given")
-                            + ". This action was NOT executed. Do not retry it — choose a different approach or give your final answer.";
-                } else {
-                    content = "ERROR: " + (result.error() != null ? result.error() : "Unknown error");
-                }
+                String content = toolResultContent(result);
                 toolTrajectories.add(SessionTrajectory.builder()
                         .runId(ctx.getRunId())
                         .turnNumber(baseTurn + i)

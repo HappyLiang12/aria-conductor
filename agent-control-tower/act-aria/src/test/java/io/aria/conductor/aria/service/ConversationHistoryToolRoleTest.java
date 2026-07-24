@@ -1,6 +1,7 @@
 package io.aria.conductor.aria.service;
 
 import io.aria.conductor.common.model.SessionTrajectory;
+import io.aria.conductor.execution.llm.LlmMessage;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -57,5 +58,22 @@ class ConversationHistoryToolRoleTest {
         assertThat(filtered)
                 .as("only user and assistant should pass the filter")
                 .containsExactly("user");
+    }
+
+    // #36: keep the MOST RECENT turns (not the oldest) while preserving chronological order.
+    @Test
+    void keepMostRecentShouldReturnNewestInChronologicalOrder() {
+        List<LlmMessage> history = new java.util.ArrayList<>();
+        for (int i = 0; i < 50; i++) history.add(LlmMessage.user("m" + i));
+        List<LlmMessage> kept = AriaService.keepMostRecent(history, 40);
+        assertThat(kept).hasSize(40);
+        assertThat(kept.get(0).content()).isEqualTo("m10");
+        assertThat(kept.get(39).content()).isEqualTo("m49");
+    }
+
+    @Test
+    void keepMostRecentShouldReturnAllWhenUnderLimit() {
+        List<LlmMessage> history = List.of(LlmMessage.user("a"), LlmMessage.assistant("b"));
+        assertThat(AriaService.keepMostRecent(history, 40)).hasSize(2);
     }
 }

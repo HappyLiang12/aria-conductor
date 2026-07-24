@@ -67,3 +67,51 @@ describe('Agent tools', () => {
     expect(fetchMock.calls[0].method).toBe('POST');
   });
 });
+
+describe('Agent tools — validation & error mapping', () => {
+  it('get_agent rejects a non-UUID id without hitting the backend', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_agent', arguments: { id: 'not-a-uuid' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('create_agent rejects missing required name', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { agentType: 'NATIVE' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('create_agent rejects an invalid agentType enum value', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'x', agentType: 'ROBOT' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('update_agent maps a backend 500 into isError with details', async () => {
+    fetchMock = mockFetch({ [`/api/v1/agents/${UUID}`]: { status: 500, body: { message: 'db down' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'update_agent', arguments: { id: UUID, name: 'x' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('500');
+    expect(resultText(r)).toContain('db down');
+  });
+
+  it('list_agents surfaces a malformed JSON response as isError', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('<<<not json>>>', { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    fetchMock = { calls: [], restore: () => { globalThis.fetch = original; } };
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'list_agents', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Error');
+  });
+});

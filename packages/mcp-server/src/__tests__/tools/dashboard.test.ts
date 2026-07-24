@@ -27,3 +27,24 @@ describe('Dashboard tools', () => {
     expect(fetchMock.calls[0].url).toContain('/dashboard/activity');
   });
 });
+
+describe('Dashboard tools — error mapping', () => {
+  it('get_dashboard_summary maps a backend 503 into isError', async () => {
+    fetchMock = mockFetch({ '/dashboard/summary': { status: 503, body: { message: 'backend warming up' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_dashboard_summary', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('503');
+    expect(resultText(r)).toContain('backend warming up');
+  });
+
+  it('get_recent_activity surfaces a malformed JSON response as isError', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    fetchMock = { calls: [], restore: () => { globalThis.fetch = original; } };
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_recent_activity', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Error');
+  });
+});

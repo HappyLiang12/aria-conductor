@@ -14,6 +14,12 @@
     <name>ACT Knowledge</name>
     <description>Knowledge governance module</description>
 
+    <properties>
+        <!-- M0 coverage ratchet (baseline 53.2% line / 49.4% branch, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.48</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.44</jacoco.branch.minimum>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.aria.conductor</groupId>

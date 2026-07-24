@@ -21,6 +21,12 @@ public class MockAdkRuntime {
     private final Map<String, Function<Action, ActionResult>> handlers = new ConcurrentHashMap<>();
     private Function<Action, ActionResult> defaultHandler =
             action -> ActionResult.ok("mock-output:" + action.name());
+    /** Simulated per-action latency in ms (0 = no delay). Supports load-test realism. */
+    private volatile long latencyMs = 0L;
+    /** When false, executed actions are not recorded (avoids unbounded growth in high-volume tests). */
+    private volatile boolean recordingEnabled = true;
+    /** Max recorded actions kept (oldest dropped beyond this). Guards memory in load scenarios. */
+    private volatile int maxRecordedActions = 10_000;
 
     public void setHealthy(boolean healthy) {
         this.healthy = healthy;
@@ -47,6 +53,24 @@ public class MockAdkRuntime {
         return this;
     }
 
+    /** Inject a fixed artificial latency before each action executes (0 disables). */
+    public MockAdkRuntime withLatencyMs(long latencyMs) {
+        this.latencyMs = Math.max(0L, latencyMs);
+        return this;
+    }
+
+    /** Enable/disable action recording (disable for high-volume load scenarios). */
+    public MockAdkRuntime withRecording(boolean enabled) {
+        this.recordingEnabled = enabled;
+        return this;
+    }
+
+    /** Cap the number of recorded actions retained (oldest evicted first). */
+    public MockAdkRuntime withMaxRecordedActions(int max) {
+        this.maxRecordedActions = Math.max(1, max);
+        return this;
+    }
+
     public ActionResult executeAction(Action action) {
         if (action == null) {
             throw new IllegalArgumentException("Action must not be null");
@@ -54,7 +78,22 @@ public class MockAdkRuntime {
         if (!healthy) {
             return ActionResult.failure("ADK runtime unhealthy");
         }
-        executedActions.add(action.name());
+        if (latencyMs > 0) {
+            try {
+                Thread.sleep(latencyMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return ActionResult.failure("Interrupted while simulating latency");
+            }
+        }
+        if (recordingEnabled) {
+            synchronized (executedActions) {
+                executedActions.add(action.name());
+                while (executedActions.size() > maxRecordedActions) {
+                    executedActions.remove(0);
+                }
+            }
+        }
         Function<Action, ActionResult> handler = handlers.getOrDefault(action.name(), defaultHandler);
         return handler.apply(action);
     }
@@ -70,6 +109,9 @@ public class MockAdkRuntime {
      */
     public void reset() {
         healthy = true;
+        latencyMs = 0L;
+        recordingEnabled = true;
+        maxRecordedActions = 10_000;
         executedActions.clear();
         handlers.clear();
         defaultHandler = action -> ActionResult.ok("mock-output:" + action.name());

@@ -12,5 +12,13 @@ export default defineConfig({
       '/api': `http://localhost:${backendPort}`,
       '/ws': { target: `ws://localhost:${backendPort}`, ws: true }
     }
+  },
+  // `vite preview` serves the built dist/ in CI E2E jobs; it needs its own proxy block
+  preview: {
+    port: frontendPort,
+    proxy: {
+      '/api': `http://localhost:${backendPort}`,
+      '/ws': { target: `ws://localhost:${backendPort}`, ws: true }
+    }
   }
 });

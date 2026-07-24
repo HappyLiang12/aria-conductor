@@ -115,7 +115,7 @@ class AriaToolsWorkflowTest {
         handlers.put("workflowHandler", new io.aria.conductor.aria.tools.handlers.WorkflowToolHandler(
                 workflowService, agentRepository, objectMapper));
         ToolExecutionEngine engine = new ToolExecutionEngine(
-                toolDefinitionRepository, sandboxRunner, handlers, workspaceManager);
+                toolDefinitionRepository, sandboxRunner, handlers);
 
         String toolName = "create_workflow";
         when(toolDefinitionRepository.findByName(toolName))

@@ -49,6 +49,8 @@ export interface Approval {
   requestedAt: string;
   decidedAt: string | null;
   expiresAt: string;
+  toolName?: string;
+  riskTier?: string;
 }
 
 // === Harness Profiles (customisable agent-loop tuning) ===

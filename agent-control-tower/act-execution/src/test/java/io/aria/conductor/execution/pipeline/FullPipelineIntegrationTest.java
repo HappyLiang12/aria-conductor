@@ -65,7 +65,7 @@ class FullPipelineIntegrationTest {
         lenient().when(ruleVerifier.verify(any(), any(), any())).thenReturn(RuleVerificationResult.allow());
         lenient().when(aiVerificationAgent.verify(any(), any(), any()))
                 .thenReturn(AiVerificationResult.pass("test-default"));
-        lenient().when(approvalGate.requestApproval(any(), any(), any())).thenReturn(ApprovalDecision.approve("ok"));
+        lenient().when(approvalGate.requestApproval(any(), any())).thenReturn(ApprovalDecision.approve("ok"));
         lenient().when(executor.execute(any(), any())).thenReturn(ActionResult.success("ran"));
 
         pipeline = new ActionExecutionPipeline(
@@ -81,7 +81,7 @@ class FullPipelineIntegrationTest {
 
         assertThat(result.status()).isEqualTo(ActionResult.Status.SUCCESS);
         verify(aiVerificationAgent, times(1)).verify(any(), any(), any()); // agent always invoked, but skips internally
-        verify(approvalGate, never()).requestApproval(any(), any(), any());
+        verify(approvalGate, never()).requestApproval(any(), any());
         verify(shadowCopyManager, never()).createShadowCopy(any(), any(), any(), any());
         verifyAuditEventEmitted("ACTION_EXECUTED");
     }
@@ -96,7 +96,7 @@ class FullPipelineIntegrationTest {
 
         assertThat(result.status()).isEqualTo(ActionResult.Status.SUCCESS);
         verify(aiVerificationAgent, times(1)).verify(any(), any(), any());
-        verify(approvalGate, times(1)).requestApproval(any(), any(), any());
+        verify(approvalGate, times(1)).requestApproval(any(), any());
         verify(shadowCopyManager, times(1))
                 .createShadowCopy(any(String.class), any(String.class), any(), any());
         verify(executor, times(1)).execute(any(), any());
@@ -114,7 +114,7 @@ class FullPipelineIntegrationTest {
         assertThat(result.status()).isEqualTo(ActionResult.Status.BLOCKED);
         assertThat(result.error()).isEqualTo("budget exhausted");
         verify(aiVerificationAgent, never()).verify(any(), any(), any());
-        verify(approvalGate, never()).requestApproval(any(), any(), any());
+        verify(approvalGate, never()).requestApproval(any(), any());
         verify(executor, never()).execute(any(), any());
         verify(shadowCopyManager, never()).createShadowCopy(any(), any(), any(), any());
         verifyAuditEventEmitted("ACTION_BLOCKED");
@@ -130,7 +130,7 @@ class FullPipelineIntegrationTest {
 
         assertThat(result.status()).isEqualTo(ActionResult.Status.BLOCKED);
         assertThat(result.error()).contains("AI safety:").contains("destructive");
-        verify(approvalGate, never()).requestApproval(any(), any(), any());
+        verify(approvalGate, never()).requestApproval(any(), any());
         verify(executor, never()).execute(any(), any());
         verify(shadowCopyManager, never()).createShadowCopy(any(), any(), any(), any());
         verifyAuditEventEmitted("ACTION_BLOCKED");
@@ -138,7 +138,7 @@ class FullPipelineIntegrationTest {
 
     @Test
     void approvalDenied_stopsAtStage4_doesNotExecute() {
-        when(approvalGate.requestApproval(any(), any(), any()))
+        when(approvalGate.requestApproval(any(), any()))
                 .thenReturn(ApprovalDecision.deny("operator denied"));
 
         ActionResult result = pipeline.execute(
@@ -171,7 +171,7 @@ class FullPipelineIntegrationTest {
 
         verify(shadowCopyManager, times(1))
                 .createShadowCopy(any(String.class), any(String.class), any(), any());
-        verify(approvalGate, never()).requestApproval(any(), any(), any());
+        verify(approvalGate, never()).requestApproval(any(), any());
     }
 
     @Test
@@ -184,7 +184,7 @@ class FullPipelineIntegrationTest {
                 new Action("write_config", ActionType.WRITE, "{}", "tc-esc"), ctx());
 
         assertThat(result.status()).isEqualTo(ActionResult.Status.SUCCESS);
-        verify(approvalGate, times(1)).requestApproval(any(), any(), any());
+        verify(approvalGate, times(1)).requestApproval(any(), any());
         verify(executor, times(1)).execute(any(), any());
     }
 

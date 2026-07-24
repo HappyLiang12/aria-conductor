@@ -110,7 +110,7 @@ class KnowledgeToolHandlerTest {
                 .filePath("/path")
                 .escalationCount(0)
                 .build();
-        when(knowledgeItemRepository.findByStatus(KnowledgeStatus.APPROVED)).thenReturn(List.of(item));
+        when(knowledgeItemRepository.searchByKeyword(any(), any(), any(), any())).thenReturn(List.of(item));
 
         String result = handler.execute(Map.of(
                 "toolName", "search_knowledge",
@@ -118,16 +118,32 @@ class KnowledgeToolHandlerTest {
         ));
 
         assertTrue(result.contains("test-knowledge"));
-        verify(knowledgeItemRepository).findByStatus(KnowledgeStatus.APPROVED);
+        verify(knowledgeItemRepository).searchByKeyword(any(), any(), any(), any());
     }
 
     @Test
     void searchKnowledgeEmptyKeywordShouldReturnAllApproved() {
-        when(knowledgeItemRepository.findByStatus(KnowledgeStatus.APPROVED)).thenReturn(List.of());
+        when(knowledgeItemRepository.searchByKeyword(any(), any(), any(), any())).thenReturn(List.of());
 
         String result = handler.execute(Map.of("toolName", "search_knowledge"));
 
         assertFalse(result.startsWith("Error"));
+    }
+
+    @Test
+    void searchKnowledgeShouldFindPendingItems() {
+        UUID id = UUID.randomUUID();
+        KnowledgeItem pending = KnowledgeItem.builder()
+                .id(id).name("pending-skill").type(KnowledgeType.SKILL)
+                .status(KnowledgeStatus.PENDING).description("fresh")
+                .sensitivity(Sensitivity.INTERNAL).createdAt(Instant.now())
+                .currentVersion("v0.1.0").escalationCount(0).build();
+        when(knowledgeItemRepository.searchByKeyword(any(), any(), any(), any())).thenReturn(List.of(pending));
+
+        String result = handler.execute(Map.of("toolName", "search_knowledge", "keyword", "pending"));
+
+        assertTrue(result.contains("pending-skill"));
+        assertTrue(result.contains("PENDING"));
     }
 
     @Test

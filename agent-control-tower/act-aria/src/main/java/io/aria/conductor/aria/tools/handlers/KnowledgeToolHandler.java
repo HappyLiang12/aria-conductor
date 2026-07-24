@@ -10,10 +10,10 @@ import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component("knowledgeToolHandler")
@@ -35,9 +35,9 @@ public class KnowledgeToolHandler implements ToolHandler {
             return switch (toolName) {
                 case "create_knowledge" -> createKnowledge(arguments);
                 case "store_knowledge" -> createKnowledge(arguments);
-                case "search_knowledge" -> searchKnowledge(arguments);
+                case "search_knowledge" -> searchKnowledge(arguments, null);
                 case "list_knowledge" -> listKnowledge(arguments);
-                case "query_knowledge" -> searchKnowledge(arguments);
+                case "query_knowledge" -> searchKnowledge(arguments, KnowledgeStatus.APPROVED);
                 case "review_knowledge" -> reviewKnowledge(arguments);
                 case "retire_knowledge" -> retireKnowledge(arguments);
                 default -> error("Unknown tool: " + toolName);
@@ -74,7 +74,7 @@ public class KnowledgeToolHandler implements ToolHandler {
         return "Knowledge '" + name + "' created (id: " + response.getId() + ", status: PENDING)";
     }
 
-    private String searchKnowledge(Map<String, Object> args) {
+    private String searchKnowledge(Map<String, Object> args, KnowledgeStatus statusFilter) {
         String keyword = Objects.toString(args.get("keyword"), "");
         String typeStr = Objects.toString(args.get("type"), "");
 
@@ -87,24 +87,16 @@ public class KnowledgeToolHandler implements ToolHandler {
             }
         }
 
-        List<KnowledgeItem> results;
-        if (type != null) {
-            results = knowledgeItemRepository.findByTypeAndStatus(type, KnowledgeStatus.APPROVED).stream()
-                    .filter(k -> keyword.isEmpty()
-                            || k.getName().toLowerCase().contains(keyword.toLowerCase())
-                            || (k.getDescription() != null && k.getDescription().toLowerCase().contains(keyword.toLowerCase())))
-                    .collect(Collectors.toList());
-        } else {
-            results = knowledgeItemRepository.findByStatus(KnowledgeStatus.APPROVED).stream()
-                    .filter(k -> keyword.isEmpty()
-                            || k.getName().toLowerCase().contains(keyword.toLowerCase())
-                            || (k.getDescription() != null && k.getDescription().toLowerCase().contains(keyword.toLowerCase())))
-                    .collect(Collectors.toList());
-        }
+        // #31: search name + description + version content at the DB layer. A null statusFilter
+        // includes PENDING/DRAFT/APPROVED (operator-facing search_knowledge) so freshly stored
+        // items are found; APPROVED restricts the agent-facing query_knowledge path.
+        String kw = keyword.isBlank() ? null : "%" + keyword.toLowerCase() + "%";
+        List<KnowledgeItem> results = knowledgeItemRepository.searchByKeyword(
+                kw, type, statusFilter, PageRequest.of(0, 20));
 
         if (results.isEmpty()) {
             return keyword.isEmpty()
-                    ? "No approved knowledge items found."
+                    ? "No knowledge items found."
                     : "No knowledge items found matching keyword: " + keyword;
         }
 

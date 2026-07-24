@@ -215,8 +215,12 @@ export function AriaPanel() {
               },
             ]);
           },
-          onDone: () => {
+          onDone: (data) => {
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            // Adopt the server-issued conversationId so multi-turn context persists (#36).
+            if (data?.conversationId) {
+              setConversationId((prev) => prev || data.conversationId);
+            }
             setBusy(false);
             setActiveTool(null);
           },

@@ -122,3 +122,50 @@ describe('Workflow tools', () => {
     expect(JSON.parse(resultText(r)).name).toBe('instance');
   });
 });
+
+describe('Workflow tools — validation & error mapping', () => {
+  it('create_workflow rejects agentIds containing non-UUID entries', async () => {
+    fetchMock = mockFetch({ '/api/v1/workflows': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_workflow', arguments: { name: 'wf', agentIds: ['not-a-uuid'] } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('retry_workflow_step rejects a negative stepIndex', async () => {
+    fetchMock = mockFetch({ '/retry': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'retry_workflow_step', arguments: { id: UUID, stepIndex: -1 } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('merge_workflows rejects missing required name', async () => {
+    fetchMock = mockFetch({ '/merge': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'merge_workflows', arguments: { sourceIds: [UUID2, UUID3] } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('execute_yaml rejects missing yamlContent', async () => {
+    fetchMock = mockFetch({ '/execute-yaml': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'execute_yaml', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('delete_workflow maps a backend 409 (RUNNING) into isError', async () => {
+    fetchMock = mockFetch({ [`/api/v1/workflows/${UUID}`]: { status: 409, body: { message: 'Cannot delete RUNNING workflow' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'delete_workflow', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('409');
+    expect(resultText(r)).toContain('Cannot delete RUNNING workflow');
+  });
+});

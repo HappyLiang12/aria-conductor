@@ -36,6 +36,46 @@ public final class TestDataBuilder {
         return new PromptCallBuilder();
     }
 
+    public static WorkflowChainBuilder aWorkflowChain() {
+        return new WorkflowChainBuilder();
+    }
+
+    public static WorkflowStepBuilder aWorkflowStep() {
+        return new WorkflowStepBuilder();
+    }
+
+    public static ToolPackBuilder aToolPack() {
+        return new ToolPackBuilder();
+    }
+
+    public static ToolDefinitionBuilder aToolDefinition() {
+        return new ToolDefinitionBuilder();
+    }
+
+    public static ToolCallBuilder aToolCall() {
+        return new ToolCallBuilder();
+    }
+
+    public static AgentSessionBuilder anAgentSession() {
+        return new AgentSessionBuilder();
+    }
+
+    public static LlmProviderBuilder anLlmProvider() {
+        return new LlmProviderBuilder();
+    }
+
+    public static PackCredentialBuilder aPackCredential() {
+        return new PackCredentialBuilder();
+    }
+
+    public static ScheduledJobBuilder aScheduledJob() {
+        return new ScheduledJobBuilder();
+    }
+
+    public static SystemConfigBuilder aSystemConfig() {
+        return new SystemConfigBuilder();
+    }
+
     // ---------------------------------------------------------------------
     // Agent
     // ---------------------------------------------------------------------
@@ -251,6 +291,432 @@ public final class TestDataBuilder {
                     .outcome(outcome)
                     .toolsUsed(toolsUsed)
                     .createdAt(createdAt)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // WorkflowChain
+    // ---------------------------------------------------------------------
+    public static final class WorkflowChainBuilder {
+        private UUID id = UUID.randomUUID();
+        private String name = "test-workflow-" + shortId();
+        private WorkflowChain.Status status = WorkflowChain.Status.PENDING;
+        private int currentStepIndex = 0;
+        private String stepsJson = "[]";
+        private Instant createdAt = Instant.now();
+        private Instant updatedAt;
+        private Instant completedAt;
+        private boolean isTemplate = false;
+        private String templateParams;
+        private UUID sourceKnowledgeItemId;
+        private UUID knowledgeItemId;
+        private String description = "Test workflow fixture";
+
+        public WorkflowChainBuilder withId(UUID id) { this.id = id; return this; }
+        public WorkflowChainBuilder withName(String name) { this.name = name; return this; }
+        public WorkflowChainBuilder withStatus(WorkflowChain.Status status) { this.status = status; return this; }
+        public WorkflowChainBuilder withCurrentStepIndex(int currentStepIndex) { this.currentStepIndex = currentStepIndex; return this; }
+        public WorkflowChainBuilder withStepsJson(String stepsJson) { this.stepsJson = stepsJson; return this; }
+        public WorkflowChainBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public WorkflowChainBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+        public WorkflowChainBuilder withCompletedAt(Instant completedAt) { this.completedAt = completedAt; return this; }
+        public WorkflowChainBuilder asTemplate(boolean isTemplate) { this.isTemplate = isTemplate; return this; }
+        public WorkflowChainBuilder withTemplateParams(String templateParams) { this.templateParams = templateParams; return this; }
+        public WorkflowChainBuilder withSourceKnowledgeItemId(UUID sourceKnowledgeItemId) { this.sourceKnowledgeItemId = sourceKnowledgeItemId; return this; }
+        public WorkflowChainBuilder withKnowledgeItemId(UUID knowledgeItemId) { this.knowledgeItemId = knowledgeItemId; return this; }
+        public WorkflowChainBuilder withDescription(String description) { this.description = description; return this; }
+
+        public WorkflowChain build() {
+            return WorkflowChain.builder()
+                    .id(id)
+                    .name(name)
+                    .status(status)
+                    .currentStepIndex(currentStepIndex)
+                    .stepsJson(stepsJson)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .completedAt(completedAt)
+                    .isTemplate(isTemplate)
+                    .templateParams(templateParams)
+                    .sourceKnowledgeItemId(sourceKnowledgeItemId)
+                    .knowledgeItemId(knowledgeItemId)
+                    .description(description)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // WorkflowStep
+    // ---------------------------------------------------------------------
+    public static final class WorkflowStepBuilder {
+        private UUID agentId = UUID.randomUUID();
+        private String promptTemplate = "Do the task: {previousOutput}";
+        private int maxIterations = 3;
+        private UUID runId;
+        private WorkflowStep.Status status = WorkflowStep.Status.PENDING;
+        private String output;
+
+        public WorkflowStepBuilder withAgentId(UUID agentId) { this.agentId = agentId; return this; }
+        public WorkflowStepBuilder withPromptTemplate(String promptTemplate) { this.promptTemplate = promptTemplate; return this; }
+        public WorkflowStepBuilder withMaxIterations(int maxIterations) { this.maxIterations = maxIterations; return this; }
+        public WorkflowStepBuilder withRunId(UUID runId) { this.runId = runId; return this; }
+        public WorkflowStepBuilder withStatus(WorkflowStep.Status status) { this.status = status; return this; }
+        public WorkflowStepBuilder withOutput(String output) { this.output = output; return this; }
+
+        public WorkflowStep build() {
+            return WorkflowStep.builder()
+                    .agentId(agentId)
+                    .promptTemplate(promptTemplate)
+                    .maxIterations(maxIterations)
+                    .runId(runId)
+                    .status(status)
+                    .output(output)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // ToolPack
+    // ---------------------------------------------------------------------
+    public static final class ToolPackBuilder {
+        private String id = UUID.randomUUID().toString();
+        private String name = "test-pack-" + shortId();
+        private PackKind kind = PackKind.HANDLER;
+        private VersionStatus status = VersionStatus.APPROVED;
+        private String sandboxMode = "NONE";
+        private String config = "{}";
+        private boolean enabled = true;
+        private Instant createdAt = Instant.now();
+        private Instant updatedAt;
+
+        public ToolPackBuilder withId(String id) { this.id = id; return this; }
+        public ToolPackBuilder withName(String name) { this.name = name; return this; }
+        public ToolPackBuilder withKind(PackKind kind) { this.kind = kind; return this; }
+        public ToolPackBuilder withStatus(VersionStatus status) { this.status = status; return this; }
+        public ToolPackBuilder withSandboxMode(String sandboxMode) { this.sandboxMode = sandboxMode; return this; }
+        public ToolPackBuilder withConfig(String config) { this.config = config; return this; }
+        public ToolPackBuilder withEnabled(boolean enabled) { this.enabled = enabled; return this; }
+        public ToolPackBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public ToolPackBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        public ToolPack build() {
+            return ToolPack.builder()
+                    .id(id)
+                    .name(name)
+                    .kind(kind)
+                    .status(status)
+                    .sandboxMode(sandboxMode)
+                    .config(config)
+                    .enabled(enabled)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // ToolDefinition
+    // ---------------------------------------------------------------------
+    public static final class ToolDefinitionBuilder {
+        private String id = UUID.randomUUID().toString();
+        private String name = "test-tool-" + shortId();
+        private String displayName = "Test Tool";
+        private String description = "Test tool fixture";
+        private String tier = "TIER_1";
+        private String category = "GENERAL";
+        private String handlerClass;
+        private String scriptType;
+        private String script;
+        private String parameters = "{\"type\":\"object\",\"properties\":{}}";
+        private String sandboxMode = "NONE";
+        private String sandboxConfig;
+        private int timeoutMs = 30_000;
+        private String knowledgeItemId;
+        private String packId;
+        private PackKind kind = PackKind.HANDLER;
+        private RiskTier riskTier = RiskTier.READ;
+        private VersionStatus status = VersionStatus.APPROVED;
+        private boolean enabled = true;
+        private int version = 1;
+        private Instant createdAt = Instant.now();
+        private Instant updatedAt;
+        private String createdBy = "test";
+
+        public ToolDefinitionBuilder withId(String id) { this.id = id; return this; }
+        public ToolDefinitionBuilder withName(String name) { this.name = name; return this; }
+        public ToolDefinitionBuilder withDisplayName(String displayName) { this.displayName = displayName; return this; }
+        public ToolDefinitionBuilder withDescription(String description) { this.description = description; return this; }
+        public ToolDefinitionBuilder withTier(String tier) { this.tier = tier; return this; }
+        public ToolDefinitionBuilder withCategory(String category) { this.category = category; return this; }
+        public ToolDefinitionBuilder withHandlerClass(String handlerClass) { this.handlerClass = handlerClass; return this; }
+        public ToolDefinitionBuilder withScriptType(String scriptType) { this.scriptType = scriptType; return this; }
+        public ToolDefinitionBuilder withScript(String script) { this.script = script; return this; }
+        public ToolDefinitionBuilder withParameters(String parameters) { this.parameters = parameters; return this; }
+        public ToolDefinitionBuilder withSandboxMode(String sandboxMode) { this.sandboxMode = sandboxMode; return this; }
+        public ToolDefinitionBuilder withSandboxConfig(String sandboxConfig) { this.sandboxConfig = sandboxConfig; return this; }
+        public ToolDefinitionBuilder withTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; return this; }
+        public ToolDefinitionBuilder withKnowledgeItemId(String knowledgeItemId) { this.knowledgeItemId = knowledgeItemId; return this; }
+        public ToolDefinitionBuilder withPackId(String packId) { this.packId = packId; return this; }
+        public ToolDefinitionBuilder withKind(PackKind kind) { this.kind = kind; return this; }
+        public ToolDefinitionBuilder withRiskTier(RiskTier riskTier) { this.riskTier = riskTier; return this; }
+        public ToolDefinitionBuilder withStatus(VersionStatus status) { this.status = status; return this; }
+        public ToolDefinitionBuilder withEnabled(boolean enabled) { this.enabled = enabled; return this; }
+        public ToolDefinitionBuilder withVersion(int version) { this.version = version; return this; }
+        public ToolDefinitionBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public ToolDefinitionBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+        public ToolDefinitionBuilder withCreatedBy(String createdBy) { this.createdBy = createdBy; return this; }
+
+        public ToolDefinition build() {
+            return ToolDefinition.builder()
+                    .id(id)
+                    .name(name)
+                    .displayName(displayName)
+                    .description(description)
+                    .tier(tier)
+                    .category(category)
+                    .handlerClass(handlerClass)
+                    .scriptType(scriptType)
+                    .script(script)
+                    .parameters(parameters)
+                    .sandboxMode(sandboxMode)
+                    .sandboxConfig(sandboxConfig)
+                    .timeoutMs(timeoutMs)
+                    .knowledgeItemId(knowledgeItemId)
+                    .packId(packId)
+                    .kind(kind)
+                    .riskTier(riskTier)
+                    .status(status)
+                    .enabled(enabled)
+                    .version(version)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .createdBy(createdBy)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // ToolCall
+    // ---------------------------------------------------------------------
+    public static final class ToolCallBuilder {
+        private UUID id = UUID.randomUUID();
+        private UUID runId = UUID.randomUUID();
+        private String toolName = "test-tool";
+        private String arguments = "{}";
+        private String result;
+        private ToolCallStatus status = ToolCallStatus.PENDING;
+        private int latencyMs = 0;
+        private Instant createdAt = Instant.now();
+
+        public ToolCallBuilder withId(UUID id) { this.id = id; return this; }
+        public ToolCallBuilder withRunId(UUID runId) { this.runId = runId; return this; }
+        public ToolCallBuilder withToolName(String toolName) { this.toolName = toolName; return this; }
+        public ToolCallBuilder withArguments(String arguments) { this.arguments = arguments; return this; }
+        public ToolCallBuilder withResult(String result) { this.result = result; return this; }
+        public ToolCallBuilder withStatus(ToolCallStatus status) { this.status = status; return this; }
+        public ToolCallBuilder withLatencyMs(int latencyMs) { this.latencyMs = latencyMs; return this; }
+        public ToolCallBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+
+        public ToolCall build() {
+            return ToolCall.builder()
+                    .id(id)
+                    .runId(runId)
+                    .toolName(toolName)
+                    .arguments(arguments)
+                    .result(result)
+                    .status(status)
+                    .latencyMs(latencyMs)
+                    .createdAt(createdAt)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // AgentSession
+    // ---------------------------------------------------------------------
+    public static final class AgentSessionBuilder {
+        private UUID runId = UUID.randomUUID();
+        private UUID agentId = UUID.randomUUID();
+        private SessionStatus status = SessionStatus.ACTIVE;
+        private String memory = "{}";
+        private String context = "[]";
+        private int turnCount = 0;
+        private long totalInputTokens = 0;
+        private long totalOutputTokens = 0;
+        private Instant createdAt = Instant.now();
+        private Instant updatedAt;
+
+        public AgentSessionBuilder withRunId(UUID runId) { this.runId = runId; return this; }
+        public AgentSessionBuilder withAgentId(UUID agentId) { this.agentId = agentId; return this; }
+        public AgentSessionBuilder withStatus(SessionStatus status) { this.status = status; return this; }
+        public AgentSessionBuilder withMemory(String memory) { this.memory = memory; return this; }
+        public AgentSessionBuilder withContext(String context) { this.context = context; return this; }
+        public AgentSessionBuilder withTurnCount(int turnCount) { this.turnCount = turnCount; return this; }
+        public AgentSessionBuilder withTotalInputTokens(long totalInputTokens) { this.totalInputTokens = totalInputTokens; return this; }
+        public AgentSessionBuilder withTotalOutputTokens(long totalOutputTokens) { this.totalOutputTokens = totalOutputTokens; return this; }
+        public AgentSessionBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public AgentSessionBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        public AgentSession build() {
+            return AgentSession.builder()
+                    .runId(runId)
+                    .agentId(agentId)
+                    .status(status)
+                    .memory(memory)
+                    .context(context)
+                    .turnCount(turnCount)
+                    .totalInputTokens(totalInputTokens)
+                    .totalOutputTokens(totalOutputTokens)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // LlmProvider
+    // ---------------------------------------------------------------------
+    public static final class LlmProviderBuilder {
+        private UUID id = UUID.randomUUID();
+        private String name = "test-provider-" + shortId();
+        private LlmProviderType type = LlmProviderType.OPENAI;
+        private String baseUrl = "http://localhost:9999/v1";
+        private String apiKey = "sk-test-key";
+        private String defaultModel = "gpt-4o-mini";
+        private int defaultMaxTokens = 4096;
+        private boolean active = false;
+        private Instant createdAt = Instant.now();
+        private Instant updatedAt;
+
+        public LlmProviderBuilder withId(UUID id) { this.id = id; return this; }
+        public LlmProviderBuilder withName(String name) { this.name = name; return this; }
+        public LlmProviderBuilder withType(LlmProviderType type) { this.type = type; return this; }
+        public LlmProviderBuilder withBaseUrl(String baseUrl) { this.baseUrl = baseUrl; return this; }
+        public LlmProviderBuilder withApiKey(String apiKey) { this.apiKey = apiKey; return this; }
+        public LlmProviderBuilder withDefaultModel(String defaultModel) { this.defaultModel = defaultModel; return this; }
+        public LlmProviderBuilder withDefaultMaxTokens(int defaultMaxTokens) { this.defaultMaxTokens = defaultMaxTokens; return this; }
+        public LlmProviderBuilder withActive(boolean active) { this.active = active; return this; }
+        public LlmProviderBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public LlmProviderBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        public LlmProvider build() {
+            return LlmProvider.builder()
+                    .id(id)
+                    .name(name)
+                    .type(type)
+                    .baseUrl(baseUrl)
+                    .apiKey(apiKey)
+                    .defaultModel(defaultModel)
+                    .defaultMaxTokens(defaultMaxTokens)
+                    .active(active)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // PackCredential
+    // ---------------------------------------------------------------------
+    public static final class PackCredentialBuilder {
+        private String id = UUID.randomUUID().toString();
+        private String packId = UUID.randomUUID().toString();
+        private String agentId;
+        private String credKey = "API_TOKEN";
+        private String encValue = "enc:placeholder";
+        private Instant updatedAt = Instant.now();
+
+        public PackCredentialBuilder withId(String id) { this.id = id; return this; }
+        public PackCredentialBuilder withPackId(String packId) { this.packId = packId; return this; }
+        public PackCredentialBuilder withAgentId(String agentId) { this.agentId = agentId; return this; }
+        public PackCredentialBuilder withCredKey(String credKey) { this.credKey = credKey; return this; }
+        public PackCredentialBuilder withEncValue(String encValue) { this.encValue = encValue; return this; }
+        public PackCredentialBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        public PackCredential build() {
+            return PackCredential.builder()
+                    .id(id)
+                    .packId(packId)
+                    .agentId(agentId)
+                    .credKey(credKey)
+                    .encValue(encValue)
+                    .updatedAt(updatedAt)
+                    .build();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // ScheduledJob (mutable DTO — builder assembles via setters)
+    // ---------------------------------------------------------------------
+    public static final class ScheduledJobBuilder {
+        private String id = UUID.randomUUID().toString();
+        private String userId = "test-user";
+        private String scheduleType = "ONE_SHOT";
+        private String category = "REMINDER";
+        private String title = "Test job " + shortId();
+        private String scheduleExpression = "2030-01-01T00:00:00Z";
+        private Instant nextFireAt = Instant.now().plusSeconds(3600);
+        private Instant lastFiredAt;
+        private String status = "ACTIVE";
+        private String notificationTitle = "Test notification";
+        private String notificationBody = "Test body";
+        private Instant createdAt = Instant.now();
+        private Instant updatedAt;
+
+        public ScheduledJobBuilder withId(String id) { this.id = id; return this; }
+        public ScheduledJobBuilder withUserId(String userId) { this.userId = userId; return this; }
+        public ScheduledJobBuilder withScheduleType(String scheduleType) { this.scheduleType = scheduleType; return this; }
+        public ScheduledJobBuilder withCategory(String category) { this.category = category; return this; }
+        public ScheduledJobBuilder withTitle(String title) { this.title = title; return this; }
+        public ScheduledJobBuilder withScheduleExpression(String scheduleExpression) { this.scheduleExpression = scheduleExpression; return this; }
+        public ScheduledJobBuilder withNextFireAt(Instant nextFireAt) { this.nextFireAt = nextFireAt; return this; }
+        public ScheduledJobBuilder withLastFiredAt(Instant lastFiredAt) { this.lastFiredAt = lastFiredAt; return this; }
+        public ScheduledJobBuilder withStatus(String status) { this.status = status; return this; }
+        public ScheduledJobBuilder withNotificationTitle(String notificationTitle) { this.notificationTitle = notificationTitle; return this; }
+        public ScheduledJobBuilder withNotificationBody(String notificationBody) { this.notificationBody = notificationBody; return this; }
+        public ScheduledJobBuilder withCreatedAt(Instant createdAt) { this.createdAt = createdAt; return this; }
+        public ScheduledJobBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        public ScheduledJob build() {
+            ScheduledJob job = new ScheduledJob();
+            job.setId(id);
+            job.setUserId(userId);
+            job.setScheduleType(scheduleType);
+            job.setCategory(category);
+            job.setTitle(title);
+            job.setScheduleExpression(scheduleExpression);
+            job.setNextFireAt(nextFireAt);
+            job.setLastFiredAt(lastFiredAt);
+            job.setStatus(status);
+            job.setNotificationTitle(notificationTitle);
+            job.setNotificationBody(notificationBody);
+            job.setCreatedAt(createdAt);
+            job.setUpdatedAt(updatedAt);
+            return job;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // SystemConfig
+    // ---------------------------------------------------------------------
+    public static final class SystemConfigBuilder {
+        private String configKey = "test.config." + shortId();
+        private String configValue = "value";
+        private String description = "Test config fixture";
+        private Instant updatedAt = Instant.now();
+
+        public SystemConfigBuilder withConfigKey(String configKey) { this.configKey = configKey; return this; }
+        public SystemConfigBuilder withConfigValue(String configValue) { this.configValue = configValue; return this; }
+        public SystemConfigBuilder withDescription(String description) { this.description = description; return this; }
+        public SystemConfigBuilder withUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        public SystemConfig build() {
+            return SystemConfig.builder()
+                    .configKey(configKey)
+                    .configValue(configValue)
+                    .description(description)
+                    .updatedAt(updatedAt)
                     .build();
         }
     }

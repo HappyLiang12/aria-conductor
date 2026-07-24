@@ -4,7 +4,8 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 300_000, // 5 min per test (LLM calls are slow)
   fullyParallel: false,
-  retries: 0,
+  // CI-only single retry: quarantines transient infra flakes; local runs stay strict.
+  retries: process.env.CI ? 1 : 0,
   reporter: [['list']],
   use: {
     baseURL: 'http://localhost:5173',

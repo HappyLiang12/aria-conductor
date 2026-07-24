@@ -67,4 +67,22 @@ describe('Dev SQL tools', () => {
     expect(resultText(result)).toContain('404');
     expect(resultText(result)).toContain('not available in current profile');
   });
+
+  it('sql_execute rejects an empty SQL string without hitting the backend', async () => {
+    fetchMock = mockFetch({ '/api/v1/dev/sql/execute': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const result = await ctx.client.callTool({ name: 'sql_execute', arguments: { sql: '' } });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('sql_execute rejects a missing sql argument', async () => {
+    fetchMock = mockFetch({ '/api/v1/dev/sql/execute': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const result = await ctx.client.callTool({ name: 'sql_execute', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
 });

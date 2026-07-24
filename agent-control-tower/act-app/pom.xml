@@ -14,6 +14,12 @@
     <name>ACT Application</name>
     <description>Spring Boot main application</description>
 
+    <properties>
+        <!-- M0 coverage ratchet (baseline 87.5% line / 68.0% branch, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.82</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.63</jacoco.branch.minimum>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.aria.conductor</groupId>
@@ -76,6 +82,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ArchUnit: module-boundary and context-discipline guardrails -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
             <scope>test</scope>
         </dependency>
 

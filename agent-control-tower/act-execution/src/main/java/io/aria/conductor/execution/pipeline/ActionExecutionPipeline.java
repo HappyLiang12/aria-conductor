@@ -93,7 +93,7 @@ public class ActionExecutionPipeline {
             setRunStatus(ctx, RunStatus.PAUSED);
             try {
                 io.aria.conductor.execution.approval.ApprovalDecision decision =
-                        approvalGate.requestApproval(action, ctx, forceApproval ? aiResult.reasoning() : null);
+                        approvalGate.requestApproval(action, ctx);
                 if (!ctx.isCancelled()) setRunStatus(ctx, RunStatus.RUNNING);
                 if (!decision.isApproved()) {
                     log.warn("Pipeline: action '{}' denied by approval gate: {}",

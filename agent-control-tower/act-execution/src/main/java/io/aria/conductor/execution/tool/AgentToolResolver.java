@@ -49,4 +49,9 @@ public class AgentToolResolver {
     private boolean isApproved(ToolDefinition tool) {
         return tool.getStatus() == null || tool.getStatus() == VersionStatus.APPROVED;
     }
+
+    /** Check if agent has explicit tool assignments (UI-controlled) vs role-template defaults. */
+    public boolean hasExplicitTools(Agent agent) {
+        return !agentToolRepo.findToolIdsByAgentId(agent.getId().toString()).isEmpty();
+    }
 }

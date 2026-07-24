@@ -89,6 +89,7 @@ export function NotificationBell() {
 
   const fmtTime = (iso: string): string => {
     const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
     const now = new Date();
     const diffMs = now.getTime() - d.getTime();
     const diffMin = Math.floor(diffMs / 60000);
@@ -123,7 +124,7 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="notif-dropdown">
+        <div className="notif-dropdown" aria-live="polite" role="region" aria-label="Notifications">
           <div className="notif-dropdown-header">
             <span className="notif-dropdown-title">Notifications</span>
             <button

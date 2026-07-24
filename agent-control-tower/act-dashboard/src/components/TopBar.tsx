@@ -20,11 +20,19 @@ function formatTokens(tokens: number | undefined): string {
   return String(tokens);
 }
 
+const THEME_KEY = 'aria-theme';
+
 export function TopBar() {
   const [now, setNow] = useState<Date>(() => new Date());
-  const [isLight, setIsLight] = useState<boolean>(() =>
-    typeof document !== 'undefined' && document.body.classList.contains('light'),
-  );
+  const [isLight, setIsLight] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'light') {
+      document.body.classList.add('light');
+      return true;
+    }
+    return false;
+  });
 
   const { data: summary } = useQuery<DashboardSummary>({
     queryKey: ['dashboard-summary'],
@@ -41,6 +49,7 @@ export function TopBar() {
     const next = !document.body.classList.contains('light');
     document.body.classList.toggle('light', next);
     setIsLight(next);
+    try { localStorage.setItem(THEME_KEY, next ? 'light' : 'dark'); } catch { /* ignore */ }
   };
 
   const activeAgents = summary?.activeAgents ?? 0;

@@ -54,20 +54,7 @@ public class GitPackHandler implements ToolHandler {
 
         String workspaceDir = Objects.toString(arguments.get("_workspaceDir"), null);
         if (workspaceDir == null || workspaceDir.isBlank()) {
-            String runId = Objects.toString(arguments.get("_runId"), "unknown");
-            return "Error: git pack requires a run workspace but none was provisioned (runId=" + runId
-                    + "). Check the server log for workspace provisioning errors and the tools.file.workspace-dir / "
-                    + "TOOLS_FILE_WORKSPACE_DIR configuration.";
-        }
-
-        if ("git_clone".equals(toolName)) {
-            try (var files = java.nio.file.Files.list(java.nio.file.Path.of(workspaceDir))) {
-                if (files.findAny().isPresent()) {
-                    return "Error: Workspace is not empty — git clone requires an empty directory";
-                }
-            } catch (Exception e) {
-                return "Error: Cannot check workspace: " + e.getMessage();
-            }
+            return "Error: git pack requires a run workspace (no _workspaceDir in context)";
         }
 
         List<String> argv = buildArgv(toolName, arguments);
@@ -75,14 +62,7 @@ public class GitPackHandler implements ToolHandler {
             return "Error: Missing or invalid required parameter for " + toolName;
         }
 
-        String result = executeInWorkspace(argv, workspaceDir, arguments);
-        // Surface the clone destination + relative-path convention so the model knows where the
-        // repo lives and how to address files (#23).
-        if ("git_clone".equals(toolName) && !result.startsWith("Error:") && !result.startsWith("Exit code:")) {
-            result = result + "\nRepository cloned into workspace root: " + workspaceDir
-                    + ". Use RELATIVE paths (e.g. agent-control-tower/...) with read_file/write_file/list_files.";
-        }
-        return result;
+        return executeInWorkspace(argv, workspaceDir, arguments);
     }
 
     /** Build argument array (no shell interpretation — prevents command injection). */
@@ -164,14 +144,14 @@ public class GitPackHandler implements ToolHandler {
                 }
 
                 Process p = pb.start();
-                // Read output before waitFor to avoid pipe deadlock when output > 64KB
-                byte[] rawOutput = p.getInputStream().readNBytes(MAX_OUTPUT_BYTES);
+                // Wait first, then read (prevents infinite block on hung process)
                 boolean finished = p.waitFor(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
                 if (!finished) {
                     p.destroyForcibly();
                     p.waitFor(2, TimeUnit.SECONDS);
                     return "Error: Git command timed out after " + DEFAULT_TIMEOUT_MS + "ms";
                 }
+                byte[] rawOutput = p.getInputStream().readNBytes(MAX_OUTPUT_BYTES);
                 String output = new String(rawOutput, StandardCharsets.UTF_8);
                 int exitCode = p.exitValue();
                 if (exitCode != 0) {

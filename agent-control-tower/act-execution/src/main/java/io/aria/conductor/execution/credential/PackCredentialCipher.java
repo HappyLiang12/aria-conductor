@@ -5,9 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
-import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -83,17 +81,10 @@ public class PackCredentialCipher {
         }
     }
 
-    // ponytail: fixed salt — single-deployment AES key derivation. Per-tenant salt if multi-tenancy added.
-    private static final byte[] SALT = "aria-conductor-pack-creds".getBytes(StandardCharsets.UTF_8);
-    private static final int PBKDF2_ITERATIONS = 100_000;
-
     private byte[] deriveKey(String key) {
-        try {
-            PBEKeySpec spec = new PBEKeySpec(key.toCharArray(), SALT, PBKDF2_ITERATIONS, 256);
-            SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
-            return factory.generateSecret(spec).getEncoded();
-        } catch (Exception e) {
-            throw new RuntimeException("Key derivation failed", e);
-        }
+        byte[] raw = key.getBytes(StandardCharsets.UTF_8);
+        byte[] result = new byte[32]; // AES-256
+        System.arraycopy(raw, 0, result, 0, Math.min(raw.length, 32));
+        return result;
     }
 }

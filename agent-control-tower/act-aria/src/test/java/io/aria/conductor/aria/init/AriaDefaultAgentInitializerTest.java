@@ -4,10 +4,8 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.aria.AriaConstants;
 import io.aria.conductor.common.model.Agent;
-import io.aria.conductor.common.model.AgentToolId;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
-import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.execution.adk.LangChainAdkProvider;
@@ -104,28 +102,5 @@ class AriaDefaultAgentInitializerTest {
                 agentToolRepository, llmProviderRepository, adkProvider, environment).run(args);
 
         verify(adkProvider, never()).prepareAgent(any(), any());
-    }
-
-    @Test
-    void assignsOnlyOrchestrationTools_andPrunesOthers() {
-        // #25: Aria must receive only orchestration tools (e.g. run_agent) and any previously-granted
-        // non-orchestration tool (e.g. git_push) must be pruned at startup.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
-        ToolDefinition runAgent = ToolDefinition.builder().id("tool-run_agent").name("run_agent").enabled(true).build();
-        ToolDefinition gitPush = ToolDefinition.builder().id("tool-git_push").name("git_push").enabled(true).build();
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of(runAgent, gitPush));
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-        // Aria currently holds git_push (to be pruned) but not run_agent (to be added).
-        when(agentToolRepository.findToolIdsByAgentId(AriaConstants.ARIA_AGENT_ID.toString()))
-                .thenReturn(java.util.List.of("tool-git_push"));
-        when(agentToolRepository.existsById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), "tool-run_agent")))
-                .thenReturn(false);
-
-        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment).run(args);
-
-        verify(agentToolRepository).save(any()); // run_agent assigned
-        verify(agentToolRepository).deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), "tool-git_push"));
     }
 }

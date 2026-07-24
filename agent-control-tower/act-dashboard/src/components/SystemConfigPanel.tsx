@@ -52,8 +52,8 @@ const CATEGORIES: CategoryDef[] = [
     icon: '📊',
     title: 'Report Generation',
     keys: [
-      { key: 'report.generate.max.tokens', label: 'Generate Max Tokens', min: 4000, max: 131072, step: 1024 },
-      { key: 'report.amend.max.tokens', label: 'Amend Max Tokens', min: 4000, max: 131072, step: 1024 },
+      { key: 'report.generate.max.tokens', label: 'Generate Max Tokens', min: 1024, max: 131072, step: 1024 },
+      { key: 'report.amend.max.tokens', label: 'Amend Max Tokens', min: 1024, max: 131072, step: 1024 },
     ],
   },
 ];

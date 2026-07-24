@@ -45,6 +45,24 @@ function renderMarkdown(text: string): string {
     html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    // Horizontal rules
+    html = html.replace(/^---+$/gm, '<hr/>');
+    html = html.replace(/^\*\*\*+$/gm, '<hr/>');
+    // Tables: detect lines starting with |
+    html = html.replace(/((?:^\|.+\|$\n?)+)/gm, (tableBlock) => {
+      const rows = tableBlock.trim().split('\n').filter(r => r.trim());
+      if (rows.length < 2) return tableBlock;
+      let out = '<table class="md-table">';
+      rows.forEach((row, i) => {
+        // Skip separator row (|---|---|)
+        if (/^\|[\s\-:|]+\|$/.test(row.trim())) return;
+        const cells = row.split('|').slice(1, -1).map(c => c.trim());
+        const tag = i === 0 ? 'th' : 'td';
+        out += '<tr>' + cells.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+      });
+      out += '</table>';
+      return out;
+    });
     html = html.replace(/^[•\-\*] (.+)$/gm, '<li>$1</li>');
     html = html.replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>');
     const lines = html.split('\n');
@@ -99,6 +117,9 @@ export function AriaPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
+  const toolStartRef = useRef<number>(0);
+  const [toolElapsed, setToolElapsed] = useState(0);
 
   const isEmpty = messages.length === 0;
 
@@ -162,6 +183,14 @@ export function AriaPanel() {
     return undefined;
   }, [open]);
 
+  // Elapsed-time ticker while a tool is active
+  useEffect(() => {
+    if (!activeTool) { setToolElapsed(0); return; }
+    toolStartRef.current = Date.now();
+    const id = setInterval(() => setToolElapsed(Math.round((Date.now() - toolStartRef.current) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [activeTool]);
+
   // Cancel in-flight stream when component unmounts
   useEffect(() => () => {
     abortRef.current?.abort();
@@ -178,6 +207,7 @@ export function AriaPanel() {
 
       // Abort any prior in-flight stream defensively.
       abortRef.current?.abort();
+      cancelledRef.current = false;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
@@ -228,6 +258,8 @@ export function AriaPanel() {
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             setBusy(false);
             setActiveTool(null);
+            // Suppress error if user explicitly cancelled
+            if (cancelledRef.current) return;
             setMessages((prev) => [
               ...prev,
               {
@@ -278,6 +310,7 @@ export function AriaPanel() {
   }, [busy, lastSentMessage, sendStreamed]);
 
   const handleCancel = useCallback(() => {
+    cancelledRef.current = true;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     abortRef.current?.abort();
     setBusy(false);
@@ -393,7 +426,7 @@ export function AriaPanel() {
             </button>
           </header>
 
-          <div className="ai-stack" ref={stackRef}>
+          <div className="ai-stack" ref={stackRef} aria-live="polite" aria-atomic="false">
             {isEmpty && (
               <div className="ai-card ai-empty">
                 <div className="ai-empty-eyebrow">— operator copilot</div>
@@ -455,6 +488,7 @@ export function AriaPanel() {
                       <div className="ai-tool-tag">
                         <span className="ai-tool-spark" aria-hidden="true">⟢</span>
                         Using <code>{activeTool}</code>
+                        {toolElapsed > 5 && <span className="ai-tool-elapsed"> ({toolElapsed}s)</span>}
                       </div>
                     ) : (
                       <div className="typing-indicator" aria-label="Aria is thinking">

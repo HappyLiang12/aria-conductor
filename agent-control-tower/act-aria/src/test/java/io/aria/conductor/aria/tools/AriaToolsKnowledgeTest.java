@@ -7,7 +7,6 @@ import io.aria.conductor.execution.sandbox.SandboxRunner;
 import io.aria.conductor.execution.tool.ToolExecutionEngine;
 import io.aria.conductor.execution.tool.ToolExecutionResult;
 import io.aria.conductor.execution.tool.ToolHandler;
-import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,7 +26,6 @@ class AriaToolsKnowledgeTest {
 
     @Mock private ToolDefinitionRepository toolDefinitionRepository;
     @Mock private SandboxRunner sandboxRunner;
-    @Mock private WorkspaceManager workspaceManager;
 
     private ToolExecutionEngine toolExecutionEngine;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -38,8 +36,7 @@ class AriaToolsKnowledgeTest {
         toolExecutionEngine = new ToolExecutionEngine(
                 toolDefinitionRepository,
                 sandboxRunner,
-                handlers,
-                workspaceManager
+                handlers
         );
     }
 

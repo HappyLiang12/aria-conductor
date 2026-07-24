@@ -21,7 +21,6 @@ public class ToolExecutionEngine {
     private final ToolDefinitionRepository toolRepo;
     private final SandboxRunner sandboxRunner;
     private final Map<String, ToolHandler> handlers;
-    private final WorkspaceManager workspaceManager;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ToolExecutionResult execute(String toolName, Map<String, Object> arguments) {
@@ -73,22 +72,9 @@ public class ToolExecutionEngine {
             // Strip reserved keys to prevent LLM from forging internal context
             handlerArgs.keySet().removeIf(k -> k.startsWith("_"));
             handlerArgs.put("toolName", tool.getName());
-            // Inject run context for workspace-aware handlers (null-safe: legacy path unchanged).
-            // Use-site workspace guarantee (#26): if the context has no workspace dir yet, resolve it
-            // via the shared idempotent WorkspaceManager.getOrProvision contract (same entry point as
-            // the loop-level pre-provision), so git-pack/file handlers always receive _workspaceDir.
+            // Inject run context for workspace-aware handlers (null-safe: legacy path unchanged)
             if (ctx != null) {
-                String workspaceDir = ctx.getWorkspaceDir();
-                if ((workspaceDir == null || workspaceDir.isBlank()) && ctx.getRunId() != null) {
-                    try {
-                        workspaceDir = workspaceManager.getOrProvision(ctx.getRunId());
-                        ctx.setWorkspaceDir(workspaceDir);
-                    } catch (Exception e) {
-                        log.error("Workspace provisioning failed for run {} (tool {}): {}",
-                                ctx.getRunId(), tool.getName(), e.getMessage());
-                    }
-                }
-                if (workspaceDir != null && !workspaceDir.isBlank()) handlerArgs.put("_workspaceDir", workspaceDir);
+                if (ctx.getWorkspaceDir() != null) handlerArgs.put("_workspaceDir", ctx.getWorkspaceDir());
                 if (ctx.getRunId() != null) handlerArgs.put("_runId", ctx.getRunId().toString());
                 if (ctx.getCurrentToolCallId() != null) handlerArgs.put("_toolCallId", ctx.getCurrentToolCallId().toString());
                 handlerArgs.put("_runContext", ctx);

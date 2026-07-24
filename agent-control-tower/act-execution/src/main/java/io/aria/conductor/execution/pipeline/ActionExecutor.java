@@ -22,13 +22,6 @@ public class ActionExecutor {
     private final ToolExecutionEngine toolExecutionEngine;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * Global cap on a single tool's output that is fed back into the model context. Prevents
-     * large outputs (e.g. web_fetch of a full HTML page, verbose git/shell output) from bloating
-     * the trajectory and burning tokens/latency on every subsequent iteration.
-     */
-    private static final int MAX_TOOL_OUTPUT_CHARS = 16_000;
-
     public ActionExecutor(AdkProviderRegistry adkProviderRegistry,
                           ToolExecutionEngine toolExecutionEngine) {
         this.adkProviderRegistry = adkProviderRegistry;
@@ -45,7 +38,6 @@ public class ActionExecutor {
 
             if (result.isSuccess()) {
                 String output = result.getOutput() != null ? result.getOutput() : "";
-                output = truncateOutput(output, ctx);
                 log.debug("Action executed successfully: name={}, outputLength={}", action.name(), output.length());
                 return ActionResult.success(output);
             } else {
@@ -66,15 +58,5 @@ public class ActionExecutor {
             log.warn("Failed to parse action arguments as JSON: {}", e.getMessage());
             throw new IllegalArgumentException("Invalid JSON arguments for tool call: " + e.getMessage(), e);
         }
-    }
-
-    /** Cap a tool output so oversized results don't bloat the model context (#perf). Profile-tunable. */
-    private String truncateOutput(String output, RunContext ctx) {
-        int cap = (ctx != null && ctx.getHarnessProfile() != null)
-                ? ctx.getHarnessProfile().effectiveOutputCap(MAX_TOOL_OUTPUT_CHARS)
-                : MAX_TOOL_OUTPUT_CHARS;
-        if (output == null || output.length() <= cap) return output;
-        int omitted = output.length() - cap;
-        return output.substring(0, cap) + "\n… [output truncated: " + omitted + " more chars omitted]";
     }
 }

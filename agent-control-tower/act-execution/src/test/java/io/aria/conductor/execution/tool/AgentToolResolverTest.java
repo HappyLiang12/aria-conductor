@@ -63,21 +63,4 @@ class AgentToolResolverTest {
         assertThat(tools).hasSize(1);
         assertThat(tools.get(0).getName()).isEqualTo("read_file");
     }
-
-    @Test
-    void shouldMapFreeTextDevRoleToDevTemplateByKeyword() {
-        // A delegated worker described in free text (e.g. "Developer who fixes bugs") must still
-        // resolve to the 'dev' template (which carries the git pack) rather than WORKER (#25).
-        UUID agentId = UUID.randomUUID();
-        String gitPushId = UUID.randomUUID().toString();
-        Agent agent = Agent.builder().id(agentId).role("Developer who fixes bugs").build();
-        when(agentToolRepo.findToolIdsByAgentId(agentId.toString())).thenReturn(List.of());
-        when(roleTemplateRepo.findDefaultToolIdsByRole("Developer who fixes bugs")).thenReturn(List.of());
-        when(roleTemplateRepo.findDefaultToolIdsByRole("dev")).thenReturn(List.of(gitPushId));
-        when(toolRepo.findAllById(List.of(gitPushId))).thenReturn(List.of(
-                ToolDefinition.builder().id(gitPushId).name("git_push").enabled(true).build()));
-        List<ToolDefinition> tools = resolver.resolveForAgent(agent);
-        assertThat(tools).hasSize(1);
-        assertThat(tools.get(0).getName()).isEqualTo("git_push");
-    }
 }

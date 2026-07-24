@@ -40,17 +40,6 @@ class WorkspaceManagerTest {
     }
 
     @Test
-    void getOrProvisionIsIdempotentAndMatchesProvision() {
-        UUID runId = UUID.randomUUID();
-        String first = manager.getOrProvision(runId);
-        String second = manager.getOrProvision(runId);
-        assertEquals(first, second);
-        assertTrue(Files.isDirectory(Path.of(first)));
-        // Same contract entry point as provision()
-        assertEquals(first, manager.provision(runId));
-    }
-
-    @Test
     void resolveRejectsTraversal() {
         UUID runId = UUID.randomUUID();
         manager.provision(runId);

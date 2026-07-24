@@ -173,6 +173,10 @@ export function WorkflowsPage() {
   const queryClient = useQueryClient();
   const { lastMessage } = useWebSocketContext();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showYamlModal, setShowYamlModal] = useState(false);
+  const [yamlInput, setYamlInput] = useState('');
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeName, setMergeName] = useState('');
 
   const { data: workflows, isLoading, error } = useQuery({
     queryKey: ['workflows'],
@@ -270,15 +274,15 @@ export function WorkflowsPage() {
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           {selectedIds.length >= 2 && (
             <button className="btn primary" onClick={() => {
-              const name = prompt('Name for merged workflow:');
-              if (name) mergeMutation.mutate({ sourceIds: selectedIds, name });
+              setMergeName('');
+              setShowMergeModal(true);
             }}>
               Merge {selectedIds.length} Workflows
             </button>
           )}
           <button className="btn" onClick={() => {
-            const yaml = prompt('Paste YAML workflow template:');
-            if (yaml) executeYamlMutation.mutate(yaml);
+            setYamlInput('');
+            setShowYamlModal(true);
           }}>
             Execute YAML
           </button>
@@ -316,6 +320,67 @@ export function WorkflowsPage() {
           onDelete={(id) => deleteMutation.mutate(id)}
         />
       ))}
+
+      {/* YAML Execute Modal */}
+      {showYamlModal && (
+        <>
+          <div className="knowledge-pop-scrim open" onClick={() => setShowYamlModal(false)} />
+          <div className="knowledge-pop" style={{ transform: 'translate(-50%, -50%) scale(1)', opacity: 1, pointerEvents: 'auto', display: 'flex', flexDirection: 'column', maxHeight: '80vh' }}>
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <strong style={{ fontSize: 13 }}>Execute YAML Workflow</strong>
+              <button className="btn" onClick={() => setShowYamlModal(false)} style={{ marginLeft: 'auto' }}>✕</button>
+            </div>
+            <div style={{ padding: 16, display: 'grid', gap: 12 }}>
+              <textarea
+                value={yamlInput}
+                onChange={(e) => setYamlInput(e.target.value)}
+                rows={12}
+                placeholder={'steps:\n  - agent_role: researcher\n    prompt_template: "Research {topic}"\n    max_iterations: 5'}
+                style={{ width: '100%', border: '1px solid var(--line-2)', borderRadius: 9, background: 'rgba(0,0,0,.22)', color: 'var(--text)', padding: '10px 12px', font: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, resize: 'vertical' }}
+              />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={() => setShowYamlModal(false)}>Cancel</button>
+                <button className="btn primary" disabled={!yamlInput.trim() || executeYamlMutation.isPending} onClick={() => {
+                  executeYamlMutation.mutate(yamlInput);
+                  setShowYamlModal(false);
+                }}>
+                  {executeYamlMutation.isPending ? 'Executing…' : 'Execute'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Merge Modal */}
+      {showMergeModal && (
+        <>
+          <div className="knowledge-pop-scrim open" onClick={() => setShowMergeModal(false)} />
+          <div className="knowledge-pop" style={{ transform: 'translate(-50%, -50%) scale(1)', opacity: 1, pointerEvents: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <strong style={{ fontSize: 13 }}>Merge {selectedIds.length} Workflows</strong>
+              <button className="btn" onClick={() => setShowMergeModal(false)} style={{ marginLeft: 'auto' }}>✕</button>
+            </div>
+            <div style={{ padding: 16, display: 'grid', gap: 12 }}>
+              <input
+                value={mergeName}
+                onChange={(e) => setMergeName(e.target.value)}
+                placeholder="Name for merged workflow"
+                style={{ width: '100%', border: '1px solid var(--line-2)', borderRadius: 9, background: 'rgba(0,0,0,.22)', color: 'var(--text)', padding: '8px 10px', font: 'inherit', fontSize: 12.5 }}
+              />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn" onClick={() => setShowMergeModal(false)}>Cancel</button>
+                <button className="btn primary" disabled={!mergeName.trim() || mergeMutation.isPending} onClick={() => {
+                  mergeMutation.mutate({ sourceIds: selectedIds, name: mergeName });
+                  setShowMergeModal(false);
+                }}>
+                  {mergeMutation.isPending ? 'Merging…' : 'Merge'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

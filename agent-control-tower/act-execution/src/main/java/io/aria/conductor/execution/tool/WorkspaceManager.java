@@ -24,18 +24,11 @@ public class WorkspaceManager {
     private final Path root;
 
     public WorkspaceManager(@Value("${tools.file.workspace-dir:./data/workspaces}") String workspaceDir) {
-        // Resolve the root robustly (#26): prefer the TOOLS_FILE_WORKSPACE_DIR env var explicitly,
-        // falling back to the injected property. @Value does not perform @ConfigurationProperties-style
-        // relaxed binding, so reading the env var directly removes any binding ambiguity. The default
-        // is CWD-relative, so log the resolved absolute path to make the effective location observable.
-        String envDir = System.getenv("TOOLS_FILE_WORKSPACE_DIR");
-        String effective = (envDir != null && !envDir.isBlank()) ? envDir : workspaceDir;
-        this.root = Path.of(effective).toAbsolutePath().normalize();
+        this.root = Path.of(workspaceDir).toAbsolutePath().normalize();
         try {
             Files.createDirectories(root);
-            log.info("Workspace root resolved to: {}", root);
         } catch (IOException e) {
-            log.error("Could not create workspace root {} — per-run provisioning will fail: {}", root, e.getMessage());
+            log.warn("Could not create workspace root {}: {}", root, e.getMessage());
         }
     }
 
@@ -44,19 +37,11 @@ public class WorkspaceManager {
      * Idempotent — safe to call multiple times for the same run.
      */
     public String provision(UUID runId) {
-        return getOrProvision(runId);
-    }
-
-    /**
-     * Contract entry point shared by the loop-level pre-provision and the tool-execution use-site
-     * (#26): return the run's workspace path, creating it if absent. Idempotent.
-     */
-    public String getOrProvision(UUID runId) {
         Path dir = root.resolve(runId.toString());
         try {
             Files.createDirectories(dir);
         } catch (IOException e) {
-            log.error("Failed to provision workspace for run {} under root {}: {}", runId, root, e.getMessage());
+            log.error("Failed to provision workspace for run {}: {}", runId, e.getMessage());
             throw new RuntimeException("Workspace provisioning failed for run " + runId, e);
         }
         return dir.toString();

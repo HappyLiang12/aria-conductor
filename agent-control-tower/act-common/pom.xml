@@ -14,6 +14,12 @@
     <name>ACT Common</name>
     <description>Shared kernel - models, events, config, exceptions</description>
 
+    <properties>
+        <!-- M1 coverage ratchet (measured 62.1% line / 73.6% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.55</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.60</jacoco.branch.minimum>
+    </properties>
+
     <dependencies>
         <!-- Spring Data JPA (for JpaRepository, @Query, @Modifying) -->
         <dependency>
@@ -58,6 +64,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- jqwik property-based tests (version managed in parent) -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

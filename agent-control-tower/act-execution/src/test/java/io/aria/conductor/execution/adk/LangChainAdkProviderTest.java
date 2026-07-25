@@ -21,7 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @ExtendWith(MockitoExtension.class)
-@WireMockTest(httpPort = 9300)
+// Dynamic port: a fixed 9300 collides with locally running ADK dev servers
+// (uvicorn defaults to 9300) and breaks the suite with "Failed to bind".
+@WireMockTest
 class LangChainAdkProviderTest {
 
     @Mock AdkProcessReaper reaper;
@@ -30,9 +32,11 @@ class LangChainAdkProviderTest {
     LangChainAdkProperties properties;
     LlmProperties llmProperties;
     LangChainAdkProvider provider;
+    int wmPort;
 
     @BeforeEach
     void setUp(WireMockRuntimeInfo wmRuntimeInfo) {
+        wmPort = wmRuntimeInfo.getHttpPort();
         properties = new LangChainAdkProperties();
         properties.setHost("127.0.0.1");
         properties.setPortRangeStart(9300);
@@ -55,7 +59,7 @@ class LangChainAdkProviderTest {
         UUID agentId = UUID.randomUUID();
 
         // Seed a healthy instance at the WireMock port so call() can proceed
-        provider.putInstanceForTest(agentId, new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), true, 0));
+        provider.putInstanceForTest(agentId, new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), true, 0));
 
         stubFor(post(urlEqualTo("/run"))
                 .willReturn(aResponse()
@@ -79,7 +83,7 @@ class LangChainAdkProviderTest {
     @Test
     void call_throwsWhenHttp500() {
         UUID agentId = UUID.randomUUID();
-        provider.putInstanceForTest(agentId, new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), true, 0));
+        provider.putInstanceForTest(agentId, new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), true, 0));
 
         stubFor(get(urlEqualTo("/health")).willReturn(aResponse().withStatus(200)));
         stubFor(post(urlEqualTo("/run")).willReturn(aResponse().withStatus(500)));
@@ -97,7 +101,7 @@ class LangChainAdkProviderTest {
         // call() must then fail fast instead of polling a dead port for 60s.
         properties.setPythonPath("nonexistent-python-binary-for-test");
         provider.putInstanceForTest(agentId,
-                new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), false, 0));
+                new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), false, 0));
 
         assertThatThrownBy(() -> provider.call(agentId, List.of(LlmMessage.user("test")), List.of()))
                 .isInstanceOf(IllegalStateException.class)
@@ -114,7 +118,7 @@ class LangChainAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         stubFor(get(urlEqualTo("/health")).willReturn(aResponse().withStatus(200)));
 
-        AdkInstance seed = new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), true, 0);
+        AdkInstance seed = new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), true, 0);
         provider.putInstanceForTest(agentId, seed);
 
         assertThat(provider.isHealthy(agentId)).isTrue();
@@ -123,7 +127,8 @@ class LangChainAdkProviderTest {
     @Test
     void healthCheck_marksUnhealthy_andIncrementsFailures() {
         UUID agentId = UUID.randomUUID();
-        AdkInstance seed = new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), true, 0);
+        // No /health stub registered → WireMock returns 404 → UNHEALTHY.
+        AdkInstance seed = new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), true, 0);
         provider.putInstanceForTest(agentId, seed);
 
         provider.healthCheck();
@@ -147,7 +152,7 @@ class LangChainAdkProviderTest {
     @Test
     void restartUnhealthy_skipsHealthyInstance() {
         UUID agentId = UUID.randomUUID();
-        AdkInstance healthy = new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), true, 0);
+        AdkInstance healthy = new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), true, 0);
         provider.putInstanceForTest(agentId, healthy);
 
         provider.restartUnhealthy();
@@ -159,7 +164,7 @@ class LangChainAdkProviderTest {
     @Test
     void restartUnhealthy_skipsWhenBelowFailureThreshold() {
         UUID agentId = UUID.randomUUID();
-        AdkInstance two = new AdkInstance(agentId, 9300, null, Instant.now(), Instant.now(), false, 2);
+        AdkInstance two = new AdkInstance(agentId, wmPort, null, Instant.now(), Instant.now(), false, 2);
         provider.putInstanceForTest(agentId, two);
 
         provider.restartUnhealthy();
@@ -172,7 +177,7 @@ class LangChainAdkProviderTest {
     void restartUnhealthy_respectsBackoff_window() {
         UUID agentId = UUID.randomUUID();
         AdkInstance pending = new AdkInstance(
-                agentId, 9300, null, Instant.now(), Instant.now(), false, 5,
+                agentId, wmPort, null, Instant.now(), Instant.now(), false, 5,
                 1, Instant.now().plusSeconds(60));
         provider.putInstanceForTest(agentId, pending);
 

@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Issue #18: LLM Provider Configuration UI Navigation', () => {
+// STALE: the /settings route and rail Settings button were removed in the UI
+// redesign — LLM provider config now lives in ConfigureModal (see Layout.tsx).
+// Rewrite this suite against the current UI in the Phase E E2E overhaul.
+test.describe.skip('Issue #18: LLM Provider Configuration UI Navigation', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the dashboard
     await page.goto('/');

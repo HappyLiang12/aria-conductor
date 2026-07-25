@@ -14,6 +14,12 @@
     <name>ACT Execution</name>
     <description>Execution engine module</description>
 
+    <properties>
+        <!-- M1 coverage ratchet (measured 65.5% line / 49.7% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.58</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.42</jacoco.branch.minimum>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.aria.conductor</groupId>
@@ -57,6 +63,18 @@
             <groupId>org.wiremock</groupId>
             <artifactId>wiremock-standalone</artifactId>
             <version>3.9.1</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Awaitility for concurrency tests (version from Spring Boot BOM) -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- jqwik property-based tests (version managed in parent) -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

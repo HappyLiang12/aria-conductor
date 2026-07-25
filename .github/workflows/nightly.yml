@@ -1,0 +1,71 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 18 * * *' # 02:00 Asia/Shanghai
+  workflow_dispatch: {}
+
+jobs:
+  mutation-tests:
+    name: PIT Mutation Testing (act-execution, act-knowledge)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Setup LangChain ADK venv
+        run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+      - name: Install reactor (skip tests)
+        run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
+      - name: Restore PIT history cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            agent-control-tower/act-execution/target/pit-history
+            agent-control-tower/act-knowledge/target/pit-history
+          key: pit-history-${{ github.ref_name }}
+      # Report-only for the first two weeks (mutationThreshold=0 in the pom);
+      # ratchet the threshold once scores stabilise — this is the primary
+      # honesty check against assertion-free tests.
+      - name: Run mutation coverage
+        run: cd agent-control-tower && mvn -P mutation org.pitest:pitest-maven:mutationCoverage -pl act-execution,act-knowledge -Dspring.profiles.active=h2
+      - name: Upload mutation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pit-reports
+          path: agent-control-tower/*/target/pit-reports/
+
+  dependency-audit:
+    name: Dependency Audit (report-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: pip-audit (langchain-adk)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          cd langchain-adk && pip-audit -r requirements.txt || true
+      - name: pnpm audit (mcp-server)
+        continue-on-error: true
+        run: cd packages/mcp-server && pnpm install --frozen-lockfile && pnpm audit --audit-level=high || true
+      - name: pnpm audit (dashboard)
+        continue-on-error: true
+        run: cd agent-control-tower/act-dashboard && pnpm install --frozen-lockfile && pnpm audit --audit-level=high || true

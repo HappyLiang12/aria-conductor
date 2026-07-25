@@ -14,6 +14,12 @@
     <name>ACT Agent</name>
     <description>Agent management module</description>
 
+    <properties>
+        <!-- M1 coverage ratchet (measured 75.6% line / 50.0% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.68</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.42</jacoco.branch.minimum>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.aria.conductor</groupId>

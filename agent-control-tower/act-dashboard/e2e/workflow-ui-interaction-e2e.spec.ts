@@ -18,7 +18,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
-const BACKEND = 'http://127.0.0.1:8080/api/v1';
+const BACKEND = `${process.env.API_URL || 'http://127.0.0.1:8080'}/api/v1`;
 
 async function apiCall(
   page: Page,
@@ -26,19 +26,15 @@ async function apiCall(
   path: string,
   body?: object,
 ): Promise<{ status: number; data: any }> {
-  const url = `${BACKEND}${path}`;
-  const bodyStr = body ? JSON.stringify(body) : undefined;
-  return page.evaluate(
-    async ({ url, method, bodyStr }) => {
-      const opts: RequestInit = { method, headers: { 'Content-Type': 'application/json' } };
-      if (bodyStr) opts.body = bodyStr;
-      const r = await fetch(url, opts);
-      const ct = r.headers.get('content-type') ?? '';
-      const data = ct.includes('json') ? await r.json().catch(() => null) : null;
-      return { status: r.status, data };
-    },
-    { url, method, bodyStr },
-  );
+  // Node-side request via Playwright: browser fetch from about:blank pages is
+  // blocked by CORS (Origin: null) in CI. page.request has no origin restrictions.
+  const resp = await page.request.fetch(`${BACKEND}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    data: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await resp.json().catch(() => null);
+  return { status: resp.status(), data };
 }
 
 async function createAgent(page: Page): Promise<string> {
@@ -225,10 +221,13 @@ test('9. click Merge → prompt for name → merged workflow appears', async ({ 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
 
-  // Select both
-  const checkboxes = page.locator('input[type="checkbox"]');
-  await checkboxes.nth(0).check();
-  await checkboxes.nth(1).check();
+  // Select the two workflows created above by name — nth(0)/nth(1) would pick
+  // whatever cards happen to be listed first (possibly non-FAILED → merge rejected).
+  const cardCheckbox = (name: string) =>
+    page.locator('div').filter({ has: page.locator(`span:text-is("${name}")`) }).last()
+      .locator('input[type="checkbox"]');
+  await cardCheckbox(wf1.name).check();
+  await cardCheckbox(wf2.name).check();
 
   // M2: the merge name is now entered in a modal dialog (no native prompt).
   const mergeName = `E2E Merged ${Date.now()}`;

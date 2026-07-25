@@ -32,3 +32,41 @@ describe('Kanban tools', () => {
     expect((fetchMock.calls[0].body as any).status).toBe('DONE');
   });
 });
+
+describe('Kanban tools — validation & error mapping', () => {
+  it('list_kanban_items rejects an invalid status enum value', async () => {
+    fetchMock = mockFetch({ '/api/v1/kanban/items': { status: 200, body: [] } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'list_kanban_items', arguments: { status: 'ARCHIVED' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('create_kanban_item rejects missing required title', async () => {
+    fetchMock = mockFetch({ '/api/v1/kanban/items': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_kanban_item', arguments: { description: 'no title' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('transition_kanban_item rejects an invalid target status', async () => {
+    fetchMock = mockFetch({ '/transition': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'transition_kanban_item', arguments: { id: 'k1', status: 'FINISHED' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('update_kanban_item maps a backend 500 into isError', async () => {
+    fetchMock = mockFetch({ '/api/v1/kanban/items/k1': { status: 500, body: { message: 'storage failure' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'update_kanban_item', arguments: { id: 'k1', title: 'new title' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('500');
+    expect(resultText(r)).toContain('storage failure');
+  });
+});

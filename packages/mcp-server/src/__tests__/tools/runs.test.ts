@@ -60,4 +60,60 @@ describe('Run tools', () => {
     expect(fetchMock.calls[0].url).toContain(`/api/v1/runs/${UUID}/tool-calls`);
     expect(JSON.parse((r.content as any[])[0].text)).toHaveLength(1);
   });
+
+  it('resume_run → POST /api/v1/runs/:id/resume', async () => {
+    fetchMock = mockFetch({ '/resume': { status: 200, body: { id: UUID, status: 'RUNNING' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'resume_run', arguments: { id: UUID } });
+    expect(fetchMock.calls[0].url).toContain(`/api/v1/runs/${UUID}/resume`);
+    expect(fetchMock.calls[0].method).toBe('POST');
+    expect(JSON.parse(resultText(r)).status).toBe('RUNNING');
+  });
+});
+
+describe('Run tools — validation & error mapping', () => {
+  it('list_runs rejects an invalid status enum value', async () => {
+    fetchMock = mockFetch({ '/api/v1/runs': { status: 200, body: [] } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'list_runs', arguments: { status: 'EXPLODED' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('create_run rejects missing required promptSeed', async () => {
+    fetchMock = mockFetch({ '/api/v1/runs': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_run', arguments: { agentId: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('create_run rejects a non-numeric maxIterations', async () => {
+    fetchMock = mockFetch({ '/api/v1/runs': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_run', arguments: { agentId: UUID, promptSeed: 'go', maxIterations: 'fifty' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('get_run maps a backend 404 into isError', async () => {
+    fetchMock = mockFetch({ [`/api/v1/runs/${UUID}`]: { status: 404, body: { error: 'Run not found' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_run', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('404');
+    expect(resultText(r)).toContain('Run not found');
+  });
+
+  it('pause_run maps a backend 409 (invalid state) into isError', async () => {
+    fetchMock = mockFetch({ '/pause': { status: 409, body: { message: 'Run is not RUNNING' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'pause_run', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('409');
+    expect(resultText(r)).toContain('Run is not RUNNING');
+  });
 });

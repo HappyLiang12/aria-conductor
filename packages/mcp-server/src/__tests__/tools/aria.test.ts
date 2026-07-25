@@ -25,3 +25,32 @@ describe('Aria tools', () => {
     expect((fetchMock.calls[0].body as any).conversationId).toBe('conv-1');
   });
 });
+
+describe('Aria tools — validation & error mapping', () => {
+  it('aria_chat rejects missing required message', async () => {
+    fetchMock = mockFetch({ '/api/v1/aria/chat': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'aria_chat', arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('aria_chat rejects a non-string message', async () => {
+    fetchMock = mockFetch({ '/api/v1/aria/chat': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'aria_chat', arguments: { message: 42 } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('aria_chat maps a backend 500 into isError', async () => {
+    fetchMock = mockFetch({ '/api/v1/aria/chat': { status: 500, body: { message: 'orchestrator crashed' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'aria_chat', arguments: { message: 'hi' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('500');
+    expect(resultText(r)).toContain('orchestrator crashed');
+  });
+});

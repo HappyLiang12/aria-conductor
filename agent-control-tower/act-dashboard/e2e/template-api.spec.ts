@@ -141,7 +141,9 @@ test.describe('Issue #80: Template API migration', () => {
   });
 
   // ── Test 4 ───────────────────────────────────────────────────────
-  test('AgentsPage template dropdown populates from API', async ({ page }) => {
+  // STALE: the standalone /agents route was removed in the UI redesign (agents now
+  // live on /crew). Rewrite against the current UI in the Phase E E2E overhaul.
+  test.skip('AgentsPage template dropdown populates from API', async ({ page }) => {
     // Navigate to Agents page
     await page.goto('/agents');
     await page.waitForLoadState('networkidle');
@@ -208,7 +210,9 @@ test.describe('Issue #80: Template API migration', () => {
   });
 
   // ── Test 5 ───────────────────────────────────────────────────────
-  test('CrewPage role dropdown populates from API', async ({ page }) => {
+  // STALE: the "+ Add Agent" mini-dialog was replaced by the Hire-from-Catalog flow
+  // in the UI redesign. Rewrite against the current UI in the Phase E E2E overhaul.
+  test.skip('CrewPage role dropdown populates from API', async ({ page }) => {
     // Already on /crew from beforeEach
     const catalog = page.locator('[data-testid="agent-catalog"]');
     await expect(catalog).toBeVisible({ timeout: 10_000 });

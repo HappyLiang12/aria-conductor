@@ -33,3 +33,41 @@ describe('Knowledge tools', () => {
     expect((fetchMock.calls[0].body as any).approved).toBe(true);
   });
 });
+
+describe('Knowledge tools — validation & error mapping', () => {
+  it('submit_knowledge rejects an invalid type enum value', async () => {
+    fetchMock = mockFetch({ '/api/v1/knowledge': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'submit_knowledge', arguments: { title: 't', type: 'WIKI', content: 'c' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('submit_knowledge rejects missing required content', async () => {
+    fetchMock = mockFetch({ '/api/v1/knowledge': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'submit_knowledge', arguments: { title: 't', type: 'SOP' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('review_knowledge rejects missing required approved flag', async () => {
+    fetchMock = mockFetch({ '/review': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'review_knowledge', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('get_knowledge maps a backend 404 into isError', async () => {
+    fetchMock = mockFetch({ [`/api/v1/knowledge/${UUID}`]: { status: 404, body: { error: 'Knowledge item not found' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_knowledge', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('404');
+    expect(resultText(r)).toContain('Knowledge item not found');
+  });
+});

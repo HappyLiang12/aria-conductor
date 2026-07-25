@@ -14,6 +14,12 @@
     <name>ACT Aria</name>
     <description>Aria assistant module</description>
 
+    <properties>
+        <!-- M1 coverage ratchet (measured 93.5% line / 83.7% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.86</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.76</jacoco.branch.minimum>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>io.aria.conductor</groupId>

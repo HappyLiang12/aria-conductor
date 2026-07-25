@@ -8,7 +8,10 @@ import { test, expect } from '@playwright/test';
  * Prerequisites: backend running with git pack seeded (V32), TOOLS_SHELL_ENABLED=true.
  */
 
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+// Default to the vite dev/preview origin used by CI and local runs; the docker
+// stack (port 3000) can still be targeted via BASE_URL. API uses 127.0.0.1 to
+// avoid IPv6 localhost resolution issues in CI (see #42).
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 const API_URL = process.env.API_URL || 'http://127.0.0.1:8080';
 
 test.describe('Git Pack Governance Lifecycle', () => {

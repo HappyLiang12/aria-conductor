@@ -35,3 +35,37 @@ describe('aria.job tools', () => {
     expect(http.patch).toHaveBeenCalledWith('/api/v1/aria/jobs/j1/pause');
   });
 });
+
+describe('aria.job tools — validation & error mapping', () => {
+  it('create schema rejects a missing title', async () => {
+    const { ariaJobTools } = await import('../aria-jobs.js');
+    const tool = ariaJobTools.find(t => t.name === 'aria.job.create')!;
+    const parsed = tool.inputSchema.safeParse({ scheduleType: 'RECURRING', category: 'REMINDER', scheduleExpression: '3600', notificationTitle: 'Hi' });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map(i => i.path[0])).toContain('title');
+  });
+
+  it('create schema rejects an invalid category enum value', async () => {
+    const { ariaJobTools } = await import('../aria-jobs.js');
+    const tool = ariaJobTools.find(t => t.name === 'aria.job.create')!;
+    const parsed = tool.inputSchema.safeParse({ scheduleType: 'RECURRING', category: 'ALARM', title: 't', scheduleExpression: '3600', notificationTitle: 'Hi' });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map(i => i.path[0])).toContain('category');
+  });
+
+  it('create schema rejects an empty scheduleExpression', async () => {
+    const { ariaJobTools } = await import('../aria-jobs.js');
+    const tool = ariaJobTools.find(t => t.name === 'aria.job.create')!;
+    const parsed = tool.inputSchema.safeParse({ scheduleType: 'ONE_SHOT', category: 'BRIEF', title: 't', scheduleExpression: '', notificationTitle: 'Hi' });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map(i => i.path[0])).toContain('scheduleExpression');
+  });
+
+  it('delete propagates backend errors from http.delete', async () => {
+    vi.mocked(http.delete).mockRejectedValueOnce(new Error('ACT API Error [404]: Not Found'));
+    const { ariaJobTools } = await import('../aria-jobs.js');
+    const tool = ariaJobTools.find(t => t.name === 'aria.job.delete')!;
+    await expect(tool.handler({ id: 'missing' })).rejects.toThrow('404');
+    expect(http.delete).toHaveBeenCalledWith('/api/v1/aria/jobs/missing');
+  });
+});

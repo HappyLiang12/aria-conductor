@@ -26,3 +26,41 @@ describe('Approval tools', () => {
     expect((fetchMock.calls[0].body as any).approved).toBe(true);
   });
 });
+
+describe('Approval tools — validation & error mapping', () => {
+  it('decide_approval rejects missing required approved flag', async () => {
+    fetchMock = mockFetch({ '/decide': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'decide_approval', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('decide_approval rejects a string in place of the boolean approved flag', async () => {
+    fetchMock = mockFetch({ '/decide': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'decide_approval', arguments: { id: UUID, approved: 'yes' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('get_approval rejects a non-UUID id', async () => {
+    fetchMock = mockFetch({ '/api/v1/approvals': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_approval', arguments: { id: '123' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('decide_approval maps a backend 404 into isError', async () => {
+    fetchMock = mockFetch({ '/decide': { status: 404, body: { error: 'Approval not found' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'decide_approval', arguments: { id: UUID, approved: false } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('404');
+    expect(resultText(r)).toContain('Approval not found');
+  });
+});

@@ -34,3 +34,32 @@ describe('LLM Provider tools', () => {
     expect(fetchMock.calls[0].method).toBe('POST');
   });
 });
+
+describe('LLM Provider tools — validation & error mapping', () => {
+  it('create_llm_provider rejects missing required apiKey', async () => {
+    fetchMock = mockFetch({ '/api/v1/llm-providers': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_llm_provider', arguments: { name: 'p', type: 'openai' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('get_llm_provider rejects a non-UUID id', async () => {
+    fetchMock = mockFetch({ '/api/v1/llm-providers': { status: 200, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'get_llm_provider', arguments: { id: 'openai' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('test_llm_provider maps a backend 502 into isError', async () => {
+    fetchMock = mockFetch({ '/test': { status: 502, body: { message: 'provider unreachable' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'test_llm_provider', arguments: { id: UUID } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('502');
+    expect(resultText(r)).toContain('provider unreachable');
+  });
+});

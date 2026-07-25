@@ -1,0 +1,51 @@
+name: Start Stack
+description: >
+  Download the built backend jar (and optionally the frontend dist), set up the
+  LangChain ADK venv, and start the H2 backend plus the dashboard frontend.
+  Extracted from four copy-pasted job preambles (plan Phase A3).
+inputs:
+  frontend-mode:
+    description: "'dist' (vite preview of built dist), 'dev' (vite dev server), or 'none' (backend only)"
+    required: false
+    default: dist
+runs:
+  using: composite
+  steps:
+    - name: Download backend jar
+      uses: actions/download-artifact@v4
+      with:
+        name: backend-jar
+        path: backend-jar/
+    - name: Download frontend dist
+      if: ${{ inputs.frontend-mode == 'dist' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: frontend-dist
+        path: agent-control-tower/act-dashboard/dist/
+    - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
+      shell: bash
+      run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+    - name: Start backend (H2, from jar)
+      # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
+      # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
+      shell: bash
+      run: |
+        cd agent-control-tower
+        PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
+        timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
+    - name: Install frontend deps and serve dist
+      if: ${{ inputs.frontend-mode == 'dist' }}
+      shell: bash
+      run: |
+        cd agent-control-tower/act-dashboard
+        pnpm install --frozen-lockfile
+        pnpm exec vite preview --port 5173 &
+        timeout 60 bash -c 'until curl -sf http://localhost:5173 > /dev/null 2>&1; do sleep 2; done'
+    - name: Install frontend deps and start dev server
+      if: ${{ inputs.frontend-mode == 'dev' }}
+      shell: bash
+      run: |
+        cd agent-control-tower/act-dashboard
+        pnpm install --frozen-lockfile
+        pnpm dev &
+        timeout 60 bash -c 'until curl -sf http://localhost:5173 > /dev/null 2>&1; do sleep 2; done'

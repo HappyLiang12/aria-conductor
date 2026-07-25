@@ -28,22 +28,15 @@ async function apiCall(
   path: string,
   body?: object,
 ): Promise<{ status: number; data: any }> {
-  const url = `${BACKEND}${path}`;
-  const bodyStr = body ? JSON.stringify(body) : undefined;
-  return page.evaluate(
-    async ({ url, method, bodyStr }) => {
-      const opts: RequestInit = {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-      };
-      if (bodyStr) opts.body = bodyStr;
-      const r = await fetch(url, opts);
-      const ct = r.headers.get('content-type') ?? '';
-      const data = ct.includes('json') ? await r.json().catch(() => null) : null;
-      return { status: r.status, data };
-    },
-    { url, method, bodyStr },
-  );
+  // Node-side request via Playwright: browser fetch from about:blank pages is
+  // blocked by CORS (Origin: null) in CI. page.request has no origin restrictions.
+  const resp = await page.request.fetch(`${BACKEND}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    data: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await resp.json().catch(() => null);
+  return { status: resp.status(), data };
 }
 
 /** Create a test agent and return its id. */

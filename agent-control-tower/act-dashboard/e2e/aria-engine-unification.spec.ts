@@ -11,6 +11,12 @@ import { test, expect, type Page } from '@playwright/test';
  */
 test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
+// A successful LLM reply is needed for the full event sequence; without a key
+// the stream ends thinking → error → done.
+const HAS_LLM_KEY = !!(
+  process.env.LLM_API_KEY || process.env.LLM_PROVIDER_API_KEY || process.env.DEEPSEEK_API_KEY
+);
+
 const STREAM_TIMEOUT = 90_000;
 
 /** Open the Aria floating panel */
@@ -22,6 +28,7 @@ async function openAriaPanel(page: Page) {
 }
 
 test('Aria SSE streaming produces all expected events', async ({ page }) => {
+  test.skip(!HAS_LLM_KEY, 'requires a real LLM API key for the message event');
   await page.goto('/');
   await page.waitForLoadState('networkidle');
   await openAriaPanel(page);

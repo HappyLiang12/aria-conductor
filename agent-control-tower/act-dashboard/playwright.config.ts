@@ -15,6 +15,8 @@ export default defineConfig({
     headless: !!process.env.CI,
     viewport: { width: 1400, height: 900 },
     actionTimeout: 15_000,
+    // Headless chromium denies clipboard access by default; specs assert copy buttons.
+    permissions: ['clipboard-read', 'clipboard-write'],
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },

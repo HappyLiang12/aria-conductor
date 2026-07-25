@@ -16,6 +16,13 @@ import { test, expect, type Page } from '@playwright/test';
  */
 test.describe.configure({ mode: 'serial', timeout: 600_000 }); // 10 min total
 
+// This journey drives real agent runs end-to-end; without an LLM key the runs
+// fail and every step times out (~25 min of dead CI time).
+test.skip(
+  !process.env.LLM_API_KEY && !process.env.LLM_PROVIDER_API_KEY && !process.env.DEEPSEEK_API_KEY,
+  'requires a real LLM API key (LLM_API_KEY / LLM_PROVIDER_API_KEY / DEEPSEEK_API_KEY)',
+);
+
 const ARIA_POLL_TIMEOUT = 120_000;  // 2 min for Aria to respond
 const RUN_TIMEOUT = 180_000;        // 3 min for a run to complete
 

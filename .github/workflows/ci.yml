@@ -254,7 +254,7 @@ jobs:
           path: agent-control-tower/act-dashboard/dist/
       - name: Start backend (H2, from jar)
         run: |
-          java --enable-preview -jar backend-jar/act-app-*.jar --spring.profiles.active=h2 &
+          java --enable-preview -jar backend-jar/act-app-*.jar --spring.profiles.active=h2 > backend.log 2>&1 &
           timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
       - name: Install frontend deps and serve dist
         run: |
@@ -266,12 +266,18 @@ jobs:
         run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
       - name: Run E2E shard
         run: cd agent-control-tower/act-dashboard && CI=true npx playwright test --shard=${{ matrix.shard }}/4 --workers=1
+      - name: Dump backend log tail (diagnose backend death)
+        if: failure()
+        run: tail -n 300 backend.log || true; ls hs_err_pid*.log 2>/dev/null && cat hs_err_pid*.log || true
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-results-shard-${{ matrix.shard }}
-          path: agent-control-tower/act-dashboard/test-results/
+          path: |
+            agent-control-tower/act-dashboard/test-results/
+            backend.log
+            hs_err_pid*.log
 
   # ---------------------------------------------------------------------------
   # BURN-IN: legacy Playwright jobs kept in parallel with the sharded matrix for

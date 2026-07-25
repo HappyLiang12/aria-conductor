@@ -148,9 +148,15 @@ jobs:
         with:
           name: backend-jar
           path: backend-jar/
+      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
+        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Start backend (H2, from jar)
+        # CWD must be agent-control-tower: the h2 profile resolves the ADK script as
+        # ../langchain-adk/src/server.py. A broken path makes Aria's ADK pre-warm fail
+        # ~2.5min after boot and the whole backend exits (Application run failed).
         run: |
-          java --enable-preview -jar backend-jar/act-app-*.jar --spring.profiles.active=h2 &
+          cd agent-control-tower
+          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
           timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
       - name: Smoke test endpoints
         run: |
@@ -252,9 +258,14 @@ jobs:
         with:
           name: frontend-dist
           path: agent-control-tower/act-dashboard/dist/
+      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
+        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Start backend (H2, from jar)
+        # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
+        # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
         run: |
-          java --enable-preview -jar backend-jar/act-app-*.jar --spring.profiles.active=h2 > backend.log 2>&1 &
+          cd agent-control-tower
+          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
           timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
       - name: Install frontend deps and serve dist
         run: |
@@ -307,9 +318,14 @@ jobs:
         with:
           name: backend-jar
           path: backend-jar/
+      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
+        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Start backend (H2, from jar)
+        # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
+        # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
         run: |
-          java --enable-preview -jar backend-jar/act-app-*.jar --spring.profiles.active=h2 &
+          cd agent-control-tower
+          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
           timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
       - name: Install and start frontend dev server
         run: |
@@ -352,9 +368,14 @@ jobs:
         with:
           name: backend-jar
           path: backend-jar/
+      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
+        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Start backend (H2, from jar)
+        # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
+        # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
         run: |
-          java --enable-preview -jar backend-jar/act-app-*.jar --spring.profiles.active=h2 &
+          cd agent-control-tower
+          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
           timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
       - name: Install and start frontend dev server
         run: |

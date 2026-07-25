@@ -15,7 +15,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
-const BACKEND = 'http://localhost:8080/api/v1';
+const BACKEND = `${process.env.API_URL || 'http://localhost:8080'}/api/v1`;
 
 async function apiCall(
   page: Page,

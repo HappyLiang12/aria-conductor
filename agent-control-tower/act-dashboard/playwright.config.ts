@@ -8,7 +8,8 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:5173',
+    // BASE_URL override enables isolated local stacks (e.g. worktrees on alternate ports).
+    baseURL: process.env.BASE_URL || 'http://localhost:5173',
     channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL ?? 'chrome',
     trace: 'retain-on-failure',
     screenshot: 'on',

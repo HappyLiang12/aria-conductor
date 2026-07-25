@@ -84,3 +84,12 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, Python 
 - All domain events live in `act-common/event/`; publish via Spring ApplicationEventPublisher
 - DB migrations: Flyway, scripts in `act-app/src/main/resources/db/migration/`
 - E2E specs: `act-dashboard/e2e/*.spec.ts` (Playwright)
+
+## Testing Pyramid
+
+- **Unit** (surefire): `mvn test` — excludes `*IntegrationTest`/`*E2ETest`/`*ContractTest`
+- **Integration** (failsafe): `mvn verify -Dskip.unit.tests=true` — `*IntegrationTest`/`*E2ETest` only
+- **E2E** (Playwright): 37 specs, sharded ×4 in CI; API-seeded via `e2e/fixtures.ts`
+- **Mutation** (PIT, nightly report-only), **property** (jqwik), **architecture** (ArchUnit `ModuleBoundaryTest`)
+- Coverage ratchet: per-module JaCoCo `check` minimums (see `docs/testing-baseline.md`); only ever raised, never lowered
+- Shared fixtures: `act-test-support` (`TestDataBuilder`, `WebMvcTestBase`, `DataJpaTestBase`)

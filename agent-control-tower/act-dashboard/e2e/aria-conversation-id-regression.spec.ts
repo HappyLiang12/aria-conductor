@@ -16,6 +16,12 @@ import { test, expect } from '@playwright/test';
  */
 test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
+// A successful LLM reply is needed for the 'message' SSE event; without a key the
+// stream ends thinking → error → done.
+const HAS_LLM_KEY = !!(
+  process.env.LLM_API_KEY || process.env.LLM_PROVIDER_API_KEY || process.env.DEEPSEEK_API_KEY
+);
+
 test('non-streaming chat returns runId + conversationId', async ({ page }) => {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
@@ -62,6 +68,7 @@ test('DELETE /api/v1/aria/sessions/{id} returns 404', async ({ page }) => {
 });
 
 test('streaming SSE emits expected events with runId + conversationId', async ({ page }) => {
+  test.skip(!HAS_LLM_KEY, 'requires a real LLM API key for the message event');
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 

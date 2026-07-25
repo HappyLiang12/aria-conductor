@@ -4,6 +4,11 @@ on:
   pull_request:
     branches: [main]
 
+# Stacked pushes to the same PR cancel the previous in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     name: Detect Changed Trees
@@ -12,6 +17,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       mcp: ${{ steps.filter.outputs.mcp }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      java: ${{ steps.filter.outputs.java }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -24,11 +30,19 @@ jobs:
               - 'packages/mcp-server/**'
             frontend:
               - 'agent-control-tower/act-dashboard/**'
+            java:
+              - 'agent-control-tower/**'
+              - '!agent-control-tower/act-dashboard/**'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
 
   build:
     name: Build Backend (once)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 12
+    needs: [changes]
+    # E2E consumes the jar even for frontend-only changes; skip only for docs/python/mcp-only PRs.
+    if: needs.changes.outputs.java == 'true' || needs.changes.outputs.frontend == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -48,7 +62,9 @@ jobs:
   java-unit-tests:
     name: Java Unit Tests (${{ matrix.group }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
+    needs: [changes]
+    if: needs.changes.outputs.java == 'true' || github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -69,11 +85,15 @@ jobs:
           java-version: '21'
           cache: maven
       - uses: actions/setup-python@v5
+        if: matrix.group == 'execution'
         with:
           python-version: '3.11'
-      - name: Setup LangChain ADK venv (needed by ADK provider tests)
+      - name: Setup LangChain ADK venv (only act-execution's ADK provider tests spawn it)
+        if: matrix.group == 'execution'
         run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Install reactor (skip tests)
+        # Deliberate: rebuilding from source with the setup-java Maven cache is cheap and
+        # simpler than piping a ~200MB repo artifact between jobs (plan PR-2 decision).
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Run unit tier with JaCoCo
         run: cd agent-control-tower && mvn test -pl ${{ matrix.modules }} -Dspring.profiles.active=h2 -Dskip.integration.tests=true
@@ -87,7 +107,9 @@ jobs:
   java-integration-tests:
     name: Java Integration Tests (Failsafe)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    needs: [changes]
+    if: needs.changes.outputs.java == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -135,7 +157,7 @@ jobs:
   e2e-smoke:
     name: E2E Smoke Test (Backend Endpoints)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     needs: [build]
     steps:
       - uses: actions/checkout@v4
@@ -143,21 +165,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Download backend jar
-        uses: actions/download-artifact@v4
+      - name: Start stack (backend only)
+        uses: ./.github/actions/start-stack
         with:
-          name: backend-jar
-          path: backend-jar/
-      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
-        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
-      - name: Start backend (H2, from jar)
-        # CWD must be agent-control-tower: the h2 profile resolves the ADK script as
-        # ../langchain-adk/src/server.py. A broken path makes Aria's ADK pre-warm fail
-        # ~2.5min after boot and the whole backend exits (Application run failed).
-        run: |
-          cd agent-control-tower
-          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
-          timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
+          frontend-mode: none
       - name: Smoke test endpoints
         run: |
           echo "Testing /actuator/health..."
@@ -228,7 +239,7 @@ jobs:
   e2e-playwright:
     name: E2E Playwright (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     needs: [build, frontend-build]
     strategy:
       fail-fast: false
@@ -248,31 +259,10 @@ jobs:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: agent-control-tower/act-dashboard/pnpm-lock.yaml
-      - name: Download backend jar
-        uses: actions/download-artifact@v4
+      - name: Start stack (dist preview)
+        uses: ./.github/actions/start-stack
         with:
-          name: backend-jar
-          path: backend-jar/
-      - name: Download frontend dist
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: agent-control-tower/act-dashboard/dist/
-      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
-        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
-      - name: Start backend (H2, from jar)
-        # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
-        # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
-        run: |
-          cd agent-control-tower
-          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
-          timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
-      - name: Install frontend deps and serve dist
-        run: |
-          cd agent-control-tower/act-dashboard
-          pnpm install --frozen-lockfile
-          pnpm exec vite preview --port 5173 &
-          timeout 60 bash -c 'until curl -sf http://localhost:5173 > /dev/null 2>&1; do sleep 2; done'
+          frontend-mode: dist
       - name: Install Playwright browsers
         run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
       - name: Run E2E shard
@@ -297,7 +287,7 @@ jobs:
   e2e-workflow-governance:
     name: E2E Workflow Governance (Playwright, legacy burn-in)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     needs: [build, frontend-build]
     steps:
       - uses: actions/checkout@v4
@@ -313,26 +303,10 @@ jobs:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: agent-control-tower/act-dashboard/pnpm-lock.yaml
-      - name: Download backend jar
-        uses: actions/download-artifact@v4
+      - name: Start stack (dev server)
+        uses: ./.github/actions/start-stack
         with:
-          name: backend-jar
-          path: backend-jar/
-      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
-        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
-      - name: Start backend (H2, from jar)
-        # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
-        # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
-        run: |
-          cd agent-control-tower
-          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
-          timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
-      - name: Install and start frontend dev server
-        run: |
-          cd agent-control-tower/act-dashboard
-          pnpm install --frozen-lockfile
-          pnpm dev &
-          timeout 60 bash -c 'until curl -sf http://localhost:5173 > /dev/null 2>&1; do sleep 2; done'
+          frontend-mode: dev
       - name: Install Playwright browsers
         run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
       - name: Run E2E tests
@@ -347,7 +321,7 @@ jobs:
   e2e-agent-dev-workflow:
     name: E2E Agent Dev-Workflow Governance (Playwright, legacy burn-in)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     needs: [build, frontend-build]
     steps:
       - uses: actions/checkout@v4
@@ -363,26 +337,10 @@ jobs:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: agent-control-tower/act-dashboard/pnpm-lock.yaml
-      - name: Download backend jar
-        uses: actions/download-artifact@v4
+      - name: Start stack (dev server)
+        uses: ./.github/actions/start-stack
         with:
-          name: backend-jar
-          path: backend-jar/
-      - name: Setup LangChain ADK venv (Aria pre-warm needs a live ADK)
-        run: cd langchain-adk && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
-      - name: Start backend (H2, from jar)
-        # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
-        # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
-        run: |
-          cd agent-control-tower
-          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python java --enable-preview -jar ../backend-jar/act-app-*.jar --spring.profiles.active=h2 > ../backend.log 2>&1 &
-          timeout 120 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
-      - name: Install and start frontend dev server
-        run: |
-          cd agent-control-tower/act-dashboard
-          pnpm install --frozen-lockfile
-          pnpm dev &
-          timeout 60 bash -c 'until curl -sf http://localhost:5173 > /dev/null 2>&1; do sleep 2; done'
+          frontend-mode: dev
       - name: Install Playwright browsers
         run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
       - name: Run E2E tests

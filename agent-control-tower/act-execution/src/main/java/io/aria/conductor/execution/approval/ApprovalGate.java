@@ -32,19 +32,21 @@ import java.util.concurrent.TimeoutException;
 @Component
 public class ApprovalGate {
 
-    private static final long APPROVAL_TIMEOUT_MINUTES = 30;
-
     private final ApprovalRepository approvalRepository;
     private final ToolCallRepository toolCallRepository;
     private final ApplicationEventPublisher eventPublisher;
+    // Injectable so concurrency tests can shrink the window to milliseconds (default 30 min).
+    private final java.time.Duration approvalTimeout;
     private final Map<UUID, CompletableFuture<ApprovalDecision>> pendingApprovals = new ConcurrentHashMap<>();
 
     public ApprovalGate(ApprovalRepository approvalRepository,
                         ToolCallRepository toolCallRepository,
-                        ApplicationEventPublisher eventPublisher) {
+                        ApplicationEventPublisher eventPublisher,
+                        @org.springframework.beans.factory.annotation.Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.approvalRepository = approvalRepository;
         this.toolCallRepository = toolCallRepository;
         this.eventPublisher = eventPublisher;
+        this.approvalTimeout = java.time.Duration.ofMillis(approvalTimeoutMs);
     }
 
     /**
@@ -119,7 +121,7 @@ public class ApprovalGate {
                 .toolCallId(firstToolCallId)
                 .status(ApprovalStatus.PENDING)
                 .reason(batchedReason)
-                .expiresAt(now.plusSeconds(APPROVAL_TIMEOUT_MINUTES * 60))
+                .expiresAt(now.plus(approvalTimeout))
                 .build();
         approvalRepository.save(approval);
 
@@ -136,15 +138,15 @@ public class ApprovalGate {
 
         try {
             long awaitStart = System.currentTimeMillis();
-            ApprovalDecision decision = future.get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            ApprovalDecision decision = future.get(approvalTimeout.toMillis(), TimeUnit.MILLISECONDS);
             ctx.addBlockedWait(java.time.Duration.ofMillis(System.currentTimeMillis() - awaitStart));
             return decision;
         } catch (TimeoutException e) {
-            ctx.addBlockedWait(java.time.Duration.ofMinutes(APPROVAL_TIMEOUT_MINUTES));
+            ctx.addBlockedWait(approvalTimeout);
             log.warn("Turn approval timed out: approvalId={}", approvalId);
             handleTimeout(approval.getId());
             return ApprovalDecision.deny(
-                    "Approval request timed out after " + APPROVAL_TIMEOUT_MINUTES + " minutes");
+                    "Approval request timed out after " + approvalTimeout.toMinutes() + " minutes");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("Turn approval interrupted: approvalId={}", approvalId);
@@ -194,7 +196,7 @@ public class ApprovalGate {
                 .toolCallId(toolCallId)
                 .status(ApprovalStatus.PENDING)
                 .reason(buildApprovalReason(action, escalationNote))
-                .expiresAt(now.plusSeconds(APPROVAL_TIMEOUT_MINUTES * 60))
+                .expiresAt(now.plus(approvalTimeout))
                 .build();
         approvalRepository.save(approval);
 
@@ -212,14 +214,14 @@ public class ApprovalGate {
         // Block until decision or timeout
         try {
             long awaitStart = System.currentTimeMillis();
-            ApprovalDecision decision = future.get(APPROVAL_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+            ApprovalDecision decision = future.get(approvalTimeout.toMillis(), TimeUnit.MILLISECONDS);
             ctx.addBlockedWait(java.time.Duration.ofMillis(System.currentTimeMillis() - awaitStart));
             return decision;
         } catch (TimeoutException e) {
-            ctx.addBlockedWait(java.time.Duration.ofMinutes(APPROVAL_TIMEOUT_MINUTES));
+            ctx.addBlockedWait(approvalTimeout);
             log.warn("Approval timed out: approvalId={}", approvalId);
             handleTimeout(approval.getId());
-            return ApprovalDecision.deny("Approval request timed out after " + APPROVAL_TIMEOUT_MINUTES + " minutes");
+            return ApprovalDecision.deny("Approval request timed out after " + approvalTimeout.toMinutes() + " minutes");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("Approval interrupted: approvalId={}", approvalId);

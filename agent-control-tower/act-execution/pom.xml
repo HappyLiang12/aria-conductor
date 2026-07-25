@@ -65,6 +65,18 @@
             <version>3.9.1</version>
             <scope>test</scope>
         </dependency>
+        <!-- Awaitility for concurrency tests (version from Spring Boot BOM) -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- jqwik property-based tests (version managed in parent) -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
 

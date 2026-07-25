@@ -65,7 +65,7 @@ class TurnLevelApprovalTest {
             return Optional.of(a);
         });
 
-        gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
+        gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, java.time.Duration.ofMinutes(30).toMillis());
     }
 
     @Test

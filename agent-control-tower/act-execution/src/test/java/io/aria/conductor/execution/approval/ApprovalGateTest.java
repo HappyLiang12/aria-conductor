@@ -86,7 +86,7 @@ class ApprovalGateTest {
         lenient().when(approvalRepository.findById(any(UUID.class)))
                 .thenAnswer(inv -> Optional.ofNullable(approvalStore.get(inv.<UUID>getArgument(0))));
 
-        gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
+        gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, java.time.Duration.ofMinutes(30).toMillis());
     }
 
     @Test

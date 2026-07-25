@@ -15,9 +15,9 @@
     <description>Aria assistant module</description>
 
     <properties>
-        <!-- M0 coverage ratchet (baseline 63.5% line / 43.0% branch, see docs/testing-baseline.md) -->
-        <jacoco.line.minimum>0.58</jacoco.line.minimum>
-        <jacoco.branch.minimum>0.38</jacoco.branch.minimum>
+        <!-- M1 coverage ratchet (measured 93.5% line / 83.7% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.86</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.76</jacoco.branch.minimum>
     </properties>
 
     <dependencies>

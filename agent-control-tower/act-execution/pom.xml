@@ -15,9 +15,9 @@
     <description>Execution engine module</description>
 
     <properties>
-        <!-- M0 coverage ratchet (baseline 39.9% line / 27.9% branch, see docs/testing-baseline.md) -->
-        <jacoco.line.minimum>0.34</jacoco.line.minimum>
-        <jacoco.branch.minimum>0.22</jacoco.branch.minimum>
+        <!-- M1 coverage ratchet (measured 65.5% line / 49.7% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.58</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.42</jacoco.branch.minimum>
     </properties>
 
     <dependencies>

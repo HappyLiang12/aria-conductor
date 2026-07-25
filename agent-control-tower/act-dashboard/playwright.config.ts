@@ -2,7 +2,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 300_000, // 5 min per test (LLM calls are slow)
+  // Default tier: 2 min covers every mock/no-LLM spec. Specs that drive a real
+  // LLM opt into 300s/600s via test.describe.configure({ timeout }) in-file.
+  timeout: 120_000,
   fullyParallel: false,
   // CI-only single retry: quarantines transient infra flakes; local runs stay strict.
   retries: process.env.CI ? 1 : 0,

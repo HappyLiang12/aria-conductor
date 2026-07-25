@@ -18,7 +18,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 test.describe.configure({ mode: 'serial', timeout: 120_000 });
 
-const BACKEND = 'http://127.0.0.1:8080/api/v1';
+const BACKEND = `${process.env.API_URL || 'http://127.0.0.1:8080'}/api/v1`;
 
 async function apiCall(
   page: Page,
@@ -221,10 +221,13 @@ test('9. click Merge → prompt for name → merged workflow appears', async ({ 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
 
-  // Select both
-  const checkboxes = page.locator('input[type="checkbox"]');
-  await checkboxes.nth(0).check();
-  await checkboxes.nth(1).check();
+  // Select the two workflows created above by name — nth(0)/nth(1) would pick
+  // whatever cards happen to be listed first (possibly non-FAILED → merge rejected).
+  const cardCheckbox = (name: string) =>
+    page.locator('div').filter({ has: page.locator(`span:text-is("${name}")`) }).last()
+      .locator('input[type="checkbox"]');
+  await cardCheckbox(wf1.name).check();
+  await cardCheckbox(wf2.name).check();
 
   // M2: the merge name is now entered in a modal dialog (no native prompt).
   const mergeName = `E2E Merged ${Date.now()}`;

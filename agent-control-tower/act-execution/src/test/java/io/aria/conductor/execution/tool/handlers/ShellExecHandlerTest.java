@@ -78,8 +78,9 @@ class ShellExecHandlerTest {
     void execute_allowsWhitelistedCommand_caseInsensitiveFirstToken() {
         // "echo" is whitelisted; the handler actually spawns it. Assert real stdout capture.
         assertThat(run("echo shellhandler_marker")).contains("shellhandler_marker");
-        // Whitelist match is case-insensitive on the first token.
-        assertThat(run("ECHO caseMarker")).contains("caseMarker");
+        // Whitelist match is case-insensitive on the first token. Only assert the gate was
+        // bypassed: actually spawning "ECHO" is OS-dependent (Linux binary lookup is case-sensitive).
+        assertThat(run("ECHO caseMarker")).doesNotStartWith("Error: Shell execution is disabled");
     }
 
     @Test

@@ -43,9 +43,12 @@
         <!-- JaCoCo ratchet: per-module overrides raise these; never set above measured coverage -->
         <jacoco.line.minimum>0</jacoco.line.minimum>
         <jacoco.branch.minimum>0</jacoco.branch.minimum>
-        <!-- CI lane switches: unit lane sets skip.integration.tests, integration lane sets skip.unit.tests -->
-        <skip.unit.tests>false</skip.unit.tests>
-        <skip.integration.tests>false</skip.integration.tests>
+        <!-- CI lane switches: unit lane sets skip.integration.tests, integration lane sets skip.unit.tests.
+             Both default to ${skipTests} so plain `mvn install -DskipTests` still skips everything
+             (explicit <skipTests> in plugin config would otherwise override the CLI flag). -->
+        <skipTests>false</skipTests>
+        <skip.unit.tests>${skipTests}</skip.unit.tests>
+        <skip.integration.tests>${skipTests}</skip.integration.tests>
     </properties>
 
     <dependencyManagement>
@@ -234,10 +237,16 @@
                     </execution>
                     <execution>
                         <id>check</id>
+                        <!-- Bind to test phase so the unit lane (`mvn test`) enforces the ratchet.
+                             Skip follows the unit tier switch: integration lane and -DskipTests
+                             builds must not evaluate coverage from absent/stale exec data.
+                             Filtered local runs (-Dtest=Foo) under-cover by design: add -Djacoco.skip=true. -->
+                        <phase>test</phase>
                         <goals>
                             <goal>check</goal>
                         </goals>
                         <configuration>
+                            <skip>${skip.unit.tests}</skip>
                             <rules>
                                 <rule>
                                     <element>BUNDLE</element>
@@ -324,4 +333,5 @@
         </pluginRepository>
     </pluginRepositories>
 </project>
+
 

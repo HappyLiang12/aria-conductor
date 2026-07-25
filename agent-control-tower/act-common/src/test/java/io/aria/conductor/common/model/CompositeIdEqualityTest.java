@@ -5,13 +5,16 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * JPA-correctness contract tests for the {@code @Embeddable} composite key classes. Hibernate
+ * JPA-correctness tests for the {@code @Embeddable} composite key classes. Hibernate
  * relies on a correct {@code equals}/{@code hashCode} pair (over ALL key columns) to identify
  * rows in the persistence context, so these verify that behaviour rather than trivial accessors:
  * equal keys must be {@code equals} and share a {@code hashCode}; keys differing in any single
  * column must not be equal.
+ *
+ * <p>Named *EqualityTest (not *ContractTest): the {@code **}{@code /*ContractTest.java} suffix is
+ * excluded from surefire and reserved for Phase D provider-contract tests.
  */
-class CompositeIdContractTest {
+class CompositeIdEqualityTest {
 
     @Test
     void agentSkillId_equalWhenAllColumnsMatch() {

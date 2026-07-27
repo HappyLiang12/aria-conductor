@@ -3,6 +3,7 @@ package io.aria.conductor.knowledge.service;
 import io.aria.conductor.common.event.KnowledgeApprovedEvent;
 import io.aria.conductor.common.event.KnowledgeRetiredEvent;
 import io.aria.conductor.common.event.KnowledgeSubmittedEvent;
+import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.KnowledgeItem;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
@@ -28,6 +29,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -110,7 +112,7 @@ class KnowledgeServiceEventTest {
 
     @Test
     void reviewKnowledge_approve_publishesKnowledgeApprovedEvent() {
-        when(itemRepository.findById(pendingItem.getId())).thenReturn(Optional.of(pendingItem));
+        when(itemRepository.findByIdForUpdate(pendingItem.getId())).thenReturn(Optional.of(pendingItem));
         when(versionRepository.findByKnowledgeItemIdAndVersion(pendingItem.getId(), "v0.1.0"))
                 .thenReturn(Optional.of(pendingVersion));
         when(itemRepository.save(any(KnowledgeItem.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -134,7 +136,7 @@ class KnowledgeServiceEventTest {
 
     @Test
     void reviewKnowledge_reject_doesNotPublishApprovedEvent() {
-        when(itemRepository.findById(pendingItem.getId())).thenReturn(Optional.of(pendingItem));
+        when(itemRepository.findByIdForUpdate(pendingItem.getId())).thenReturn(Optional.of(pendingItem));
         when(versionRepository.findByKnowledgeItemIdAndVersion(pendingItem.getId(), "v0.1.0"))
                 .thenReturn(Optional.of(pendingVersion));
         when(itemRepository.save(any(KnowledgeItem.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -164,5 +166,22 @@ class KnowledgeServiceEventTest {
         KnowledgeRetiredEvent event = captor.getValue();
         assertThat(event.getKnowledgeId()).isEqualTo(pendingItem.getId());
         assertThat(event.getName()).isEqualTo("Test Item");
+    }
+
+    @Test
+    void reviewKnowledge_alreadyDecided_isRejected() {
+        // F1 guard: a review that observes a non-PENDING status (e.g. because a concurrent
+        // reviewer already decided while holding the pessimistic row lock) is rejected, so
+        // two opposing decisions can never both win.
+        pendingItem.setStatus(KnowledgeStatus.APPROVED);
+        when(itemRepository.findByIdForUpdate(pendingItem.getId())).thenReturn(Optional.of(pendingItem));
+
+        ReviewDecisionRequest request = ReviewDecisionRequest.builder()
+                .decision(ReviewDecisionRequest.ReviewDecision.REJECTED)
+                .reason("late")
+                .build();
+
+        assertThatThrownBy(() -> service.reviewKnowledge(pendingItem.getId(), request))
+                .isInstanceOf(InvalidStateTransitionException.class);
     }
 }

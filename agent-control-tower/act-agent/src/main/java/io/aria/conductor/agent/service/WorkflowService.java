@@ -444,14 +444,18 @@ public class WorkflowService {
 
             log.info("Workflow step started: chain={}, step={}, runId={}",
                     chain.getId(), stepIndex, run.getId());
-        } catch (Exception e) {
-            log.error("Failed to start workflow step: chain={}, step={}: {}",
+        } catch (RuntimeException e) {
+            // A step can fail to *start* only when its run cannot be created — e.g. the
+            // agentId does not resolve. createRun runs in the same transaction, so its
+            // exception has already marked the tx rollback-only; catching-then-saving a
+            // FAILED chain here would throw UnexpectedRollbackException at commit (HTTP 500).
+            // Instead let it propagate so the transaction rolls back cleanly and the caller
+            // surfaces the underlying 4xx (e.g. 404 for an unknown agent), matching the
+            // execute-yaml path. Runs that fail *during execution* are still marked FAILED
+            // asynchronously via WorkflowAutoChainer#markStepFailed.
+            log.warn("Failed to start workflow step: chain={}, step={}: {}",
                     chain.getId(), stepIndex, e.getMessage());
-            step.setStatus(WorkflowStep.Status.FAILED);
-            step.setOutput("FAILED: " + e.getMessage());
-            chain.setStatus(WorkflowChain.Status.FAILED);
-            chain.setStepsJson(serializeSteps(steps));
-            workflowChainRepository.save(chain);
+            throw e;
         }
     }
 

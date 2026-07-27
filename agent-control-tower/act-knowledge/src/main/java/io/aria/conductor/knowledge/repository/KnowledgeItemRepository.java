@@ -3,8 +3,10 @@ package io.aria.conductor.knowledge.repository;
 import io.aria.conductor.common.model.KnowledgeItem;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -26,6 +28,17 @@ public interface KnowledgeItemRepository extends JpaRepository<KnowledgeItem, UU
     List<KnowledgeItem> findByStatusAndType(KnowledgeStatus status, KnowledgeType type);
 
     Optional<KnowledgeItem> findByNameAndType(String name, KnowledgeType type);
+
+    /**
+     * Pessimistic-write lookup used by the review state machine. Acquiring a row
+     * write-lock serializes concurrent reviews of the same item so two opposing
+     * decisions (approve vs reject) cannot both read PENDING and both commit
+     * (KnowledgeItem carries no @Version). The second reviewer blocks until the
+     * first commits, then sees the decided status and is rejected by the guard.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select k from KnowledgeItem k where k.id = :id")
+    Optional<KnowledgeItem> findByIdForUpdate(@Param("id") UUID id);
 
     long countByStatus(KnowledgeStatus status);
 

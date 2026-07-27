@@ -114,6 +114,44 @@ class WorkflowServiceExistingTest {
         verify(runService).createRun(any());
     }
 
+    @Test
+    void createAndStart_whenRunCannotStart_propagatesCleanlyWithoutSwallowing() {
+        // F2 regression: an unresolvable agent makes createRun throw. Because createRun
+        // shares the transaction, catching-then-saving a FAILED chain used to throw
+        // UnexpectedRollbackException at commit (HTTP 500). The failure must instead
+        // propagate so the tx rolls back cleanly and the caller surfaces the 4xx.
+        UUID agentId = UUID.randomUUID();
+
+        CreateWorkflowRequest request = CreateWorkflowRequest.builder()
+                .name("Bad Agent Workflow")
+                .steps(List.of(
+                        CreateWorkflowRequest.StepDef.builder()
+                                .agentId(agentId)
+                                .promptTemplate("never runs")
+                                .maxIterations(1)
+                                .build()
+                ))
+                .build();
+
+        when(workflowChainRepository.save(any())).thenAnswer(inv -> {
+            WorkflowChain chain = inv.getArgument(0);
+            if (chain.getId() == null) chain.setId(UUID.randomUUID());
+            if (chain.getCreatedAt() == null) chain.setCreatedAt(Instant.now());
+            return chain;
+        });
+        when(runService.createRun(any()))
+                .thenThrow(new ResourceNotFoundException("Agent", agentId));
+
+        assertThatThrownBy(() -> workflowService.createAndStart(request))
+                .isInstanceOf(ResourceNotFoundException.class);
+
+        // The start failure is NOT swallowed into a persisted FAILED chain.
+        ArgumentCaptor<WorkflowChain> captor = ArgumentCaptor.forClass(WorkflowChain.class);
+        verify(workflowChainRepository, atMost(1)).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .noneMatch(c -> c.getStatus() == WorkflowChain.Status.FAILED);
+    }
+
     // ==================== advanceWorkflow ====================
 
     @Test

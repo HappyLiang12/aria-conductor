@@ -136,3 +136,187 @@ export async function seedRun(
   }
   return data;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Concurrency & metrics helpers (added for the skill/knowledge/workflow
+// concurrent multi-agent E2E effort). All additive — the exports above
+// are unchanged so existing specs keep working verbatim.
+// ─────────────────────────────────────────────────────────────────────
+
+/** A single timed API result: adds elapsed wall-clock ms to ApiResult. */
+export interface TimedResult<T = any> extends ApiResult<T> {
+  ms: number;
+  error?: string;
+}
+
+/** apiCall wrapper that records elapsed milliseconds and never throws. */
+export async function timedApiCall(
+  request: APIRequestContext,
+  method: string,
+  path: string,
+  body?: object,
+): Promise<TimedResult> {
+  const start = Date.now();
+  try {
+    const { status, data } = await apiCall(request, method, path, body);
+    return { status, data, ms: Date.now() - start };
+  } catch (e: any) {
+    return { status: 0, data: null, ms: Date.now() - start, error: String(e?.message ?? e) };
+  }
+}
+
+/**
+ * Polls GET {path} until predicate(json) is true or the deadline elapses.
+ * Mirrors the waitForBackend pattern from multi-agent-lifecycle.spec.ts so
+ * both API and UI specs share one implementation. Runs are async (started
+ * via an AFTER_COMMIT @Async listener), so callers must poll — never assume
+ * a POST returns a terminal state synchronously.
+ */
+export async function pollUntil<T = any>(
+  request: APIRequestContext,
+  path: string,
+  predicate: (data: T) => boolean,
+  timeoutMs = 60_000,
+  intervalMs = 2_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let last: any = null;
+  while (Date.now() < deadline) {
+    const { status, data } = await apiCall(request, 'GET', path);
+    last = data;
+    if (status >= 200 && status < 300 && predicate(data as T)) return data as T;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(
+    `pollUntil timed out for ${path} after ${timeoutMs}ms; last=${JSON.stringify(last)?.slice(0, 300)}`,
+  );
+}
+
+/**
+ * Runs {fn} over {items} with at most {concurrency} in flight, preserving
+ * input order in the result. This is the real-LLM budget guard: it caps how
+ * many expensive runs execute simultaneously.
+ */
+export async function runBounded<I, O>(
+  items: I[],
+  concurrency: number,
+  fn: (item: I, index: number) => Promise<O>,
+): Promise<O[]> {
+  const results: O[] = new Array(items.length);
+  let cursor = 0;
+  const lanes = Math.max(1, Math.min(concurrency, items.length || 1));
+  const workers = Array.from({ length: lanes }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) break;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+export interface Metrics {
+  count: number;
+  ok: number;
+  errors: number;
+  errorRate: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  max: number;
+  byStatus: Record<string, number>;
+}
+
+/** Aggregates timed results into latency percentiles + a status histogram. */
+export function collectMetrics(results: TimedResult[]): Metrics {
+  const lat = results.map((r) => r.ms).sort((a, b) => a - b);
+  const pct = (p: number) =>
+    lat.length ? lat[Math.min(lat.length - 1, Math.floor((p / 100) * lat.length))] : 0;
+  const byStatus: Record<string, number> = {};
+  let ok = 0;
+  for (const r of results) {
+    const key = String(r.status);
+    byStatus[key] = (byStatus[key] ?? 0) + 1;
+    if (r.status >= 200 && r.status < 300) ok++;
+  }
+  const errors = results.length - ok;
+  return {
+    count: results.length,
+    ok,
+    errors,
+    errorRate: results.length ? errors / results.length : 0,
+    p50: pct(50),
+    p95: pct(95),
+    p99: pct(99),
+    max: lat.length ? lat[lat.length - 1] : 0,
+    byStatus,
+  };
+}
+
+// ── Thin REST wrappers over the governed endpoints ──────────────────────
+
+/** POST /knowledge/{id}/review — decision is APPROVED | REJECTED. */
+export function reviewKnowledge(
+  request: APIRequestContext,
+  id: string,
+  decision: 'APPROVED' | 'REJECTED',
+  reason = 'e2e concurrency review',
+) {
+  return apiCall(request, 'POST', `/knowledge/${id}/review`, { decision, reason });
+}
+
+/** POST /knowledge/{id}/promote — derives a new item of targetType. */
+export function promoteKnowledge(
+  request: APIRequestContext,
+  id: string,
+  targetType: 'SKILL' | 'SCRIPT' | 'PROMPT' | 'TOOL' | 'TEMPLATE' | 'GUIDELINE' | 'WORKFLOW',
+  targetName?: string,
+) {
+  return apiCall(request, 'POST', `/knowledge/${id}/promote`, {
+    targetType,
+    ...(targetName ? { targetName } : {}),
+  });
+}
+
+/** POST /skills/{id}/toggle — flips the enabled flag. */
+export function toggleSkill(request: APIRequestContext, id: string) {
+  return apiCall(request, 'POST', `/skills/${id}/toggle`);
+}
+
+/** POST /agents/{id}/skills — assign an existing skill to an agent. */
+export function assignSkill(request: APIRequestContext, agentId: string, skillId: string) {
+  return apiCall(request, 'POST', `/agents/${agentId}/skills`, { skillId });
+}
+
+/** POST /workflows/{id}/cancel. */
+export function cancelWorkflow(request: APIRequestContext, id: string) {
+  return apiCall(request, 'POST', `/workflows/${id}/cancel`);
+}
+
+/** POST /workflows/{id}/retry — retry a failed step by index. */
+export function retryWorkflow(request: APIRequestContext, id: string, stepIndex: number) {
+  return apiCall(request, 'POST', `/workflows/${id}/retry`, { stepIndex });
+}
+
+/** DELETE /workflows/{id}. */
+export function deleteWorkflow(request: APIRequestContext, id: string) {
+  return apiCall(request, 'DELETE', `/workflows/${id}`);
+}
+
+/** POST /workflows/merge — concatenate >=2 source chains into a new one. */
+export function mergeWorkflows(request: APIRequestContext, sourceIds: string[], name: string) {
+  return apiCall(request, 'POST', '/workflows/merge', { sourceIds, name });
+}
+
+/** POST /workflows/execute-yaml — run a workflow straight from YAML. */
+export function executeYamlWorkflow(
+  request: APIRequestContext,
+  yamlContent: string,
+  parameters?: Record<string, string>,
+) {
+  return apiCall(request, 'POST', '/workflows/execute-yaml', {
+    yamlContent,
+    ...(parameters ? { parameters } : {}),
+  });
+}

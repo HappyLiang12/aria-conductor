@@ -8,7 +8,8 @@ export default defineConfig({
   fullyParallel: false,
   // CI-only single retry: quarantines transient infra flakes; local runs stay strict.
   retries: process.env.CI ? 1 : 0,
-  reporter: [['list']],
+  // JSON reporter feeds the evidence pipeline (scripts/run-e2e-evidence.ps1).
+  reporter: [['list'], ['json', { outputFile: process.env.PW_JSON_OUT || 'test-results/results.json' }]],
   use: {
     // BASE_URL override enables isolated local stacks (e.g. worktrees on alternate ports).
     baseURL: process.env.BASE_URL || 'http://localhost:5173',
@@ -22,6 +23,20 @@ export default defineConfig({
     permissions: ['clipboard-read', 'clipboard-write'],
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // UI specs (drive the React dashboard through a real browser). Excludes the
+    // API-layer concurrency/load harness so those don't spin up a browser.
+    {
+      name: 'chromium',
+      testIgnore: /e2e[\\/]api[\\/]/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    // API-layer harness: REST/WebSocket concurrency + load specs under e2e/api/.
+    // No browser needed (uses APIRequestContext); long timeout covers real-LLM
+    // tiers and multi-tier load ramps.
+    {
+      name: 'api',
+      testMatch: /e2e[\\/]api[\\/].*\.spec\.ts$/,
+      timeout: 600_000,
+    },
   ],
 });

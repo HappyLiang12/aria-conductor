@@ -178,7 +178,10 @@ public class KnowledgeService implements KnowledgeContextProvider {
         MDC.put("entityId", id.toString());
         long start = System.currentTimeMillis();
         try {
-            KnowledgeItem item = itemRepository.findById(id)
+            // Pessimistic-lock the row so concurrent opposing reviews serialize: the
+            // second reviewer blocks here until the first commits, then sees the decided
+            // status below and is rejected by the guard (no @Version on KnowledgeItem).
+            KnowledgeItem item = itemRepository.findByIdForUpdate(id)
                     .orElseThrow(() -> new ResourceNotFoundException("KnowledgeItem", id));
 
             if (item.getStatus() != KnowledgeStatus.PENDING) {

@@ -152,7 +152,7 @@ steps:
       name: uniqueName('e2e-wf-bad-agent'),
       steps: [{ agentId: BOGUS_AGENT, promptTemplate: 'never runs', maxIterations: 1 }],
     });
-    expect(status, `POST /workflows with unknown agent returned ${status}`).toBeLessThan(500);
-    expect(status).toBeGreaterThanOrEqual(400);
+    // F2: an unresolvable agent is a not-found client error, not a 500 rollback.
+    expect(status, `POST /workflows with unknown agent returned ${status}`).toBe(404);
   });
 });

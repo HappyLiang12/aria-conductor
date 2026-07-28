@@ -123,4 +123,32 @@ class ToolExecutionEngineTest {
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).isEqualTo("M some/file.txt");
     }
+
+    /**
+     * #61 false-positive guard: content tools (read_file / web_fetch / http_request) return raw
+     * external content. If a file's content or an HTTP body merely starts with "Exit code: ", it
+     * must NOT be misclassified as a failure — the sentinel is only meaningful for the
+     * process-wrapping handlers (git pack, shell).
+     */
+    @Test
+    void contentToolOutputStartingWithExitCode_staysSuccess() {
+        ToolHandler contentHandler = args -> "Exit code: 1\n(this is file content, not a process exit)";
+        ToolExecutionEngine engine = new ToolExecutionEngine(
+                toolRepo, sandboxRunner, Map.of("fileReadHandler", contentHandler),
+                new WorkspaceManager(tempDir.toString()));
+
+        ToolDefinition tool = org.mockito.Mockito.mock(ToolDefinition.class);
+        when(tool.getName()).thenReturn("read_file");
+        when(tool.getHandlerClass()).thenReturn("fileReadHandler");
+        when(tool.isEnabled()).thenReturn(true);
+        when(tool.getStatus()).thenReturn(null);
+        when(tool.getKind()).thenReturn(null);
+        when(tool.getSandboxMode()).thenReturn("NONE");
+        when(toolRepo.findByName("read_file")).thenReturn(Optional.of(tool));
+
+        ToolExecutionResult result = engine.execute("read_file", Map.of(), null);
+
+        assertThat(result.isSuccess()).as("content-tool output must not be misclassified as failure").isTrue();
+        assertThat(result.getOutput()).startsWith("Exit code: 1");
+    }
 }

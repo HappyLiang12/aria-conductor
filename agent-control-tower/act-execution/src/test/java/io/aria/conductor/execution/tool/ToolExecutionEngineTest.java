@@ -70,4 +70,57 @@ class ToolExecutionEngineTest {
         assertThat(Files.isDirectory(Path.of(wsDir))).isTrue();
         assertThat(ctx.getWorkspaceDir()).isEqualTo(wsDir); // populated on the context
     }
+
+    /**
+     * #61: process-wrapping handlers (git pack, shell) encode a non-zero exit as an
+     * "Exit code: N" prefix (they never emit "Exit code: 0"). The engine must surface that
+     * as a FAILED result so the audit trail / circuit breaker see a failure — not SUCCESS.
+     */
+    @Test
+    void nonZeroExitCode_isRecordedAsFailed_notSuccess() {
+        ToolHandler failing = args -> "Exit code: 128\nfatal: authentication failed";
+        ToolExecutionEngine engine = new ToolExecutionEngine(
+                toolRepo, sandboxRunner, Map.of("gitPackHandler", failing),
+                new WorkspaceManager(tempDir.toString()));
+
+        ToolDefinition tool = org.mockito.Mockito.mock(ToolDefinition.class);
+        when(tool.getName()).thenReturn("git_push");
+        when(tool.getHandlerClass()).thenReturn("gitPackHandler");
+        when(tool.isEnabled()).thenReturn(true);
+        when(tool.getStatus()).thenReturn(null);
+        when(tool.getKind()).thenReturn(null);
+        when(tool.getSandboxMode()).thenReturn("NONE");
+        when(toolRepo.findByName("git_push")).thenReturn(Optional.of(tool));
+
+        ToolExecutionResult result = engine.execute("git_push", Map.of(), null);
+
+        assertThat(result.isSuccess()).as("non-zero exit must be a failed result").isFalse();
+        assertThat(result.getError()).contains("Exit code: 128");
+    }
+
+    /**
+     * Regression guard: ordinary successful output (even content that mentions errors) must stay
+     * SUCCESS. Detection keys only on the "Exit code: " sentinel, never on arbitrary content.
+     */
+    @Test
+    void normalHandlerOutput_staysSuccess() {
+        ToolHandler ok = args -> "M some/file.txt";
+        ToolExecutionEngine engine = new ToolExecutionEngine(
+                toolRepo, sandboxRunner, Map.of("gitPackHandler", ok),
+                new WorkspaceManager(tempDir.toString()));
+
+        ToolDefinition tool = org.mockito.Mockito.mock(ToolDefinition.class);
+        when(tool.getName()).thenReturn("git_status");
+        when(tool.getHandlerClass()).thenReturn("gitPackHandler");
+        when(tool.isEnabled()).thenReturn(true);
+        when(tool.getStatus()).thenReturn(null);
+        when(tool.getKind()).thenReturn(null);
+        when(tool.getSandboxMode()).thenReturn("NONE");
+        when(toolRepo.findByName("git_status")).thenReturn(Optional.of(tool));
+
+        ToolExecutionResult result = engine.execute("git_status", Map.of(), null);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).isEqualTo("M some/file.txt");
+    }
 }

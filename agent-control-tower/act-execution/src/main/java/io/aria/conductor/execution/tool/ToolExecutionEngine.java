@@ -94,6 +94,12 @@ public class ToolExecutionEngine {
                 handlerArgs.put("_runContext", ctx);
             }
             String result = handlers.get(handlerName).execute(handlerArgs);
+            // #61: process-wrapping handlers (git pack, shell) encode a non-zero process exit as an
+            // "Exit code: N" prefix (they never emit "Exit code: 0"). Surface that as a failed result
+            // so the audit trail and circuit breaker see a failure instead of a false SUCCESS.
+            if (result != null && result.startsWith("Exit code: ")) {
+                return ToolExecutionResult.failed(result);
+            }
             return ToolExecutionResult.success(result);
         } catch (Exception e) {
             log.error("Handler failed for {}", tool.getName(), e);

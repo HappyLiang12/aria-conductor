@@ -24,6 +24,15 @@ public class ToolExecutionEngine {
     private final WorkspaceManager workspaceManager;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * Bean names of the process-wrapping handlers that encode a non-zero process exit as an
+     * "Exit code: N" prefix (#61). Only these handlers' output is treated as a failure on that
+     * prefix, so a content tool (read_file/web_fetch/http_request) returning a payload that merely
+     * starts with "Exit code: " is never misclassified as a failure.
+     */
+    private static final java.util.Set<String> PROCESS_EXIT_HANDLERS =
+            java.util.Set.of("gitPackHandler", "shellExecHandler");
+
     public ToolExecutionResult execute(String toolName, Map<String, Object> arguments) {
         return execute(toolName, arguments, null);
     }
@@ -96,8 +105,9 @@ public class ToolExecutionEngine {
             String result = handlers.get(handlerName).execute(handlerArgs);
             // #61: process-wrapping handlers (git pack, shell) encode a non-zero process exit as an
             // "Exit code: N" prefix (they never emit "Exit code: 0"). Surface that as a failed result
-            // so the audit trail and circuit breaker see a failure instead of a false SUCCESS.
-            if (result != null && result.startsWith("Exit code: ")) {
+            // so the audit trail and circuit breaker see a failure instead of a false SUCCESS. Scoped
+            // to those handlers so a content tool whose payload merely starts with the prefix is safe.
+            if (result != null && result.startsWith("Exit code: ") && PROCESS_EXIT_HANDLERS.contains(handlerName)) {
                 return ToolExecutionResult.failed(result);
             }
             return ToolExecutionResult.success(result);

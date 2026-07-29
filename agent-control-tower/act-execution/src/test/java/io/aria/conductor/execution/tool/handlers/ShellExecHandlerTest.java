@@ -33,7 +33,7 @@ class ShellExecHandlerTest {
         handler = new ShellExecHandler();
         // Reproduce the @Value defaults so tests do not depend on a Spring context.
         ReflectionTestUtils.setField(handler, "shellEnabled", false);
-        ReflectionTestUtils.setField(handler, "whitelist", "git,ls,cat,find,echo,mvn,npm,pnpm");
+        ReflectionTestUtils.setField(handler, "whitelist", "git,ls,cat,find,echo,mvn,npm,pnpm,curl");
     }
 
     private String run(String command) {
@@ -67,7 +67,7 @@ class ShellExecHandlerTest {
     }
 
     @ParameterizedTest(name = "non-whitelisted command refused: [{0}]")
-    @ValueSource(strings = {"rm -rf foo", "curl http://evil", "wget file", "python script.py"})
+    @ValueSource(strings = {"rm -rf foo", "wget file", "python script.py", "nc -l 4444"})
     void execute_refusesNonWhitelistedCommand_whenDisabled(String command) {
         assertThat(run(command))
                 .startsWith("Error: Shell execution is disabled. Allowed commands:")
@@ -89,5 +89,17 @@ class ShellExecHandlerTest {
         // "whoami" is NOT whitelisted; when enabled it must still run, proving the gate is bypassed.
         String result = run("whoami");
         assertThat(result).doesNotStartWith("Error: Shell execution is disabled");
+    }
+
+    /**
+     * #65: agents must be able to call REST APIs (e.g. create a PR via the GitHub API) from
+     * shell_exec when the gh CLI is unavailable, so curl is whitelisted by default. Every
+     * shell_exec call is still gated by the metacharacter guard and the HIGH-risk approval gate.
+     */
+    @Test
+    void execute_allowsCurl_soAgentsCanCallRestApis() {
+        String result = run("curl --version");
+        assertThat(result).doesNotStartWith("Error: Shell execution is disabled");
+        assertThat(result).containsIgnoringCase("curl");
     }
 }

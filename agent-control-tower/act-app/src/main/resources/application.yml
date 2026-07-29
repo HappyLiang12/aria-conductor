@@ -33,4 +33,4 @@ tools:
     workspace-dir: ${TOOLS_FILE_WORKSPACE_DIR:./data/workspaces}
   shell:
     enabled: ${TOOLS_SHELL_ENABLED:false}
-    whitelist: ${TOOLS_SHELL_WHITELIST:git,ls,cat,find,echo,mvn,npm,pnpm}
+    whitelist: ${TOOLS_SHELL_WHITELIST:git,ls,cat,find,echo,mvn,npm,pnpm,curl}

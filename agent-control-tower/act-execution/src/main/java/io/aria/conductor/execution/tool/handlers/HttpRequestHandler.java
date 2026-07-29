@@ -43,6 +43,7 @@ public class HttpRequestHandler implements ToolHandler {
                     requestBuilder.GET();
                     break;
             }
+            applyHeaders(requestBuilder, arguments.get("headers"));
             HttpRequest request = requestBuilder.build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             String responseBody = response.body();
@@ -54,5 +55,22 @@ public class HttpRequestHandler implements ToolHandler {
             log.error("Failed to execute HTTP {} request to URL: {}", method, url, e);
             return "Error executing HTTP " + method + " request to '" + url + "': " + e.getMessage();
         }
+    }
+
+    /**
+     * Apply caller-supplied headers (e.g. {@code Authorization}, {@code Content-Type}) so agents
+     * can call authenticated REST APIs such as the GitHub PR endpoint (#65). Headers the JDK client
+     * reserves (Host, Content-Length, ...) are skipped rather than failing the whole request.
+     */
+    private void applyHeaders(HttpRequest.Builder builder, Object headers) {
+        if (!(headers instanceof Map<?, ?> map)) return;
+        map.forEach((name, value) -> {
+            if (name == null || value == null) return;
+            try {
+                builder.header(String.valueOf(name), String.valueOf(value));
+            } catch (IllegalArgumentException e) {
+                log.warn("Ignoring unsupported HTTP header '{}': {}", name, e.getMessage());
+            }
+        });
     }
 }

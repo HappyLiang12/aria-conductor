@@ -20,6 +20,14 @@ public class ShellExecHandler implements ToolHandler {
     @Value("${tools.shell.whitelist:git,ls,cat,find,echo,mvn,npm,pnpm,curl}")
     private String whitelist;
 
+    /**
+     * Targets curl must not reach while shell is disabled (#66 review): curl is whitelisted so
+     * agents can call external REST APIs, not so it can double as a local-file reader or an SSRF
+     * probe into loopback/internal services (incl. the cloud metadata endpoint).
+     */
+    private static final java.util.regex.Pattern CURL_BLOCKED_TARGET = java.util.regex.Pattern.compile(
+            "(?i)file://|localhost|127\\.0\\.0\\.1|\\[::1]|0\\.0\\.0\\.0|169\\.254\\.169\\.254");
+
     @Override
     public String execute(Map<String, Object> arguments) {
         String command = Objects.toString(arguments.get("command"), "");
@@ -38,6 +46,10 @@ public class ShellExecHandler implements ToolHandler {
             if (!allowed.contains(cmd)) {
                 return "Error: Shell execution is disabled. Allowed commands: " + whitelist
                         + ". Set tools.shell.enabled=true for unrestricted access.";
+            }
+            if ("curl".equals(cmd) && CURL_BLOCKED_TARGET.matcher(command).find()) {
+                return "Error: Shell execution is disabled. curl must not target local/internal"
+                        + " addresses or file:// URLs.";
             }
         }
         try {

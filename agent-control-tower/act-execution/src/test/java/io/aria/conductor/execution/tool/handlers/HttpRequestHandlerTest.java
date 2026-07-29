@@ -118,4 +118,39 @@ class HttpRequestHandlerTest {
 
         assertThat(result).startsWith("Error executing HTTP GET request to '" + dead + "'");
     }
+
+    /**
+     * #65 Option C: without custom headers an agent can neither authenticate to a REST API
+     * (no {@code Authorization}) nor declare a JSON payload (no {@code Content-Type}), so
+     * creating a PR via the GitHub API is impossible even though a body is already supported.
+     */
+    @Test
+    void execute_sendsCustomHeaders_soAgentsCanAuthenticateRestApis() {
+        AtomicReference<String> auth = new AtomicReference<>();
+        AtomicReference<String> contentType = new AtomicReference<>();
+        server.createContext("/pulls", exchange -> {
+            auth.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            contentType.set(exchange.getRequestHeaders().getFirst("Content-Type"));
+            exchange.getRequestBody().readAllBytes();
+            byte[] out = "{\"number\":1}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(201, out.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(out);
+            }
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("url", url("/pulls"));
+        args.put("method", "POST");
+        args.put("body", "{\"title\":\"my pr\"}");
+        args.put("headers", Map.of(
+                "Authorization", "token gh_test_token",
+                "Content-Type", "application/json"));
+
+        String result = handler.execute(args);
+
+        assertThat(result).contains("-> HTTP 201");
+        assertThat(auth.get()).isEqualTo("token gh_test_token");
+        assertThat(contentType.get()).isEqualTo("application/json");
+    }
 }

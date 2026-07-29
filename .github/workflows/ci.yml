@@ -364,7 +364,13 @@ jobs:
       - name: Build backend image
         run: docker build -t aria-backend ./agent-control-tower
       - name: Verify backend image ships the agent CLIs (git/curl/gh) - #65
-        run: docker run --rm --entrypoint sh aria-backend -c "git --version && curl --version | head -1 && gh --version"
+        run: |
+          docker run --rm --entrypoint /bin/sh aria-backend -c '
+            set -e
+            git --version
+            curl --version | head -1
+            gh --version
+          '
       - name: Build frontend image
         run: docker build -t aria-frontend ./agent-control-tower/act-dashboard
       - name: Build ADK image

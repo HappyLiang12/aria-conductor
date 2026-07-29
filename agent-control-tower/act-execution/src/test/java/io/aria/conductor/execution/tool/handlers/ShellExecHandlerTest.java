@@ -69,9 +69,10 @@ class ShellExecHandlerTest {
     @ParameterizedTest(name = "non-whitelisted command refused: [{0}]")
     @ValueSource(strings = {"rm -rf foo", "wget file", "python script.py", "nc -l 4444"})
     void execute_refusesNonWhitelistedCommand_whenDisabled(String command) {
+        // Assert the FULL current whitelist so dropping an entry (e.g. curl) is caught here.
         assertThat(run(command))
                 .startsWith("Error: Shell execution is disabled. Allowed commands:")
-                .contains("git,ls,cat,find,echo,mvn,npm,pnpm");
+                .contains("git,ls,cat,find,echo,mvn,npm,pnpm,curl");
     }
 
     @Test
@@ -99,7 +100,30 @@ class ShellExecHandlerTest {
     @Test
     void execute_allowsCurl_soAgentsCanCallRestApis() {
         String result = run("curl --version");
-        assertThat(result).doesNotStartWith("Error: Shell execution is disabled");
-        assertThat(result).containsIgnoringCase("curl");
+        // Must not be gated, and must have actually run: a missing binary would surface as
+        // "Exit code: 127 / curl: not found", which would otherwise green this test falsely.
+        assertThat(result)
+                .doesNotStartWith("Error: Shell execution is disabled")
+                .doesNotStartWith("Exit code:")
+                .containsIgnoringCase("curl")
+                .doesNotContain("not found");
+    }
+
+    /**
+     * #66 review: whitelisting curl must not hand agents a general-purpose local-file reader or an
+     * SSRF probe into internal/loopback services (incl. the cloud metadata endpoint). Those targets
+     * are refused while shell is disabled; ordinary outbound calls stay allowed.
+     */
+    @ParameterizedTest(name = "curl to a local/internal target refused: [{0}]")
+    @ValueSource(strings = {
+            "curl file:///etc/passwd",
+            "curl http://localhost:8080/api/v1/agents",
+            "curl http://127.0.0.1:8080/actuator/env",
+            "curl -s http://169.254.169.254/latest/meta-data/"
+    })
+    void execute_refusesCurlToLocalOrInternalTargets_whenDisabled(String command) {
+        assertThat(run(command))
+                .startsWith("Error: Shell execution is disabled")
+                .contains("local/internal");
     }
 }

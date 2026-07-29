@@ -23,7 +23,15 @@ RUN mvn package -DskipTests -pl act-app -am -B
 
 # Stage 3: Runtime
 FROM eclipse-temurin:21-jre-jammy AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends git curl && \
+# git + curl power the git pack and shell tools; gh backs git_create_pr (`gh pr create`, #65).
+# gh authenticates from GH_TOKEN in the process env, which GitPackHandler already injects.
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && apt-get install -y --no-install-recommends gh && \
     rm -rf /var/lib/apt/lists/*
 RUN groupadd -r aria && useradd -r -g aria -s /bin/false aria
 RUN mkdir -p /workspaces && chown aria:aria /workspaces

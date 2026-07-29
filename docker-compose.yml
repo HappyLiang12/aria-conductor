@@ -46,7 +46,7 @@ services:
       ADK_HOST: langchain-adk
       ADK_PORT: 9300
       PROJECT_ROOT: /project
-      TOOLS_SHELL_WHITELIST: "git,ls,cat,find,echo,mvn,npm,pnpm"
+      TOOLS_SHELL_WHITELIST: ${TOOLS_SHELL_WHITELIST:-git,ls,cat,find,echo,mvn,npm,pnpm,curl}
       TOOLS_FILE_WORKSPACE_DIR: /workspaces
       TOOLS_SHELL_ENABLED: ${TOOLS_SHELL_ENABLED:-false}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}

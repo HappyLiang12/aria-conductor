@@ -17,7 +17,7 @@ public class ShellExecHandler implements ToolHandler {
     @Value("${tools.shell.enabled:false}")
     private boolean shellEnabled;
 
-    @Value("${tools.shell.whitelist:git,ls,cat,find,echo,mvn,npm,pnpm}")
+    @Value("${tools.shell.whitelist:git,ls,cat,find,echo,mvn,npm,pnpm,curl}")
     private String whitelist;
 
     @Override

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentTools, setAgentSkills } from '../api/agents';
 import { getAgentTelemetry } from '../api/dashboard';
-import type { Agent, CreateAgentRequest, AgentTemplate, AgentTelemetry } from '../types';
+import { listAdkProviders } from '../api/adk';
+import type { Agent, CreateAgentRequest, AgentTemplate, AgentTelemetry, AdkProviderInfo } from '../types';
 import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
 import { ManageToolsDialog } from '../components/ManageToolsDialog';
@@ -29,6 +30,7 @@ interface AddAgentForm {
   name: string;
   role: string;
   model: string;
+  adkProvider: string;
   maxToolCallRounds: number;
 }
 
@@ -36,6 +38,7 @@ const EMPTY_FORM: AddAgentForm = {
   name: '',
   role: 'dev',
   model: '',
+  adkProvider: 'langchain',
   maxToolCallRounds: 15,
 };
 
@@ -69,6 +72,19 @@ export default function CrewPage() {
     queryFn: () => getRoleDefaults(form.role),
     enabled: dialogOpen && !!form.role,
   });
+
+  const { data: adkProviders } = useQuery({
+    queryKey: ['adk-providers'],
+    queryFn: listAdkProviders,
+  });
+
+  // Fall back to the built-in LangChain ADK option when the providers API is
+  // empty or unavailable (option text keeps the 'LangChain' substring so the
+  // existing E2E selectors that pick the langchain value stay compatible).
+  const adkProviderOptions: AdkProviderInfo[] =
+    adkProviders && adkProviders.length > 0
+      ? adkProviders
+      : [{ id: 'langchain', displayName: 'LangChain ADK', supportsTaskExecution: false, isDefault: true }];
 
   // Pre-check the role's recommended tools + skills when the dialog opens or the role changes.
   // Reset to the (possibly still-loading) defaults so a stale prior-role selection is never persisted.
@@ -187,7 +203,7 @@ export default function CrewPage() {
       model: form.model.trim() || selectedTemplate?.model || undefined,
       provider: selectedTemplate?.provider || 'openai',
       description: selectedTemplate?.description,
-      adkProvider: 'langchain',
+      adkProvider: form.adkProvider || selectedTemplate?.adkProvider || 'langchain',
       config: { maxToolCallRounds: form.maxToolCallRounds },
     };
     createMutation.mutate(body);
@@ -306,7 +322,17 @@ export default function CrewPage() {
           <select
             id="add-agent-role"
             value={form.role}
-            onChange={(e) => setForm({ ...form, role: e.target.value })}
+            onChange={(e) => {
+              const role = e.target.value;
+              // Template-driven form: back-fill the template's ADK provider
+              // (fallback 'langchain') when a role/template is applied.
+              const template = templates?.find((t) => t.role === role);
+              setForm((prev) => ({
+                ...prev,
+                role,
+                adkProvider: template?.adkProvider || 'langchain',
+              }));
+            }}
           >
             {(templates ?? []).map((t) => (
               <option key={t.id} value={t.role}>{t.label}</option>
@@ -321,6 +347,17 @@ export default function CrewPage() {
             placeholder="e.g. gpt-4o-mini"
             onChange={(e) => setForm({ ...form, model: e.target.value })}
           />
+
+          <label htmlFor="add-agent-adk-provider">ADK Provider</label>
+          <select
+            id="add-agent-adk-provider"
+            value={form.adkProvider}
+            onChange={(e) => setForm({ ...form, adkProvider: e.target.value })}
+          >
+            {adkProviderOptions.map((p) => (
+              <option key={p.id} value={p.id}>{p.displayName}</option>
+            ))}
+          </select>
 
           <div style={{ marginTop: 12 }}>
             <label>Recommended tools <span style={{ textTransform: 'none', color: 'var(--text-mute)' }}>· {selectedTools.size} selected</span></label>

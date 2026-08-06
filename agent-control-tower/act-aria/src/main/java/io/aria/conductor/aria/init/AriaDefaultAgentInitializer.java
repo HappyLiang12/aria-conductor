@@ -6,7 +6,7 @@ import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.aria.AriaConstants;
-import io.aria.conductor.execution.adk.LangChainAdkProvider;
+import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -112,7 +112,6 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
 
             Always be helpful, concise, and proactive. Use tools to get real data rather than guessing.
             Format responses clearly with bullet points or tables when listing items.
-            
             IMPORTANT — you are an orchestrator, not a worker:
             You do NOT have file, shell, git, or raw-HTTP tools. You MUST NOT attempt development work
             (reading/editing files, running commands, cloning, committing, pushing, opening pull requests)
@@ -172,20 +171,20 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
     private final ToolDefinitionRepository toolDefinitionRepository;
     private final AgentToolRepository agentToolRepository;
     private final LlmProviderRepository llmProviderRepository;
-    private final LangChainAdkProvider adkProvider;
+    private final AdkProviderRegistry adkProviderRegistry;
     private final Environment environment;
 
     public AriaDefaultAgentInitializer(AgentRepository agentRepository,
                                        ToolDefinitionRepository toolDefinitionRepository,
                                        AgentToolRepository agentToolRepository,
                                        LlmProviderRepository llmProviderRepository,
-                                       LangChainAdkProvider adkProvider,
+                                       AdkProviderRegistry adkProviderRegistry,
                                        Environment environment) {
         this.agentRepository = agentRepository;
         this.toolDefinitionRepository = toolDefinitionRepository;
         this.agentToolRepository = agentToolRepository;
         this.llmProviderRepository = llmProviderRepository;
-        this.adkProvider = adkProvider;
+        this.adkProviderRegistry = adkProviderRegistry;
         this.environment = environment;
     }
 
@@ -305,7 +304,9 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             if (ariaAgent != null) {
                 try {
                     log.info("Pre-warming ADK instance for Aria...");
-                    adkProvider.prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
+                    // Route through the registry so the Aria agent's own provider is used
+                    // (defaults to langchain, matching the historical behaviour).
+                    adkProviderRegistry.resolve(ariaAgent).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
                     log.info("ADK instance for Aria is ready (health check passed)");
                 } catch (Exception e) {
                     log.error("ADK pre-warm failed — Aria cannot start: {}", e.getMessage());

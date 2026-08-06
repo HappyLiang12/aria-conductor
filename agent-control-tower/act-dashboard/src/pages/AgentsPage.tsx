@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, updateAgent, retireAgent, getTemplates } from '../api/agents';
+import { listAdkProviders } from '../api/adk';
 import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
-import type { CreateAgentRequest, AgentType, AgentHealthStatus, Agent, AgentTemplate } from '../types';
+import type { CreateAgentRequest, AgentType, AgentHealthStatus, Agent, AgentTemplate, AdkProviderInfo } from '../types';
 
 interface ConfirmDialogState {
   open: boolean;
@@ -63,6 +64,19 @@ export function AgentsPage() {
     queryKey: ['agent-templates'],
     queryFn: getTemplates,
   });
+
+  const { data: adkProviders } = useQuery({
+    queryKey: ['adk-providers'],
+    queryFn: listAdkProviders,
+  });
+
+  // Fall back to the built-in LangChain ADK option when the providers API is
+  // empty or unavailable, keeping the existing E2E selector (.form-card select
+  // with text 'LangChain') able to pick the langchain value.
+  const adkProviderOptions: AdkProviderInfo[] =
+    adkProviders && adkProviders.length > 0
+      ? adkProviders
+      : [{ id: 'langchain', displayName: 'LangChain ADK', supportsTaskExecution: false, isDefault: true }];
 
   const createMutation = useMutation({
     mutationFn: createAgent,
@@ -151,6 +165,8 @@ export function AgentsPage() {
     return true;
   }) ?? [];
 
+  const detailAgent = detailDialog.agent;
+
   return (
     <div className="page">
       <div className="page-header">
@@ -218,8 +234,9 @@ export function AgentsPage() {
             <div className="form-field">
               <label>ADK Provider</label>
               <select value={form.adkProvider} onChange={(e) => setForm({ ...form, adkProvider: e.target.value })}>
-                <option value="langchain">LangChain</option>
-                <option value="langchain">LangChain ADK</option>
+                {adkProviderOptions.map((p) => (
+                  <option key={p.id} value={p.id}>{p.displayName}</option>
+                ))}
               </select>
             </div>
             <div className="form-field full-width">
@@ -340,8 +357,9 @@ export function AgentsPage() {
                 <div className="form-field">
                   <label>ADK Provider</label>
                   <select value={editForm.adkProvider} onChange={(e) => setEditForm({ ...editForm, adkProvider: e.target.value })}>
-                    <option value="langchain">LangChain</option>
-                    <option value="langchain">LangChain ADK</option>
+                    {adkProviderOptions.map((p) => (
+                      <option key={p.id} value={p.id}>{p.displayName}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="form-field full-width">
@@ -371,7 +389,15 @@ export function AgentsPage() {
               <div className="detail-item"><span className="detail-label">Role</span><span>{detailDialog.agent.role || '—'}</span></div>
               <div className="detail-item"><span className="detail-label">Model</span><span>{detailDialog.agent.model || '—'}</span></div>
               <div className="detail-item"><span className="detail-label">Provider</span><span>{detailDialog.agent.provider || '—'}</span></div>
-              <div className="detail-item"><span className="detail-label">ADK Provider</span><span>{detailDialog.agent.adkProvider || '—'}</span></div>
+              <div className="detail-item">
+                <span className="detail-label">ADK Provider</span>
+                <span>{detailDialog.agent.adkProvider || '—'}</span>
+                {adkProviders?.some((p) => p.id === detailAgent?.adkProvider && p.supportsTaskExecution) ? (
+                  <span className="type-badge">Task</span>
+                ) : (
+                  <span className="type-badge">Turn</span>
+                )}
+              </div>
               <div className="detail-item"><span className="detail-label">Health</span><StatusBadge status={detailDialog.agent.healthStatus} /></div>
               <div className="detail-item"><span className="detail-label">Created</span><span>{new Date(detailDialog.agent.createdAt).toLocaleString()}</span></div>
               <div className="detail-item detail-full"><span className="detail-label">Description</span><span>{detailDialog.agent.description || '—'}</span></div>

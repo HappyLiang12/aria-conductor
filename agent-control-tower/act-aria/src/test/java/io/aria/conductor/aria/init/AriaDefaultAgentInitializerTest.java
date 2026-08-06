@@ -10,7 +10,8 @@ import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
-import io.aria.conductor.execution.adk.LangChainAdkProvider;
+import io.aria.conductor.execution.adk.AdkProvider;
+import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,7 +33,8 @@ class AriaDefaultAgentInitializerTest {
     @Mock ToolDefinitionRepository toolDefinitionRepository;
     @Mock AgentToolRepository agentToolRepository;
     @Mock LlmProviderRepository llmProviderRepository;
-    @Mock LangChainAdkProvider adkProvider;
+    @Mock AdkProviderRegistry adkProviderRegistry;
+    @Mock AdkProvider adkProvider;
     @Mock Environment environment;
     @Mock ApplicationArguments args;
 
@@ -49,6 +51,9 @@ class AriaDefaultAgentInitializerTest {
                 .config("{\"maxToolCallRounds\":15}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
+        // The registry resolves the Aria agent's own provider (defaults to langchain)
+        // lenient: profile-skip tests never reach the pre-warm resolve
+        lenient().when(adkProviderRegistry.resolve(ariaAgent)).thenReturn(adkProvider);
     }
 
     @Test
@@ -59,7 +64,7 @@ class AriaDefaultAgentInitializerTest {
         when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
 
         verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
     }
@@ -73,7 +78,7 @@ class AriaDefaultAgentInitializerTest {
         doThrow(new RuntimeException("ADK down")).when(adkProvider).prepareAgent(any(), any());
 
         var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment);
 
         assertThatThrownBy(() -> initializer.run(args))
                 .isInstanceOf(IllegalStateException.class)
@@ -88,7 +93,7 @@ class AriaDefaultAgentInitializerTest {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
 
         verify(adkProvider, never()).prepareAgent(any(), any());
     }
@@ -101,7 +106,7 @@ class AriaDefaultAgentInitializerTest {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
 
         verify(adkProvider, never()).prepareAgent(any(), any());
     }

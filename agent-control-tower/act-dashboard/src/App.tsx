@@ -11,6 +11,7 @@ import { WorkflowsPage } from './pages/WorkflowsPage';
 import { ScheduledJobsPage } from './pages/ScheduledJobsPage';
 import { RunsPage } from './pages/RunsPage';
 import { ApprovalsPage } from './pages/ApprovalsPage';
+import { ProvidersPage } from './pages/ProvidersPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,6 +32,7 @@ export default function App() {
             <Route element={<Layout />}>
               <Route path="/" element={<OverviewPage />} />
               <Route path="/crew" element={<CrewPage />} />
+              <Route path="/providers" element={<ProvidersPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/chat" element={<ChatPage />} />

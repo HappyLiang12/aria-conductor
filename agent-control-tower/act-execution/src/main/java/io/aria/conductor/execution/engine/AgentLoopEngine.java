@@ -16,6 +16,11 @@ import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.adk.TaskContext;
+import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.adk.TaskResult;
+import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
+import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.llm.LlmMessage;
@@ -23,6 +28,7 @@ import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.pipeline.Action;
 import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
+import io.aria.conductor.execution.pipeline.ActionType;
 import io.aria.conductor.execution.pipeline.ActionResult;
 import io.aria.conductor.execution.harness.ToolSteeringGuard;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -45,6 +51,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
@@ -84,6 +91,7 @@ public class AgentLoopEngine {
     private final HarnessProfileService harnessProfileService;
     private final ToolSteeringGuard toolSteeringGuard;
     private final ApprovalRepository approvalRepository;
+    private final OpenCodeProperties openCodeProperties;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -108,7 +116,8 @@ public class AgentLoopEngine {
                            WorkspaceManager workspaceManager,
                            HarnessProfileService harnessProfileService,
                            ToolSteeringGuard toolSteeringGuard,
-                           ApprovalRepository approvalRepository) {
+                           ApprovalRepository approvalRepository,
+                           OpenCodeProperties openCodeProperties) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -130,6 +139,7 @@ public class AgentLoopEngine {
         this.harnessProfileService = harnessProfileService;
         this.toolSteeringGuard = toolSteeringGuard;
         this.approvalRepository = approvalRepository;
+        this.openCodeProperties = openCodeProperties;
     }
 
     /**
@@ -502,6 +512,15 @@ public class AgentLoopEngine {
             }
         }
 
+        // Task-level delegation branch: a task-capable provider (e.g. OpenCode) takes
+        // over the whole run via executeTask — the turn-level loop below is never
+        // entered. Turn-loop logic remains untouched.
+        AdkProvider resolvedProvider = adkProviderRegistry.resolve(ctx.getAgent());
+        if (resolvedProvider.supportsTaskExecution()) {
+            taskExecutionPath(ctx, resolvedProvider, emitter);
+            return;
+        }
+
         try {
             while (!ctx.isCancelled() && ctx.getIterationCount() < ctx.getMaxIterations()) {
                 // Check pause
@@ -577,6 +596,226 @@ public class AgentLoopEngine {
             tryEmit(emitter, "done", donePayload(ctx, errMsg));
             tryEmit(emitter, "error", Map.of("message", errMsg));
             completeRun(ctx, RunStatus.FAILED);
+        }
+    }
+
+    // ---- Task-level delegation branch (task-capable providers, e.g. OpenCode) ----
+
+    /**
+     * Task-level delegation path: hands the whole run to a task-capable provider
+     * instead of the turn-level while loop. Governance at task level: optional
+     * approval gate → virtual-thread execution with cancellable polling →
+     * timeout/abort mapping → token audit + final output persistence.
+     */
+    private void taskExecutionPath(RunContext ctx, AdkProvider provider, @Nullable SseEmitter emitter) {
+        log.info("Task execution path: runId={}, provider={}", ctx.getRunId(), provider.providerId());
+        tryEmit(emitter, "thinking", Map.of("status", "processing", "mode", "task", "provider", provider.providerId()));
+
+        try {
+            // Approval gate — only when the agent config opts in ("taskApprovalRequired": true).
+            // Default passes through untouched: existing agents are not affected.
+            ApprovalDecision approval = taskApprovalGate(ctx);
+            if (!approval.isApproved()) {
+                String denial = "Task approval denied: " + approval.reason();
+                log.warn("Task denied by approval gate: runId={}, reason={}", ctx.getRunId(), approval.reason());
+                ctx.addError(denial);
+                tryEmit(emitter, "done", donePayload(ctx, denial));
+                tryEmit(emitter, "error", Map.of("message", denial));
+                completeRun(ctx, RunStatus.CANCELLED);
+                return;
+            }
+
+            // Single merged task prompt: same system-rule injection (role / knowledge /
+            // skills) as the turn loop via buildMessages, plus the user request.
+            String taskPrompt = buildTaskPrompt(ctx);
+
+            // Task-level constraints: agent-config round cap (same parse as the turn loop)
+            // + OpenCode max-task-minutes timeout.
+            TaskContext taskContext = new TaskContext(
+                    parseMaxIterationsFromConfig(ctx.getAgent(), ctx.getMaxIterations()),
+                    Duration.ofMinutes(openCodeProperties.getMaxTaskMinutes()),
+                    null);
+
+            // Execute on a virtual thread; poll every second so cancelRun() stays
+            // responsive (abortTask on cancel → TaskExecutionException(ABORTED)).
+            TaskResult result = awaitTaskResult(ctx, provider, taskPrompt, taskContext);
+
+            // Success: token/iteration bookkeeping + audit + final output + completion.
+            ctx.addTokensUsed(result.inputTokens(), result.outputTokens());
+            ctx.incrementIteration();
+            if (result.finalOutput() != null && !result.finalOutput().isBlank()) {
+                ctx.setLastAssistantResponse(result.finalOutput());
+                tryEmit(emitter, "message", Map.of("content", result.finalOutput()));
+            }
+            recordTaskPromptCall(ctx, result.inputTokens(), result.outputTokens());
+            RunStatus finalStatus = result.aborted() ? RunStatus.ABORTED : RunStatus.COMPLETED;
+            tryEmit(emitter, "done", donePayload(ctx, null));
+            completeRun(ctx, finalStatus);
+        } catch (TaskExecutionException e) {
+            handleTaskExecutionFailure(ctx, e, provider, emitter);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            handleTaskFailure(ctx, "Task interrupted: " + e.getMessage(), RunStatus.CANCELLED, emitter);
+        } catch (Exception e) {
+            log.error("Task path unexpected failure: runId={}", ctx.getRunId(), e);
+            handleTaskFailure(ctx, e.getMessage() != null ? e.getMessage() : "Unknown task error",
+                    RunStatus.FAILED, emitter);
+        }
+    }
+
+    /**
+     * Builds the single task prompt handed to a task-level provider: the same
+     * system-rule injection (role / knowledge / skills) as the turn loop via
+     * {@link #buildMessages}, merged with the user request into one string
+     * ({@code ---} + {@code User request:} separator). Degrades gracefully when
+     * either half is missing.
+     */
+    private String buildTaskPrompt(RunContext ctx) {
+        List<LlmMessage> messages = buildMessages(ctx);
+        StringBuilder system = new StringBuilder();
+        String userRequest = null;
+        for (LlmMessage msg : messages) {
+            if ("system".equals(msg.role())) {
+                if (!system.isEmpty()) system.append("\n\n");
+                system.append(msg.content());
+            } else if ("user".equals(msg.role())) {
+                userRequest = msg.content();
+            }
+        }
+        if (userRequest == null || userRequest.isBlank()) {
+            return system.toString();
+        }
+        if (system.isEmpty()) {
+            return userRequest;
+        }
+        return system + "\n\n---\nUser request: " + userRequest;
+    }
+
+    /**
+     * Task-level approval gate — reuses the turn-level {@link ApprovalGate} entry,
+     * but only intercepts when the agent config explicitly opts in
+     * ({@code "taskApprovalRequired": true}). Defaults to an approved pass-through.
+     */
+    private ApprovalDecision taskApprovalGate(RunContext ctx) {
+        if (!taskApprovalRequired(ctx.getAgent())) {
+            return ApprovalDecision.approve("No task approval required");
+        }
+        log.info("Requesting task-level approval: runId={}, agentId={}", ctx.getRunId(), ctx.getAgentId());
+        // Synthetic action representing the whole task (the gate only needs a name/type).
+        Action taskAction = new Action("task_execution", ActionType.EXECUTE, "{}", null);
+        return approvalGate.requestApproval(taskAction, ctx);
+    }
+
+    /** Whether the agent config explicitly requires human approval before task-level execution. */
+    private static boolean taskApprovalRequired(Agent agent) {
+        String config = agent.getConfig();
+        if (config == null || config.isBlank()) return false;
+        try {
+            Map<String, Object> configMap = new ObjectMapper().readValue(
+                    config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            Object v = configMap.get("taskApprovalRequired");
+            return v instanceof Boolean b && b;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Runs the provider task on a virtual thread and polls for completion every
+     * second. Each poll re-checks {@code ctx.isCancelled()} (set by cancelRun)
+     * so an in-flight task can be interrupted: abort the provider and surface
+     * {@link TaskExecutionException}(ABORTED).
+     */
+    private TaskResult awaitTaskResult(RunContext ctx, AdkProvider provider, String taskPrompt, TaskContext taskContext)
+            throws InterruptedException {
+        CompletableFuture<TaskResult> future = CompletableFuture.supplyAsync(
+                () -> provider.executeTask(ctx.getAgent(), ctx.getRunId(), taskPrompt, taskContext),
+                virtualThreadExecutor);
+
+        while (true) {
+            if (ctx.isCancelled()) {
+                try {
+                    provider.abortTask(ctx.getRunId());
+                } catch (Exception abortEx) {
+                    log.warn("Abort call failed for cancelled run {}: {}", ctx.getRunId(), abortEx.getMessage());
+                }
+                throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED, "Run cancelled");
+            }
+            try {
+                return future.get(1, TimeUnit.SECONDS);
+            } catch (TimeoutException timeout) {
+                // still in flight — poll again (cancellation re-checked at loop top)
+            } catch (ExecutionException execution) {
+                Throwable cause = execution.getCause() != null ? execution.getCause() : execution;
+                if (cause instanceof TaskExecutionException tee) {
+                    throw tee;
+                }
+                throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
+                        "Task execution failed: " + cause.getMessage(), cause);
+            }
+        }
+    }
+
+    /**
+     * Maps a {@link TaskExecutionException} onto the run state: TIMEOUT aborts the
+     * provider's in-flight work and marks the run ABORTED; ABORTED (user cancel /
+     * provider abort) marks ABORTED; sandbox/provider errors FAIL the run. Mirrors
+     * the turn-loop semantics — failure paths write no PromptCall audit entry.
+     */
+    private void handleTaskExecutionFailure(RunContext ctx, TaskExecutionException e,
+                                            AdkProvider provider, @Nullable SseEmitter emitter) {
+        log.error("Task execution failed: runId={}, cause={}, message={}", ctx.getRunId(), e.cause(), e.getMessage());
+        String errMsg = e.getMessage() != null ? e.getMessage() : "Task execution failed: " + e.cause();
+        ctx.addError(errMsg);
+
+        RunStatus status = switch (e.cause()) {
+            case TIMEOUT -> {
+                try {
+                    provider.abortTask(ctx.getRunId());
+                } catch (Exception abortEx) {
+                    log.warn("Abort call failed after task timeout for run {}: {}", ctx.getRunId(), abortEx.getMessage());
+                }
+                yield RunStatus.ABORTED;
+            }
+            case ABORTED -> RunStatus.ABORTED;
+            case SANDBOX_UNAVAILABLE, PROVIDER_ERROR -> RunStatus.FAILED;
+        };
+
+        tryEmit(emitter, "done", donePayload(ctx, errMsg));
+        tryEmit(emitter, "error", Map.of("message", errMsg));
+        completeRun(ctx, status);
+    }
+
+    /**
+     * Generic failure handler for the task path (non-TaskExecutionException):
+     * records the error and completes the run with the given status.
+     */
+    private void handleTaskFailure(RunContext ctx, String message, RunStatus status, @Nullable SseEmitter emitter) {
+        log.error("Task path failure: runId={}, status={}, message={}", ctx.getRunId(), status, message);
+        ctx.addError(message);
+        tryEmit(emitter, "done", donePayload(ctx, message));
+        tryEmit(emitter, "error", Map.of("message", message != null ? message : "Unknown error"));
+        completeRun(ctx, status);
+    }
+
+    /**
+     * Mirrors {@link #recordPromptCall} for the task path: persists a PromptCall
+     * audit entry (input/output tokens) for successful task-level runs only.
+     */
+    private void recordTaskPromptCall(RunContext ctx, int inputTokens, int outputTokens) {
+        try {
+            PromptCall promptCall = PromptCall.builder()
+                    .runId(ctx.getRunId())
+                    .agentId(ctx.getAgentId())
+                    .provider(ctx.getAgent().getProvider())
+                    .model(ctx.getAgent().getModel())
+                    .inputTokens(inputTokens)
+                    .outputTokens(outputTokens)
+                    .latencyMs(0) // TODO: measure actual latency
+                    .build();
+            promptCallRepository.save(promptCall);
+        } catch (Exception e) {
+            log.warn("Failed to record task prompt call: {}", e.getMessage());
         }
     }
 
@@ -1122,6 +1361,8 @@ public class AgentLoopEngine {
                 case COMPLETED -> SessionStatus.COMPLETED;
                 case FAILED -> SessionStatus.FAILED;
                 case CANCELLED -> SessionStatus.CANCELLED;
+                // Task-level ABORTED runs terminate the session like a cancellation
+                case ABORTED -> SessionStatus.CANCELLED;
                 default -> SessionStatus.FAILED;
             };
             sessionStateManager.updateSessionStatus(ctx.getRunId(), sessionStatus);
@@ -1242,9 +1483,9 @@ public class AgentLoopEngine {
     }
 
     // ---- SSE helpers —
-    
+
     private static final ObjectMapper SSE_MAPPER = new ObjectMapper();
-    
+
     /**
      * Builds the standard done event payload with runId, conversationId, and intent.
      */
@@ -1258,7 +1499,7 @@ public class AgentLoopEngine {
         }
         return payload;
     }
-    
+
     /**
      * Safely emit an SSE event, silently dropping if emitter is null or client disconnected.
      */

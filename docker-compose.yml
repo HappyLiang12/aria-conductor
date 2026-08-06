@@ -51,6 +51,11 @@ services:
       TOOLS_SHELL_ENABLED: ${TOOLS_SHELL_ENABLED:-false}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       PACK_CREDENTIAL_KEY: ${PACK_CREDENTIAL_KEY:-}
+      # OpenSandbox server API key (empty placeholder when not configured; see opencode.sandbox-api-key)
+      OPENSANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
+      # Overrides opencode.sandbox-server-url in Docker network (Spring relaxed binding);
+      # default http://localhost:8080 in application.yml is for local dev outside Docker
+      OPENSANDBOX_SERVER_URL: http://opensandbox-server:8080
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:
@@ -63,6 +68,28 @@ services:
       - knowledge_data:/app/data
       - ${PROJECT_SOURCE:-.}:/project:ro
       - aria_workspaces:/workspaces
+    networks:
+      - aria-network
+
+  opensandbox-server:
+    image: opensandbox/server:latest
+    container_name: aria-opensandbox
+    environment:
+      SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
+      # Required for non-interactive container startup when no server API key is configured;
+      # for production, set [server] api_key in the config below and remove this variable
+      OPENSANDBOX_INSECURE_SERVER: "YES"
+    ports:
+      # Container port 8080; host 8090 avoids clash with aria-backend's 8080 binding
+      - "127.0.0.1:${OPENSANDBOX_PORT:-8090}:8080"
+    volumes:
+      # Docker runtime mode: the server creates/kills sandbox containers via the Docker socket
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist server-managed metadata (SQLite store at ~/.opensandbox/opensandbox.db)
+      - opensandbox_data:/root/.opensandbox
+    configs:
+      - source: opensandbox-config
+        target: /etc/opensandbox/config.toml
     networks:
       - aria-network
 
@@ -101,10 +128,38 @@ services:
     networks:
       - aria-network
 
+configs:
+  # OpenSandbox server config (Docker runtime mode), generated per official
+  # server/docker-compose.example.yaml; equivalent to `uvx opensandbox-server init-config --example docker`
+  opensandbox-config:
+    content: |
+      [server]
+      host = "0.0.0.0"
+      port = 8080
+
+      [log]
+      level = "INFO"
+
+      [runtime]
+      type = "docker"
+      execd_image = "opensandbox/execd:v1.0.21"
+
+      [docker]
+      network_mode = "bridge"
+      # Server runs in a container: bridge-mode sandbox endpoints must be host-reachable
+      # (host.docker.internal works on Docker Desktop; Linux needs extra_hosts on backend)
+      host_ip = "host.docker.internal"
+      port_range_min = 40000
+      port_range_max = 60000
+
+      [ingress]
+      mode = "direct"
+
 volumes:
   mariadb_data:
   knowledge_data:
   aria_workspaces:
+  opensandbox_data:
 
 networks:
   aria-network:

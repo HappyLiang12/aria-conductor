@@ -13,6 +13,7 @@ spring:
     show-sql: false
     hibernate:
       ddl-auto: none
+    open-in-view: false
   flyway:
     enabled: true
     url: ${spring.datasource.url}
@@ -26,6 +27,11 @@ llm:
     api-key: test-key
     model: test-model
     max-tokens: 100
+
+opencode:
+  sandbox-server-url: http://localhost:18080
+  sandbox-api-key: test-opensandbox-key
+  max-task-minutes: 30
 
 adk:
   default-provider: langchain
@@ -51,3 +57,4 @@ aria:
 knowledge:
   storage:
     base-path: ./target/test-knowledge
+

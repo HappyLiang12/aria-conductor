@@ -59,6 +59,12 @@
             <artifactId>act-test-support</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- OpenSandbox Java SDK (com.alibaba.opensandbox:sandbox 1.0.18) for the OpenCode provider sandbox lifecycle -->
+        <dependency>
+            <groupId>com.alibaba.opensandbox</groupId>
+            <artifactId>sandbox</artifactId>
+            <version>1.0.18</version>
+        </dependency>
         <dependency>
             <groupId>org.wiremock</groupId>
             <artifactId>wiremock-standalone</artifactId>

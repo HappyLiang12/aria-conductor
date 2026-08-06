@@ -54,4 +54,42 @@ public interface AdkProvider {
 
     /** Shut down all runtimes managed by this provider. */
     void shutdownAll();
+
+    /**
+     * Whether this provider executes end-to-end tasks (agent semantics).
+     *
+     * <p>Providers that return {@code true} handle the whole run internally
+     * (their own tool loop) and are invoked via {@link #executeTask} instead
+     * of the turn-level {@link #call}. Default {@code false}.
+     */
+    default boolean supportsTaskExecution() {
+        return false;
+    }
+
+    /**
+     * Task-level execution: hand the whole run to the provider's internal loop.
+     *
+     * <p>Only invoked when {@link #supportsTaskExecution()} returns {@code true}.
+     *
+     * @param agent      the agent being executed
+     * @param runId      unique identifier of this run
+     * @param taskPrompt the task prompt handed to the provider
+     * @param context    task-level constraints (round limit, timeout, audit sink)
+     * @return the aggregated task result
+     * @throws TaskExecutionException if the task fails (sandbox unavailable, timeout, ...)
+     */
+    default TaskResult executeTask(Agent agent, UUID runId, String taskPrompt, TaskContext context) {
+        throw new UnsupportedOperationException(
+                "Provider " + providerId() + " does not support task execution");
+    }
+
+    /**
+     * Abort an in-flight task (budget exceeded / user cancel).
+     *
+     * <p>Default no-op — turn-level providers do not manage long-running tasks.
+     *
+     * @param runId unique identifier of the run to abort
+     */
+    default void abortTask(UUID runId) {
+    }
 }

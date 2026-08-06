@@ -499,3 +499,16 @@ export interface ToolDefinition {
 export interface AgentToolAssignment { agentId: string; toolIds: string[]; skillIds: string[]; }
 
 export interface SkillDefinitionUI { id: string; name: string; description: string; tier: string; toolDependencies: string[]; enabled: boolean; }
+
+// === Adk Provider (Exchangeable Agent Provider) ===
+export interface AdkProviderInfo {
+  id: string;
+  displayName: string;
+  supportsTaskExecution: boolean;
+  isDefault: boolean;
+}
+
+export interface AdkProviderHealth {
+  providerId: string;
+  healthy: boolean;
+}

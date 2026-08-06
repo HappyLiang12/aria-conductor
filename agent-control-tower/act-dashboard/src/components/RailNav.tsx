@@ -9,6 +9,7 @@ interface RailItem {
 const ITEMS: RailItem[] = [
   { path: '/', label: 'Overview', icon: '▦' },
   { path: '/crew', label: 'Crew', icon: '👥' },
+  { path: '/providers', label: 'Providers', icon: '🔄' },
   { path: '/runs', label: 'Runs', icon: '▶️' },
   { path: '/knowledge', label: 'Knowledge', icon: '📚' },
   { path: '/reports', label: 'Reports', icon: '📊' },

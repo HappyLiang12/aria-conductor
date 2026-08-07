@@ -51,11 +51,14 @@ services:
       TOOLS_SHELL_ENABLED: ${TOOLS_SHELL_ENABLED:-false}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       PACK_CREDENTIAL_KEY: ${PACK_CREDENTIAL_KEY:-}
-      # OpenSandbox server API key (empty placeholder when not configured; see opencode.sandbox-api-key)
-      OPENSANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
+      # OpenSandbox server API key (optional; insecure server mode in this compose file).
+      # Env var name MUST carry the `opencode` prefix to bind opencode.sandbox-api-key.
+      OPENCODE_SANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
       # Overrides opencode.sandbox-server-url in Docker network (Spring relaxed binding);
-      # default http://localhost:8080 in application.yml is for local dev outside Docker
-      OPENSANDBOX_SERVER_URL: http://opensandbox-server:8080
+      # default http://localhost:8080 in application.yml is for local dev outside Docker.
+      # NOTE: env var name MUST carry the `opencode` prefix (OPENCODE_SANDBOX_SERVER_URL);
+      # OPENSANDBOX_SERVER_URL does not bind to opencode.sandbox-server-url (prefix mismatch).
+      OPENCODE_SANDBOX_SERVER_URL: http://opensandbox-server:8080
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:
@@ -146,9 +149,11 @@ configs:
 
       [docker]
       network_mode = "bridge"
-      # Server runs in a container: bridge-mode sandbox endpoints must be host-reachable
-      # (host.docker.internal works on Docker Desktop; Linux needs extra_hosts on backend)
-      host_ip = "host.docker.internal"
+      # Backend runs on the Docker host (not in a container): sandbox endpoints must
+      # resolve on the host. 127.0.0.1 reaches the execd port mappings (0.0.0.0) on the
+      # host; `host.docker.internal` does NOT resolve from host processes on Windows
+      # (only from inside containers), which caused SDK execd calls to time out.
+      host_ip = "127.0.0.1"
       port_range_min = 40000
       port_range_max = 60000
 

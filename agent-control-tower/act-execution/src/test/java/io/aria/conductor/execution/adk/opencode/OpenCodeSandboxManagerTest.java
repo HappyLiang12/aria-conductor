@@ -1,7 +1,10 @@
 package io.aria.conductor.execution.adk.opencode;
 
 import com.alibaba.opensandbox.sandbox.Sandbox;
+import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
 import java.util.Map;
@@ -10,6 +13,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -68,6 +72,7 @@ class OpenCodeSandboxManagerTest {
             when(builder.connectionConfig(any())).thenReturn(builder);
             when(builder.image(anyString())).thenReturn(builder);
             when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
             when(builder.env(anyMap())).thenReturn(builder);
             when(builder.build()).thenReturn(sandbox);
             when(sandbox.getId()).thenReturn("sb-1");
@@ -90,6 +95,7 @@ class OpenCodeSandboxManagerTest {
             when(builder.connectionConfig(any())).thenReturn(builder);
             when(builder.image(anyString())).thenReturn(builder);
             when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
             when(builder.build()).thenReturn(sandbox);
             when(sandbox.getId()).thenReturn("sb-1");
 
@@ -111,6 +117,7 @@ class OpenCodeSandboxManagerTest {
             when(builder.connectionConfig(any())).thenReturn(builder);
             when(builder.image(anyString())).thenReturn(builder);
             when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
             when(builder.build()).thenReturn(sandbox);
             when(sandbox.getId()).thenReturn("sb-1");
 
@@ -119,6 +126,113 @@ class OpenCodeSandboxManagerTest {
 
             assertThat(id).isEqualTo("sb-1");
             verify(builder, never()).env(anyMap());
+        }
+    }
+
+    @Test
+    void connectionConfig_doesNotUseServerProxy() {
+        // Regression: the server-side proxy path (/v1/sandboxes/{id}/proxy/{port}) resolves
+        // the target as the sandbox container IP, which is unreachable from the server's own
+        // Docker network when sandboxes run on the default bridge. Direct endpoints
+        // (`<host_ip>:{mapped}/proxy/<port>`, execd built-in forwarding) are the only
+        // reliable path, so useServerProxy must stay off.
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            new OpenCodeSandboxManager("http://localhost:8090", null)
+                    .createSandbox(UUID.randomUUID(), "test-image", null);
+
+            ArgumentCaptor<ConnectionConfig> captor = ArgumentCaptor.forClass(ConnectionConfig.class);
+            verify(builder).connectionConfig(captor.capture());
+            assertThat(captor.getValue().getUseServerProxy())
+                    .as("sandbox client must use direct execd endpoints, not the server proxy")
+                    .isFalse();
+        }
+    }
+
+    @Test
+    void createSandbox_skipsSdkHealthCheck() {
+        // Regression: the SDK health check probes the raw execd endpoint whose
+        // `host.docker.internal` hostname does not resolve on a Windows host, timing
+        // out sandbox creation. Readiness is verified by the provider itself against
+        // the rewritten endpoint instead (see {@link #getSandboxUrl}).
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            new OpenCodeSandboxManager("http://localhost:8090", null)
+                    .createSandbox(UUID.randomUUID(), "test-image", null);
+
+            verify(builder).skipHealthCheck(true);
+        }
+    }
+
+    @Test
+    void getSandboxUrl_prependsHttpSchemeWhenMissing() {
+        // Regression: the server returns scheme-less direct endpoints like
+        // `127.0.0.1:40369/proxy/4096` (execd built-in forwarding on the Docker host);
+        // feeding that straight into URI.create() fails with "invalid URI scheme".
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            SandboxEndpoint endpoint = mock(SandboxEndpoint.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+            when(sandbox.getEndpoint(4096)).thenReturn(endpoint);
+            when(endpoint.getEndpoint())
+                    .thenReturn("127.0.0.1:40369/proxy/4096");
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+            String url = manager.getSandboxUrl("sb-1", 4096);
+
+            assertThat(url).isEqualTo("http://127.0.0.1:40369/proxy/4096");
+        }
+    }
+
+    @Test
+    void getSandboxUrl_keepsExistingScheme() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            SandboxEndpoint endpoint = mock(SandboxEndpoint.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+            when(sandbox.getEndpoint(4096)).thenReturn(endpoint);
+            when(endpoint.getEndpoint()).thenReturn("http://192.168.1.10:4096");
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+            String url = manager.getSandboxUrl("sb-1", 4096);
+
+            assertThat(url).isEqualTo("http://192.168.1.10:4096");
         }
     }
 }

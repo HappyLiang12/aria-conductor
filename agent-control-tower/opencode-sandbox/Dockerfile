@@ -4,6 +4,11 @@
 
 FROM node:22-slim
 
+# curl is required by the OpenSandbox server-side proxy path
+# (GET /v1/sandboxes/{id}/proxy/{port} forwards via `docker exec ... curl`).
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install the opencode CLI globally (official npm package, see https://opencode.ai/docs)
 # NOTE: use `opencode-ai` (bin: opencode). The package `@opencode-ai/cli` is a DIFFERENT
 # project (anomalyco/opencode, bin: lildax) and must not be used.

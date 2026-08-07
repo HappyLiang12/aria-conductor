@@ -32,6 +32,8 @@ opencode:
   sandbox-server-url: http://localhost:18080
   sandbox-api-key: test-opensandbox-key
   max-task-minutes: 30
+  sandbox-env:
+    DEEPSEEK_API_KEY: test-key
 
 adk:
   default-provider: langchain

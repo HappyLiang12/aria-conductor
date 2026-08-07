@@ -255,15 +255,26 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         }
     }
 
-    /** Poll the serve health endpoint until ready or {@link #readyTimeout} elapses. */
+    /**
+     * Poll the serve health endpoint until ready or {@link #readyTimeout} elapses.
+     *
+     * <p>Budget is enforced on the wall clock: each {@code isHealthy()} probe may
+     * itself block for up to the client's HTTP timeout (3s), so an attempt-count
+     * budget ({@code readyTimeout / pollInterval}) would stretch the real wait far
+     * beyond the declared {@code readyTimeout} (observed ~7 min for a 60s budget).
+     */
     private void waitForHealth(OpenCodeHttpClient client, UUID agentId) {
-        long maxAttempts = Math.max(1, readyTimeout.toMillis() / readyPollInterval.toMillis());
-        for (int i = 0; i < maxAttempts; i++) {
+        long deadlineNanos = System.nanoTime() + readyTimeout.toNanos();
+        while (System.nanoTime() < deadlineNanos) {
             if (client.isHealthy()) {
                 return;
             }
+            long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000;
+            if (remainingMillis <= 0) {
+                break;
+            }
             try {
-                Thread.sleep(readyPollInterval.toMillis());
+                Thread.sleep(Math.min(readyPollInterval.toMillis(), remainingMillis));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;

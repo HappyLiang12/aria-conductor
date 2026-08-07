@@ -134,6 +134,35 @@ class OpenCodeAdkProviderTest {
     }
 
     @Test
+    void prepareAgent_healthProbeSlowerThanPollInterval_stillHonorsWallClockBudget() {
+        UUID agentId = UUID.randomUUID();
+        provider.setReadyTimeoutForTest(Duration.ofMillis(300));
+        provider.setReadyPollIntervalForTest(Duration.ofMillis(50));
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-slow");
+        when(sandboxManager.getSandboxUrl("sb-slow", 4096)).thenReturn("http://127.0.0.1:4096");
+        // Each probe blocks 80ms (slower than the 50ms poll interval). The old
+        // attempt-count budget (300/50 = 6 tries) would wall-clock to ~6*(80+50)
+        // = 780ms instead of the declared 300ms budget.
+        when(httpClient.isHealthy()).thenAnswer(inv -> {
+            Thread.sleep(80);
+            return false;
+        });
+
+        long start = System.nanoTime();
+        assertThatThrownBy(() -> provider.prepareAgent(agentId, agent(agentId)))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE))
+                .hasMessageContaining("did not become ready");
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+        // Wall clock stays near the 300ms budget (old code: ~780ms, new: ~350ms).
+        assertThat(elapsedMs).as("waitForHealth must honor the wall-clock budget").isLessThan(500);
+        verify(sandboxManager).killSandbox("sb-slow");
+        assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
+    }
+
+    @Test
     void prepareAgent_passesSandboxEnvToManager() {
         UUID agentId = UUID.randomUUID();
         Map<String, String> env = Map.of("DEEPSEEK_API_KEY", "secret-key");

@@ -83,7 +83,13 @@ public class OpenCodeSandboxManager {
             Sandbox.Builder builder = Sandbox.builder()
                     .connectionConfig(connectionConfig)
                     .image(image)
-                    .timeout(SANDBOX_TIMEOUT);
+                    .timeout(SANDBOX_TIMEOUT)
+                    // The server reports execd endpoints without a scheme and with the
+                    // configured host (bridge mode: 127.0.0.1:{mapped}/proxy/{port}, see
+                    // docker-compose `[docker] host_ip`). We skip the SDK's built-in health
+                    // check (it would probe the scheme-less endpoint and fail) and instead
+                    // verify readiness ourselves against the URL built by {@link #getSandboxUrl}.
+                    .skipHealthCheck(true);
             if (env != null && !env.isEmpty()) {
                 builder.env(env);
                 log.info("Injecting {} env var(s) into sandbox for agent {}", env.size(), agentId);
@@ -152,12 +158,18 @@ public class OpenCodeSandboxManager {
 
     /**
      * Resolve the externally reachable URL for a sandbox-internal port.
+     *
+     * <p>The server returns scheme-less direct endpoints like
+     * {@code 127.0.0.1:{mapped}/proxy/{port}} (execd built-in forwarding on the Docker
+     * host, see docker-compose {@code [docker] host_ip}); the scheme is completed here,
+     * producing e.g. {@code http://127.0.0.1:40369/proxy/4096}.
      */
     public String getSandboxUrl(String sandboxId, int port) {
         Sandbox sandbox = requireSandbox(sandboxId);
         try {
             SandboxEndpoint endpoint = sandbox.getEndpoint(port);
-            return endpoint.getEndpoint();
+            String raw = endpoint.getEndpoint();
+            return raw.contains("://") ? raw : "http://" + raw;
         } catch (Exception e) {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Could not resolve endpoint for sandbox " + sandboxId + " port " + port + ": " + e.getMessage(), e);
@@ -258,6 +270,12 @@ public class OpenCodeSandboxManager {
         if (apiKey != null && !apiKey.isBlank()) {
             builder.apiKey(apiKey);
         }
+        // keep useServerProxy=false (default): the server-side proxy path
+        // (/v1/sandboxes/{id}/proxy/{port}) resolves the target as the sandbox container IP,
+        // which is unreachable from this server's Docker network when sandboxes run on the
+        // default bridge. Direct endpoints ({@code <host_ip>:{mapped}/proxy/<port>}, execd
+        // built-in forwarding) are reachable from this host — docker-compose sets
+        // `[docker] host_ip = "127.0.0.1"` so the returned endpoints resolve locally.
         return builder.build();
     }
 }

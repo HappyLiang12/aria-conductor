@@ -27,6 +27,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * operations are addressed by sandbox id; the underlying {@link Sandbox}
  * instances are kept in an internal registry.
  *
+ * <p>Env vars (e.g. LLM model credentials) can be injected into every sandbox via
+ * {@link #createSandbox(UUID, String, java.util.Map)}; the SDK builder supports
+ * {@code Sandbox.Builder#env(Map)} (verified against OpenSandbox 1.0.18).
+ *
  * <p>SDK notes (verified against OpenSandbox 1.0.18):
  * <ul>
  *   <li>Command execution is {@code sandbox.commands().run(cmd)} — blocking until the
@@ -62,12 +66,29 @@ public class OpenCodeSandboxManager {
      * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if creation fails
      */
     public String createSandbox(UUID agentId, String image) {
+        return createSandbox(agentId, image, null);
+    }
+
+    /**
+     * Create a sandbox from the given image, optionally injecting env vars
+     * (e.g. LLM model credentials for opencode inside the sandbox).
+     *
+     * @param env env vars to inject into the sandbox; {@code null} or empty is
+     *            treated as "no env" and the SDK env call is skipped
+     * @return the created sandbox id
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if creation fails
+     */
+    public String createSandbox(UUID agentId, String image, Map<String, String> env) {
         try {
-            Sandbox sandbox = Sandbox.builder()
+            Sandbox.Builder builder = Sandbox.builder()
                     .connectionConfig(connectionConfig)
                     .image(image)
-                    .timeout(SANDBOX_TIMEOUT)
-                    .build();
+                    .timeout(SANDBOX_TIMEOUT);
+            if (env != null && !env.isEmpty()) {
+                builder.env(env);
+                log.info("Injecting {} env var(s) into sandbox for agent {}", env.size(), agentId);
+            }
+            Sandbox sandbox = builder.build();
             String sandboxId = sandbox.getId();
             sandboxes.put(agentId, sandbox);
             log.info("OpenSandbox sandbox created for agent {}: {}", agentId, sandboxId);

@@ -232,7 +232,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                     "Cannot create workspace dir " + workspace + ": " + e.getMessage(), e);
         }
 
-        String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage());
+        String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), properties.getSandboxEnv());
         try {
             sandboxManager.uploadWorkspace(agentId, workspace);
             sandboxManager.runServeCommand(sandboxId, properties.getPort());

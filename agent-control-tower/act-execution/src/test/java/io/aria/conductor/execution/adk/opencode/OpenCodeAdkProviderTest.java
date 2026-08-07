@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -82,13 +83,13 @@ class OpenCodeAdkProviderTest {
     @Test
     void prepareAgent_success_createsSandboxUploadsStartsServeAndWaitsHealth() {
         UUID agentId = UUID.randomUUID();
-        when(sandboxManager.createSandbox(agentId, IMAGE)).thenReturn("sb-1");
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
         when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
         when(httpClient.isHealthy()).thenReturn(true);
 
         provider.prepareAgent(agentId, agent(agentId));
 
-        verify(sandboxManager).createSandbox(agentId, IMAGE);
+        verify(sandboxManager).createSandbox(eq(agentId), eq(IMAGE), any());
         verify(sandboxManager).uploadWorkspace(eq(agentId), eq(tempDir.resolve(agentId.toString())));
         verify(sandboxManager).runServeCommand("sb-1", 4096);
         verify(httpClient, atLeastOnce()).isHealthy();
@@ -100,7 +101,7 @@ class OpenCodeAdkProviderTest {
     @Test
     void prepareAgent_sandboxCreationFailure_throwsSandboxUnavailable_withoutKill() {
         UUID agentId = UUID.randomUUID();
-        when(sandboxManager.createSandbox(agentId, IMAGE))
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any()))
                 .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE, "server down"));
 
         assertThatThrownBy(() -> provider.prepareAgent(agentId, agent(agentId)))
@@ -118,7 +119,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         provider.setReadyTimeoutForTest(Duration.ofMillis(250));
         provider.setReadyPollIntervalForTest(Duration.ofMillis(50));
-        when(sandboxManager.createSandbox(agentId, IMAGE)).thenReturn("sb-1");
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
         when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
         when(httpClient.isHealthy()).thenReturn(false);
 
@@ -130,6 +131,21 @@ class OpenCodeAdkProviderTest {
 
         verify(sandboxManager).killSandbox("sb-1");
         assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
+    }
+
+    @Test
+    void prepareAgent_passesSandboxEnvToManager() {
+        UUID agentId = UUID.randomUUID();
+        Map<String, String> env = Map.of("DEEPSEEK_API_KEY", "secret-key");
+        properties.setSandboxEnv(env);
+        when(sandboxManager.createSandbox(agentId, IMAGE, env)).thenReturn("sb-env");
+        when(sandboxManager.getSandboxUrl("sb-env", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(sandboxManager).createSandbox(agentId, IMAGE, env);
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-env");
     }
 
     @Test
@@ -183,13 +199,13 @@ class OpenCodeAdkProviderTest {
         assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
 
         // Next prepareAgent rebuilds the sandbox
-        when(sandboxManager.createSandbox(agentId, IMAGE)).thenReturn("sb-new");
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-new");
         when(sandboxManager.getSandboxUrl("sb-new", 4096)).thenReturn("http://127.0.0.1:4096");
         when(httpClient.isHealthy()).thenReturn(true);
 
         provider.prepareAgent(agentId, agent(agentId));
 
-        verify(sandboxManager).createSandbox(agentId, IMAGE);
+        verify(sandboxManager).createSandbox(eq(agentId), eq(IMAGE), any());
         assertThat(provider.instancesForTest()).containsKey(agentId);
         assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-new");
     }

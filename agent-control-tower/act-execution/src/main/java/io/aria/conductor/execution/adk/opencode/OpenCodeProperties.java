@@ -5,6 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Configuration for the OpenCode agent provider ({@code opencode.*} prefix).
  *
@@ -28,6 +31,12 @@ public class OpenCodeProperties {
 
     /** Port the sandbox-internal opencode serve binds to. */
     private int port = 4096;
+
+    /**
+     * Env vars injected into every agent sandbox (e.g. LLM model credentials
+     * such as DEEPSEEK_API_KEY consumed by opencode inside the sandbox).
+     */
+    private Map<String, String> sandboxEnv = new LinkedHashMap<>();
 
     /** Default task timeout in minutes (used when TaskContext.maxDuration is null). */
     private int maxTaskMinutes = 30;

@@ -5,7 +5,9 @@
 FROM node:22-slim
 
 # Install the opencode CLI globally (official npm package, see https://opencode.ai/docs)
-RUN npm install -g @opencode-ai/cli
+# NOTE: use `opencode-ai` (bin: opencode). The package `@opencode-ai/cli` is a DIFFERENT
+# project (anomalyco/opencode, bin: lildax) and must not be used.
+RUN npm install -g opencode-ai
 
 # Agents' workspace files (opencode.json / AGENTS.md) are uploaded here by the Java side
 WORKDIR /workspace

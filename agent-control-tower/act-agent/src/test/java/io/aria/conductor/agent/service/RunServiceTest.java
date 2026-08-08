@@ -339,6 +339,26 @@ class RunServiceTest {
         verify(eventPublisher, never()).publishEvent(any());
     }
 
+    @Test
+    void cancelRun_fromAborted_setsCancelledAndPublishesCompletedEvent() {
+        UUID id = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                        .withStatus(RunStatus.ABORTED).build()));
+        stubSaveReturnsArgument();
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(response.getCompletedAt()).isNotNull();
+
+        ArgumentCaptor<RunCompletedEvent> event = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(event.getValue().getAgentId()).isEqualTo(agentId);
+    }
+
     // ---------------------------------------------------------------------
     // updateRunStatus
     // ---------------------------------------------------------------------
@@ -415,7 +435,9 @@ class RunServiceTest {
             "PENDING,CANCELLED",
             "INITIALIZING,RUNNING",
             "RUNNING,PAUSED",
-            "PAUSED,RUNNING"
+            "RUNNING,ABORTED",
+            "PAUSED,RUNNING",
+            "ABORTED,CANCELLED"
     })
     void updateRunStatus_validTransitions_areAccepted(RunStatus from, RunStatus to) {
         UUID id = UUID.randomUUID();

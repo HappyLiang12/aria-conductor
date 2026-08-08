@@ -65,6 +65,11 @@ public class WorkflowAutoChainer {
                 return;
             }
 
+            if (event.getStatus() == RunStatus.ABORTED) {
+                workflowService.markStepFailed(chain.getId(), stepIndex, "Run was aborted");
+                return;
+            }
+
             // Advance to next step (or complete the chain)
             boolean started = workflowService.advanceWorkflow(
                     chain.getId(), stepIndex, event.getFinalOutput());

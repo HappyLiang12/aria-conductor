@@ -128,7 +128,7 @@ class AriaDefaultAgentInitializerTest {
                 .thenReturn(false);
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
 
         verify(agentToolRepository).save(any()); // run_agent assigned
         verify(agentToolRepository).deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), "tool-git_push"));

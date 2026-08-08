@@ -10,7 +10,7 @@ import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
-import io.aria.conductor.execution.adk.LangChainAdkProvider;
+import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,7 +45,7 @@ class AriaDefaultAgentInitializerUpsertTest {
     @Mock ToolDefinitionRepository toolDefinitionRepository;
     @Mock AgentToolRepository agentToolRepository;
     @Mock LlmProviderRepository llmProviderRepository;
-    @Mock LangChainAdkProvider adkProvider;
+    @Mock AdkProviderRegistry adkProviderRegistry;
     @Mock Environment environment;
     @Mock ApplicationArguments args;
 
@@ -54,7 +54,7 @@ class AriaDefaultAgentInitializerUpsertTest {
     @BeforeEach
     void setUp() {
         initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProvider, environment);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment);
         // "test" profile skips ADK pre-warm; active provider skips the env-var bootstrap
         when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
         when(llmProviderRepository.findByActiveTrue())

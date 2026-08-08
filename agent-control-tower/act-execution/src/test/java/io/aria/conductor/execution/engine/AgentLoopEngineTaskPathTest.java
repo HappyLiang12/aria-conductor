@@ -12,6 +12,8 @@ import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SessionTrajectory;
+import io.aria.conductor.common.exception.BudgetExceededException;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
 import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.execution.adk.AdkProvider;
@@ -19,6 +21,7 @@ import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
+import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.harness.ToolSteeringGuard;
@@ -51,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -128,10 +132,17 @@ class AgentLoopEngineTaskPathTest {
         when(harnessProfileService.resolve(agent)).thenReturn(HarnessProfile.defaults());
         when(sessionStateManager.loadOrCreateSession(runId, agentId))
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
-        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
+        // Only used on paths that reach buildMessages/buildTaskPrompt (approval-denied and
+        // circuit-breaker-tripped tests never get there) — lenient for strict-stub hygiene.
+        lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
         lenient().when(openCodeProperties.getMaxTaskMinutes()).thenReturn(30);
-        when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
+        lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
+        // The task-level approval gate now REQUIRES approval by default (governance parity
+        // with the turn path). Most success-path tests just need the gate to approve, so
+        // stub it leniently here; tests that exercise deny/opt-out override this per-test.
+        lenient().when(approvalGate.requestApproval(any(), any()))
+                .thenReturn(ApprovalDecision.approve("test-approved"));
     }
 
     @Test
@@ -254,6 +265,133 @@ class AgentLoopEngineTaskPathTest {
         verify(taskProvider, never()).executeTask(any(), any(), anyString(), any());
         // turn loop calls the LLM provider
         verify(taskProvider).call(any(), any(), any());
+    }
+
+    // ---- #8 task-level approval gate (default REQUIRES approval) ----
+
+    @Test
+    void taskApprovalGate_defaultConfig_requestsApprovalBeforeExecution() {
+        // Agent config has NO taskApprovalRequired key — the gate must engage by default
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "approved task output", 20, 10, false));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        // Default (no opt-out) must route through the human gate, never a silent pass-through
+        verify(approvalGate).requestApproval(any(), any());
+        verify(taskProvider).executeTask(eq(agent), eq(runId), anyString(), any());
+    }
+
+    @Test
+    void taskApprovalGate_explicitlyDisabled_skipsApprovalGate() {
+        when(agent.getConfig()).thenReturn(
+                "{\"taskApprovalRequired\":false,\"maxToolCallRounds\":7,\"systemPrompt\":\"You are a tester agent.\"}");
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        // Explicit "taskApprovalRequired": false is the only opt-out
+        verify(approvalGate, never()).requestApproval(any(), any());
+        verify(taskProvider).executeTask(eq(agent), eq(runId), anyString(), any());
+    }
+
+    @Test
+    void taskApprovalGate_denied_cancelsRunWithoutExecutingTask() {
+        when(approvalGate.requestApproval(any(), any()))
+                .thenReturn(ApprovalDecision.deny("operator said no"));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.CANCELLED);
+
+        // A denied task must never reach the provider
+        verify(taskProvider, never()).executeTask(any(), any(), anyString(), any());
+        assertThat(run.getErrorMessage()).contains("Task approval denied");
+    }
+
+    // ---- #17 task path persists final output to trajectory ----
+
+    @Test
+    void taskSuccess_writesAssistantTrajectoryWithFinalOutput() {
+        when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(1);
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        ArgumentCaptor<SessionTrajectory> captor = ArgumentCaptor.forClass(SessionTrajectory.class);
+        verify(trajectoryRepository, org.mockito.Mockito.atLeastOnce()).save(captor.capture());
+        // The promptSeed seeding also saves a user trajectory — find the assistant entry
+        SessionTrajectory assistant = captor.getAllValues().stream()
+                .filter(t -> "assistant".equals(t.getRole()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no assistant trajectory was written"));
+        assertThat(assistant.getRunId()).isEqualTo(runId);
+        assertThat(assistant.getTurnNumber()).isEqualTo(2); // max turn 1 + 1
+        assertThat(assistant.getRole()).isEqualTo("assistant");
+        assertThat(assistant.getContent()).isEqualTo("Task done output");
+        assertThat(assistant.getOutputTokens()).isEqualTo(30);
+    }
+
+    @Test
+    void taskFailure_doesNotWriteAssistantTrajectory() {
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenThrow(
+                new io.aria.conductor.execution.adk.TaskExecutionException(
+                        io.aria.conductor.execution.adk.TaskExecutionException.Cause.PROVIDER_ERROR,
+                        "provider exploded"));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.FAILED);
+
+        // Failure path mirrors the turn loop: no assistant trajectory, no PromptCall audit
+        verify(trajectoryRepository, never())
+                .save(argThat(t -> "assistant".equals(t.getRole())));
+        verify(promptCallRepository, never()).save(any());
+    }
+
+    // ---- #19 task path is covered by the circuit breaker ----
+
+    @Test
+    void taskPath_checksCircuitBreakerBeforeExecution() {
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        // Same governance as the turn loop: budget/iteration/latency caps checked on the task path
+        verify(circuitBreaker).check(any());
+    }
+
+    @Test
+    void circuitBreakerTrip_failsTaskRunWithoutExecutingTask() {
+        org.mockito.Mockito.doThrow(new BudgetExceededException("token budget blown"))
+                .when(circuitBreaker).check(any());
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.FAILED);
+
+        // Tripped before approval/execution — the provider must never be invoked
+        verify(taskProvider, never()).executeTask(any(), any(), anyString(), any());
+        verify(approvalGate, never()).requestApproval(any(), any());
+        assertThat(run.getErrorMessage()).contains("budget");
     }
 
     // ---- helper to build a plain agent (avoid over-mocking in edge tests) ----

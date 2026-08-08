@@ -612,8 +612,14 @@ public class AgentLoopEngine {
         tryEmit(emitter, "thinking", Map.of("status", "processing", "mode", "task", "provider", provider.providerId()));
 
         try {
-            // Approval gate — only when the agent config opts in ("taskApprovalRequired": true).
-            // Default passes through untouched: existing agents are not affected.
+            // Circuit breaker — same governance as the turn loop (budget / iteration /
+            // latency caps). Runs before the approval gate so a budget-exhausted run is
+            // stopped even when a human would have approved it.
+            circuitBreaker.check(ctx);
+
+            // Approval gate — mirrors the turn path's human gate semantics. Default
+            // REQUIRES approval before task-level execution; only an explicit
+            // "taskApprovalRequired": false in the agent config opts out.
             ApprovalDecision approval = taskApprovalGate(ctx);
             if (!approval.isApproved()) {
                 String denial = "Task approval denied: " + approval.reason();
@@ -646,11 +652,16 @@ public class AgentLoopEngine {
             if (result.finalOutput() != null && !result.finalOutput().isBlank()) {
                 ctx.setLastAssistantResponse(result.finalOutput());
                 tryEmit(emitter, "message", Map.of("content", result.finalOutput()));
+                recordTaskTrajectory(ctx, result.finalOutput(), result.outputTokens());
             }
             recordTaskPromptCall(ctx, result.inputTokens(), result.outputTokens());
             RunStatus finalStatus = result.aborted() ? RunStatus.ABORTED : RunStatus.COMPLETED;
             tryEmit(emitter, "done", donePayload(ctx, null));
             completeRun(ctx, finalStatus);
+        } catch (BudgetExceededException e) {
+            log.error("Circuit breaker tripped for task run {}: {}", ctx.getRunId(), e.getMessage());
+            handleTaskFailure(ctx, e.getMessage() != null ? e.getMessage() : "Budget exceeded",
+                    RunStatus.FAILED, emitter);
         } catch (TaskExecutionException e) {
             handleTaskExecutionFailure(ctx, e, provider, emitter);
         } catch (InterruptedException e) {
@@ -692,13 +703,15 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Task-level approval gate — reuses the turn-level {@link ApprovalGate} entry,
-     * but only intercepts when the agent config explicitly opts in
-     * ({@code "taskApprovalRequired": true}). Defaults to an approved pass-through.
+     * Task-level approval gate — reuses the turn-level {@link ApprovalGate} entry.
+     * Default REQUIRES human approval before task-level execution, matching the
+     * governance level of the turn path. An agent config can opt out explicitly
+     * with {@code "taskApprovalRequired": false} (and can still opt in explicitly
+     * with {@code true} for backward compatibility).
      */
     private ApprovalDecision taskApprovalGate(RunContext ctx) {
-        if (!taskApprovalRequired(ctx.getAgent())) {
-            return ApprovalDecision.approve("No task approval required");
+        if (taskApprovalExplicitlyDisabled(ctx.getAgent())) {
+            return ApprovalDecision.approve("Task approval disabled by agent config");
         }
         log.info("Requesting task-level approval: runId={}, agentId={}", ctx.getRunId(), ctx.getAgentId());
         // Synthetic action representing the whole task (the gate only needs a name/type).
@@ -706,15 +719,15 @@ public class AgentLoopEngine {
         return approvalGate.requestApproval(taskAction, ctx);
     }
 
-    /** Whether the agent config explicitly requires human approval before task-level execution. */
-    private static boolean taskApprovalRequired(Agent agent) {
+    /** Whether the agent config explicitly disables human approval before task-level execution. */
+    private static boolean taskApprovalExplicitlyDisabled(Agent agent) {
         String config = agent.getConfig();
         if (config == null || config.isBlank()) return false;
         try {
             Map<String, Object> configMap = new ObjectMapper().readValue(
                     config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
             Object v = configMap.get("taskApprovalRequired");
-            return v instanceof Boolean b && b;
+            return v instanceof Boolean b && !b;
         } catch (Exception e) {
             return false;
         }
@@ -823,6 +836,28 @@ public class AgentLoopEngine {
             promptCallRepository.save(promptCall);
         } catch (Exception e) {
             log.warn("Failed to record task prompt call: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Mirrors {@link #recordTrajectory} for the task path: persists the final task
+     * output as an assistant trajectory entry (next turn after the existing max) so
+     * the following session turn can see the previous conclusion. Written only on
+     * success with non-blank output — failure/abort paths write nothing, matching
+     * the turn-loop semantics of not auditing failed attempts.
+     */
+    private void recordTaskTrajectory(RunContext ctx, String finalOutput, int outputTokens) {
+        try {
+            int turnNumber = trajectoryRepository.findMaxTurnNumberByRunId(ctx.getRunId()) + 1;
+            trajectoryRepository.save(SessionTrajectory.builder()
+                    .runId(ctx.getRunId())
+                    .turnNumber(turnNumber)
+                    .role("assistant")
+                    .content(finalOutput)
+                    .outputTokens(outputTokens)
+                    .build());
+        } catch (Exception e) {
+            log.warn("Failed to record task trajectory: {}", e.getMessage());
         }
     }
 

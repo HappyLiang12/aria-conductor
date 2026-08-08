@@ -11,8 +11,10 @@ import { test, expect, type Page } from '@playwright/test';
  *    opencode → langchain → opencode via PUT /api/v1/agents/{id}
  * 4. Providers page: provider table (OpenCode + LangChain ADK, langchain default)
  *    and Per-Agent Backends block shows the agent with 'opencode'
- * 5. Start a run from Runs view, poll until the run leaves PENDING/RUNNING and
- *    reaches a terminal state (COMPLETED / FAILED / ABORTED / CANCELLED).
+ * 5. Start a run from Runs view, approve the task-level approval gate (default-on
+ *    for opencode since 632d3de — POST /api/v1/approvals/{id}/decide {approved:true}),
+ *    then poll until the run leaves PENDING/RUNNING and reaches a terminal state
+ *    (COMPLETED / FAILED / ABORTED / CANCELLED).
  *    No OpenSandbox in CI → FAILED with a sandbox-layer errorMessage is the
  *    expected path and still proves the delegation path was triggered; COMPLETED
  *    only occurs with a full local stack (sandbox + LLM). A run that never leaves
@@ -243,14 +245,70 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
 
   await page.screenshot({ path: 'e2e/screenshots/oc-07-run-started.png' });
 
-  // ── Step 6: Poll until the run leaves PENDING/RUNNING ──
+  const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
+
+  // ── Step 6: Approve the task-level approval gate ──
+  // Since 632d3de the task-level path (opencode provider) REQUIRES human approval
+  // by default: AgentLoopEngine calls ApprovalGate.requestApproval, creating a
+  // PENDING approval, and blocks until a human decides (approvals.timeout-ms,
+  // default 30 min). The run stays non-terminal until approved. The backend
+  // exposes only PENDING approvals via GET /api/v1/approvals; a decision is
+  // granted with POST /api/v1/approvals/{id}/decide { approved: true }.
+  // If the run already reached a terminal state (e.g. it failed before the gate),
+  // skip approval and let the terminal poll below assert that state. A run that
+  // never produces an approval times out here and fails the test — never tolerated:
+  // that would indicate the gate/approvals API is broken.
+  const alreadyTerminal = await page.evaluate(
+    async ({ agentId }) => {
+      const r = await fetch(`http://localhost:8080/api/v1/runs?agentId=${agentId}`);
+      if (!r.ok) return false;
+      const runs = await r.json();
+      return Array.isArray(runs) && runs.some((x: any) => TERMINAL_RUN_STATUSES.includes(x.status));
+    },
+    { agentId },
+  );
+
+  if (!alreadyTerminal) {
+    // Resolve this agent's run ids, then wait for a PENDING approval tied to one
+    // of those runs.
+    const agentRuns = await waitForBackend(
+      page,
+      `http://localhost:8080/api/v1/runs?agentId=${agentId}`,
+      (runs: any[]) => Array.isArray(runs) && runs.length > 0,
+      RUN_TIMEOUT,
+    );
+    const runIds = new Set(agentRuns.map((r: any) => r.id));
+    const approvals = await waitForBackend(
+      page,
+      'http://localhost:8080/api/v1/approvals',
+      (list: any[]) =>
+        Array.isArray(list) && list.some((a: any) => a.status === 'PENDING' && runIds.has(a.runId)),
+      RUN_TIMEOUT,
+    );
+    const approval = approvals.find((a: any) => a.status === 'PENDING' && runIds.has(a.runId));
+    console.log(`Task-level approval ${approval.id} requested for run ${approval.runId}; approving…`);
+    const decided = await page.evaluate(
+      async ({ id }) => {
+        const r = await fetch(`/api/v1/approvals/${id}/decide`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: true, reason: 'E2E auto-approval (task-level gate)' }),
+        });
+        if (!r.ok) throw new Error(`approval decide failed: HTTP ${r.status}`);
+        return r.json();
+      },
+      { id: approval.id },
+    );
+    console.log(`Approval ${approval.id} decided: ${JSON.stringify(decided)}`);
+  }
+
+  // ── Step 7: Poll until the run leaves PENDING/RUNNING ──
   // The spec runs without an OpenSandbox in CI, so the delegated OpenCode path
   // fails inside the sandbox layer with TaskExecutionException(SANDBOX_UNAVAILABLE)
   // → run FAILED with a sandbox-layer errorMessage. COMPLETED only occurs with a
   // full local stack (sandbox + LLM). Either terminal state proves the delegation
   // path was actually triggered; a run that never leaves PENDING/RUNNING (or never
   // appears in the list) makes waitForBackend throw — the timeout is NOT tolerated.
-  const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
   const runResult = await waitForBackend(
     page,
     `http://localhost:8080/api/v1/runs?agentId=${agentId}`,

@@ -9,7 +9,8 @@ import { fileURLToPath } from 'url';
  *   rl-01  Providers page renders both provider rows (opencode + langchain ADK).
  *   rl-02  Crew view: create an OpenCode agent (adkProvider=opencode) → write the
  *          workspace opencode.json (DeepSeek, {env:DEEPSEEK_API_KEY}) → start a run
- *          → poll until COMPLETED → verify the final output is displayed in the UI.
+ *          → approve the task-level approval gate (default-on for opencode) → poll
+ *          until COMPLETED → verify the final output is displayed in the UI.
  *
  * Prerequisites (started outside this spec):
  *   - backend (SPRING_PROFILES_ACTIVE=h2, DEEPSEEK_API_KEY set, OpenSandbox reachable)
@@ -173,6 +174,58 @@ test('rl-02 OpenCode agent: create via UI → real-LLM run → result displayed'
   await page.locator('.form-card button[type="submit"]').click();
   await page.waitForTimeout(3000);
   await page.screenshot({ path: 'e2e/screenshots/rl-06-run-started.png' });
+
+  // ── Approve the task-level approval gate (default-on for opencode since 632d3de) ──
+  // The task-level path requests a PENDING approval via ApprovalGate and BLOCKS
+  // until a human decides (approvals.timeout-ms, default 30 min); the run stays
+  // non-terminal until approved. GET /api/v1/approvals returns PENDING approvals
+  // only; POST /api/v1/approvals/{id}/decide { approved: true } grants one.
+  // If the run already reached a terminal state (failed before the gate), skip
+  // approval and let the terminal poll below assert that state.
+  const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
+  const alreadyTerminal = await page.evaluate(
+    async ({ agentId }) => {
+      const r = await fetch(`http://localhost:8080/api/v1/runs?agentId=${agentId}`);
+      if (!r.ok) return false;
+      const runs = await r.json();
+      return Array.isArray(runs) && runs.some((x: any) => TERMINAL_RUN_STATUSES.includes(x.status));
+    },
+    { agentId },
+  );
+
+  if (!alreadyTerminal) {
+    // Resolve this agent's run ids, then wait for a PENDING approval tied to one
+    // of those runs.
+    const agentRuns = await waitForBackend(
+      page,
+      `http://localhost:8080/api/v1/runs?agentId=${agentId}`,
+      (runs: any[]) => Array.isArray(runs) && runs.length > 0,
+      RUN_TIMEOUT,
+    );
+    const runIds = new Set(agentRuns.map((r: any) => r.id));
+    const approvals = await waitForBackend(
+      page,
+      'http://localhost:8080/api/v1/approvals',
+      (list: any[]) =>
+        Array.isArray(list) && list.some((a: any) => a.status === 'PENDING' && runIds.has(a.runId)),
+      RUN_TIMEOUT,
+    );
+    const approval = approvals.find((a: any) => a.status === 'PENDING' && runIds.has(a.runId));
+    console.log(`Task-level approval ${approval.id} requested for run ${approval.runId}; approving…`);
+    const decided = await page.evaluate(
+      async ({ id }) => {
+        const r = await fetch(`/api/v1/approvals/${id}/decide`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved: true, reason: 'E2E auto-approval (task-level gate)' }),
+        });
+        if (!r.ok) throw new Error(`approval decide failed: HTTP ${r.status}`);
+        return r.json();
+      },
+      { id: approval.id },
+    );
+    console.log(`Approval ${approval.id} decided: ${JSON.stringify(decided)}`);
+  }
 
   // ── Poll the backend for a terminal run state (real LLM + sandbox) ──
   const runs = await waitForBackend(

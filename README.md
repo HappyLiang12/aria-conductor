@@ -85,6 +85,11 @@ Agents default to the **langchain** provider. To use **opencode** (sandbox-isola
 | **opencode** | OpenCode CLI in Docker sandbox via OpenSandbox | Container per agent |
 | **langchain** (default) | Python LangChain ADK runtime | Shared process |
 
+> **Approvals**: Task-level runs (opencode provider) require human approval by
+> default: the run starts in approval-pending state and executes after approval
+> in the Approvals page. To disable per-agent, set agent config
+> `"taskApprovalRequired": false`.
+
 To switch an agent's provider, use the Crew page or the API:
 ```bash
 curl -X PUT http://localhost:8080/api/v1/agents/{id} \

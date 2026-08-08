@@ -5,7 +5,7 @@
 ## Project Positioning
 
 Aria Conductor is an open-source AI Agent orchestration and governance platform (modular monolith).
-Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, Python 3.11 LangChain ADK runtime, Node.js MCP server.
+Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCode sandbox (default) + Python 3.11 LangChain ADK runtime, Node.js MCP server.
 
 ## Module Responsibility Table
 
@@ -21,6 +21,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, Python 
 | `act-test-support` | Shared test utilities, mock ADK, test data builders | `agent-control-tower/act-test-support/src/main/java/io/aria/conductor/test/` |
 | `act-dashboard` | React frontend (pages, components, API layer) | `agent-control-tower/act-dashboard/src/App.tsx` |
 | `langchain-adk` | Python LangChain agent runtime (FastAPI) | `langchain-adk/src/server.py` |
+| `opencode-sandbox` | Docker image for OpenCode sandbox (opencode provider) | `agent-control-tower/opencode-sandbox/Dockerfile` |
 | `packages/mcp-server` | MCP protocol server (TypeScript) | `packages/mcp-server/src/server.ts` |
 
 ## Common Task Paths
@@ -41,9 +42,10 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, Python 
 1. `act-knowledge/` → service/controller → 2. `act-common/model/KnowledgeItem.java` → 3. `act-dashboard/src/pages/` → UI
 
 ### Run full-stack locally
-1. Backend: `cd agent-control-tower && mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2`
-2. Frontend: `cd agent-control-tower/act-dashboard && pnpm dev`
-3. ADK: `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
+1. OpenSandbox: `docker compose up -d opensandbox-server` (required for opencode provider)
+2. Backend: `cd agent-control-tower && OPENCODE_SANDBOX_SERVER_URL=http://localhost:8090 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2`
+3. Frontend: `cd agent-control-tower/act-dashboard && pnpm dev`
+4. ADK (langchain only): `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
 
 ## High-Risk Areas
 
@@ -56,6 +58,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, Python 
 | LLM provider config / API key handling | Key leak, provider misconfiguration | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*Llm*"` |
 | WebSocket events (real-time dashboard) | Event loss, UI state desync | `cd agent-control-tower/act-dashboard && npx playwright test` |
 | Python ADK tool binding | Tool schema mismatch causes agent crash | `cd langchain-adk && python -m pytest tests/` |
+| OpenCode sandbox / OpenSandbox | Sandbox creation failure, endpoint unreachable | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*OpenCode*"` |
 
 ## Validation Command Mapping
 

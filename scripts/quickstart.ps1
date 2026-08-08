@@ -35,21 +35,28 @@ if ($dockerAvailable) {
     }
 
     Write-Host "Building and starting services..." -ForegroundColor Yellow
+    Write-Host "  (includes OpenSandbox server for opencode agent runtime)" -ForegroundColor DarkGray
     docker compose up -d --build
 
     Write-Host ""
     Write-Host "Services:" -ForegroundColor Green
-    Write-Host "  Dashboard:  http://localhost:3000" -ForegroundColor White
-    Write-Host "  Backend:    http://localhost:8080" -ForegroundColor White
-    Write-Host "  ADK:        http://localhost:9300" -ForegroundColor White
-    Write-Host "  Swagger:    http://localhost:8080/swagger-ui.html" -ForegroundColor White
+    Write-Host "  Dashboard:       http://localhost:3000" -ForegroundColor White
+    Write-Host "  Backend:         http://localhost:8080" -ForegroundColor White
+    Write-Host "  ADK:             http://localhost:9300" -ForegroundColor White
+    Write-Host "  OpenSandbox:     http://localhost:8090" -ForegroundColor White
+    Write-Host "  Swagger:         http://localhost:8080/swagger-ui.html" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Default ADK provider: opencode (sandbox-isolated agent runtime)" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Commands:" -ForegroundColor Cyan
-    Write-Host "  docker compose ps       # Check status"
-    Write-Host "  docker compose logs -f  # View logs"
-    Write-Host "  docker compose down     # Stop"
+    Write-Host "  docker compose ps              # Check status"
+    Write-Host "  docker compose logs -f         # View logs"
+    Write-Host "  docker compose down            # Stop"
 } else {
     Write-Host "Docker not found. Falling back to local development mode." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "NOTE: OpenCode sandbox mode requires Docker for the OpenSandbox server." -ForegroundColor Red
+    Write-Host "      Without Docker, only langchain ADK provider is available." -ForegroundColor Red
     Write-Host ""
 
     # Check prerequisites
@@ -68,8 +75,12 @@ if ($dockerAvailable) {
     Write-Host "All prerequisites found. Starting services..." -ForegroundColor Green
     Write-Host ""
 
+    # Determine ADK provider (default: opencode if Docker available, else langchain)
+    $adkProvider = "langchain"
+    Write-Host "Using ADK provider: $adkProvider (Docker required for opencode)" -ForegroundColor Yellow
+
     Write-Host "Starting backend..." -ForegroundColor Yellow
-    Start-Process pwsh -ArgumentList "-NoProfile", "-File", "$PSScriptRoot\start-backend.ps1" -NoNewWindow
+    Start-Process pwsh -ArgumentList "-NoProfile", "-File", "$PSScriptRoot\start-backend.ps1", "-AdkProvider", $adkProvider, "-SkipSandbox" -NoNewWindow
 
     Start-Sleep -Seconds 5
 
@@ -80,4 +91,6 @@ if ($dockerAvailable) {
     Write-Host "Services:" -ForegroundColor Green
     Write-Host "  Dashboard:  http://localhost:5173" -ForegroundColor White
     Write-Host "  Backend:    http://localhost:8080" -ForegroundColor White
+    Write-Host ""
+    Write-Host "To use opencode provider, install Docker and re-run this script." -ForegroundColor Cyan
 }

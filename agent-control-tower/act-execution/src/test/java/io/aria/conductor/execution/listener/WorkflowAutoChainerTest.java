@@ -122,6 +122,20 @@ class WorkflowAutoChainerTest {
     }
 
     @Test
+    void onRunCompleted_abortedRun_marksStepFailedAsAborted() {
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+
+        chainer.onRunCompleted(completed(RunStatus.ABORTED, "ignored output"));
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(workflowService).markStepFailed(eq(chain.getId()), eq(1), messageCaptor.capture());
+        assertThat(messageCaptor.getValue()).isEqualTo("Run was aborted");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void onRunCompleted_successfulRun_advancesChainAndPublishesRunningEvent() {
         when(workflowService.findChainByRunId(runId)).thenReturn(chain);
         when(workflowService.findStepIndex(chain, runId)).thenReturn(1);

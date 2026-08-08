@@ -90,6 +90,7 @@ public class RunKanbanAutoCreator {
             List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
             KanbanStatus targetStatus = switch (event.getStatus()) {
                 case COMPLETED -> KanbanStatus.DONE;
+                case ABORTED -> KanbanStatus.CANCELLED;
                 case CANCELLED -> KanbanStatus.CANCELLED;
                 case FAILED -> KanbanStatus.CANCELLED;
                 default -> KanbanStatus.DONE;

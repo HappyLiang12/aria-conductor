@@ -182,6 +182,7 @@ class RunKanbanAutoCreatorTest {
     @ParameterizedTest(name = "run {0} → kanban {1}")
     @CsvSource({
             "COMPLETED, DONE",
+            "ABORTED,   CANCELLED",
             "CANCELLED, CANCELLED",
             "FAILED,    CANCELLED",
             "PAUSED,    DONE"          // default branch of the status switch

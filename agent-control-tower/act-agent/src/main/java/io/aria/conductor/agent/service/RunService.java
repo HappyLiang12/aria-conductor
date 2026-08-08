@@ -30,11 +30,12 @@ public class RunService {
         Map<RunStatus, Set<RunStatus>> transitions = new EnumMap<>(RunStatus.class);
         transitions.put(RunStatus.PENDING, EnumSet.of(RunStatus.INITIALIZING, RunStatus.CANCELLED));
         transitions.put(RunStatus.INITIALIZING, EnumSet.of(RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED));
-        transitions.put(RunStatus.RUNNING, EnumSet.of(RunStatus.PAUSED, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED));
+        transitions.put(RunStatus.RUNNING, EnumSet.of(RunStatus.PAUSED, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED));
         transitions.put(RunStatus.PAUSED, EnumSet.of(RunStatus.RUNNING, RunStatus.CANCELLED));
         transitions.put(RunStatus.COMPLETED, EnumSet.noneOf(RunStatus.class));
         transitions.put(RunStatus.FAILED, EnumSet.noneOf(RunStatus.class));
         transitions.put(RunStatus.CANCELLED, EnumSet.noneOf(RunStatus.class));
+        transitions.put(RunStatus.ABORTED, EnumSet.of(RunStatus.CANCELLED));
         VALID_TRANSITIONS = Collections.unmodifiableMap(transitions);
     }
 

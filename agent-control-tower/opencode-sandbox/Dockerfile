@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 # Install the opencode CLI globally (official npm package, see https://opencode.ai/docs)
 # NOTE: use `opencode-ai` (bin: opencode). The package `@opencode-ai/cli` is a DIFFERENT
 # project (anomalyco/opencode, bin: lildax) and must not be used.
-RUN npm install -g opencode-ai
+# Version pinned to the one verified in the sandbox image (see npm view opencode-ai@1.18.15).
+RUN npm install -g opencode-ai@1.18.15
 
 # Agents' workspace files (opencode.json / AGENTS.md) are uploaded here by the Java side
 WORKDIR /workspace

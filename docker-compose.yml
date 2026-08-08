@@ -43,6 +43,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      # Injected into opencode sandboxes via application.yml opencode.sandbox-env
+      # (opencode needs LLM credentials inside the sandbox to call models).
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${LLM_API_KEY:-}}
       ADK_HOST: langchain-adk
       ADK_PORT: 9300
       PROJECT_ROOT: /project
@@ -77,6 +80,9 @@ services:
   opensandbox-server:
     image: opensandbox/server:latest
     container_name: aria-opensandbox
+    # The opencode sandbox image (used by the opencode provider at runtime) must be
+    # built before the first run:
+    #   docker build -t aria-conductor/opencode-sandbox:1.0 agent-control-tower/opencode-sandbox
     environment:
       SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
       # Required for non-interactive container startup when no server API key is configured;
@@ -149,10 +155,15 @@ configs:
 
       [docker]
       network_mode = "bridge"
-      # Backend runs on the Docker host (not in a container): sandbox endpoints must
-      # resolve on the host. 127.0.0.1 reaches the execd port mappings (0.0.0.0) on the
-      # host; `host.docker.internal` does NOT resolve from host processes on Windows
-      # (only from inside containers), which caused SDK execd calls to time out.
+      # host_ip=127.0.0.1 is only valid when the backend runs ON the Docker host
+      # (local-dev topology): sandbox endpoints (execd port mappings) must resolve
+      # from the backend process, and on the host loopback they do. `host.docker.internal`
+      # does NOT resolve from host processes on Windows (only from inside containers).
+      # FULL-STACK COMPOSE TOPOLOGY: the backend is a container, so 127.0.0.1 inside it
+      # points at the backend container itself — sandbox endpoints are unreachable and the
+      # opencode provider is NOT usable in full-stack compose mode (runs fail with
+      # SANDBOX_UNAVAILABLE after the SDK timeout). Use the local-dev topology (backend on
+      # the Docker host) or the langchain provider for the full-stack compose deployment.
       host_ip = "127.0.0.1"
       port_range_min = 40000
       port_range_max = 60000

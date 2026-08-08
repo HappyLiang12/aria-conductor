@@ -127,7 +127,7 @@ class AgentLoopEngineTaskPathTest {
         when(sessionStateManager.loadOrCreateSession(runId, agentId))
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
         when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
-        when(workspaceManager.provision(runId)).thenReturn("/tmp/ws");
+        when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
         lenient().when(openCodeProperties.getMaxTaskMinutes()).thenReturn(30);
         when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
     }

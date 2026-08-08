@@ -86,7 +86,7 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
         Agent agent = agentRepository.save(Agent.builder()
                 .id(UUID.randomUUID()).name("opencode-agent").description("task agent")
                 .agentType(AgentType.NATIVE).role("tester").model("gpt-4o")
-                .provider("openai").config("{\"maxToolCallRounds\":9}")
+                .provider("openai").config("{\"maxToolCallRounds\":9,\"taskApprovalRequired\":false}")
                 .adkProvider("opencode").healthStatus(HealthStatus.HEALTHY)
                 .createdAt(Instant.now()).build());
         Run run = runRepository.save(Run.builder()
@@ -140,7 +140,7 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
         Agent agent = agentRepository.save(Agent.builder()
                 .id(UUID.randomUUID()).name("opencode-timeout").description("task agent")
                 .agentType(AgentType.NATIVE).role("tester").model("gpt-4o")
-                .provider("openai").config("{}")
+                .provider("openai").config("{\"taskApprovalRequired\":false}")
                 .adkProvider("opencode").healthStatus(HealthStatus.HEALTHY)
                 .createdAt(Instant.now()).build());
         Run run = runRepository.save(Run.builder()

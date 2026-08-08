@@ -50,6 +50,9 @@ class StatusTransitionPropertyTest {
         run.put(RunStatus.COMPLETED, EnumSet.noneOf(RunStatus.class));
         run.put(RunStatus.FAILED, EnumSet.noneOf(RunStatus.class));
         run.put(RunStatus.CANCELLED, EnumSet.noneOf(RunStatus.class));
+        // ABORTED (task-level engine timeout/budget/approval-denial) is terminal like
+        // the other end states; RunService.VALID_TRANSITIONS handles it via getOrDefault.
+        run.put(RunStatus.ABORTED, EnumSet.noneOf(RunStatus.class));
         RUN_TRANSITIONS = Collections.unmodifiableMap(run);
 
         Map<ApprovalStatus, Set<ApprovalStatus>> approval = new EnumMap<>(ApprovalStatus.class);
@@ -62,7 +65,7 @@ class StatusTransitionPropertyTest {
     }
 
     private static final Set<RunStatus> RUN_TERMINALS =
-            EnumSet.of(RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED);
+            EnumSet.of(RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
     private static final Set<ApprovalStatus> APPROVAL_TERMINALS =
             EnumSet.of(ApprovalStatus.APPROVED, ApprovalStatus.DENIED, ApprovalStatus.EXPIRED);
 

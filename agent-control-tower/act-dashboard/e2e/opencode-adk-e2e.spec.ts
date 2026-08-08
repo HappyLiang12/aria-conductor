@@ -11,9 +11,12 @@ import { test, expect, type Page } from '@playwright/test';
  *    opencode → langchain → opencode via PUT /api/v1/agents/{id}
  * 4. Providers page: provider table (OpenCode + LangChain ADK, langchain default)
  *    and Per-Agent Backends block shows the agent with 'opencode'
- * 5. Start a run from Runs view, poll until COMPLETED / FAILED
- *    (no OpenSandbox in local E2E → FAILED is expected and still proves the
- *    delegation path was triggered; timeout is tolerated like langchain spec)
+ * 5. Start a run from Runs view, poll until the run leaves PENDING/RUNNING and
+ *    reaches a terminal state (COMPLETED / FAILED / ABORTED / CANCELLED).
+ *    No OpenSandbox in CI → FAILED with a sandbox-layer errorMessage is the
+ *    expected path and still proves the delegation path was triggered; COMPLETED
+ *    only occurs with a full local stack (sandbox + LLM). A run that never leaves
+ *    PENDING/RUNNING times out and fails the test — it is never tolerated.
  *
  * LLM API key is injected via env var DEEPSEEK_API_KEY (DeepSeek-compatible).
  * Idempotency: agent name carries a unique suffix; the agent is retired at the
@@ -240,27 +243,41 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
 
   await page.screenshot({ path: 'e2e/screenshots/oc-07-run-started.png' });
 
-  // ── Step 6: Poll for run completion ──
-  // OpenCode runs need an OpenSandbox sandbox; without one the run FAILS —
-  // FAILED still proves the task-execution delegation path was triggered.
-  try {
-    const runResult = await waitForBackend(
-      page,
-      `http://localhost:8080/api/v1/runs?agentId=${agentId}`,
-      (runs: any[]) =>
-        Array.isArray(runs) &&
-        runs.some((r: any) => r.status === 'COMPLETED' || r.status === 'FAILED'),
-      RUN_TIMEOUT,
-    );
+  // ── Step 6: Poll until the run leaves PENDING/RUNNING ──
+  // The spec runs without an OpenSandbox in CI, so the delegated OpenCode path
+  // fails inside the sandbox layer with TaskExecutionException(SANDBOX_UNAVAILABLE)
+  // → run FAILED with a sandbox-layer errorMessage. COMPLETED only occurs with a
+  // full local stack (sandbox + LLM). Either terminal state proves the delegation
+  // path was actually triggered; a run that never leaves PENDING/RUNNING (or never
+  // appears in the list) makes waitForBackend throw — the timeout is NOT tolerated.
+  const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
+  const runResult = await waitForBackend(
+    page,
+    `http://localhost:8080/api/v1/runs?agentId=${agentId}`,
+    (runs: any[]) =>
+      Array.isArray(runs) &&
+      runs.some((r: any) => TERMINAL_RUN_STATUSES.includes(r.status)),
+    RUN_TIMEOUT,
+  );
 
-    const run = runResult.find((r: any) => r.status === 'COMPLETED' || r.status === 'FAILED');
-    console.log(`OpenCode run finished with status: ${run.status}`);
-    await page.screenshot({ path: 'e2e/screenshots/oc-08-run-completed.png' });
-  } catch (e) {
-    // Run might not reach a terminal state (sandbox unavailable) — tolerated
-    console.log('OpenCode run did not complete in time (sandbox unavailable is expected)');
-    await page.screenshot({ path: 'e2e/screenshots/oc-08-run-timeout.png' });
+  const run = runResult.find((r: any) => TERMINAL_RUN_STATUSES.includes(r.status));
+  expect(run, 'run object must exist in the runs list (delegation path triggered)').toBeTruthy();
+  console.log(`OpenCode run ${run.id} finished with status: ${run.status}`);
+
+  if (run.status === 'FAILED') {
+    // CI (no OpenSandbox): the sandbox layer rejects the delegation before any LLM
+    // call. errorMessage is the exception message — e.g. "OpenSandbox sandbox
+    // creation failed for agent …" — the enum name SANDBOX_UNAVAILABLE itself is
+    // NOT part of the message, so match the sandbox-layer wording instead.
+    expect(run.errorMessage, 'FAILED run must carry a sandbox-layer errorMessage').toBeTruthy();
+    expect(
+      run.errorMessage,
+      'FAILED run errorMessage must originate from the sandbox layer',
+    ).toMatch(/sandbox|serve|OpenSandbox/i);
+  } else if (run.status === 'COMPLETED') {
+    expect(run.finalOutput, 'COMPLETED run must have non-empty finalOutput').toBeTruthy();
   }
+  await page.screenshot({ path: 'e2e/screenshots/oc-08-run-completed.png' });
 
   // ── Cleanup: retire the test agent (idempotency for reruns) ──
   if (agentId) {

@@ -319,13 +319,37 @@
                             </outputFormats>
                             <!-- Single-threaded + capped heap: the default auto-threading forks
                                  one JVM per core and each fork boots a full Spring context,
-                                 which crashed the runner JVM on every nightly run (hs_err). -->
+                                 which crashed the runner JVM on every nightly run (hs_err).
+                                 timeoutConstant=15000: the 4s default is below the wall-clock
+                                 budget of the Spring-backed tests, so healthy mutation units
+                                 were killed as TIMED_OUT and rerun repeatedly. -->
                             <threads>1</threads>
+                            <timeoutConstant>15000</timeoutConstant>
                             <jvmArgs>
                                 <jvmArg>--enable-preview</jvmArg>
                                 <jvmArg>-Xmx2048m</jvmArg>
                                 <jvmArg>-XX:MaxMetaspaceSize=768m</jvmArg>
                             </jvmArgs>
+                        </configuration>
+                    </plugin>
+                    <!-- PIT inherits the surefire argLine, which contains the @{argLine}
+                         late-binding placeholder that PIT cannot resolve — the raw string
+                         reached the minion JVM and killed it at startup (MINION_DIED,
+                         "could not open `{argLine}'"). Override both test plugins here so
+                         PIT's minions get a clean argLine (no JaCoCo agent: PIT runs its
+                         own coverage instrumentation). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <argLine>--enable-preview -XX:+EnableDynamicAgentLoading</argLine>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <argLine>--enable-preview -XX:+EnableDynamicAgentLoading</argLine>
                         </configuration>
                     </plugin>
                 </plugins>

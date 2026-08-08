@@ -93,6 +93,16 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
   await page.getByRole('tab', { name: /LLM Providers/ }).click();
   await expect(page.locator('.modal h2', { hasText: 'Settings' })).toBeVisible({ timeout: 10_000 });
 
+  // Wait for the provider list to finish loading BEFORE checking whether DeepSeek
+  // already exists (same guard as langchain spec): checking too early races the
+  // GET /api/v1/llm-providers fetch and would attempt a duplicate create, which
+  // the backend rejects with a 500 (llm_providers.name has a unique index). That
+  // would leave a stray "Add LLM Provider" form inside the (hidden but still
+  // mounted) modal DOM, which then trips strict-mode locators like .form-card.
+  await expect(
+    page.locator('.modal .data-table, .modal .empty-state').first(),
+  ).toBeVisible({ timeout: 10_000 });
+
   // Check if DeepSeek provider already exists (rerun / persistent H2 db)
   let deepSeekExists = await page.getByText('DeepSeek').isVisible().catch(() => false);
 
@@ -114,8 +124,19 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
 
     // Submit
     await page.getByRole('button', { name: 'Create' }).click();
-    await page.waitForTimeout(2000);
   }
+
+  // Idempotency guard: wait until the backend actually has a DeepSeek provider.
+  // The modal table only refreshes when a create succeeds — the API is the
+  // authoritative source (same guard as langchain spec).
+  await waitForBackend(
+    page,
+    'http://localhost:8080/api/v1/llm-providers',
+    (providers: any[]) =>
+      Array.isArray(providers) && providers.some((p: any) => p.name === 'DeepSeek'),
+    30_000,
+    2_000,
+  );
 
   // Activate DeepSeek provider if not active
   const activateBtn = page.getByRole('button', { name: 'Activate' }).first();
@@ -221,26 +242,29 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
   // ── Step 5: Start a run for the OpenCode agent ──
   await navigateTo(page, 'runs');
   await page.getByRole('button', { name: '+ Start Run' }).click();
-  await expect(page.locator('.form-card')).toBeVisible({ timeout: 5_000 });
+  // Scope to the visible route content (<main className="content">): the Configure
+  // modal stays mounted (opacity:0) after closing and may still contain a stray
+  // SettingsPage form, which would make the bare .form-card locator ambiguous.
+  await expect(page.locator('main .form-card')).toBeVisible({ timeout: 5_000 });
 
   // Select the E2E OpenCode Agent (agent is HEALTHY at creation → listed)
-  const agentSelect = page.locator('.form-card select').first();
+  const agentSelect = page.locator('main .form-card select').first();
   const options = await agentSelect.locator('option').allTextContents();
   const targetOption = options.find((o) => o.includes(agentName));
   expect(targetOption, `run form should list '${agentName}' (got: ${options.join(', ')})`).toBeTruthy();
   await agentSelect.selectOption({ label: targetOption! });
 
   // Fill prompt
-  await page.locator('.form-card textarea').fill('What is 2+2? Reply with just the number.');
+  await page.locator('main .form-card textarea').fill('What is 2+2? Reply with just the number.');
 
   // Set max iterations to 1 for quick test
-  const maxIterInput = page.locator('.form-card input[type="number"]');
+  const maxIterInput = page.locator('main .form-card input[type="number"]');
   await maxIterInput.fill('1');
 
   await page.screenshot({ path: 'e2e/screenshots/oc-06-create-run.png' });
 
   // Submit the run
-  await page.locator('.form-card button[type="submit"]').click();
+  await page.locator('main .form-card button[type="submit"]').click();
   await page.waitForTimeout(3000);
 
   await page.screenshot({ path: 'e2e/screenshots/oc-07-run-started.png' });
@@ -259,13 +283,13 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
   // never produces an approval times out here and fails the test — never tolerated:
   // that would indicate the gate/approvals API is broken.
   const alreadyTerminal = await page.evaluate(
-    async ({ agentId }) => {
+    async ({ agentId, terminalStatuses }) => {
       const r = await fetch(`http://localhost:8080/api/v1/runs?agentId=${agentId}`);
       if (!r.ok) return false;
       const runs = await r.json();
-      return Array.isArray(runs) && runs.some((x: any) => TERMINAL_RUN_STATUSES.includes(x.status));
+      return Array.isArray(runs) && runs.some((x: any) => terminalStatuses.includes(x.status));
     },
-    { agentId },
+    { agentId, terminalStatuses: TERMINAL_RUN_STATUSES },
   );
 
   if (!alreadyTerminal) {

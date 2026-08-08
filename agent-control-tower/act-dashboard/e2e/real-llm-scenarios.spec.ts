@@ -184,13 +184,13 @@ test('rl-02 OpenCode agent: create via UI → real-LLM run → result displayed'
   // approval and let the terminal poll below assert that state.
   const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
   const alreadyTerminal = await page.evaluate(
-    async ({ agentId }) => {
+    async ({ agentId, terminalStatuses }) => {
       const r = await fetch(`http://localhost:8080/api/v1/runs?agentId=${agentId}`);
       if (!r.ok) return false;
       const runs = await r.json();
-      return Array.isArray(runs) && runs.some((x: any) => TERMINAL_RUN_STATUSES.includes(x.status));
+      return Array.isArray(runs) && runs.some((x: any) => terminalStatuses.includes(x.status));
     },
-    { agentId },
+    { agentId, terminalStatuses: TERMINAL_RUN_STATUSES },
   );
 
   if (!alreadyTerminal) {

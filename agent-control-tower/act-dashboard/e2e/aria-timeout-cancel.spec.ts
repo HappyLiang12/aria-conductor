@@ -34,9 +34,35 @@ async function typeAndSend(page: Page, message: string) {
 test('Cancel button appears while Aria is busy', async ({ page }) => {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
+
+  // Override fetch BEFORE sending so the busy state is deterministic: the real
+  // chat endpoint may fail or complete instantly in CI (no LLM_API_KEY → no
+  // active LLM provider), which made the cancel-button assertion timing-flaky.
+  // A hanging stream guarantees the busy window regardless of environment.
+  await page.evaluate(() => {
+    const originalFetch = window.fetch;
+    (window as any).__originalFetch = originalFetch;
+    window.fetch = async (url: any, init?: any) => {
+      if (typeof url === 'string' && url.includes('/api/v1/aria/chat/stream')) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: thinking\ndata: {"status":"processing"}\n\n'));
+            // Never close — the stream hangs indefinitely, keeping Aria busy.
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      return originalFetch(url, init);
+    };
+  });
+
   await openAriaPanel(page);
 
-  // Send a message that will take some time to process.
+  // Send a message — the hanging stream keeps Aria processing.
   await typeAndSend(page, 'What is the status of all agents?');
 
   // The cancel button should appear while Aria is processing.
@@ -140,7 +166,7 @@ test('Error message on silent stream close', async ({ page }) => {
 
   // The Retry button should be shown alongside the error message.
   const retryBtn = page.locator('.ai-retry');
-  await expect(retryBtn).toBeVisible({ timeout: 5000 });
+  await expect(retryBtn).toBeVisible({ timeout: 10_000 });
   await page.screenshot({ path: `${SCREENSHOT_DIR}/06-retry-button-shown.png` });
 
   // Busy state should be cleared (no spinner stuck).

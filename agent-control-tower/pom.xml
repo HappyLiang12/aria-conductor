@@ -317,8 +317,14 @@
                                 <outputFormat>XML</outputFormat>
                                 <outputFormat>HTML</outputFormat>
                             </outputFormats>
+                            <!-- Single-threaded + capped heap: the default auto-threading forks
+                                 one JVM per core and each fork boots a full Spring context,
+                                 which crashed the runner JVM on every nightly run (hs_err). -->
+                            <threads>1</threads>
                             <jvmArgs>
                                 <jvmArg>--enable-preview</jvmArg>
+                                <jvmArg>-Xmx2048m</jvmArg>
+                                <jvmArg>-XX:MaxMetaspaceSize=768m</jvmArg>
                             </jvmArgs>
                         </configuration>
                     </plugin>

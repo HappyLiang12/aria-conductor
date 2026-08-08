@@ -34,8 +34,11 @@ jobs:
       # Report-only for the first two weeks (mutationThreshold=0 in the pom);
       # ratchet the threshold once scores stabilise — this is the primary
       # honesty check against assertion-free tests.
+      # threads=1: the default auto-threading forks one JVM per core; each fork
+      # boots a full Spring context for the integration-heavy tests, which
+      # exhausted the runner memory and crashed the JVM (hs_err) on every run.
       - name: Run mutation coverage
-        run: cd agent-control-tower && mvn -P mutation org.pitest:pitest-maven:mutationCoverage -pl act-execution,act-knowledge -Dspring.profiles.active=h2
+        run: cd agent-control-tower && mvn -P mutation org.pitest:pitest-maven:mutationCoverage -pl act-execution,act-knowledge -Dspring.profiles.active=h2 -Dthreads=1
       - name: Upload mutation reports
         if: always()
         uses: actions/upload-artifact@v4

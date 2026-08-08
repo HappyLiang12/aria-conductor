@@ -49,6 +49,19 @@ public interface AdkProvider {
     /** Check whether the agent runtime is healthy and reachable. */
     boolean isHealthy(UUID agentId);
 
+    /**
+     * Service-level health probe that needs no agent context (used by the
+     * provider inventory / health API, {@code GET /api/v1/adk/providers/{id}/health}).
+     *
+     * <p>Unlike {@link #isHealthy(UUID)} (instance-scoped, requires an agentId),
+     * this probes the provider's underlying runtime service (ADK host:port for
+     * langchain, OpenSandbox server reachability for opencode). Defaults to
+     * {@code true} for providers without a meaningful service-level probe.
+     */
+    default boolean isServiceHealthy() {
+        return true;
+    }
+
     /** Shut down the runtime for a specific agent. */
     void shutdownAgent(UUID agentId);
 

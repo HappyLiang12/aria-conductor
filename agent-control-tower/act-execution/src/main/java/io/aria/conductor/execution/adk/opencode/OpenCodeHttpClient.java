@@ -14,6 +14,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
@@ -36,7 +37,7 @@ import java.util.concurrent.Executors;
  * {@link TaskExecutionException.Cause#TIMEOUT}.
  */
 @Slf4j
-public class OpenCodeHttpClient {
+public class OpenCodeHttpClient implements AutoCloseable {
 
     /** Default request timeout applied to all calls. */
     public static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofMinutes(5);
@@ -44,6 +45,8 @@ public class OpenCodeHttpClient {
     private final String baseUrl;
     private final Duration requestTimeout;
     private final HttpClient httpClient;
+    /** Owned executor feeding {@link #httpClient} — shut down in {@link #close()}. */
+    private final ExecutorService executor;
     private final ObjectMapper objectMapper;
 
     public OpenCodeHttpClient(String baseUrl) {
@@ -57,12 +60,26 @@ public class OpenCodeHttpClient {
     public OpenCodeHttpClient(String baseUrl, Duration requestTimeout) {
         this.baseUrl = stripTrailingSlash(baseUrl);
         this.requestTimeout = requestTimeout != null ? requestTimeout : DEFAULT_REQUEST_TIMEOUT;
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
-                .executor(Executors.newVirtualThreadPerTaskExecutor())
+                .executor(executor)
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
         this.objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * Release this client's resources: close the underlying {@link HttpClient}
+     * (JDK 21+ {@code AutoCloseable}) and shut down the owned executor so the
+     * virtual threads backing in-flight requests are interrupted and reclaimed.
+     *
+     * <p>Idempotent — safe to call more than once.
+     */
+    @Override
+    public void close() {
+        httpClient.close();
+        executor.shutdownNow();
     }
 
     /**

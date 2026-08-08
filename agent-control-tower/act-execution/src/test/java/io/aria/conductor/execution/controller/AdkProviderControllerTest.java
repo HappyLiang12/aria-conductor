@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -78,6 +79,7 @@ class AdkProviderControllerTest {
     @Test
     void health_returnsHealthyForRegisteredProvider() {
         when(registry.getProvider("opencode")).thenReturn(openCode);
+        when(openCode.isServiceHealthy()).thenReturn(true);
 
         ResponseEntity<Map<String, Object>> response = controller.getProviderHealth("opencode");
 
@@ -85,6 +87,31 @@ class AdkProviderControllerTest {
         assertThat(response.getBody())
                 .containsEntry("providerId", "opencode")
                 .containsEntry("healthy", true);
+    }
+
+    @Test
+    void health_returnsUnhealthy_whenServiceProbeFails() {
+        // Simulates e.g. the OpenSandbox server being down: the service-level
+        // probe reports false and the endpoint must NOT hard-code healthy=true.
+        when(registry.getProvider("opencode")).thenReturn(openCode);
+        when(openCode.isServiceHealthy()).thenReturn(false);
+
+        ResponseEntity<Map<String, Object>> response = controller.getProviderHealth("opencode");
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody())
+                .containsEntry("providerId", "opencode")
+                .containsEntry("healthy", false);
+    }
+
+    @Test
+    void health_delegatesToServiceLevelProbe() {
+        when(registry.getProvider("langchain")).thenReturn(langChain);
+        when(langChain.isServiceHealthy()).thenReturn(true);
+
+        controller.getProviderHealth("langchain");
+
+        verify(langChain).isServiceHealthy();
     }
 
     @Test

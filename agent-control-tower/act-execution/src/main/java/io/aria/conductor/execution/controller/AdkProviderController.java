@@ -56,11 +56,11 @@ public class AdkProviderController {
     /**
      * {@code GET /api/v1/adk/providers/{id}/health} — {@code { providerId, healthy }}.
      *
-     * <p>The controller has no agent context, and {@link AdkProvider#isHealthy} is
-     * instance-scoped (requires an agentId), so health is simplified to provider
-     * registration existence: {@code healthy=true} when the provider is registered.
-     * Instance-level probes (sandbox reachability for opencode) belong in a future
-     * agent-scoped endpoint.
+     * <p>The controller has no agent context, so health comes from the provider's
+     * service-level probe {@link AdkProvider#isServiceHealthy()} (e.g. OpenSandbox
+     * server reachability for opencode, ADK host:port for langchain) instead of the
+     * instance-scoped {@link AdkProvider#isHealthy(UUID)}. Instance-level probes
+     * (sandbox rebuild on repeated failures) remain agent-scoped.
      */
     @GetMapping("/providers/{id}/health")
     public ResponseEntity<Map<String, Object>> getProviderHealth(@PathVariable String id) {
@@ -69,9 +69,11 @@ public class AdkProviderController {
             log.warn("ADK provider health probe for unknown provider '{}'", id);
             return ResponseEntity.notFound().build();
         }
+        boolean healthy = provider.isServiceHealthy();
+        log.info("ADK provider '{}' health probe: {}", id, healthy);
         return ResponseEntity.ok(Map.of(
                 "providerId", id,
-                "healthy", true
+                "healthy", healthy
         ));
     }
 

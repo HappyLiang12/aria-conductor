@@ -3,6 +3,7 @@ package io.aria.conductor.execution.adk.opencode;
 import com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo;
 import com.github.tomakehurst.wiremock.junit5.WireMockTest;
 import io.aria.conductor.execution.adk.TaskExecutionException;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +33,13 @@ class OpenCodeHttpClientTest {
     @BeforeEach
     void setUp(WireMockRuntimeInfo wmRuntimeInfo) {
         client = new OpenCodeHttpClient(wmRuntimeInfo.getHttpBaseUrl(), Duration.ofSeconds(5));
+    }
+
+    @AfterEach
+    void tearDown() {
+        // Each test creates its own client with a fresh executor — release it so
+        // the test JVM does not accumulate threads (see #15).
+        client.close();
     }
 
     @Test

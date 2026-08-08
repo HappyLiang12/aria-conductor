@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -195,7 +196,7 @@ class OpenCodeAdkProviderTest {
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
 
         TaskResult result = provider.executeTask(agent(agentId), runId, "do the task",
-                new TaskContext(50, Duration.ofMinutes(5), null));
+                new TaskContext(50, Duration.ofMinutes(5)));
 
         assertThat(result.runId()).isEqualTo(runId);
         assertThat(result.sessionId()).isEqualTo("sess-1");
@@ -216,7 +217,7 @@ class OpenCodeAdkProviderTest {
                 .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT, "deadline exceeded"));
 
         assertThatThrownBy(() -> provider.executeTask(agent(agentId), runId, "task",
-                new TaskContext(50, Duration.ofSeconds(1), null)))
+                new TaskContext(50, Duration.ofSeconds(1))))
                 .isInstanceOf(TaskExecutionException.class)
                 .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.TIMEOUT));
@@ -271,6 +272,33 @@ class OpenCodeAdkProviderTest {
         assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
     }
 
+    // ---- #15 per-instance OpenCodeHttpClient resources must be closed on shutdown ----
+
+    @Test
+    void shutdownAgent_closesPerInstanceHttpClient() {
+        UUID agentId = UUID.randomUUID();
+        OpenCodeHttpClient instanceClient = mock(OpenCodeHttpClient.class);
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, instanceClient));
+
+        provider.shutdownAgent(agentId);
+
+        // The provider owns per-instance clients: they must be closed so their
+        // executor / HttpClient resources are released.
+        verify(instanceClient).close();
+    }
+
+    @Test
+    void shutdownAgent_doesNotCloseFixedHttpClient() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+
+        provider.shutdownAgent(agentId);
+
+        // The fixed test client is injected and owned by the test — the provider
+        // must not close it.
+        verify(httpClient, never()).close();
+    }
+
     // ---- #1 cancel race: pending abort recorded before session creation ----
 
     @Test
@@ -287,7 +315,7 @@ class OpenCodeAdkProviderTest {
         });
 
         assertThatThrownBy(() -> provider.executeTask(agent(agentId), runId, "task",
-                new TaskContext(0, Duration.ofMinutes(5), null)))
+                new TaskContext(0, Duration.ofMinutes(5))))
                 .isInstanceOf(TaskExecutionException.class)
                 .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.ABORTED))
@@ -308,7 +336,7 @@ class OpenCodeAdkProviderTest {
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
 
-        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(7, Duration.ofMinutes(30), null));
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(7, Duration.ofMinutes(30)));
 
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(httpClient).sendMessage(eq("sess-1"), promptCaptor.capture(), eq("do the task"), any());
@@ -326,7 +354,7 @@ class OpenCodeAdkProviderTest {
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
 
-        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(0, Duration.ofMinutes(30), null));
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(0, Duration.ofMinutes(30)));
 
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(httpClient).sendMessage(eq("sess-1"), promptCaptor.capture(), eq("do the task"), any());
@@ -345,7 +373,7 @@ class OpenCodeAdkProviderTest {
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
 
         // 2 rounds × 2 min = 4 min budget, tighter than the 30 min max duration.
-        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, Duration.ofMinutes(30), null));
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, Duration.ofMinutes(30)));
 
         verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(4)));
     }
@@ -373,7 +401,7 @@ class OpenCodeAdkProviderTest {
                 ready.countDown();
                 go.await();
                 return provider.executeTask(agent(agentId), runId, "task-" + runId,
-                        new TaskContext(0, Duration.ofMinutes(5), null));
+                        new TaskContext(0, Duration.ofMinutes(5)));
             }));
         }
         assertThat(ready.await(10, TimeUnit.SECONDS)).as("all threads must reach the barrier").isTrue();

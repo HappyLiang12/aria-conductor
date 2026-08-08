@@ -272,6 +272,13 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         // (and leaking) their own sandbox.
         CompletableFuture<OpenCodeInstance> future = preparing.get(agentId);
         if (future == null) {
+            // Re-check instances: the previous owner may have published its instance and
+            // removed the preparing future between our earlier instances.get and this
+            // preparing.get — without this re-check we would prepare a second sandbox.
+            OpenCodeInstance completed = instances.get(agentId);
+            if (completed != null && completed.healthy()) {
+                return completed;
+            }
             CompletableFuture<OpenCodeInstance> fresh = new CompletableFuture<>();
             CompletableFuture<OpenCodeInstance> raced = preparing.putIfAbsent(agentId, fresh);
             if (raced == null) {

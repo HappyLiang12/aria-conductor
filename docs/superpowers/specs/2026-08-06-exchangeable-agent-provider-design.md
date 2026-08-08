@@ -141,7 +141,7 @@ if (provider.supportsTaskExecution()) {
 ### taskExecutionPath Flow
 
 1. Load agent + run; build `TaskContext` (`agent.config.maxToolCallRounds` default 50 → maxRounds; `opencode.max-task-minutes` → maxDuration)
-2. **Approval gate**: reuse `ApprovalGate` — high-risk tasks enter PENDING until approved, same entry logic as the turn path
+2. **Approval gate**: reuse `ApprovalGate` — **enabled by default** for task-level runs, matching the governance level of the turn path. `taskExecutionPath` calls `ApprovalGate.requestApproval` before executing, creating a PENDING approval that **blocks** the run (approval-pending state) until a human decides in the Approvals page (`approvals.timeout-ms`, default 30 min). Agents can **opt out** explicitly via agent config `"taskApprovalRequired": false`; an explicit `"taskApprovalRequired": true` keeps the gate on (backward compatible).
 3. Build task prompt: system rules from `buildMessages` (role/knowledge/skill injection) + user messages
 4. `provider.executeTask(...)` on a virtual thread; SSE bridge: `run.started` → (optional intermediate) → `run.completed` / `run.error`
 5. **Budget abort**: timeout or round limit → `provider.abortTask(runId)` → run ABORTED (existing state transitions)
@@ -149,7 +149,7 @@ if (provider.supportsTaskExecution()) {
 
 ### Governance Layering
 
-- Task level (Java): approval gate before start, budget abort during run, audit after completion
+- Task level (Java): approval gate **on by default** before start (agent config `taskApprovalRequired: false` opts out; `true` opts in explicitly), budget abort during run, audit after completion
 - Inside OpenCode (sandbox): permissions tightened via workspace `opencode.json`; no per-tool interleaving
 
 ### AriaDefaultAgentInitializer Fix
@@ -209,7 +209,7 @@ opencode:
 |---|---|
 | Unit (act-execution) | `OpenCodeHttpClientTest` (WireMock: session/message/abort/health + error mapping); `OpenCodeAdkProviderTest` (prepare success/sandbox failure, executeTask success/timeout→abort, health rebuild, shutdown kill); `AgentLoopEngineTaskPathTest` (mock task provider: delegation taken, call not invoked, approval gate, budget abort, audit, run states) |
 | Integration (act-app) | `OpenCodeTaskExecutionIntegrationTest` (@SpringBootTest + BaseH2IntegrationTest + @MockBean AdkProviderRegistry, mirroring AgentLoopInjectionIntegrationTest): executeTask invoked with system-rule prompt (ArgumentCaptor), run COMPLETED + finalOutput, TIMEOUT → FAILED/ABORTED + PromptCall audit, REST `GET /api/v1/adk/providers` lists opencode+langchain |
-| E2E (act-dashboard) | `opencode-adk-e2e.spec.ts` mirroring `langchain-adk-e2e.spec.ts` full flow: configure LLM → create OpenCode agent → verify list/detail + capability badge → runtime switch opencode→langchain→opencode (persistence) → run → poll completion; `adk-providers.spec.ts`: Providers page rendering + dynamic dropdown; existing `langchain-adk-e2e.spec.ts` stays green (regression) |
+| E2E (act-dashboard) | `opencode-adk-e2e.spec.ts` mirroring `langchain-adk-e2e.spec.ts` full flow: configure LLM → create OpenCode agent → verify list/detail + capability badge → runtime switch opencode→langchain→opencode (persistence) → run → approve the task-level approval gate (default-on) → poll completion; `adk-providers.spec.ts`: Providers page rendering + dynamic dropdown; existing `langchain-adk-e2e.spec.ts` stays green (regression) |
 | CI smoke (optional) | Docker present: build opencode-sandbox image → start opensandbox-server → create sandbox → `opencode --version`; skipped without Docker |
 
 ## Assumptions

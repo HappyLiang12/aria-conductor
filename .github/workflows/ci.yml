@@ -243,6 +243,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [build, frontend-build]
+    env:
+      # Real-LLM E2E specs (opencode-adk-e2e, langchain-adk-e2e, real-llm-scenarios)
+      # skip themselves when this is unset. Set the DEEPSEEK_API_KEY repository
+      # secret to actually exercise the provider run paths in CI (they were
+      # previously always skipped, leaving the exchangeable-provider flow untested).
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -283,76 +289,10 @@ jobs:
             hs_err_pid*.log
 
   # ---------------------------------------------------------------------------
-  # BURN-IN: legacy Playwright jobs kept in parallel with the sharded matrix for
-  # one week of green runs, then remove (plan Phase A3). Do not extend these.
+  # BURN-IN complete (one week of green runs since 2026-07-25): the legacy
+  # e2e-workflow-governance / e2e-agent-dev-workflow jobs are removed — their
+  # specs are covered by the sharded matrix (plan Phase A3).
   # ---------------------------------------------------------------------------
-  e2e-workflow-governance:
-    name: E2E Workflow Governance (Playwright, legacy burn-in)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs: [build, frontend-build]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: pnpm
-          cache-dependency-path: agent-control-tower/act-dashboard/pnpm-lock.yaml
-      - name: Start stack (dev server)
-        uses: ./.github/actions/start-stack
-        with:
-          frontend-mode: dev
-      - name: Install Playwright browsers
-        run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
-      - name: Run E2E tests
-        run: cd agent-control-tower/act-dashboard && CI=true npx playwright test e2e/workflow-governance.spec.ts e2e/agent-tool-skill-recommendations.spec.ts --workers=1
-      - name: Upload test results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-results
-          path: agent-control-tower/act-dashboard/test-results/
-
-  e2e-agent-dev-workflow:
-    name: E2E Agent Dev-Workflow Governance (Playwright, legacy burn-in)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs: [build, frontend-build]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: pnpm
-          cache-dependency-path: agent-control-tower/act-dashboard/pnpm-lock.yaml
-      - name: Start stack (dev server)
-        uses: ./.github/actions/start-stack
-        with:
-          frontend-mode: dev
-      - name: Install Playwright browsers
-        run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
-      - name: Run E2E tests
-        run: cd agent-control-tower/act-dashboard && CI=true npx playwright test e2e/agent-dev-workflow-governance.spec.ts e2e/harness-governance.spec.ts --workers=1
-      - name: Upload test results
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-agent-dev-workflow-results
-          path: agent-control-tower/act-dashboard/test-results/
 
   docker-build:
     name: Docker Build Verification

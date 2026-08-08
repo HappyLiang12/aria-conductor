@@ -21,7 +21,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * OpenCode agent provider — one {@code opencode serve} instance per agent,
@@ -61,6 +65,12 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private final Map<UUID, OpenCodeInstance> instances = new ConcurrentHashMap<>();
     private final Map<UUID, String> runSessions = new ConcurrentHashMap<>();
     private final Map<UUID, OpenCodeHttpClient> runClients = new ConcurrentHashMap<>();
+    /** Pending aborts recorded while a run's session was not yet created (see {@link #abortTask}). */
+    private final Map<UUID, Boolean> runAborted = new ConcurrentHashMap<>();
+    /** In-flight sandbox preparations, keyed by agentId — concurrent runs share one prepare. */
+    private final Map<UUID, CompletableFuture<OpenCodeInstance>> preparing = new ConcurrentHashMap<>();
+    /** Executor for sandbox preparation (sleep-based health polling must not block common pool). */
+    private final ExecutorService prepareExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     private Path workspaceBase = Paths.get(WORKSPACE_BASE);
     /** Ready-wait budget (overridable in tests). */
@@ -116,13 +126,24 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         }
         OpenCodeInstance inst = getOrPrepareInstance(agent.getId(), agent);
         OpenCodeHttpClient client = clientFor(inst);
+        // Register the client before createSession so a cancel landing in the
+        // sandbox-prep / session-creation window is recorded (pending abort) and
+        // honored immediately after the session exists — instead of being lost
+        // because runSessions was not yet populated.
+        runClients.put(runId, client);
 
         String sessionId = client.createSession("run-" + runId);
         runSessions.put(runId, sessionId);
-        runClients.put(runId, client);
+        // A cancel that arrived before the session existed must terminate the run
+        // right away rather than letting it execute in the sandbox.
+        if (runAborted.remove(runId) != null) {
+            abortSession(client, sessionId, runId);
+            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                    "Run " + runId + " cancelled before execution started");
+        }
         log.info("OpenCode task {} started for agent {} (session {})", runId, agent.getId(), sessionId);
         try {
-            String systemPrompt = buildSystemPrompt(agent);
+            String systemPrompt = buildSystemPrompt(agent, context);
             Duration deadline = resolveMaxDuration(context);
             OpenCodeHttpClient.MessageResponse resp =
                     client.sendMessage(sessionId, systemPrompt, taskPrompt, deadline);
@@ -139,17 +160,30 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         } finally {
             runSessions.remove(runId);
             runClients.remove(runId);
+            runAborted.remove(runId);
         }
     }
 
     @Override
     public void abortTask(UUID runId) {
-        String sessionId = runSessions.get(runId);
         OpenCodeHttpClient client = runClients.get(runId);
-        if (sessionId == null || client == null) {
+        if (client == null) {
+            // Run not even registered yet — nothing to abort (still in sandbox prep).
             log.debug("No in-flight OpenCode task found for run {}", runId);
             return;
         }
+        String sessionId = runSessions.get(runId);
+        if (sessionId == null) {
+            // Session not created yet (sandbox-prep / session-creation window): record
+            // a pending abort that executeTask honors right after createSession.
+            runAborted.put(runId, Boolean.TRUE);
+            log.info("OpenCode abort requested for run {} before session creation — pending", runId);
+            return;
+        }
+        abortSession(client, sessionId, runId);
+    }
+
+    private void abortSession(OpenCodeHttpClient client, String sessionId, UUID runId) {
         try {
             client.abortSession(sessionId);
             log.info("Aborted OpenCode session {} for run {}", sessionId, runId);
@@ -206,6 +240,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             shutdownAgent(agentId);
         }
         instances.clear();
+        prepareExecutor.shutdown();
     }
 
     // ---- instance lifecycle ----
@@ -220,7 +255,51 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             destroyInstance(existing.sandboxId());
             instances.remove(agentId);
         }
-        return prepareInstance(agentId, agent);
+        // Concurrent runs for the same agent share a single sandbox preparation: the
+        // thread that wins putIfAbsent owns the prepare and completes the shared
+        // future; followers simply wait on the same future instead of each creating
+        // (and leaking) their own sandbox.
+        CompletableFuture<OpenCodeInstance> future = preparing.get(agentId);
+        if (future == null) {
+            CompletableFuture<OpenCodeInstance> fresh = new CompletableFuture<>();
+            CompletableFuture<OpenCodeInstance> raced = preparing.putIfAbsent(agentId, fresh);
+            if (raced == null) {
+                // Owner: prepare on the shared executor and complete the future.
+                try {
+                    prepareExecutor.execute(() -> {
+                        try {
+                            fresh.complete(prepareInstance(agentId, agent));
+                        } catch (Throwable t) {
+                            fresh.completeExceptionally(t);
+                        } finally {
+                            preparing.remove(agentId);
+                        }
+                    });
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    // Executor shut down (provider teardown) — fail the waiters fast.
+                    fresh.completeExceptionally(e);
+                }
+                future = fresh;
+            } else {
+                future = raced;
+            }
+        }
+        try {
+            return future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                    "Interrupted while preparing OpenCode sandbox for agent " + agentId, e);
+        } catch (ExecutionException e) {
+            // prepareInstance throws TaskExecutionException — unwrap and rethrow as-is
+            // to preserve the caller-visible cause semantics.
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (cause instanceof TaskExecutionException tee) {
+                throw tee;
+            }
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "OpenCode sandbox setup failed for agent " + agentId + ": " + cause.getMessage(), cause);
+        }
     }
 
     private OpenCodeInstance prepareInstance(UUID agentId, Agent agent) {
@@ -301,13 +380,21 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     }
 
     private Duration resolveMaxDuration(TaskContext context) {
-        if (context != null && context.maxDuration() != null) {
-            return context.maxDuration();
+        Duration maxDuration = (context != null && context.maxDuration() != null)
+                ? context.maxDuration()
+                : Duration.ofMinutes(properties.getMaxTaskMinutes());
+        if (context != null && context.maxRounds() > 0) {
+            // Translate the round budget into a time budget as well: allow at most
+            // 2 minutes per round, bounded by the overall max duration.
+            Duration roundBudget = Duration.ofMinutes(context.maxRounds() * 2L);
+            if (roundBudget.compareTo(maxDuration) < 0) {
+                return roundBudget;
+            }
         }
-        return Duration.ofMinutes(properties.getMaxTaskMinutes());
+        return maxDuration;
     }
 
-    private String buildSystemPrompt(Agent agent) {
+    private String buildSystemPrompt(Agent agent, TaskContext context) {
         StringBuilder sb = new StringBuilder(
                 "You are an autonomous coding agent working on behalf of Aria Conductor.");
         if (agent != null) {
@@ -320,6 +407,11 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             if (agent.getDescription() != null && !agent.getDescription().isBlank()) {
                 sb.append("\nDescription: ").append(agent.getDescription());
             }
+        }
+        if (context != null && context.maxRounds() > 0) {
+            sb.append("\nYou have at most ").append(context.maxRounds())
+                    .append(" assistant turns to complete the task. Stop when the limit")
+                    .append(" is reached even if the task appears incomplete.");
         }
         sb.append("\nYou operate inside an isolated sandbox workspace (/workspace)."
                 + " Permission requests default to denied.");

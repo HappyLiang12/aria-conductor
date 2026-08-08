@@ -7,7 +7,7 @@ BACKEND_DIR="$PROJECT_ROOT/agent-control-tower"
 
 # Parse arguments
 PROFILE="${SPRING_PROFILES_ACTIVE:-h2}"
-ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
+ADK_PROVIDER="${ADK_PROVIDER:-langchain}"
 SKIP_SANDBOX="${SKIP_SANDBOX:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 
@@ -75,4 +75,5 @@ fi
 echo "Launching Spring Boot..."
 mvn spring-boot:run -pl act-app \
     -Dspring-boot.run.profiles="$PROFILE" \
-    -Dspring-boot.run.jvmArguments="--enable-preview"
+    -Dspring-boot.run.jvmArguments="--enable-preview" \
+    -Dspring-boot.run.arguments="--adk.default-provider=$ADK_PROVIDER"

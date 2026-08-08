@@ -10,7 +10,8 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **Governance Workflows** — Built-in approval gates, review cycles, and compliance checkpoints
 - **Aria Assistant** — AI-powered operator assistant for managing your agent fleet
 - **LLM Provider Agnostic** — Works with OpenAI, DeepSeek, or any OpenAI-compatible API
-- **LangChain ADK Runtime** — Python-based agent runtime with LangChain integration
+- **Exchangeable Agent Provider** — Choose between **OpenCode** (sandbox-isolated, default) or **LangChain ADK** (Python runtime) per agent
+- **OpenCode Sandbox** — Agent code execution in isolated Docker containers via OpenSandbox
 - **MCP Server** — Model Context Protocol server for tool integration
 - **Real-time Dashboard** — React-based dashboard with live agent status, kanban board, and activity timeline
 
@@ -20,7 +21,8 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 |-----------|-----------|
 | Backend | Java 21, Spring Boot 3.3, Spring Data JPA |
 | Frontend | React 19, Vite, TypeScript |
-| Agent Runtime | Python 3.11, LangChain, FastAPI |
+| Agent Runtime | OpenCode (sandbox) / Python 3.11 LangChain (ADK) |
+| Sandbox | OpenSandbox (Docker-based isolation) |
 | Database | H2 (dev) / MariaDB (production) |
 | MCP Server | Node.js, TypeScript |
 | Containerization | Docker, Docker Compose |
@@ -51,13 +53,13 @@ LLM_API_KEY=your-api-key-here
 docker compose up -d
 ```
 
-Wait for all services to be healthy (~60 seconds for first startup).
+This starts the backend, frontend, LangChain ADK, and **OpenSandbox server** (for OpenCode agent runtime). Wait ~60 seconds for all services to be healthy.
 
 ### 3. Open the dashboard
 
 Navigate to [http://localhost:3000](http://localhost:3000)
 
-### 4. Configure LLM provider (optional)
+### 4. Configure LLM provider
 
 Use the dashboard Settings page or the API:
 ```bash
@@ -70,6 +72,24 @@ curl -X POST http://localhost:8080/api/v1/llm-providers \
     "baseUrl": "https://api.openai.com/v1",
     "defaultModel": "gpt-4o"
   }'
+```
+
+### 5. Create an agent
+
+Agents default to the **opencode** provider (sandbox-isolated). You can switch to **langchain** per agent in the Crew page.
+
+## Agent Providers
+
+| Provider | Description | Isolation |
+|----------|-------------|-----------|
+| **opencode** (default) | OpenCode CLI in Docker sandbox via OpenSandbox | Container per agent |
+| **langchain** | Python LangChain ADK runtime | Shared process |
+
+To switch an agent's provider, use the Crew page or the API:
+```bash
+curl -X PUT http://localhost:8080/api/v1/agents/{id} \
+  -H "Content-Type: application/json" \
+  -d '{"adkProvider": "langchain"}'
 ```
 
 ## Development Setup
@@ -85,13 +105,33 @@ For local development without Docker:
 | Node.js | 20+ | `node --version` |
 | pnpm | 9+ | `pnpm --version` |
 | Python | 3.11+ | `python --version` |
+| Docker | 24+ | `docker --version` (required for opencode provider) |
+
+### Quick start with scripts
+
+```bash
+# Docker available → full stack with OpenCode sandbox
+./scripts/quickstart.sh        # Linux/macOS
+.\scripts\quickstart.ps1       # Windows
+
+# Or start individual services:
+./scripts/start-backend.sh     # Starts OpenSandbox + backend
+./scripts/start-frontend.sh    # Vite dev server
+```
+
+The `start-backend` script automatically starts the OpenSandbox server (requires Docker) and defaults to the **opencode** ADK provider. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox startup.
 
 ### Backend
 
 ```bash
 cd agent-control-tower
 mvn clean install -DskipTests
+
+# With OpenCode sandbox (default, requires Docker):
 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2
+
+# Set OpenSandbox URL for local dev:
+# OPENCODE_SANDBOX_SERVER_URL=http://localhost:8090
 ```
 
 Backend starts at `http://localhost:8080`
@@ -106,13 +146,30 @@ pnpm dev
 
 Dashboard starts at `http://localhost:5173`
 
-### Python ADK Runtime
+### Python ADK Runtime (langchain provider)
+
+Only needed when using the **langchain** ADK provider:
 
 ```bash
 cd langchain-adk
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt  # Windows
 # .venv/bin/pip install -r requirements.txt   # Linux/macOS
+python -m uvicorn src.server:app --port 9300
+```
+
+### OpenSandbox Server (opencode provider)
+
+Required for the **opencode** ADK provider. Start via Docker Compose:
+
+```bash
+docker compose up -d opensandbox-server
+```
+
+OpenSandbox server starts at `http://localhost:8090`. The opencode sandbox image must be built first:
+
+```bash
+docker build -t aria-conductor/opencode-sandbox:1.0 agent-control-tower/opencode-sandbox
 ```
 
 ## Module Structure
@@ -121,7 +178,7 @@ python -m venv .venv
 |--------|-------------|
 | `act-common` | Shared models, DTOs, repositories |
 | `act-agent` | Agent lifecycle management |
-| `act-execution` | Tool execution engine, LLM client, ADK integration |
+| `act-execution` | Tool execution engine, LLM client, ADK integration (OpenCode + LangChain) |
 | `act-knowledge` | Knowledge base management |
 | `act-aria` | Aria AI assistant service |
 | `act-dashboard-api` | Dashboard REST API controllers |
@@ -129,6 +186,7 @@ python -m venv .venv
 | `act-test-support` | Shared test utilities |
 | `act-dashboard` | React frontend dashboard |
 | `langchain-adk` | Python LangChain agent runtime |
+| `opencode-sandbox` | Docker image for OpenCode sandbox |
 | `packages/mcp-server` | MCP protocol server |
 
 ## Configuration
@@ -140,6 +198,9 @@ python -m venv .venv
 | `LLM_API_KEY` | — | Your LLM provider API key |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API base URL |
 | `LLM_MODEL` | `gpt-4o` | Default LLM model |
+| `OPENCODE_SANDBOX_SERVER_URL` | `http://localhost:8090` | OpenSandbox server URL |
+| `OPENSANDBOX_API_KEY` | — | OpenSandbox API key (empty = insecure mode) |
+| `DEEPSEEK_API_KEY` | — | Injected into sandbox for opencode agents |
 | `DB_HOST` | `mariadb` | Database host (Docker) |
 | `DB_PORT` | `3306` | Database port |
 | `DB_NAME` | `aria_conductor` | Database name |

@@ -28,20 +28,27 @@ if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; t
     fi
 
     echo "Building and starting services..."
+    echo "  (includes OpenSandbox server for opencode agent runtime)"
     docker compose up -d --build
 
     echo ""
     echo "Services starting:"
-    echo "  Dashboard:  http://localhost:3000"
-    echo "  Backend:    http://localhost:8080"
-    echo "  ADK:        http://localhost:9300"
-    echo "  Swagger:    http://localhost:8080/swagger-ui.html"
+    echo "  Dashboard:       http://localhost:3000"
+    echo "  Backend:         http://localhost:8080"
+    echo "  ADK:             http://localhost:9300"
+    echo "  OpenSandbox:     http://localhost:8090"
+    echo "  Swagger:         http://localhost:8080/swagger-ui.html"
+    echo ""
+    echo "Default ADK provider: opencode (sandbox-isolated agent runtime)"
     echo ""
     echo "Check status: docker compose ps"
     echo "View logs:    docker compose logs -f"
     echo "Stop:         docker compose down"
 else
     echo "Docker not found. Falling back to local development mode."
+    echo ""
+    echo "NOTE: OpenCode sandbox mode requires Docker for the OpenSandbox server."
+    echo "      Without Docker, only langchain ADK provider is available."
     echo ""
 
     # Check prerequisites
@@ -63,8 +70,8 @@ else
 
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-    echo "Starting backend..."
-    bash "$SCRIPT_DIR/start-backend.sh" &
+    echo "Starting backend (langchain provider, Docker required for opencode)..."
+    ADK_PROVIDER=langchain SKIP_SANDBOX=true bash "$SCRIPT_DIR/start-backend.sh" &
     BACKEND_PID=$!
 
     sleep 5
@@ -77,6 +84,8 @@ else
     echo "Services starting:"
     echo "  Dashboard:  http://localhost:5173"
     echo "  Backend:    http://localhost:8080"
+    echo ""
+    echo "To use opencode provider, install Docker and re-run this script."
     echo ""
     echo "Press Ctrl+C to stop all services."
 

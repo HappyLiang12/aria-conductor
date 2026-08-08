@@ -639,8 +639,7 @@ public class AgentLoopEngine {
             // + OpenCode max-task-minutes timeout.
             TaskContext taskContext = new TaskContext(
                     parseMaxIterationsFromConfig(ctx.getAgent(), ctx.getMaxIterations()),
-                    Duration.ofMinutes(openCodeProperties.getMaxTaskMinutes()),
-                    null);
+                    Duration.ofMinutes(openCodeProperties.getMaxTaskMinutes()));
 
             // Execute on a virtual thread; poll every second so cancelRun() stays
             // responsive (abortTask on cancel → TaskExecutionException(ABORTED)).

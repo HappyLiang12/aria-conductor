@@ -160,6 +160,16 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
     }
 
     @Override
+    public boolean isServiceHealthy() {
+        // Service-level probe without agent context: the ADK host/port (the
+        // default/remote port range start). No live agent instance means the
+        // subprocess ADK is not listening → unhealthy, which is the correct
+        // "no service up" answer for the inventory health API.
+        return checkHealth(properties.getHost(), properties.getPortRangeStart())
+                == AdkHealthStatus.HEALTHY;
+    }
+
+    @Override
     public void shutdownAgent(UUID agentId) {
         AdkInstance inst = instances.remove(agentId);
         stopInstance(inst);

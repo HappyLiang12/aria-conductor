@@ -9,6 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,16 +49,21 @@ public class OpenCodeSandboxManager {
 
     /** Sandbox default TTL. */
     private static final Duration SANDBOX_TIMEOUT = Duration.ofMinutes(30);
+    /** Timeout for the server-level health probe. */
+    private static final Duration HEALTH_TIMEOUT = Duration.ofSeconds(3);
     /** Max recursion depth when uploading a workspace. */
     private static final int MAX_UPLOAD_DEPTH = 3;
     /** Cap on a single uploaded file to keep requests sane. */
     private static final long MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
     private final ConnectionConfig connectionConfig;
+    /** Raw server base URL (used for the service-level health probe). */
+    private final String serverUrl;
     /** agentId → live sandbox instance (single table, sandbox id is resolved by walking values). */
     private final Map<UUID, Sandbox> sandboxes = new ConcurrentHashMap<>();
 
     public OpenCodeSandboxManager(String serverUrl, String apiKey) {
+        this.serverUrl = serverUrl != null && !serverUrl.isBlank() ? serverUrl : "http://localhost:8080";
         this.connectionConfig = buildConnectionConfig(serverUrl, apiKey);
     }
 
@@ -188,6 +196,31 @@ public class OpenCodeSandboxManager {
             log.info("Sandbox {} killed", sandboxId);
         } catch (Exception e) {
             log.warn("Failed to kill sandbox {}: {}", sandboxId, e.getMessage());
+        }
+    }
+
+    /**
+     * Service-level health probe for the OpenSandbox server itself:
+     * {@code GET {serverUrl}/health}. No sandbox / agent context needed.
+     *
+     * @return {@code true} when the server responds 2xx; {@code false} on any
+     *         connectivity or HTTP error (never throws)
+     */
+    public boolean isServerHealthy() {
+        try (HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(HEALTH_TIMEOUT)
+                .version(HttpClient.Version.HTTP_1_1)
+                .build()) {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(serverUrl + "/health"))
+                    .timeout(HEALTH_TIMEOUT)
+                    .GET()
+                    .build();
+            HttpResponse<Void> resp = client.send(req, HttpResponse.BodyHandlers.discarding());
+            return resp.statusCode() / 100 == 2;
+        } catch (Exception e) {
+            log.debug("OpenSandbox server health probe failed: {}", e.getMessage());
+            return false;
         }
     }
 

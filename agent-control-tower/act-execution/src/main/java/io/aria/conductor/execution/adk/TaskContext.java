@@ -1,15 +1,12 @@
 package io.aria.conductor.execution.adk;
 
 import java.time.Duration;
-import java.util.function.BiConsumer;
 
 /**
  * Task-level constraints passed to {@link AdkProvider#executeTask}.
  *
  * @param maxRounds   maximum number of internal agent rounds (may be {@code null} if unset)
  * @param maxDuration maximum wall-clock duration for the whole task (may be {@code null})
- * @param auditSink   callback receiving (description, tokenCount) audit events (may be {@code null})
  */
-public record TaskContext(int maxRounds, Duration maxDuration,
-                          BiConsumer<String, Integer> auditSink) {
+public record TaskContext(int maxRounds, Duration maxDuration) {
 }

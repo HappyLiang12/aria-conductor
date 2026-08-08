@@ -211,9 +211,17 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             log.warn("OpenCode sandbox for agent {} unhealthy after {} consecutive failures — destroying for rebuild",
                     agentId, failures);
             destroyInstance(inst.sandboxId());
+            closeIfOwned(inst.client());
             instances.remove(agentId);
         }
         return healthy;
+    }
+
+    @Override
+    public boolean isServiceHealthy() {
+        // Service-level probe: the OpenSandbox lifecycle server itself (no agent /
+        // sandbox context). Never throws — an unreachable server reports false.
+        return sandboxManager.isServerHealthy();
     }
 
     @Override
@@ -229,6 +237,9 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             }
         });
         sandboxManager.killSandbox(inst.sandboxId());
+        // Close the per-instance HTTP client (owned by this provider). The fixed
+        // test client is injected and must stay open.
+        closeIfOwned(inst.client());
         log.info("OpenCode agent {} shut down (sandbox {})", agentId, inst.sandboxId());
     }
 
@@ -312,11 +323,12 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         }
 
         String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), properties.getSandboxEnv());
+        OpenCodeHttpClient client = null;
         try {
             sandboxManager.uploadWorkspace(agentId, workspace);
             sandboxManager.runServeCommand(sandboxId, properties.getPort());
             String serveUrl = sandboxManager.getSandboxUrl(sandboxId, properties.getPort());
-            OpenCodeHttpClient client = clientForUrl(serveUrl);
+            client = clientForUrl(serveUrl);
             waitForHealth(client, agentId);
             OpenCodeInstance instance = new OpenCodeInstance(sandboxId, true, Instant.now(), 0, client);
             instances.put(agentId, instance);
@@ -324,10 +336,12 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             return instance;
         } catch (TaskExecutionException e) {
             destroyInstance(sandboxId);
+            closeIfOwned(client);
             instances.remove(agentId);
             throw e;
         } catch (Exception e) {
             destroyInstance(sandboxId);
+            closeIfOwned(client);
             instances.remove(agentId);
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "OpenCode sandbox setup failed for agent " + agentId + ": " + e.getMessage(), e);
@@ -368,6 +382,21 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             sandboxManager.killSandbox(sandboxId);
         } catch (Exception e) {
             log.warn("Failed to destroy sandbox {}: {}", sandboxId, e.getMessage());
+        }
+    }
+
+    /**
+     * Close a per-instance {@link OpenCodeHttpClient} unless it is the injected
+     * fixed test client (owned by the test, must stay open). Never throws.
+     */
+    private void closeIfOwned(OpenCodeHttpClient client) {
+        if (client == null || client == fixedHttpClient) {
+            return;
+        }
+        try {
+            client.close();
+        } catch (Exception e) {
+            log.debug("Failed to close OpenCode HTTP client: {}", e.getMessage());
         }
     }
 

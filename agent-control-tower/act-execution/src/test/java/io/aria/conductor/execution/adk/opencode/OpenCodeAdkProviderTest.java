@@ -10,15 +10,22 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,6 +34,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -261,5 +269,121 @@ class OpenCodeAdkProviderTest {
 
         verify(sandboxManager).killSandbox("sb-1");
         assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
+    }
+
+    // ---- #1 cancel race: pending abort recorded before session creation ----
+
+    @Test
+    void abortTask_beforeSessionCreated_recordsPendingAbort_executeTaskAbortsAndThrowsAborted() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        // Simulate a cancel landing in the session-creation window: runClients is
+        // already registered (executeTask registers it before createSession) but
+        // runSessions is not yet populated — abortTask must record a pending abort.
+        when(httpClient.createSession("run-" + runId)).thenAnswer(inv -> {
+            provider.abortTask(runId);
+            return "sess-1";
+        });
+
+        assertThatThrownBy(() -> provider.executeTask(agent(agentId), runId, "task",
+                new TaskContext(0, Duration.ofMinutes(5), null)))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.ABORTED))
+                .hasMessageContaining("cancelled");
+
+        // The pending abort is honored right after createSession: session aborted.
+        verify(httpClient).abortSession("sess-1");
+    }
+
+    // ---- #7 maxRounds must not be a dead parameter ----
+
+    @Test
+    void executeTask_withMaxRounds_injectsRoundLimitIntoSystemPrompt() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
+
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(7, Duration.ofMinutes(30), null));
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(httpClient).sendMessage(eq("sess-1"), promptCaptor.capture(), eq("do the task"), any());
+        assertThat(promptCaptor.getValue())
+                .as("system prompt must carry the maxRounds constraint")
+                .contains("You have at most 7 assistant turns");
+    }
+
+    @Test
+    void executeTask_withoutMaxRounds_omitsRoundLimitFromSystemPrompt() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
+
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(0, Duration.ofMinutes(30), null));
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(httpClient).sendMessage(eq("sess-1"), promptCaptor.capture(), eq("do the task"), any());
+        assertThat(promptCaptor.getValue())
+                .as("no maxRounds means no round-limit injection")
+                .doesNotContain("assistant turns");
+    }
+
+    @Test
+    void executeTask_maxRoundsBudget_capsDeadlineBelowMaxDuration() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
+
+        // 2 rounds × 2 min = 4 min budget, tighter than the 30 min max duration.
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, Duration.ofMinutes(30), null));
+
+        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(4)));
+    }
+
+    // ---- #10 concurrent runs for the same agent share one sandbox preparation ----
+
+    @Test
+    void concurrentExecuteTask_sameAgent_createsSandboxOnlyOnce() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession(anyString())).thenAnswer(inv -> "sess-" + UUID.randomUUID());
+        when(httpClient.sendMessage(any(), any(), any(), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "done", 1, 1));
+
+        int threads = 4;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch ready = new CountDownLatch(threads);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<TaskResult>> futures = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            UUID runId = UUID.randomUUID();
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                go.await();
+                return provider.executeTask(agent(agentId), runId, "task-" + runId,
+                        new TaskContext(0, Duration.ofMinutes(5), null));
+            }));
+        }
+        assertThat(ready.await(10, TimeUnit.SECONDS)).as("all threads must reach the barrier").isTrue();
+        go.countDown();
+        for (Future<TaskResult> f : futures) {
+            assertThat(f.get(30, TimeUnit.SECONDS).finalOutput()).isEqualTo("done");
+        }
+        pool.shutdownNow();
+
+        verify(sandboxManager, times(1)).createSandbox(eq(agentId), eq(IMAGE), any());
+        assertThat(provider.instancesForTest()).containsKey(agentId);
     }
 }

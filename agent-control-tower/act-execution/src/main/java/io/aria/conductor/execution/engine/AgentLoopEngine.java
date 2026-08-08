@@ -734,6 +734,13 @@ public class AgentLoopEngine {
 
         while (true) {
             if (ctx.isCancelled()) {
+                // Cancel the underlying future: after this the future is terminal and
+                // future.get() would throw CancellationException, so it must never be
+                // called again (the throw below returns from this method directly).
+                // Note: CompletableFuture.cancel(true) does not interrupt the executing
+                // thread (mayInterruptIfRunning is a no-op there) — the provider-side
+                // abortTask is what actually stops in-flight work.
+                future.cancel(true);
                 try {
                     provider.abortTask(ctx.getRunId());
                 } catch (Exception abortEx) {

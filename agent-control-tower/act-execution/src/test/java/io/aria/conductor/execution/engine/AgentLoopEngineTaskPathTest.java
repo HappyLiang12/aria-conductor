@@ -44,6 +44,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -197,6 +199,43 @@ class AgentLoopEngineTaskPathTest {
         verify(taskProvider).abortTask(runId);
         verify(taskProvider, never()).call(any(), any(), any());
         assertThat(run.getErrorMessage()).contains("budget");
+    }
+
+    @Test
+    void cancelRun_abortsInFlightTask_andMarksRunTerminal() throws Exception {
+        CountDownLatch taskStarted = new CountDownLatch(1);
+        CountDownLatch releaseTask = new CountDownLatch(1);
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenAnswer(inv -> {
+            taskStarted.countDown();
+            try {
+                releaseTask.await(60, TimeUnit.SECONDS); // long-running task
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            }
+            return new TaskResult(runId, "sess-1", "done", 10, 5, false);
+        });
+
+        engine.startRun(runId);
+
+        assertThat(taskStarted.await(10, TimeUnit.SECONDS)).as("executeTask must start").isTrue();
+        engine.cancelRun(runId);
+
+        try {
+            // Cancel path: abortTask is invoked and the run reaches a terminal state.
+            // cancelRun() persists CANCELLED first, and completeRun() refuses to
+            // overwrite that externally-set terminal state, so the run ends
+            // CANCELLED/ABORTED depending on the interleaving.
+            // (CompletableFuture.cancel(true) does not interrupt the executing thread,
+            // so we assert the provider-side abort signal instead of an interrupt.)
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                verify(taskProvider).abortTask(runId);
+                assertThat(run.getStatus()).isIn(RunStatus.CANCELLED, RunStatus.ABORTED);
+            });
+        } finally {
+            // Unblock the still-executing executeTask so the virtual thread unwinds.
+            releaseTask.countDown();
+        }
     }
 
     @Test

@@ -23,6 +23,7 @@ const STATUS_TONE: Record<RunStatus, { pill: string; dot: string; label: string 
   COMPLETED:    { pill: 'pill ok',   dot: 'var(--green)',     label: 'Completed' },
   FAILED:       { pill: 'pill risk', dot: 'var(--red)',       label: 'Failed' },
   CANCELLED:    { pill: 'pill',      dot: 'var(--text-mute)', label: 'Cancelled' },
+  ABORTED:      { pill: 'pill risk', dot: 'var(--red)',       label: 'Aborted' },
 };
 
 function relativeTime(iso: string): string {

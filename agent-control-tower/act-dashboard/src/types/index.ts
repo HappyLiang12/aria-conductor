@@ -1,7 +1,7 @@
 // === Enums ===
 export type AgentType = 'NATIVE' | 'ADK';
 export type AgentHealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'RETIRED';
-export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABORTED';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
 export type KnowledgeType = 'SKILL' | 'SCRIPT' | 'PROMPT' | 'TOOL' | 'TEMPLATE' | 'GUIDELINE' | 'WORKFLOW';
 export type KnowledgeStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETIRED';

@@ -105,6 +105,7 @@ export function RunsPage() {
           <option value="COMPLETED">COMPLETED</option>
           <option value="FAILED">FAILED</option>
           <option value="CANCELLED">CANCELLED</option>
+          <option value="ABORTED">ABORTED</option>
         </select>
         <select value={filterAgent} onChange={(e) => setFilterAgent(e.target.value)}>
           <option value="">All Agents</option>

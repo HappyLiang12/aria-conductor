@@ -18,6 +18,7 @@ const statusColors: Record<string, string> = {
   COMPLETED: '#66bb6a',
   FAILED: '#f44336',
   CANCELLED: '#9e9e9e',
+  ABORTED: '#f44336',
   // Approval
   APPROVED: '#4caf50',
   DENIED: '#f44336',

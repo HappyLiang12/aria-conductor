@@ -2,7 +2,7 @@
 param(
     [string]$Profile = "h2",
     [switch]$SkipBuild,
-    [string]$AdkProvider = "opencode",
+    [string]$AdkProvider = "langchain",
     [switch]$SkipSandbox
 )
 
@@ -70,4 +70,4 @@ if (-not $SkipBuild -and -not (Test-Path $jarPath)) {
 }
 
 Write-Host "Launching Spring Boot..." -ForegroundColor Green
-mvn spring-boot:run -pl act-app "-Dspring-boot.run.profiles=$Profile" "-Dspring-boot.run.jvmArguments=--enable-preview"
+mvn spring-boot:run -pl act-app "-Dspring-boot.run.profiles=$Profile" "-Dspring-boot.run.jvmArguments=--enable-preview" "-Dspring-boot.run.arguments=--adk.default-provider=$AdkProvider"

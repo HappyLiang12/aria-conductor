@@ -46,7 +46,7 @@ if ($dockerAvailable) {
     Write-Host "  OpenSandbox:     http://localhost:8090" -ForegroundColor White
     Write-Host "  Swagger:         http://localhost:8080/swagger-ui.html" -ForegroundColor White
     Write-Host ""
-    Write-Host "Default ADK provider: opencode (sandbox-isolated agent runtime)" -ForegroundColor Cyan
+    Write-Host "ADK provider: langchain (default); use opencode with sandbox by setting -AdkProvider opencode" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Commands:" -ForegroundColor Cyan
     Write-Host "  docker compose ps              # Check status"
@@ -75,7 +75,7 @@ if ($dockerAvailable) {
     Write-Host "All prerequisites found. Starting services..." -ForegroundColor Green
     Write-Host ""
 
-    # Determine ADK provider (default: opencode if Docker available, else langchain)
+    # No-Docker path: default ADK provider is langchain (opencode requires Docker)
     $adkProvider = "langchain"
     Write-Host "Using ADK provider: $adkProvider (Docker required for opencode)" -ForegroundColor Yellow
 

@@ -39,7 +39,7 @@ if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; t
     echo "  OpenSandbox:     http://localhost:8090"
     echo "  Swagger:         http://localhost:8080/swagger-ui.html"
     echo ""
-    echo "Default ADK provider: opencode (sandbox-isolated agent runtime)"
+    echo "ADK provider: langchain (default); use opencode with sandbox by setting ADK_PROVIDER=opencode"
     echo ""
     echo "Check status: docker compose ps"
     echo "View logs:    docker compose logs -f"

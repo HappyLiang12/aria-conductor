@@ -192,6 +192,87 @@ export async function pollUntil<T = any>(
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Task-level (ADK provider) helpers — used by the API fault-injection /
+// concurrency / state-machine specs. All seeding goes through the REST API.
+// ─────────────────────────────────────────────────────────────────────
+
+/** POST /agents — ADK agent with an explicit provider (opencode | langchain). */
+export async function seedAdkAgent(
+  request: APIRequestContext,
+  opts: { name?: string; adkProvider?: string; model?: string; config?: string } = {},
+) {
+  const { status, data } = await apiCall(request, 'POST', '/agents', {
+    name: opts.name ?? uniqueName('e2e-adk-agent'),
+    agentType: 'ADK',
+    role: 'dev',
+    model: opts.model ?? 'deepseek-chat',
+    adkProvider: opts.adkProvider ?? 'opencode',
+    ...(opts.config ? { config: opts.config } : {}),
+  });
+  if (status !== 201) {
+    throw new Error(`seedAdkAgent failed: HTTP ${status} ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+/** POST /runs — starts a run for an ADK agent. */
+export async function startRun(
+  request: APIRequestContext,
+  agentId: string,
+  promptSeed: string,
+  maxIterations = 1,
+) {
+  const { status, data } = await apiCall(request, 'POST', '/runs', {
+    agentId,
+    promptSeed,
+    maxIterations,
+  });
+  if (status !== 201 && status !== 200) {
+    throw new Error(`startRun failed: HTTP ${status} ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+/**
+ * Approve the task-level approval gate for a run (default-on since 632d3de):
+ * waits for the PENDING approval tied to the run, then decides approved.
+ */
+export async function approveRunApproval(
+  request: APIRequestContext,
+  runId: string,
+  timeoutMs = 30_000,
+) {
+  const approvals = await pollUntil<any[]>(
+    request,
+    '/approvals',
+    (list) => Array.isArray(list) && list.some((a) => a.status === 'PENDING' && a.runId === runId),
+    timeoutMs,
+    2_000,
+  );
+  const pending = approvals.find((a) => a.status === 'PENDING' && a.runId === runId);
+  return apiCall(request, 'POST', `/approvals/${pending.id}/decide`, {
+    approved: true,
+    reason: 'API E2E auto-approval (task-level gate)',
+  });
+}
+
+/** Wait until a run reaches a terminal state and return the run entity. */
+export async function pollRunTerminal(
+  request: APIRequestContext,
+  runId: string,
+  timeoutMs = 120_000,
+) {
+  const TERMINAL = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
+  return pollUntil<any>(
+    request,
+    `/runs/${runId}`,
+    (run) => TERMINAL.includes(run.status),
+    timeoutMs,
+    2_000,
+  );
+}
+
 /**
  * Runs {fn} over {items} with at most {concurrency} in flight, preserving
  * input order in the result. This is the real-LLM budget guard: it caps how

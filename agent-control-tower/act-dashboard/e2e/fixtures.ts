@@ -216,27 +216,11 @@ export async function seedAdkAgent(
   return data;
 }
 
-/** POST /runs — starts a run for an ADK agent. */
-export async function startRun(
-  request: APIRequestContext,
-  agentId: string,
-  promptSeed: string,
-  maxIterations = 1,
-) {
-  const { status, data } = await apiCall(request, 'POST', '/runs', {
-    agentId,
-    promptSeed,
-    maxIterations,
-  });
-  if (status !== 201 && status !== 200) {
-    throw new Error(`startRun failed: HTTP ${status} ${JSON.stringify(data)}`);
-  }
-  return data;
-}
-
 /**
  * Approve the task-level approval gate for a run (default-on since 632d3de):
  * waits for the PENDING approval tied to the run, then decides approved.
+ * Throws when the decision is rejected so callers cannot silently pass a
+ * broken approvals API.
  */
 export async function approveRunApproval(
   request: APIRequestContext,
@@ -251,10 +235,14 @@ export async function approveRunApproval(
     2_000,
   );
   const pending = approvals.find((a) => a.status === 'PENDING' && a.runId === runId);
-  return apiCall(request, 'POST', `/approvals/${pending.id}/decide`, {
+  const decided = await apiCall(request, 'POST', `/approvals/${pending.id}/decide`, {
     approved: true,
     reason: 'API E2E auto-approval (task-level gate)',
   });
+  if (decided.status !== 200) {
+    throw new Error(`approval decide failed: HTTP ${decided.status} ${JSON.stringify(decided.data)}`);
+  }
+  return decided;
 }
 
 /** Wait until a run reaches a terminal state and return the run entity. */

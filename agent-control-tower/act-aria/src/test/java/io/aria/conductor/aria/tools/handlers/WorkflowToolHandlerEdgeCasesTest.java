@@ -45,7 +45,9 @@ class WorkflowToolHandlerEdgeCasesTest {
 
     @BeforeEach
     void setUp() {
-        handler = new WorkflowToolHandler(workflowService, agentRepository, new ObjectMapper());
+        handler = new WorkflowToolHandler(workflowService,
+                org.mockito.Mockito.mock(io.aria.conductor.knowledge.service.WorkflowTemplateService.class),
+                agentRepository, new ObjectMapper());
         lenient().when(agentRepository.findByName("dev-bot")).thenReturn(Optional.of(
                 Agent.builder().id(devAgentId).name("dev-bot").build()));
     }

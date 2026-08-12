@@ -5,6 +5,7 @@ import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
+import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
@@ -12,6 +13,7 @@ import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
 import io.aria.conductor.knowledge.dto.UpdateKnowledgeRequest;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
+import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +22,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.time.Instant;
 import java.util.List;
@@ -35,10 +38,12 @@ class SpecReviewCoordinatorTest {
 
     @Mock KnowledgeService knowledgeService;
     @Mock KnowledgeItemRepository itemRepository;
+    @Mock KnowledgeVersionRepository versionRepository;
     @Mock ApprovalRepository approvalRepository;
     @Mock WorkflowChainRepository chainRepository;
     @Mock WorkflowService workflowService;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock PlatformTransactionManager transactionManager;
 
     SpecReviewCoordinator coordinator;
 
@@ -88,8 +93,8 @@ class SpecReviewCoordinatorTest {
                 .build();
 
         coordinator = new SpecReviewCoordinator(
-                knowledgeService, itemRepository, approvalRepository,
-                chainRepository, workflowService, eventPublisher, 1800000L);
+                knowledgeService, itemRepository, versionRepository, approvalRepository,
+                chainRepository, workflowService, eventPublisher, transactionManager, 1800000L);
     }
 
     @Test
@@ -173,5 +178,82 @@ class SpecReviewCoordinatorTest {
         coordinator.onApprovalDecided(new ApprovalDecidedEvent(this, UUID.randomUUID(), ApprovalStatus.APPROVED));
 
         verifyNoInteractions(knowledgeService, workflowService);
+    }
+
+    @Test
+    void onApprovalDecided_chainNotWaitingApproval_skipsAdvance() {
+        // Approval already APPROVED but the chain was resumed by another approval (double-approval guard).
+        when(approvalRepository.findById(approvalId)).thenReturn(Optional.of(specReviewApproval));
+        chain.setStatus(WorkflowChain.Status.RUNNING);
+        when(workflowService.findChainByRunId(baRunId)).thenReturn(chain);
+        specReviewApproval.setStatus(ApprovalStatus.APPROVED);
+
+        coordinator.onApprovalDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED));
+
+        verify(knowledgeService, never()).reviewKnowledge(any(), any());
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+    }
+
+    @Test
+    void onApprovalRejected_reschedulesBaAfterMovingChainToRunning() {
+        when(approvalRepository.findById(approvalId)).thenReturn(Optional.of(specReviewApproval));
+        when(workflowService.findChainByRunId(baRunId)).thenReturn(chain);
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        specReviewApproval.setStatus(ApprovalStatus.DENIED);
+
+        coordinator.onApprovalDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.DENIED));
+
+        assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.RUNNING);
+        verify(workflowService).rescheduleStep(eq(chainId), eq(0), anyString());
+    }
+
+    @Test
+    void resubmitApproval_usesLatestSpecVersionContent_andRejectsDuplicatePending() {
+        KnowledgeItem item = KnowledgeItem.builder()
+                .id(specItemId)
+                .name("spec-" + chainId)
+                .currentVersion("v0.2.0")
+                .build();
+        chain.setStatus(WorkflowChain.Status.WAITING_APPROVAL);
+        chain.setStepsJson("[{\"runId\":\"" + baRunId + "\",\"kind\":\"BA\"}]");
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(WorkflowStep.builder()
+                .runId(baRunId).kind(WorkflowStep.StepKind.BA).build());
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.of(item));
+        when(approvalRepository.findByRunId(baRunId)).thenReturn(List.of());
+        KnowledgeVersion version = KnowledgeVersion.builder()
+                .knowledgeItemId(specItemId)
+                .version("v0.2.0")
+                .content("# Real spec body v2")
+                .build();
+        when(versionRepository.findByKnowledgeItemIdAndVersion(specItemId, "v0.2.0"))
+                .thenReturn(Optional.of(version));
+
+        Approval created = coordinator.resubmitApproval(chainId);
+
+        assertThat(created.getContent()).isEqualTo("# Real spec body v2");
+        assertThat(created.getApprovalType()).isEqualTo(Approval.ApprovalType.SPEC_REVIEW);
+
+        // Second call with an existing PENDING approval must be rejected (idempotency).
+        when(approvalRepository.findByRunId(baRunId)).thenReturn(List.of(specReviewApproval));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> coordinator.resubmitApproval(chainId))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void onWorkflowCancelled_expiresPendingSpecReviewApprovals() {
+        chain.setStepsJson("[{\"runId\":\"" + baRunId + "\",\"kind\":\"BA\"}]");
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(WorkflowStep.builder()
+                .runId(baRunId).kind(WorkflowStep.StepKind.BA).build());
+        when(approvalRepository.findByRunId(baRunId)).thenReturn(List.of(specReviewApproval));
+
+        coordinator.onWorkflowCancelled(new WorkflowCancelledEvent(this, chainId, "sdd-chain"));
+
+        assertThat(specReviewApproval.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(specReviewApproval.getReason()).isEqualTo("Workflow cancelled");
+        verify(approvalRepository).save(specReviewApproval);
     }
 }

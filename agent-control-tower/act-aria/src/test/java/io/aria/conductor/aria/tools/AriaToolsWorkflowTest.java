@@ -116,7 +116,9 @@ class AriaToolsWorkflowTest {
 
         Map<String, ToolHandler> handlers = new HashMap<>();
         handlers.put("workflowHandler", new io.aria.conductor.aria.tools.handlers.WorkflowToolHandler(
-                workflowService, agentRepository, objectMapper));
+                workflowService,
+                org.mockito.Mockito.mock(io.aria.conductor.knowledge.service.WorkflowTemplateService.class),
+                agentRepository, objectMapper));
         ToolExecutionEngine engine = new ToolExecutionEngine(
                 toolDefinitionRepository, sandboxRunner, handlers, workspaceManager);
 

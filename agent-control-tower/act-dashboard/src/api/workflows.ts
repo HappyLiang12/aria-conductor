@@ -37,6 +37,11 @@ export async function retryWorkflow(id: string, stepIndex: number): Promise<Work
   return data;
 }
 
+export async function resubmitApproval(id: string): Promise<WorkflowChain> {
+  const { data } = await client.post<WorkflowChain>(`/api/v1/workflows/${id}/resubmit-approval`);
+  return data;
+}
+
 export async function updateWorkflow(id: string, body: { name?: string; description?: string }): Promise<WorkflowChain> {
   const { data } = await client.put<WorkflowChain>(`/api/v1/workflows/${id}`, body);
   return data;

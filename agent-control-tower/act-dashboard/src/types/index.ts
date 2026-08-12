@@ -3,10 +3,12 @@ export type AgentType = 'NATIVE' | 'ADK';
 export type AgentHealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'RETIRED';
 export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABORTED';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
-export type KnowledgeType = 'SKILL' | 'SCRIPT' | 'PROMPT' | 'TOOL' | 'TEMPLATE' | 'GUIDELINE' | 'WORKFLOW';
+export type ApprovalType = 'TOOL_CALL' | 'SPEC_REVIEW';
+export type ContentKind = 'MARKDOWN' | 'HTML';
+export type KnowledgeType = 'SKILL' | 'SCRIPT' | 'PROMPT' | 'TOOL' | 'TEMPLATE' | 'GUIDELINE' | 'WORKFLOW' | 'SPEC';
 export type KnowledgeStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETIRED';
 export type ToolCallStatus = 'PENDING' | 'EXECUTING' | 'COMPLETED' | 'FAILED' | 'DENIED';
-export type WorkflowStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type WorkflowStatus = 'PENDING' | 'RUNNING' | 'WAITING_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type WorkflowStepStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 
 // === Entities ===
@@ -43,14 +45,16 @@ export interface Run {
 export interface Approval {
   id: string;
   runId: string;
-  toolCallId: string;
+  toolCallId: string | null;
   status: ApprovalStatus;
   reason: string;
   requestedAt: string;
   decidedAt: string | null;
   expiresAt: string;
-  // Enriched fields from GET /api/v1/approvals (#24) — present when the approval is
-  // backed by a tool call; optional for backward compatibility.
+  approvalType?: ApprovalType;
+  content?: string;
+  contentKind?: ContentKind;
+  knowledgeItemId?: string;
   toolName?: string;
   arguments?: string;
   riskTier?: string;
@@ -303,7 +307,7 @@ export interface CreateEvidenceRequest {
 }
 
 // === Kanban ===
-export type KanbanStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'BLOCKED' | 'CANCELLED';
+export type KanbanStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'BLOCKED' | 'CANCELLED' | 'REVIEW';
 export type KanbanPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface KanbanItem {

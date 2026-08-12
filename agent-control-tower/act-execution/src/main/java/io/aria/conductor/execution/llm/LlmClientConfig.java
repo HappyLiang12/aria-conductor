@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Qualifier;
 
 @Configuration
@@ -19,6 +20,7 @@ public class LlmClientConfig {
 
     @Bean
     @Primary
+    @Profile("!noop-llm")
     public LlmClient resilientLlmClient(@Qualifier("rawLlmClient") LlmClient rawLlmClient, SystemConfigService systemConfigService) {
         return new LlmClientRetryDecorator(rawLlmClient, systemConfigService);
     }

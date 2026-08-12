@@ -56,8 +56,14 @@ public class ApprovalToolHandler implements ToolHandler {
         String reason = Objects.toString(args.get("reason"), "");
         if (id.isEmpty()) return error("Missing required parameter: id");
         if (decision.isEmpty()) return error("Missing required parameter: decision");
+        UUID approvalId = UUID.fromString(id);
+        // Governance: SPEC_REVIEW approvals require a human decision, not an agent's.
+        Approval target = approvalRepository.findById(approvalId).orElse(null);
+        if (target != null && target.getApprovalType() == Approval.ApprovalType.SPEC_REVIEW) {
+            return error("SPEC_REVIEW approvals must be decided by a human via the dashboard, not by an agent.");
+        }
         boolean approved = Set.of("approve","approved","yes","true").contains(decision.toLowerCase());
-        approvalGate.decideApproval(UUID.fromString(id), approved, reason);
+        approvalGate.decideApproval(approvalId, approved, reason);
         return "Approval " + id + " " + (approved ? "approved" : "denied") + ".";
     }
 

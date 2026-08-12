@@ -281,6 +281,13 @@ public class WorkflowService {
     public WorkflowResponse rescheduleStep(UUID chainId, int stepIndex, String feedback) {
         WorkflowChain chain = workflowChainRepository.findById(chainId)
                 .orElseThrow(() -> new ResourceNotFoundException("WorkflowChain", chainId));
+        if (chain.getStatus() != WorkflowChain.Status.RUNNING
+                && chain.getStatus() != WorkflowChain.Status.PENDING
+                && chain.getStatus() != WorkflowChain.Status.WAITING_APPROVAL) {
+            throw new IllegalArgumentException(
+                    "Cannot reschedule step: workflow status is " + chain.getStatus()
+                            + "; must be RUNNING, PENDING or WAITING_APPROVAL");
+        }
         List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
         if (stepIndex < 0 || stepIndex >= steps.size()) {
             throw new IllegalArgumentException("Step index out of range: " + stepIndex);
@@ -300,7 +307,7 @@ public class WorkflowService {
         String augmented = feedback != null && !feedback.isBlank()
                 ? base + "\n\nFeedback from the previous round:\n" + feedback
                 : base;
-        step.setPromptTemplate(augmented); // note: startStep truncates at 10,000 chars
+        step.setPromptTemplate(augmented); // note: startStep truncates at 10,000 chars; reschedules are bounded by DEFAULT_MAX_ATTEMPTS so the latest feedback stays visible in practice
         chain.setStepsJson(serializeSteps(steps));
         workflowChainRepository.save(chain);
         startStep(chain, stepIndex, null);

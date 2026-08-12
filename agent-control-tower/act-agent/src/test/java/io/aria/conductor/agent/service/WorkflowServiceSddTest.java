@@ -145,6 +145,18 @@ class WorkflowServiceSddTest {
         verify(runService, never()).createRun(any());
     }
 
+    @Test
+    void rescheduleStep_terminalChainState_throws() {
+        WorkflowChain chain = chainWithDevStepAt(1, 0);
+        chain.setStatus(WorkflowChain.Status.COMPLETED);
+        when(workflowChainRepository.findById(chain.getId())).thenReturn(Optional.of(chain));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> workflowService.rescheduleStep(chain.getId(), 1, "late feedback"))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(runService, never()).createRun(any());
+    }
+
     // ==================== cancelWorkflow (WAITING_APPROVAL) ====================
 
     @Test

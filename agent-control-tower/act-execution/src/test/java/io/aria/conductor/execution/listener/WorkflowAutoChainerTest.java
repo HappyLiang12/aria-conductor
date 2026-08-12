@@ -1,10 +1,12 @@
 package io.aria.conductor.execution.listener;
 
+import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +38,8 @@ import static org.mockito.Mockito.when;
 class WorkflowAutoChainerTest {
 
     @Mock private WorkflowService workflowService;
+    @Mock private DoDService dodService;
+    @Mock private WorkflowChainRepository chainRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
 
     private WorkflowAutoChainer chainer;
@@ -46,7 +50,7 @@ class WorkflowAutoChainerTest {
 
     @BeforeEach
     void setUp() {
-        chainer = new WorkflowAutoChainer(workflowService, eventPublisher);
+        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher);
         chain = TestDataBuilder.aWorkflowChain()
                 .withName("release-train")
                 .withStatus(WorkflowChain.Status.RUNNING)

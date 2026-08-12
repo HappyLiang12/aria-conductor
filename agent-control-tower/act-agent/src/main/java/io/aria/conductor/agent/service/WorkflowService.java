@@ -190,6 +190,13 @@ public class WorkflowService {
         return -1;
     }
 
+    /** Null-safe accessor for a step by index. */
+    public WorkflowStep stepAt(WorkflowChain chain, int index) {
+        if (chain == null) return null;
+        List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        return (index >= 0 && index < steps.size()) ? steps.get(index) : null;
+    }
+
     // ==================== Lifecycle methods ====================
 
     /**

@@ -126,6 +126,11 @@ jobs:
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Run integration tier only
         run: cd agent-control-tower && mvn verify -Dskip.unit.tests=true -Dspring.profiles.active=h2
+      - name: Schema consistency smoke (V40 SDD columns)
+        run: |
+          cd agent-control-tower
+          mvn -pl act-app test -Dtest=SchemaConsistencySmokeTest \
+            -Dspring.profiles.active=h2
 
   frontend-build:
     name: Frontend Build Check

@@ -128,7 +128,20 @@ class EventBroadcastListenerTest {
         assertThat(event.type()).isEqualTo("approval.requested");
         assertThat(event.data()).containsEntry("approvalId", approvalId.toString())
                 .containsEntry("runId", runId.toString())
-                .containsEntry("toolCallId", toolCallId.toString());
+                .containsEntry("toolCallId", toolCallId.toString())
+                .containsEntry("approvalType", "TOOL_CALL");
+    }
+
+    @Test
+    void onApprovalRequested_nullToolCallId_specReview_noNpe() {
+        UUID approvalId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, runId, null, "SPEC_REVIEW"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.requested");
+        assertThat(event.data()).containsEntry("toolCallId", null)
+                .containsEntry("approvalType", "SPEC_REVIEW");
     }
 
     @Test

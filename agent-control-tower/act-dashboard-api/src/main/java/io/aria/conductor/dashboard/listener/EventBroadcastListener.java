@@ -69,11 +69,13 @@ public class EventBroadcastListener {
 
     @EventListener
     public void onApprovalRequested(ApprovalRequestedEvent event) {
-        broadcast("approval.requested", Map.of(
-                "approvalId", event.getApprovalId().toString(),
-                "runId", event.getRunId().toString(),
-                "toolCallId", event.getToolCallId().toString()
-        ));
+        Map<String, Object> data = new HashMap<>();
+        data.put("approvalId", event.getApprovalId().toString());
+        data.put("runId", event.getRunId().toString());
+        // SPEC_REVIEW approvals have no tool call; carry the type instead.
+        data.put("toolCallId", event.getToolCallId() != null ? event.getToolCallId().toString() : null);
+        data.put("approvalType", event.getApprovalType() != null ? event.getApprovalType() : "TOOL_CALL");
+        broadcast("approval.requested", data);
     }
 
     @EventListener

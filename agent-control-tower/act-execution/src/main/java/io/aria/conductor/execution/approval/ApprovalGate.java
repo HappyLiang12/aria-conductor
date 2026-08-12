@@ -322,10 +322,16 @@ public class ApprovalGate {
 
     /**
      * Cancel all pending approvals for a given run.
+     *
+     * <p>Only TOOL_CALL approvals are cancelled: SPEC_REVIEW approvals are created after
+     * the BA run has already completed (by {@code SpecReviewCoordinator}) and their
+     * lifecycle is governed by the spec-approval flow, not the originating run.
      */
     public void cancelAllPendingForRun(UUID runId) {
         approvalRepository.findByRunId(runId).stream()
                 .filter(a -> a.getStatus() == ApprovalStatus.PENDING)
+                .filter(a -> a.getApprovalType() == null
+                        || a.getApprovalType() == Approval.ApprovalType.TOOL_CALL)
                 .forEach(a -> {
                     a.setStatus(ApprovalStatus.EXPIRED);
                     a.setReason("Run cancelled");

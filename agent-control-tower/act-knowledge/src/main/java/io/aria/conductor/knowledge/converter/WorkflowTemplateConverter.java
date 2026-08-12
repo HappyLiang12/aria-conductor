@@ -341,7 +341,7 @@ public class WorkflowTemplateConverter {
     static WorkflowStep.StepKind parseKind(String raw) {
         if (raw == null || raw.isBlank()) return WorkflowStep.StepKind.GENERIC;
         try {
-            return WorkflowStep.StepKind.valueOf(raw.trim().toUpperCase());
+            return WorkflowStep.StepKind.valueOf(raw.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             log.warn("Unknown workflow step kind '{}', defaulting to GENERIC", raw);
             return WorkflowStep.StepKind.GENERIC;

@@ -8,6 +8,7 @@ import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.execution.tool.ToolHandler;
+import io.aria.conductor.knowledge.service.WorkflowTemplateService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
@@ -27,12 +28,16 @@ import java.util.*;
 public class WorkflowToolHandler implements ToolHandler {
 
     private final WorkflowService workflowService;
+    private final WorkflowTemplateService workflowTemplateService;
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
 
-    public WorkflowToolHandler(WorkflowService workflowService, AgentRepository agentRepository,
+    public WorkflowToolHandler(WorkflowService workflowService,
+                               WorkflowTemplateService workflowTemplateService,
+                               AgentRepository agentRepository,
                                ObjectMapper objectMapper) {
         this.workflowService = workflowService;
+        this.workflowTemplateService = workflowTemplateService;
         this.agentRepository = agentRepository;
         this.objectMapper = objectMapper;
     }
@@ -47,12 +52,32 @@ public class WorkflowToolHandler implements ToolHandler {
                 case "list_workflows" -> listWorkflows();
                 case "cancel_workflow" -> cancelWorkflow(arguments);
                 case "retry_workflow_step" -> retryWorkflowStep(arguments);
+                case "instantiate_template" -> instantiateTemplate(arguments);
                 default -> error("Unknown tool: " + toolName);
             };
         } catch (Exception e) {
             log.error("WorkflowToolHandler failed for {}", toolName, e);
             return error(e.getMessage());
         }
+    }
+
+    /** Start the governed SDD loop from an APPROVED WORKFLOW template (e.g. development-workflow). */
+    private String instantiateTemplate(Map<String, Object> args) throws Exception {
+        String templateId = Objects.toString(args.get("templateId"), "");
+        if (templateId.isBlank()) return error("Missing required parameter: templateId");
+        UUID id;
+        try {
+            id = UUID.fromString(templateId);
+        } catch (IllegalArgumentException e) {
+            return error("templateId must be a UUID");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, String> params = (Map<String, String>) args.get("parameters");
+        if (params == null) params = Map.of();
+        WorkflowResponse resp = workflowTemplateService.instantiateTemplate(id, params);
+        return "Workflow template instantiated and started (chain id: " + resp.getId()
+                + ", name: " + resp.getName() + ", status: " + resp.getStatus()
+                + "). The loop pauses for human spec approval (SPEC_REVIEW) before Dev runs.";
     }
 
     private String createWorkflow(Map<String, Object> args) throws Exception {

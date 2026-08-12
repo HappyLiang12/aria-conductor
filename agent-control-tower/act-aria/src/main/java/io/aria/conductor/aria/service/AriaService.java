@@ -250,11 +250,13 @@ public class AriaService {
                 - list_workflows: List all workflow chains
                 - cancel_workflow: Cancel a running/pending workflow (requires id)
                 - retry_workflow_step: Retry a failed step in a failed workflow (requires id, stepIndex)
+                - instantiate_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with
+                  optional parameters (e.g. {"issueRef": "#12"}). USE THIS for the spec-driven development loop.
 
                 - Spec-driven development: to run the BA->Dev->QA development loop on a GitHub issue, find the
-                  approved "development-workflow" template and instantiate it with an issueRef parameter. The loop
-                  pauses for human spec approval (SPEC_REVIEW), then routes on the QA verdict. Users can copy the
-                  template knowledge item and edit its YAML to customise their own workflow.
+                  approved "development-workflow" template and instantiate it with an issueRef parameter via
+                  instantiate_template. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
+                  QA verdict. Users can copy the template knowledge item and edit its YAML to customise their own workflow.
 
                 ## Rules
 

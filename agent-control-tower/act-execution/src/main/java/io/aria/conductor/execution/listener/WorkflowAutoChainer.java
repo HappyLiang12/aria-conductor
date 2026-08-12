@@ -16,6 +16,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -152,14 +153,22 @@ public class WorkflowAutoChainer {
 
     /** Route a completed QA step on its latest recorded qa-stage verdict. */
     private void routeOnQaVerdict(WorkflowChain chain, int stepIndex, String finalOutput) {
-        DoDRecord record = dodService.getStatus(chain.getId().toString());
+        DoDRecord record;
+        try {
+            record = dodService.getStatus(chain.getId().toString());
+        } catch (IllegalStateException e) {
+            // QA-kind step without a DoD record (chain built outside instantiateTemplate).
+            workflowService.markStepFailed(chain.getId(), stepIndex,
+                    "QA completed but no DoD record");
+            return;
+        }
         DoDStageReview latest = dodService.latestQaReview(record);
         if (latest == null || latest.getVerdict() == null) {
             workflowService.markStepFailed(chain.getId(), stepIndex,
                     "QA completed but no verdict submitted");
             return;
         }
-        String verdict = latest.getVerdict().toUpperCase();
+        String verdict = latest.getVerdict().toUpperCase(Locale.ROOT);
         switch (verdict) {
             case "PASS" -> {
                 storeQaReportIdIfPresent(chain, finalOutput);
@@ -168,10 +177,20 @@ public class WorkflowAutoChainer {
             }
             case "DEFECT" -> {
                 int devIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV);
+                if (devIdx < 0) {
+                    workflowService.markStepFailed(chain.getId(), stepIndex,
+                            "DEFECT verdict but chain has no DEV step");
+                    return;
+                }
                 workflowService.rescheduleStep(chain.getId(), devIdx, latest.getComment());
             }
             case "SPEC_GAP" -> {
                 int baIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA);
+                if (baIdx < 0) {
+                    workflowService.markStepFailed(chain.getId(), stepIndex,
+                            "SPEC_GAP verdict but chain has no BA step");
+                    return;
+                }
                 workflowService.rescheduleStep(chain.getId(), baIdx, latest.getComment());
             }
             default -> workflowService.markStepFailed(chain.getId(), stepIndex,

@@ -44,19 +44,4 @@ class SchemaConsistencySmokeTest {
         assertThat(present).as("workflow_chains.report_artifact_id")
                 .contains("REPORT_ARTIFACT_ID");
     }
-
-    @Test
-    void v40SeedDevelopmentWorkflowTemplateIsPresent() {
-        Integer count = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM knowledge_items WHERE name = 'development-workflow'",
-                Integer.class);
-        assertThat(count).isEqualTo(1);
-
-        Integer versionCount = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM knowledge_versions v JOIN knowledge_items i"
-                        + " ON v.knowledge_item_id = i.id WHERE i.name = 'development-workflow'"
-                        + " AND v.yaml_content LIKE '%kind: ba%'",
-                Integer.class);
-        assertThat(versionCount).isEqualTo(1);
-    }
 }

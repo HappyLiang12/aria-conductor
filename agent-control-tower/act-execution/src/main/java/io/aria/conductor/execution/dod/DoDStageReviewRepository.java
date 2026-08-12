@@ -11,5 +11,7 @@ public interface DoDStageReviewRepository extends JpaRepository<DoDStageReview, 
 
     List<DoDStageReview> findByDodIdAndStage(String dodId, String stage);
 
+    List<DoDStageReview> findByDodIdAndStageOrderByReviewedAtDesc(String dodId, String stage);
+
     List<DoDStageReview> findByDodIdOrderByReviewedAtAsc(String dodId);
 }

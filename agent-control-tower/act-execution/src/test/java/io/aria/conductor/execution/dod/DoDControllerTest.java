@@ -37,9 +37,9 @@ class DoDControllerTest {
         DoDRecord record = DoDRecord.builder()
                 .id("d1").taskId("T1").currentStage("dev")
                 .overallStatus(DoDService.STATUS_IN_PROGRESS).build();
-        when(dodService.init("T1", "story")).thenReturn(record);
+        when(dodService.init("T1", "story", null)).thenReturn(record);
 
-        InitDoDRequest body = new InitDoDRequest("T1", "story");
+        InitDoDRequest body = new InitDoDRequest("T1", "story", null);
         mockMvc.perform(post("/api/v1/dod/init")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
@@ -54,10 +54,10 @@ class DoDControllerTest {
         DoDRecord advanced = DoDRecord.builder()
                 .id("d1").taskId("T1").currentStage("qa")
                 .overallStatus(DoDService.STATUS_IN_PROGRESS).build();
-        when(dodService.review(eq("T1"), eq("u1"), any(), eq(true), any(), any()))
+        when(dodService.review(eq("T1"), eq("u1"), any(), eq(true), any(), any(), any()))
                 .thenReturn(advanced);
 
-        SubmitReviewRequest body = new SubmitReviewRequest("T1", "u1", "Alice", true, "evidence", "lgtm");
+        SubmitReviewRequest body = new SubmitReviewRequest("T1", "u1", "Alice", true, "evidence", "lgtm", null);
         mockMvc.perform(post("/api/v1/dod/review")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
@@ -67,10 +67,10 @@ class DoDControllerTest {
 
     @Test
     void postReview_invalidState_returns400() throws Exception {
-        when(dodService.review(any(), any(), any(), anyBoolean(), any(), any()))
+        when(dodService.review(any(), any(), any(), anyBoolean(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("DoD already completed"));
 
-        SubmitReviewRequest body = new SubmitReviewRequest("T1", "u1", null, true, null, null);
+        SubmitReviewRequest body = new SubmitReviewRequest("T1", "u1", null, true, null, null, null);
         mockMvc.perform(post("/api/v1/dod/review")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))

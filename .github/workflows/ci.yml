@@ -130,7 +130,7 @@ jobs:
         run: |
           cd agent-control-tower
           mvn -pl act-app test -Dtest=SchemaConsistencySmokeTest \
-            -Dspring.profiles.active=h2
+            -Dspring.profiles.active=h2 -Djacoco.skip=true
 
   frontend-build:
     name: Frontend Build Check

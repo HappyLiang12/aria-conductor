@@ -68,6 +68,10 @@ class DoDServiceSddTest {
         assertThat(record.getCurrentStage()).isEqualTo("qa");
         dodService.review("chain-3", "qa", "QA", true, null, null, "PASS");   // qa passed
         assertThat(record.getOverallStatus()).isEqualTo(DoDService.STATUS_PASSED);
+
+        // Verdict was recorded on the second review
+        verify(reviewRepository).save(argThat(rv ->
+                "qa".equals(rv.getStage()) && "PASS".equals(rv.getVerdict())));
     }
 
     @Test
@@ -79,6 +83,20 @@ class DoDServiceSddTest {
         dodService.review("chain-4", "u", "U", true, null, "c", null);
 
         verify(reviewRepository).save(argThat(rv -> rv.getVerdict() == null));
+    }
+
+    @Test
+    void review_withCustomStages_advancesIndependentlyOfDefaultStageNames() {
+        when(dodRepository.findByTaskId("chain-5")).thenReturn(Optional.empty());
+        DoDRecord record = dodService.init("chain-5", "SDD", List.of("analysis", "implementation", "verification"));
+        stubFind(record);
+
+        dodService.review("chain-5", "e1", null, true, null, null, null);                 // analysis passed
+        assertThat(record.getCurrentStage()).isEqualTo("implementation");
+        dodService.review("chain-5", "e2", null, false, null, "defect", "DEFECT");        // implementation failed, but optional
+        assertThat(record.getCurrentStage()).isEqualTo("verification");
+        dodService.review("chain-5", "e3", null, true, null, null, "PASS");               // verification passed
+        assertThat(record.getOverallStatus()).isEqualTo(DoDService.STATUS_PASSED);
     }
 
     // -------- helpers --------

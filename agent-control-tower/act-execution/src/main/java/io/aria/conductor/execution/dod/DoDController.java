@@ -25,8 +25,9 @@ public class DoDController {
 
     @PostMapping("/init")
     public ResponseEntity<DoDRecord> init(@Valid @RequestBody InitDoDRequest request) {
-        log.info("DoD init: taskId={} taskType={}", request.taskId(), request.taskType());
-        DoDRecord record = dodService.init(request.taskId(), request.taskType());
+        log.info("DoD init: taskId={} taskType={} stages={}",
+                request.taskId(), request.taskType(), request.stages());
+        DoDRecord record = dodService.init(request.taskId(), request.taskType(), request.stages());
         return ResponseEntity.ok(record);
     }
 
@@ -41,7 +42,8 @@ public class DoDController {
                     request.reviewerName(),
                     request.passed(),
                     request.evidence(),
-                    request.comment());
+                    request.comment(),
+                    request.verdict());
             return ResponseEntity.ok(record);
         } catch (IllegalStateException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

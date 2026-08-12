@@ -211,6 +211,14 @@ public class DoDService {
                 .orElseThrow(() -> new IllegalStateException("No DoD record for task: " + taskId));
     }
 
+    /** Latest qa-stage review for an SDD chain, or null. */
+    @Transactional(readOnly = true)
+    public DoDStageReview latestQaReview(DoDRecord record) {
+        if (record == null) return null;
+        return reviewRepository.findByDodIdAndStageOrderByReviewedAtDesc(record.getId(), "qa")
+                .stream().findFirst().orElse(null);
+    }
+
     /** Build the dashboard-friendly aggregate view used by {@code GET /api/v1/dod/{taskId}}. */
     @Transactional(readOnly = true)
     public DoDStatusResponse buildStatusResponse(String taskId) {

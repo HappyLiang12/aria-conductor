@@ -1,0 +1,326 @@
+package io.aria.conductor.execution.listener;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.repository.WorkflowChainRepository;
+import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.event.BaStepCompletedEvent;
+import io.aria.conductor.common.event.RunCompletedEvent;
+import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.dod.DoDRecord;
+import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.dod.DoDStageReview;
+import io.aria.conductor.test.TestDataBuilder;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * SDD kind-routing matrix for {@link WorkflowAutoChainer} (9 cases):
+ * BA hands off to the spec coordinator via {@link BaStepCompletedEvent} (no advance),
+ * DEV auto-submits the dev-stage DoD review then advances,
+ * QA routes on its recorded verdict (PASS advance / DEFECT re-schedule Dev /
+ * SPEC_GAP re-schedule BA / missing verdict fails the chain),
+ * GENERIC keeps the existing linear advance, and failed runs mark the step failed.
+ */
+@ExtendWith(MockitoExtension.class)
+class WorkflowAutoChainerSddTest {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final UUID REPORT_ARTIFACT_ID = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
+
+    @Mock private WorkflowService workflowService;
+    @Mock private DoDService dodService;
+    @Mock private WorkflowChainRepository chainRepository;
+    @Mock private ApplicationEventPublisher eventPublisher;
+
+    private WorkflowAutoChainer chainer;
+
+    private final UUID runId = UUID.randomUUID();
+    private final UUID agentId = UUID.randomUUID();
+    private WorkflowChain chain;
+
+    @BeforeEach
+    void setUp() {
+        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher);
+    }
+
+    // ---- 1. BA: hand off to the coordinator, do NOT advance ----
+
+    @Test
+    void baCompletion_publishesBaStepCompletedEvent_doesNotAdvance() {
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, runId);
+        chain = chainWith(baStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(baStep);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "spec draft markdown"));
+
+        ArgumentCaptor<BaStepCompletedEvent> captor = ArgumentCaptor.forClass(BaStepCompletedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        BaStepCompletedEvent event = captor.getValue();
+        assertThat(event.getChainId()).isEqualTo(chain.getId());
+        assertThat(event.getBaStepIndex()).isEqualTo(0);
+        assertThat(event.getBaRunId()).isEqualTo(runId);
+        assertThat(event.getFinalOutput()).isEqualTo("spec draft markdown");
+
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    // ---- 2. DEV: DoD at dev stage -> auto-submit dev review + advance ----
+
+    @Test
+    void devCompletion_whenDoDAtDev_submitsDevReviewAndAdvances() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, runId);
+        chain = chainWith(devStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
+        when(dodService.getStatus(chain.getId().toString()))
+                .thenReturn(record("dev"));
+        when(workflowService.advanceWorkflow(chain.getId(), 0, "implementation done"))
+                .thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "implementation done"));
+
+        verify(dodService).submitStageReview(chain.getId().toString(),
+                "engine", "SDD Engine", true, "auto: dev step completed");
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, "implementation done");
+        verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
+    // ---- 3. DEV rework: DoD already at qa -> skip dev review, still advance ----
+
+    @Test
+    void devCompletion_whenDoDAtQa_skipsDevReviewAndAdvances() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, runId);
+        chain = chainWith(devStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
+        when(dodService.getStatus(chain.getId().toString()))
+                .thenReturn(record("qa"));
+        when(workflowService.advanceWorkflow(chain.getId(), 0, "rework done"))
+                .thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "rework done"));
+
+        verify(dodService, never()).submitStageReview(anyString(), anyString(), anyString(), anyBoolean(), anyString());
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, "rework done");
+        verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
+    // ---- 4. QA: verdict PASS -> advance (and capture REPORT_ID) ----
+
+    @Test
+    void qaCompletion_verdictPass_advances() {
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review("PASS", "looks good"));
+        when(workflowService.advanceWorkflow(chain.getId(), 0, outputWithReportId()))
+                .thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, outputWithReportId()));
+
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, outputWithReportId());
+        assertThat(chain.getReportArtifactId()).isEqualTo(REPORT_ARTIFACT_ID);
+        verify(chainRepository).save(chain);
+        verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
+    // ---- 5. QA: verdict DEFECT -> re-schedule the DEV step with feedback ----
+
+    @Test
+    void qaCompletion_verdictDefect_reschedulesDevStep() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review("DEFECT", "parser crashes on empty input"));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
+
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "parser crashes on empty input");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    // ---- 6. QA: verdict SPEC_GAP -> re-schedule the BA step with feedback ----
+
+    @Test
+    void qaCompletion_verdictSpecGap_reschedulesBaStep() {
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, UUID.randomUUID());
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(baStep, devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(2);
+        when(workflowService.stepAt(chain, 2)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review("SPEC_GAP", "auth flows not covered"));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
+
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "auth flows not covered");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    // ---- 7. QA: no verdict submitted -> fail the chain explicitly ----
+
+    @Test
+    void qaCompletion_noVerdict_failsChain() {
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
+
+        verify(workflowService).markStepFailed(chain.getId(), 0, "QA completed but no verdict submitted");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    // ---- 8. GENERIC: existing linear advance, DoD untouched ----
+
+    @Test
+    void genericCompletion_advancesUnchanged() {
+        WorkflowStep genericStep = step(WorkflowStep.StepKind.GENERIC, runId);
+        chain = chainWith(genericStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(genericStep);
+        when(workflowService.advanceWorkflow(chain.getId(), 0, "generic out")).thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "generic out"));
+
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, "generic out");
+        verify(dodService, never()).getStatus(anyString());
+        verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
+    // ---- 9. FAILED run: mark failed unchanged (even for BA-kind steps) ----
+
+    @Test
+    void failedRun_marksStepFailed_unchanged() {
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, runId);
+        chain = chainWith(baStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+
+        chainer.onRunCompleted(completed(RunStatus.FAILED, "LLM quota exceeded"));
+
+        verify(workflowService).markStepFailed(chain.getId(), 0, "Run failed: LLM quota exceeded");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    // ---- helpers ----
+
+    private RunCompletedEvent completed(RunStatus status, String finalOutput) {
+        return new RunCompletedEvent(this, runId, agentId, status, finalOutput);
+    }
+
+    private WorkflowStep step(WorkflowStep.StepKind kind, UUID stepRunId) {
+        return WorkflowStep.builder()
+                .agentId(agentId)
+                .promptTemplate("prompt for " + kind)
+                .maxIterations(3)
+                .kind(kind)
+                .runId(stepRunId)
+                .status(WorkflowStep.Status.RUNNING)
+                .build();
+    }
+
+    private WorkflowChain chainWith(WorkflowStep... steps) {
+        return TestDataBuilder.aWorkflowChain()
+                .withName("sdd-loop")
+                .withStatus(WorkflowChain.Status.RUNNING)
+                .withStepsJson(stepsJson(steps))
+                .build();
+    }
+
+    private String stepsJson(WorkflowStep... steps) {
+        try {
+            return MAPPER.writeValueAsString(List.of(steps));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private DoDRecord record(String currentStage) {
+        return DoDRecord.builder()
+                .id("dod-1")
+                .taskId(chain.getId().toString())
+                .taskType("sdd")
+                .currentStage(currentStage)
+                .overallStatus("IN_PROGRESS")
+                .build();
+    }
+
+    private DoDStageReview review(String verdict, String comment) {
+        return DoDStageReview.builder()
+                .id(UUID.randomUUID().toString())
+                .dodId("dod-1")
+                .stage("qa")
+                .reviewerId("qa-agent")
+                .passed("PASS".equals(verdict))
+                .verdict(verdict)
+                .comment(comment)
+                .build();
+    }
+
+    private String outputWithReportId() {
+        return "Report generated.\nREPORT_ID=" + REPORT_ARTIFACT_ID + "\nAll checks green.";
+    }
+
+    private void verifyAdvancedEvent(int completedStep, int nextStep, WorkflowChain.Status chainStatus) {
+        ArgumentCaptor<WorkflowAdvancedEvent> eventCaptor =
+                ArgumentCaptor.forClass(WorkflowAdvancedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        WorkflowAdvancedEvent event = eventCaptor.getValue();
+        assertThat(event.getWorkflowId()).isEqualTo(chain.getId());
+        assertThat(event.getCompletedStep()).isEqualTo(completedStep);
+        assertThat(event.getNextStep()).isEqualTo(nextStep);
+        assertThat(event.getChainStatus()).isEqualTo(chainStatus);
+    }
+}

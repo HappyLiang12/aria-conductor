@@ -20,7 +20,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class WorkflowChain {
 
-    public enum Status { PENDING, RUNNING, COMPLETED, FAILED, CANCELLED }
+    public enum Status { PENDING, RUNNING, WAITING_APPROVAL, COMPLETED, FAILED, CANCELLED }
 
     @Id
     @Column(columnDefinition = "UUID")
@@ -62,6 +62,9 @@ public class WorkflowChain {
 
     @Column(columnDefinition = "TEXT")
     private String description;
+
+    @Column(name = "report_artifact_id", columnDefinition = "UUID")
+    private UUID reportArtifactId;
 
     @PrePersist
     protected void onCreate() {

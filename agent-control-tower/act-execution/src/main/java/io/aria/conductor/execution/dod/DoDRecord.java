@@ -33,6 +33,10 @@ public class DoDRecord {
     @Column(name = "overall_status", nullable = false, length = 20)
     private String overallStatus;
 
+    /** Optional custom stage list (JSON array). Null = use DoDService.DEFAULT_STAGES. */
+    @Column(name = "stages_json", columnDefinition = "TEXT")
+    private String stagesJson;
+
     @Column(name = "created_at")
     private Instant createdAt;
 

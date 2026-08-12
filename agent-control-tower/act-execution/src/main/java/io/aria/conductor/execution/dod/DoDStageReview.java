@@ -37,6 +37,10 @@ public class DoDStageReview {
     @Column(nullable = false)
     private boolean passed;
 
+    /** SDD verdict for the qa stage: PASS / DEFECT / SPEC_GAP. Null for non-SDD reviews. */
+    @Column(length = 20)
+    private String verdict;
+
     @Column(columnDefinition = "TEXT")
     private String evidence;
 

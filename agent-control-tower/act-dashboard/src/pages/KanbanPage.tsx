@@ -22,6 +22,7 @@ interface ColumnDef {
 const COLUMNS: ColumnDef[] = [
   { status: 'TODO', label: 'Todo' },
   { status: 'IN_PROGRESS', label: 'In Progress' },
+  { status: 'REVIEW', label: 'Review' },
   { status: 'BLOCKED', label: 'Blocked' },
   { status: 'DONE', label: 'Done' },
 ];
@@ -32,6 +33,7 @@ const PRIORITY_OPTIONS: KanbanPriority[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 const ALLOWED: Record<KanbanStatus, KanbanStatus[]> = {
   TODO: ['IN_PROGRESS', 'BLOCKED', 'CANCELLED'],
   IN_PROGRESS: ['DONE', 'BLOCKED', 'CANCELLED'],
+  REVIEW: ['IN_PROGRESS', 'DONE', 'BLOCKED', 'CANCELLED'],
   BLOCKED: ['TODO', 'IN_PROGRESS', 'CANCELLED'],
   DONE: [],
   CANCELLED: [],
@@ -115,6 +117,7 @@ export function KanbanPage() {
     const map: Record<KanbanStatus, KanbanItem[]> = {
       TODO: [],
       IN_PROGRESS: [],
+      REVIEW: [],
       BLOCKED: [],
       DONE: [],
       CANCELLED: [],

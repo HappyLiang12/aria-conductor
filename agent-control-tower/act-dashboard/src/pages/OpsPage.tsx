@@ -358,7 +358,7 @@ export default function OpsPage() {
                       </div>
 
                       <div className="ttl">
-                        {a.reason?.trim() || `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off`}
+                        {a.reason?.trim() || (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off')}
                       </div>
                       <div className="desc" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span

@@ -17,5 +17,6 @@ public enum KanbanStatus {
     IN_PROGRESS,
     DONE,
     BLOCKED,
-    CANCELLED
+    CANCELLED,
+    REVIEW
 }

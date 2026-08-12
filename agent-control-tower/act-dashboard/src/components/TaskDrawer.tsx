@@ -14,6 +14,7 @@ import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 const STATUS_LABEL: Record<KanbanStatus, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
+  REVIEW: 'Review',
   DONE: 'Done',
   BLOCKED: 'Blocked',
   CANCELLED: 'Cancelled',
@@ -29,6 +30,7 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
 const TRANSITIONS: Record<KanbanStatus, KanbanStatus[]> = {
   TODO: ['IN_PROGRESS', 'BLOCKED', 'CANCELLED'],
   IN_PROGRESS: ['DONE', 'BLOCKED', 'TODO', 'CANCELLED'],
+  REVIEW: ['IN_PROGRESS', 'DONE', 'BLOCKED', 'CANCELLED'],
   BLOCKED: ['IN_PROGRESS', 'CANCELLED'],
   DONE: ['IN_PROGRESS'],
   CANCELLED: ['TODO'],

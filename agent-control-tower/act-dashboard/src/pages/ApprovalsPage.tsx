@@ -123,7 +123,7 @@ export function ApprovalsPage() {
                   <div className="approval-card-body">
                     <div className="approval-info-row">
                       <span className="approval-label">Tool/Action</span>
-                      <span className="cell-mono">{approval.toolName ?? approval.toolCallId.slice(0, 8)}</span>
+                      <span className="cell-mono">{approval.toolName ?? (approval.toolCallId ? approval.toolCallId.slice(0, 8) : '—')}</span>
                     </div>
                     {approval.arguments && (
                       <div className="approval-info-row">

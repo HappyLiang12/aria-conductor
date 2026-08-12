@@ -94,6 +94,11 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             - cancel_workflow: Cancel a running/pending workflow (requires id)
             - retry_workflow_step: Retry a failed step in a failed workflow (requires id, stepIndex)
 
+            - Spec-driven development: to run the BA->Dev->QA development loop on a GitHub issue, find the
+              approved "development-workflow" template and instantiate it with an issueRef parameter. The loop
+              pauses for human spec approval (SPEC_REVIEW), then routes on the QA verdict. Users can copy the
+              template knowledge item and edit its YAML to customise their own workflow.
+
             ## Rules
 
             IMPORTANT — knowledge governance:

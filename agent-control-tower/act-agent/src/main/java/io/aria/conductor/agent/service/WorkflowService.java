@@ -53,6 +53,7 @@ public class WorkflowService {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations() > 0 ? s.getMaxIterations() : 3)
+                        .kind(s.getKind() != null ? s.getKind() : WorkflowStep.StepKind.GENERIC)
                         .status(WorkflowStep.Status.PENDING)
                         .build())
                 .collect(Collectors.toList());
@@ -294,6 +295,7 @@ public class WorkflowService {
                         .agentId(sd.getAgentId())
                         .promptTemplate(sd.getPromptTemplate())
                         .maxIterations(sd.getMaxIterations() > 0 ? sd.getMaxIterations() : 3)
+                        .kind(sd.getKind() != null ? sd.getKind() : WorkflowStep.StepKind.GENERIC)
                         .status(WorkflowStep.Status.PENDING)
                         .build());
             }
@@ -349,6 +351,7 @@ public class WorkflowService {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations())
+                        .kind(s.getKind())
                         .build())
                 .collect(Collectors.toList());
 
@@ -387,6 +390,7 @@ public class WorkflowService {
                     .agentId(step.getAgentId())
                     .promptTemplate(prompt)
                     .maxIterations(step.getMaxIterations())
+                    .kind(step.getKind())
                     .build());
         }
 

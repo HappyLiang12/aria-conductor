@@ -122,6 +122,9 @@ public class WorkflowTemplateConverter {
                 ys.put("agent_id", step.getAgentId() != null ? step.getAgentId().toString() : "");
                 ys.put("prompt_template", step.getPromptTemplate() != null ? step.getPromptTemplate() : "");
                 ys.put("max_iterations", step.getMaxIterations());
+                if (step.getKind() != null && step.getKind() != WorkflowStep.StepKind.GENERIC) {
+                    ys.put("kind", step.getKind().name());
+                }
                 yamlSteps.add(ys);
             }
         }
@@ -179,6 +182,9 @@ public class WorkflowTemplateConverter {
             }
 
             step.setPromptTemplate(getStringValue(raw, "prompt_template"));
+
+            // SDD step kind (case-normalised; unknown/missing -> GENERIC).
+            step.setKind(parseKind(getStringValue(raw, "kind")));
 
             Object maxIter = raw.get("max_iterations");
             if (maxIter instanceof Number) {
@@ -329,5 +335,16 @@ public class WorkflowTemplateConverter {
     private static String getStringValue(Map<String, Object> map, String key) {
         Object val = map.get(key);
         return val != null ? val.toString() : null;
+    }
+
+    /** Parse a step kind with case normalisation; null/unknown -> GENERIC. */
+    static WorkflowStep.StepKind parseKind(String raw) {
+        if (raw == null || raw.isBlank()) return WorkflowStep.StepKind.GENERIC;
+        try {
+            return WorkflowStep.StepKind.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown workflow step kind '{}', defaulting to GENERIC", raw);
+            return WorkflowStep.StepKind.GENERIC;
+        }
     }
 }

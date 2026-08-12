@@ -26,12 +26,13 @@ class WorkflowToolHandlerTest {
 
     @Mock private WorkflowService workflowService;
     @Mock private AgentRepository agentRepository;
+    @Mock private io.aria.conductor.knowledge.service.WorkflowTemplateService workflowTemplateService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private WorkflowToolHandler handler;
 
     @BeforeEach
     void setUp() {
-        handler = new WorkflowToolHandler(workflowService, agentRepository, objectMapper);
+        handler = new WorkflowToolHandler(workflowService, workflowTemplateService, agentRepository, objectMapper);
     }
 
     @Test

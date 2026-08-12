@@ -53,6 +53,10 @@ public class ApprovalController {
             Instant requestedAt,
             Instant decidedAt,
             Instant expiresAt,
+            String approvalType,
+            String content,
+            String contentKind,
+            UUID knowledgeItemId,
             String toolName,
             String arguments,
             String riskTier) {}
@@ -112,6 +116,10 @@ public class ApprovalController {
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
+                a.getApprovalType() != null ? a.getApprovalType().name() : "TOOL_CALL",
+                a.getContent(),
+                a.getContentKind() != null ? a.getContentKind().name() : null,
+                a.getKnowledgeItemId(),
                 toolName, tc != null ? tc.getArguments() : null, riskTier);
     }
 

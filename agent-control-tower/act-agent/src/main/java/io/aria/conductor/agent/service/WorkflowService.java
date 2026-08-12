@@ -533,7 +533,7 @@ public class WorkflowService {
         }
     }
 
-    private String serializeSteps(List<WorkflowStep> steps) {
+    public String serializeSteps(List<WorkflowStep> steps) {
         try {
             return objectMapper.writeValueAsString(steps);
         } catch (JsonProcessingException e) {
@@ -541,7 +541,7 @@ public class WorkflowService {
         }
     }
 
-    private List<WorkflowStep> deserializeSteps(String json) {
+    public List<WorkflowStep> deserializeSteps(String json) {
         if (json == null || json.isBlank()) return new ArrayList<>();
         try {
             return objectMapper.readValue(json, new TypeReference<List<WorkflowStep>>() {});

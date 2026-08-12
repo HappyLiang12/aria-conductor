@@ -69,7 +69,7 @@ class SpecReviewCoordinatorTest {
 
         chain = WorkflowChain.builder()
                 .id(chainId)
-                .status(WorkflowChain.Status.RUNNING)
+                .status(WorkflowChain.Status.WAITING_APPROVAL)
                 .currentStepIndex(0)
                 .stepsJson("[]")
                 .build();
@@ -222,6 +222,7 @@ class SpecReviewCoordinatorTest {
                 .runId(baRunId).kind(WorkflowStep.StepKind.BA).build());
         when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.of(item));
         when(approvalRepository.findByRunId(baRunId)).thenReturn(List.of());
+        when(approvalRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         KnowledgeVersion version = KnowledgeVersion.builder()
                 .knowledgeItemId(specItemId)
                 .version("v0.2.0")

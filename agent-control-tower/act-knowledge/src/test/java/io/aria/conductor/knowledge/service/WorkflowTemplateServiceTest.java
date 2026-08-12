@@ -11,6 +11,8 @@ import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.KnowledgeVersion;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -52,13 +54,16 @@ class WorkflowTemplateServiceTest {
     @Mock WorkflowService workflowService;
     @Mock WorkflowChainRepository chainRepository;
     @Mock KnowledgeService knowledgeService;
+    @Mock DoDService dodService;
+    @Mock KanbanService kanbanService;
 
     WorkflowTemplateService service;
 
     @BeforeEach
     void setUp() {
         service = new WorkflowTemplateService(itemRepository, versionRepository,
-                templateConverter, workflowService, chainRepository, knowledgeService);
+                templateConverter, workflowService, chainRepository, knowledgeService,
+                dodService, kanbanService);
     }
 
     // ---- findMatchingTemplates -------------------------------------------

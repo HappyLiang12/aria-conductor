@@ -11,6 +11,9 @@ import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.KnowledgeVersion;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
+import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -39,19 +42,25 @@ public class WorkflowTemplateService {
     private final WorkflowService workflowService;
     private final WorkflowChainRepository chainRepository;
     private final KnowledgeService knowledgeService;
+    private final DoDService dodService;
+    private final KanbanService kanbanService;
 
     public WorkflowTemplateService(KnowledgeItemRepository itemRepository,
                                    KnowledgeVersionRepository versionRepository,
                                    WorkflowTemplateConverter templateConverter,
                                    WorkflowService workflowService,
                                    WorkflowChainRepository chainRepository,
-                                   KnowledgeService knowledgeService) {
+                                   KnowledgeService knowledgeService,
+                                   DoDService dodService,
+                                   KanbanService kanbanService) {
         this.itemRepository = itemRepository;
         this.versionRepository = versionRepository;
         this.templateConverter = templateConverter;
         this.workflowService = workflowService;
         this.chainRepository = chainRepository;
         this.knowledgeService = knowledgeService;
+        this.dodService = dodService;
+        this.kanbanService = kanbanService;
     }
 
     /**
@@ -139,6 +148,22 @@ public class WorkflowTemplateService {
                 .build();
 
         WorkflowResponse response = workflowService.createAndStart(request);
+
+        // SDD wiring: templates carrying BA/DEV/QA step kinds initialise a DoD
+        // record (custom stages [dev, qa], taskId = chainId) and a chain-level
+        // kanban item without a linked run, so RunKanbanAutoCreator does not
+        // auto-transition it.
+        boolean isSdd = steps.stream().anyMatch(s ->
+                s.getKind() == WorkflowStep.StepKind.BA
+                        || s.getKind() == WorkflowStep.StepKind.DEV
+                        || s.getKind() == WorkflowStep.StepKind.QA);
+        if (isSdd) {
+            dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
+            kanbanService.create(CreateKanbanItemRequest.builder()
+                    .title(response.getName())
+                    .description("SDD workflow: " + item.getName())
+                    .build());
+        }
 
         // Link source knowledge item to the newly created chain
         WorkflowChain newChain = chainRepository.findById(response.getId())

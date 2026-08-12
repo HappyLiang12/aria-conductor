@@ -1,9 +1,11 @@
 package io.aria.conductor.knowledge.controller;
 
+import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.knowledge.dto.*;
 import io.aria.conductor.knowledge.service.KnowledgeService;
+import io.aria.conductor.knowledge.service.WorkflowTemplateService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -12,6 +14,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -20,10 +23,26 @@ import java.util.UUID;
 public class KnowledgeController {
 
     private final KnowledgeService knowledgeService;
+    private final WorkflowTemplateService workflowTemplateService;
 
-    public KnowledgeController(KnowledgeService knowledgeService) {
+    public KnowledgeController(KnowledgeService knowledgeService,
+                               WorkflowTemplateService workflowTemplateService) {
         this.knowledgeService = knowledgeService;
+        this.workflowTemplateService = workflowTemplateService;
     }
+
+    /** Template instantiation parameters: {@code {parameters: {issueRef: "#1"}}}. */
+    public record InstantiateWorkflowRequest(Map<String, String> parameters) {}
+
+    @PostMapping("/{id}/instantiate-workflow")
+    public ResponseEntity<WorkflowResponse> instantiateWorkflow(
+            @PathVariable UUID id,
+            @RequestBody(required = false) InstantiateWorkflowRequest request) {
+        Map<String, String> params = request != null && request.parameters() != null
+                ? request.parameters() : Map.of();
+        return ResponseEntity.ok(workflowTemplateService.instantiateTemplate(id, params));
+    }
+
 
     @PostMapping
     public ResponseEntity<KnowledgeItemResponse> submitKnowledge(@Valid @RequestBody CreateKnowledgeRequest request) {

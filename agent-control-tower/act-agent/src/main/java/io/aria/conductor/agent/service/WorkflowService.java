@@ -28,6 +28,9 @@ public class WorkflowService {
 
     private static final int MAX_OUTPUT_PREVIEW = 200;
 
+    /** Max re-schedule attempts per step before the SDD loop is considered exhausted. */
+    private static final int DEFAULT_MAX_ATTEMPTS = 3;
+
     private final WorkflowChainRepository workflowChainRepository;
     private final RunService runService;
     private final ObjectMapper objectMapper;
@@ -159,8 +162,9 @@ public class WorkflowService {
     @Transactional(readOnly = true)
     public WorkflowChain findChainByRunId(UUID runId) {
         List<WorkflowChain> activeChains = workflowChainRepository.findByStatus(WorkflowChain.Status.RUNNING);
-        // Also check PENDING chains
+        // Also check PENDING and WAITING_APPROVAL chains
         activeChains.addAll(workflowChainRepository.findByStatus(WorkflowChain.Status.PENDING));
+        activeChains.addAll(workflowChainRepository.findByStatus(WorkflowChain.Status.WAITING_APPROVAL));
 
         for (WorkflowChain chain : activeChains) {
             List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
@@ -197,9 +201,11 @@ public class WorkflowService {
                 .orElseThrow(() -> new ResourceNotFoundException("WorkflowChain", chainId));
 
         if (chain.getStatus() != WorkflowChain.Status.RUNNING
-                && chain.getStatus() != WorkflowChain.Status.PENDING) {
+                && chain.getStatus() != WorkflowChain.Status.PENDING
+                && chain.getStatus() != WorkflowChain.Status.WAITING_APPROVAL) {
             throw new IllegalArgumentException(
-                    "Cannot cancel workflow in status " + chain.getStatus() + "; must be RUNNING or PENDING");
+                    "Cannot cancel workflow in status " + chain.getStatus()
+                            + "; must be RUNNING, PENDING or WAITING_APPROVAL");
         }
 
         List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
@@ -264,6 +270,56 @@ public class WorkflowService {
                 stepIndex, stepIndex, chain.getStatus()));
 
         return toResponse(chain);
+    }
+
+    /**
+     * Re-runs a step within the same chain (SDD DEFECT / SPEC_GAP loop-back).
+     * Increments the attempt counter, appends feedback to the prompt, starts a new run.
+     * Fails the chain if maxAttempts is exceeded.
+     */
+    @Transactional
+    public WorkflowResponse rescheduleStep(UUID chainId, int stepIndex, String feedback) {
+        WorkflowChain chain = workflowChainRepository.findById(chainId)
+                .orElseThrow(() -> new ResourceNotFoundException("WorkflowChain", chainId));
+        List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        if (stepIndex < 0 || stepIndex >= steps.size()) {
+            throw new IllegalArgumentException("Step index out of range: " + stepIndex);
+        }
+        WorkflowStep step = steps.get(stepIndex);
+        if (step.getAttemptCount() >= DEFAULT_MAX_ATTEMPTS) {
+            chain.setStatus(WorkflowChain.Status.FAILED);
+            chain.setCompletedAt(Instant.now());
+            chain.setStepsJson(serializeSteps(steps));
+            workflowChainRepository.save(chain);
+            log.info("SDD loop exhausted: chain={} step={} attempts={}", chainId, stepIndex, step.getAttemptCount());
+            return toResponse(chain);
+        }
+        step.setAttemptCount(step.getAttemptCount() + 1);
+        step.setStatus(WorkflowStep.Status.PENDING);
+        String base = step.getPromptTemplate() != null ? step.getPromptTemplate() : "";
+        String augmented = feedback != null && !feedback.isBlank()
+                ? base + "\n\nFeedback from the previous round:\n" + feedback
+                : base;
+        step.setPromptTemplate(augmented); // note: startStep truncates at 10,000 chars
+        chain.setStepsJson(serializeSteps(steps));
+        workflowChainRepository.save(chain);
+        startStep(chain, stepIndex, null);
+        log.info("SDD step rescheduled: chain={} step={} attempt={}", chainId, stepIndex, step.getAttemptCount());
+        return toResponse(chain);
+    }
+
+    /**
+     * Find the index of the first step with the given kind, or -1.
+     * Legacy steps deserialized from steps_json may carry a null kind; those are treated as GENERIC.
+     */
+    public int findStepIndexByKind(WorkflowChain chain, WorkflowStep.StepKind kind) {
+        List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        for (int i = 0; i < steps.size(); i++) {
+            WorkflowStep.StepKind stepKind = steps.get(i).getKind();
+            if (stepKind == null) stepKind = WorkflowStep.StepKind.GENERIC;
+            if (stepKind == kind) return i;
+        }
+        return -1;
     }
 
     /**

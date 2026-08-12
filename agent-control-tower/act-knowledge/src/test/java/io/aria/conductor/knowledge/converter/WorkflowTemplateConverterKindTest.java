@@ -61,6 +61,13 @@ class WorkflowTemplateConverterKindTest {
         assertThat(steps.get(1).getKind()).isEqualTo(WorkflowStep.StepKind.GENERIC);
     }
 
+    @Test
+    void parseKind_unknownValue_defaultsGeneric() {
+        assertThat(WorkflowTemplateConverter.parseKind("foo")).isEqualTo(WorkflowStep.StepKind.GENERIC);
+        assertThat(WorkflowTemplateConverter.parseKind(" ")).isEqualTo(WorkflowStep.StepKind.GENERIC);
+        assertThat(WorkflowTemplateConverter.parseKind(null)).isEqualTo(WorkflowStep.StepKind.GENERIC);
+    }
+
     // ==================== steps -> yaml kind emission ====================
 
     @Test
@@ -73,5 +80,17 @@ class WorkflowTemplateConverterKindTest {
                 .kind(WorkflowStep.StepKind.BA).promptTemplate("p").build();
         String yaml = converter.workflowChainToYaml(chain("wf"), List.of(ba), null);
         assertThat(yaml).contains("kind: BA");
+    }
+
+    @Test
+    void workflowChainToYaml_genericStep_doesNotEmitKind() {
+        UUID agentId = UUID.randomUUID();
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(Agent.builder().id(agentId).role("dev").build()));
+
+        WorkflowStep generic = WorkflowStep.builder().agentId(agentId)
+                .kind(WorkflowStep.StepKind.GENERIC).promptTemplate("p").build();
+        String yaml = converter.workflowChainToYaml(chain("wf"), List.of(generic), null);
+        assertThat(yaml).doesNotContain("kind");
     }
 }

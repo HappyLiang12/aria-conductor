@@ -150,6 +150,51 @@ class KanbanServiceTest {
     }
 
     @Test
+    void transition_inProgressToReview_succeeds() {
+        stored.setStatus(KanbanStatus.IN_PROGRESS);
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.REVIEW, "waiting for approval");
+
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+    }
+
+    @Test
+    void transition_reviewToInProgress_succeeds() {
+        stored.setStatus(KanbanStatus.REVIEW);
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.IN_PROGRESS, "approved");
+
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void transition_reviewToDone_succeeds() {
+        stored.setStatus(KanbanStatus.REVIEW);
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.DONE, "approved");
+
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.DONE);
+    }
+
+    @Test
+    void transition_todoToReview_isRejected() {
+        stored.setStatus(KanbanStatus.TODO);
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.REVIEW, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid kanban transition");
+
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     void get_missingId_throwsNotFound() {
         when(repository.findById("missing")).thenReturn(Optional.empty());
 

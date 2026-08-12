@@ -128,6 +128,7 @@ public class WorkflowTemplateService {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations())
+                        .kind(s.getKind())
                         .build())
                 .toList();
 

@@ -1,5 +1,6 @@
 package io.aria.conductor.agent.dto;
 
+import io.aria.conductor.common.model.WorkflowStep;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -33,5 +34,6 @@ public class CreateWorkflowRequest {
         private String promptTemplate;
         @Builder.Default
         private int maxIterations = 3;
+        private WorkflowStep.StepKind kind;
     }
 }

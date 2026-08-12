@@ -781,6 +781,7 @@ export function KnowledgePage() {
                     <option value="TEMPLATE">Template</option>
                     <option value="GUIDELINE">Guideline</option>
                     <option value="WORKFLOW">Workflow</option>
+                    <option value="SPEC">Spec</option>
                   </select>
                 </FormRow>
                 <FormRow label="Sensitivity">

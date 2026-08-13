@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,7 @@ import src.agent as agent_mod
 from src.agent import (
     get_state,
     parse_tool_calls,
+    parse_tool_calls_from_text,
     run_agent_stream,
     to_langchain_messages,
     to_langchain_tools,
@@ -153,6 +155,55 @@ class TestParseToolCalls:
         assert parse_tool_calls(AIMessage(content="plain answer")) == []
 
 
+# ── parse_tool_calls_from_text (F16 fallback parser) ───────────────────────
+
+class TestParseToolCallsFromText:
+    def test_xml_tool_call_tag(self):
+        content = '<tool_call name="submit_dod_review">{"verdict": "PASS"}</tool_call>'
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "submit_dod_review"
+        assert result[0].id
+        assert json.loads(result[0].arguments) == {"verdict": "PASS"}
+
+    def test_xml_function_calls_invoke(self):
+        content = '<function_calls><invoke name="search">{"q": "cats"}</invoke></function_calls>'
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "search"
+        assert json.loads(result[0].arguments) == {"q": "cats"}
+
+    def test_markdown_json_code_block(self):
+        content = '```json\n{"name": "calc", "arguments": {"x": 1}}\n```'
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "calc"
+        assert json.loads(result[0].arguments) == {"x": 1}
+
+    def test_plain_text_without_markers_returns_empty(self):
+        result = parse_tool_calls_from_text("here is a plain answer with no tool markers")
+        assert result == []
+
+    def test_unknown_tool_name_dropped_by_whitelist(self):
+        content = '<tool_call name="evil_tool">{"x": 1}</tool_call>'
+        result = parse_tool_calls_from_text(content, bound_tool_names=["submit_dod_review"])
+        assert result == []
+
+    def test_known_tool_name_kept_by_whitelist(self):
+        content = '<tool_call name="submit_dod_review">{"verdict": "PASS"}</tool_call>'
+        result = parse_tool_calls_from_text(content, bound_tool_names=["submit_dod_review"])
+        assert len(result) == 1
+        assert result[0].name == "submit_dod_review"
+
+    def test_oversized_content_returns_quickly(self):
+        content = "x" * (50 * 1024 + 1)
+        start = time.perf_counter()
+        result = parse_tool_calls_from_text(content)
+        elapsed = time.perf_counter() - start
+        assert result == []
+        assert elapsed < 2.0
+
+
 # ── to_langchain_tools ──────────────────────────────────────────────────────
 
 class TestToLangchainTools:
@@ -249,6 +300,29 @@ class TestRunAgentStream:
         assert json.loads(tool_events[1].data["arguments"]) == {"x": 1}
         response = next(e for e in events if e.event == "response")
         assert [tc["id"] for tc in response.data["tool_calls"]] == ["c1", "c2"]
+
+    def test_fallback_parser_activated_for_weak_model(self, fake_llm):
+        fake_llm.response = AIMessage(
+            content='<tool_call name="web_search">{"q": "a"}</tool_call>',
+        )
+        req = RunRequest(
+            agent_id="a13",
+            tools=[{"name": "web_search", "description": "d", "parameters": {}}],
+        )
+        events = collect_events(req)
+        tool_events = [e for e in events if e.event == "tool_call"]
+        assert [e.data["name"] for e in tool_events] == ["web_search"]
+        assert json.loads(tool_events[0].data["arguments"]) == {"q": "a"}
+        response = next(e for e in events if e.event == "response")
+        assert response.data["tool_calls"][0]["name"] == "web_search"
+
+    def test_fallback_not_activated_without_bound_tools(self, fake_llm):
+        fake_llm.response = AIMessage(
+            content='<tool_call name="web_search">{"q": "a"}</tool_call>',
+        )
+        events = collect_events(RunRequest(agent_id="a14"))
+        tool_events = [e for e in events if e.event == "tool_call"]
+        assert tool_events == []
 
     def test_tools_bound_when_provided(self, fake_llm):
         req = RunRequest(

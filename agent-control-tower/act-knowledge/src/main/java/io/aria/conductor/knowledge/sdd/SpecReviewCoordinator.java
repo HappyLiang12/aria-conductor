@@ -6,6 +6,7 @@ import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
+import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
@@ -135,18 +136,23 @@ public class SpecReviewCoordinator {
         }
 
         boolean approved = approval.getStatus() == ApprovalStatus.APPROVED;
-        knowledgeService.reviewKnowledge(specItemId, ReviewDecisionRequest.builder()
-                .decision(approved ? ReviewDecisionRequest.ReviewDecision.APPROVED
-                                   : ReviewDecisionRequest.ReviewDecision.REJECTED)
-                .reason(approval.getReason())
-                .build());
+        try {
+            knowledgeService.reviewKnowledge(specItemId, ReviewDecisionRequest.builder()
+                    .decision(approved ? ReviewDecisionRequest.ReviewDecision.APPROVED
+                                       : ReviewDecisionRequest.ReviewDecision.REJECTED)
+                    .reason(approval.getReason())
+                    .build());
+        } catch (InvalidStateTransitionException e) {
+            log.warn("Spec knowledge write-back skipped (item {} no longer PENDING): {}",
+                    specItemId, e.getMessage());
+        }
 
         int baIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA);
         if (approved) {
             injectSpecReference(chain, specItemId);
             chain.setStatus(WorkflowChain.Status.RUNNING);
             chainRepository.save(chain);
-            workflowService.advanceWorkflow(chain.getId(), baIdx, approval.getReason());
+            workflowService.advanceWorkflow(chain.getId(), baIdx, approval.getContent());
             log.info("SDD spec approved: chain={} advancing to Dev", chain.getId());
         } else {
             // Spec state machine: WAITING_APPROVAL -(REJECTED)-> RUNNING -(re-schedule BA step).
@@ -236,7 +242,10 @@ public class SpecReviewCoordinator {
                 .reason("Spec resubmitted for review: " + specName)
                 .expiresAt(Instant.now().plus(approvalTimeout))
                 .build();
-        return approvalRepository.save(approval);
+        Approval saved = approvalRepository.save(approval);
+        eventPublisher.publishEvent(new ApprovalRequestedEvent(
+                this, saved.getId(), saved.getRunId(), null, "SPEC_REVIEW"));
+        return saved;
     }
 
     private UUID upsertSpecKnowledge(String name, String content) {

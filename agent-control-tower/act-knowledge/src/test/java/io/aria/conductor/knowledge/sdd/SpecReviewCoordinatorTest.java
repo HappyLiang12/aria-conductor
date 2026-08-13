@@ -6,6 +6,7 @@ import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
+import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
@@ -32,6 +33,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+
+import java.util.List;
 
 @ExtendWith(MockitoExtension.class)
 class SpecReviewCoordinatorTest {
@@ -152,7 +155,7 @@ class SpecReviewCoordinatorTest {
                 r.getDecision() == ReviewDecisionRequest.ReviewDecision.APPROVED));
         assertThat(devStep.getPromptTemplate()).doesNotContain("{specRef}");
         assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.RUNNING);
-        verify(workflowService).advanceWorkflow(eq(chainId), eq(0), any());
+        verify(workflowService).advanceWorkflow(eq(chainId), eq(0), eq(specContent));
     }
 
     @Test
@@ -169,6 +172,27 @@ class SpecReviewCoordinatorTest {
         verify(knowledgeService).reviewKnowledge(eq(specItemId), argThat(r ->
                 r.getDecision() == ReviewDecisionRequest.ReviewDecision.REJECTED));
         verify(workflowService).rescheduleStep(eq(chainId), eq(0), anyString());
+    }
+
+    @Test
+    void onApprovalApproved_knowledgeWriteBackFails_doesNotThrow() {
+        when(approvalRepository.findById(approvalId)).thenReturn(Optional.of(specReviewApproval));
+        when(workflowService.findChainByRunId(baRunId)).thenReturn(chain);
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        doThrow(new InvalidStateTransitionException("KnowledgeItem", "PENDING", "REVIEWED"))
+                .when(knowledgeService).reviewKnowledge(any(), any());
+        specReviewApproval.setStatus(ApprovalStatus.APPROVED);
+        WorkflowStep devStep = WorkflowStep.builder().kind(WorkflowStep.StepKind.DEV)
+                .promptTemplate("Implement {specRef}").build();
+        when(workflowService.deserializeSteps(anyString())).thenReturn(List.of(devStep));
+        doAnswer(inv -> "[{\"kind\":\"DEV\",\"promptTemplate\":\"Implement " + specItemId + "\"}]")
+                .when(workflowService).serializeSteps(anyList());
+
+        coordinator.onApprovalDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED));
+
+        // Chain still advances (write-back failure is logged but does not block)
+        assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.RUNNING);
+        verify(workflowService).advanceWorkflow(eq(chainId), eq(0), any());
     }
 
     @Test
@@ -235,6 +259,10 @@ class SpecReviewCoordinatorTest {
 
         assertThat(created.getContent()).isEqualTo("# Real spec body v2");
         assertThat(created.getApprovalType()).isEqualTo(Approval.ApprovalType.SPEC_REVIEW);
+        verify(eventPublisher).publishEvent(argThat(e ->
+                e instanceof ApprovalRequestedEvent
+                && ((ApprovalRequestedEvent) e).getRunId().equals(baRunId)
+                && "SPEC_REVIEW".equals(((ApprovalRequestedEvent) e).getApprovalType())));
 
         // Second call with an existing PENDING approval must be rejected (idempotency).
         when(approvalRepository.findByRunId(baRunId)).thenReturn(List.of(specReviewApproval));

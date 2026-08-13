@@ -30,6 +30,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static io.aria.conductor.test.TestDataBuilder.aKnowledgeItem;
@@ -38,6 +39,7 @@ import static io.aria.conductor.test.TestDataBuilder.aWorkflowStep;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
@@ -147,6 +149,7 @@ class WorkflowTemplateServiceTest {
                 .withPromptTemplate("Deploy {env} using {previousOutput}").withMaxIterations(7).build();
         when(templateConverter.yamlToWorkflowSteps("steps: [...]")).thenReturn(List.of(step1, step2));
         Map<String, String> params = Map.of("env", "prod");
+        when(templateConverter.extractParameterNames(anyList())).thenReturn(Set.of("env"));
         when(templateConverter.substituteParameters("Build {env}", params))
                 .thenReturn("Build prod");
         when(templateConverter.substituteParameters("Deploy {env} using {previousOutput}", params))

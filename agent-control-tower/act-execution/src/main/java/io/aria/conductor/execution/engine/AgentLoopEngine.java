@@ -24,7 +24,6 @@ import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.dod.DoDService;
-import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmResponse;
@@ -386,17 +385,14 @@ public class AgentLoopEngine {
         WorkflowResponse response = workflowService.createAndStart(request);
 
         // SDD wiring for YAML-defined BA/DEV/QA chains (mirrors instantiateTemplate):
-        // custom DoD stages + a chain-level kanban item without a linked run.
+        // custom DoD stages. Per-run kanban items are created exclusively by
+        // RunKanbanAutoCreator — no chain-level kanban item here.
         boolean isSdd = steps.stream().anyMatch(s ->
                 s.getKind() == WorkflowStep.StepKind.BA
                 || s.getKind() == WorkflowStep.StepKind.DEV
                 || s.getKind() == WorkflowStep.StepKind.QA);
         if (isSdd) {
             dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
-            kanbanService.create(CreateKanbanItemRequest.builder()
-                    .title(response.getName())
-                    .description("SDD workflow executed from YAML")
-                    .build());
         }
 
         // Load and return the full chain entity

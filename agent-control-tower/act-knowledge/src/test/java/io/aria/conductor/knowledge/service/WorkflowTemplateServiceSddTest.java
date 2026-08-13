@@ -26,12 +26,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static io.aria.conductor.test.TestDataBuilder.aKnowledgeItem;
 import static io.aria.conductor.test.TestDataBuilder.aWorkflowChain;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -83,6 +87,8 @@ class WorkflowTemplateServiceSddTest {
         WorkflowStep qa = step(WorkflowStep.StepKind.QA, "Verify against spec");
         when(templateConverter.yamlToWorkflowSteps("steps: [ba, dev, qa]"))
                 .thenReturn(List.of(ba, dev, qa));
+        when(templateConverter.extractParameterNames(anyList()))
+                .thenReturn(Set.of("issueRef"));
 
         UUID chainId = UUID.randomUUID();
         WorkflowResponse response = WorkflowResponse.builder()
@@ -98,14 +104,8 @@ class WorkflowTemplateServiceSddTest {
 
         // DoD initialised with custom stages [dev, qa] for taskId = chainId
         verify(dodService).init(chainId.toString(), "SDD", List.of("dev", "qa"));
-        // chain-level kanban item created WITHOUT linkedRunId
-        ArgumentCaptor<CreateKanbanItemRequest> captor =
-                ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
-        verify(kanbanService).create(captor.capture());
-        CreateKanbanItemRequest kanbanRequest = captor.getValue();
-        assertThat(kanbanRequest.getLinkedRunId()).isNull();
-        assertThat(kanbanRequest.getTitle()).contains("development-workflow-instance");
-        assertThat(kanbanRequest.getDescription()).contains("development-workflow");
+        // chain-level kanban item removed (RunKanbanAutoCreator creates per-run items)
+        verify(kanbanService, never()).create(any());
         // steps carry kinds through StepDef
         ArgumentCaptor<CreateWorkflowRequest> requestCaptor =
                 ArgumentCaptor.forClass(CreateWorkflowRequest.class);
@@ -116,6 +116,25 @@ class WorkflowTemplateServiceSddTest {
                         WorkflowStep.StepKind.QA);
         // chain is still linked back to the source template
         assertThat(chain.getSourceKnowledgeItemId()).isEqualTo(templateId);
+    }
+
+    @Test
+    void instantiateTemplate_rejectsUnknownKeys() {
+        UUID templateId = UUID.randomUUID();
+        KnowledgeItem item = approvedWorkflowTemplate("dev-workflow", "SDD");
+        item.setId(templateId);
+        item.setCurrentVersion("v1");
+        when(itemRepository.findById(templateId)).thenReturn(Optional.of(item));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(templateId, "v1"))
+                .thenReturn(Optional.of(KnowledgeVersion.builder().yamlContent("steps: [...]").build()));
+        WorkflowStep step = step(WorkflowStep.StepKind.DEV, "Implement {issueRef}");
+        when(templateConverter.yamlToWorkflowSteps("steps: [...]")).thenReturn(List.of(step));
+        when(templateConverter.extractParameterNames(anyList())).thenReturn(Set.of("issueRef"));
+
+        Map<String, String> params = Map.of("issueRef", "#1", "malicious", "injected");
+        assertThatThrownBy(() -> service.instantiateTemplate(templateId, params))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("malicious");
     }
 
     @Test

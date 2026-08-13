@@ -124,4 +124,20 @@ public class KnowledgeController {
         KnowledgeStatsResponse response = knowledgeService.getStats();
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Validation failures from template instantiation (e.g. agent role not resolvable,
+     * item not a WORKFLOW, template not APPROVED) are client input errors -> 400,
+     * not server errors.
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<String> handleIllegalArgument(IllegalArgumentException e) {
+        return ResponseEntity.badRequest().body(e.getMessage());
+    }
+
+    /** State errors from template instantiation (e.g. template/version state mismatch). */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<String> handleIllegalState(IllegalStateException e) {
+        return ResponseEntity.badRequest().body(e.getMessage());
+    }
 }

@@ -571,6 +571,17 @@ class KnowledgeControllerTest extends WebMvcTestBase {
     }
 
     @Test
+    void instantiateWorkflow_missingAgent_returns400() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(workflowTemplateService.instantiateTemplate(eq(id), anyMap()))
+                .thenThrow(new IllegalArgumentException("Cannot resolve agent for YAML step: role='ba'"));
+        mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
+                        .contentType("application/json")
+                        .content("{\"parameters\":{}}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void getStats_returnsAggregatedCounts() throws Exception {
         when(knowledgeService.getStats()).thenReturn(KnowledgeStatsResponse.builder()
                 .totalItems(5)

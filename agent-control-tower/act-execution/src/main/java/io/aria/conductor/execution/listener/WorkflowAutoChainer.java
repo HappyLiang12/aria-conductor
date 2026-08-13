@@ -16,6 +16,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -113,6 +114,14 @@ public class WorkflowAutoChainer {
         WorkflowStep.StepKind kind = step != null && step.getKind() != null
                 ? step.getKind() : WorkflowStep.StepKind.GENERIC;
 
+        // Initialize DoD for SDD chains created via API/tool (createAndStart does
+        // not wire DoD). DoD must exist before any SDD routing logic runs (e.g.
+        // autoSubmitDevStageReviewIfAtDev, routeOnQaVerdict). Idempotent: if a
+        // record already exists (YAML path or coordinator-initiated), this is a no-op.
+        if (isSddKind(kind) && !hasDoDRecord(chain)) {
+            dodService.init(chain.getId().toString(), "SDD", java.util.List.of("dev", "qa"));
+        }
+
         switch (kind) {
             case BA -> {
                 // Signal the coordinator (act-knowledge) via a domain event; do NOT advance here.
@@ -153,6 +162,11 @@ public class WorkflowAutoChainer {
 
     /** Route a completed QA step on its latest recorded qa-stage verdict. */
     private void routeOnQaVerdict(WorkflowChain chain, int stepIndex, String finalOutput) {
+        // Mark the QA step COMPLETED and persist its output BEFORE routing on verdict.
+        // DEFECT and SPEC_GAP branches never advance (they reschedule instead), so without
+        // this the QA step stays RUNNING indefinitely — the chain appears stuck.
+        completeQaStep(chain, stepIndex, finalOutput);
+
         DoDRecord record;
         try {
             record = dodService.getStatus(chain.getId().toString());
@@ -208,6 +222,39 @@ public class WorkflowAutoChainer {
                     chain.getId(), stepIndex + 1);
             eventPublisher.publishEvent(new WorkflowAdvancedEvent(
                     this, chain.getId(), chain.getName(), stepIndex, -1, WorkflowChain.Status.COMPLETED));
+        }
+    }
+
+    /**
+     * @return true if the given kind is one of the SDD-specific kinds (BA, DEV, QA).
+     */
+    private static boolean isSddKind(WorkflowStep.StepKind kind) {
+        return kind == WorkflowStep.StepKind.BA
+                || kind == WorkflowStep.StepKind.DEV
+                || kind == WorkflowStep.StepKind.QA;
+    }
+
+    /**
+     * @return true if a DoD record already exists for this chain (idempotent check).
+     */
+    private boolean hasDoDRecord(WorkflowChain chain) {
+        try {
+            dodService.getStatus(chain.getId().toString());
+            return true;
+        } catch (IllegalStateException e) {
+            return false;
+        }
+    }
+
+    /** Mark the QA step as COMPLETED and persist its output. */
+    private void completeQaStep(WorkflowChain chain, int stepIndex, String finalOutput) {
+        List<WorkflowStep> steps = workflowService.deserializeSteps(chain.getStepsJson());
+        if (stepIndex >= 0 && stepIndex < steps.size()) {
+            WorkflowStep step = steps.get(stepIndex);
+            step.setStatus(WorkflowStep.Status.COMPLETED);
+            step.setOutput(finalOutput);
+            chain.setStepsJson(workflowService.serializeSteps(steps));
+            chainRepository.save(chain);
         }
     }
 

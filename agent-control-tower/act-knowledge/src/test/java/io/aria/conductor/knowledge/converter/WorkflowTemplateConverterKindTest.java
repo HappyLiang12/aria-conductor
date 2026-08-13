@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import java.util.Map;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
@@ -80,6 +83,28 @@ class WorkflowTemplateConverterKindTest {
                 .kind(WorkflowStep.StepKind.BA).promptTemplate("p").build();
         String yaml = converter.workflowChainToYaml(chain("wf"), List.of(ba), null);
         assertThat(yaml).contains("kind: BA");
+    }
+
+    // ==================== parameter substitution ====================
+
+    @Test
+    void substituteParameters_skipsSystemPlaceholders_specRef() {
+        String result = converter.substituteParameters("Implement {specRef}", Map.of("specRef", "injected"));
+        assertThat(result).isEqualTo("Implement {specRef}");
+    }
+
+    @Test
+    void substituteParameters_skipsSystemPlaceholders_previousOutput() {
+        String result = converter.substituteParameters("Use {previousOutput}", Map.of("previousOutput", "injected"));
+        assertThat(result).isEqualTo("Use {previousOutput}");
+    }
+
+    @Test
+    void extractParameterNames_excludesSpecRef() {
+        WorkflowStep step = WorkflowStep.builder().kind(WorkflowStep.StepKind.DEV)
+                .promptTemplate("Implement {specRef} and handle {issueRef}").build();
+        Set<String> params = converter.extractParameterNames(List.of(step));
+        assertThat(params).containsExactly("issueRef");
     }
 
     @Test

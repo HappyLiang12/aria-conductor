@@ -22,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -29,8 +30,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -177,6 +180,61 @@ class WorkflowAutoChainerSddTest {
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
     }
 
+    // ---- 5b. QA: verdict DEFECT -> QA step must be COMPLETED, not left RUNNING ----
+
+    @Test
+    void qaCompletion_defect_updatesQaStepStatus() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record("qa"));
+        when(dodService.latestQaReview(any())).thenReturn(review("DEFECT", "parser crashes"));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
+        // Stub for completeQaStep — the fix adds step-status update before rescheduling
+        when(workflowService.deserializeSteps(chain.getStepsJson()))
+                .thenReturn(new ArrayList<>(List.of(devStep, qaStep)));
+        when(workflowService.serializeSteps(any())).thenReturn(chain.getStepsJson());
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
+
+        // QA step must be COMPLETED, not still RUNNING
+        assertThat(qaStep.getStatus()).isEqualTo(WorkflowStep.Status.COMPLETED);
+        assertThat(qaStep.getOutput()).isEqualTo("qa output");
+        // DEFECT branch still reschedules DEV step
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "parser crashes");
+        verify(chainRepository).save(chain);
+    }
+
+    // ---- 5c. QA: verdict SPEC_GAP -> QA step must be COMPLETED ----
+
+    @Test
+    void qaCompletion_specGap_updatesQaStepStatus() {
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, UUID.randomUUID());
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(baStep, devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(2);
+        when(workflowService.stepAt(chain, 2)).thenReturn(qaStep);
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record("qa"));
+        when(dodService.latestQaReview(any())).thenReturn(review("SPEC_GAP", "auth flows missing"));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        when(workflowService.deserializeSteps(chain.getStepsJson()))
+                .thenReturn(new ArrayList<>(List.of(baStep, devStep, qaStep)));
+        when(workflowService.serializeSteps(any())).thenReturn(chain.getStepsJson());
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
+
+        assertThat(qaStep.getStatus()).isEqualTo(WorkflowStep.Status.COMPLETED);
+        assertThat(qaStep.getOutput()).isEqualTo("qa output");
+        // SPEC_GAP branch still reschedules BA step
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "auth flows missing");
+        verify(chainRepository).save(chain);
+    }
+
     // ---- 6. QA: verdict SPEC_GAP -> re-schedule the BA step with feedback ----
 
     @Test
@@ -252,6 +310,29 @@ class WorkflowAutoChainerSddTest {
         verify(workflowService).markStepFailed(chain.getId(), 0, "Run failed: LLM quota exceeded");
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    // ---- 10. SDD chain without DoD record: chainer must init DoD on first step ----
+
+    @Test
+    void firstSddStep_initsDoDWhenAbsent() {
+        // BA step completes on a chain created via API (createAndStart), which has
+        // no DoD record. The chainer must initialize DoD before routing the step.
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, runId);
+        chain = chainWith(baStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(baStep);
+        // No DoD record exists — dodService.getStatus throws
+        when(dodService.getStatus(chain.getId().toString()))
+                .thenThrow(new IllegalStateException("No DoD record"));
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "spec draft"));
+
+        // MUST initialize DoD for SDD chains without an existing record
+        verify(dodService).init(chain.getId().toString(), "SDD", List.of("dev", "qa"));
+        // After DoD init, BA routing proceeds as normal
+        verify(eventPublisher).publishEvent(any(BaStepCompletedEvent.class));
     }
 
     // ---- helpers ----

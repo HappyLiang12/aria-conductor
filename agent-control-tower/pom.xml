@@ -172,7 +172,8 @@
             <!--
               Test tiering:
               - Surefire (mvn test): fast unit tier only. *IntegrationTest / *E2ETest /
-                *ContractTest are excluded and run under Failsafe instead.
+                *ContractTest are excluded from Surefire and run under Failsafe instead
+                (see Failsafe includes below).
               - Failsafe (mvn verify): integration tier, sequential (Spring context reuse
                 matters more than parallelism there).
               CI unit lane runs `mvn test`; integration lane runs `mvn verify`.
@@ -205,6 +206,7 @@
                     <includes>
                         <include>**/*IntegrationTest.java</include>
                         <include>**/*E2ETest.java</include>
+                        <include>**/*ContractTest.java</include>
                     </includes>
                     <argLine>@{argLine} --enable-preview -XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>

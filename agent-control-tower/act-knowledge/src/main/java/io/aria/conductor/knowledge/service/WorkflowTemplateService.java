@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -123,6 +124,18 @@ public class WorkflowTemplateService {
         // Parse YAML to steps
         List<WorkflowStep> steps = templateConverter.yamlToWorkflowSteps(yamlContent);
 
+        // Validate that all parameter keys are declared in the template
+        if (parameters != null) {
+            Set<String> declaredParams = templateConverter.extractParameterNames(steps);
+            for (String key : parameters.keySet()) {
+                if (!declaredParams.contains(key)) {
+                    throw new IllegalArgumentException(
+                            "Unknown parameter '" + key + "': not declared in template " + templateItemId
+                            + ". Declared: " + declaredParams);
+                }
+            }
+        }
+
         // Substitute parameters
         if (parameters != null) {
             for (WorkflowStep step : steps) {
@@ -159,10 +172,6 @@ public class WorkflowTemplateService {
                         || s.getKind() == WorkflowStep.StepKind.QA);
         if (isSdd) {
             dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
-            kanbanService.create(CreateKanbanItemRequest.builder()
-                    .title(response.getName())
-                    .description("SDD workflow: " + item.getName())
-                    .build());
         }
 
         // Link source knowledge item to the newly created chain

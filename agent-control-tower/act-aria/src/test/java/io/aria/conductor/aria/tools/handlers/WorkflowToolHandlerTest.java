@@ -8,6 +8,7 @@ import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.common.model.WorkflowStep;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -86,6 +87,68 @@ class WorkflowToolHandlerTest {
         assertTrue(result.startsWith("Error"));
         assertTrue(result.contains("agent not found"));
         verifyNoInteractions(workflowService);
+    }
+
+    @Test
+    void createWorkflow_rejectsSddKinds() {
+        UUID baId = UUID.randomUUID();
+        when(agentRepository.findByName("ba-agent")).thenReturn(Optional.of(
+                Agent.builder().id(baId).name("ba-agent").role("ba")
+                        .healthStatus(HealthStatus.HEALTHY).build()));
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("toolName", "create_workflow");
+        args.put("name", "sdd");
+        args.put("steps", List.of(Map.of("agent", "ba-agent", "promptTemplate", "write the spec")));
+
+        String result = handler.execute(args);
+
+        assertTrue(result.startsWith("Error"));
+        assertTrue(result.contains("instantiate_template"));
+        verifyNoInteractions(workflowService);
+    }
+
+    @Test
+    void createWorkflow_genericKindsStillAllowed() {
+        UUID devId = UUID.randomUUID();
+        when(agentRepository.findByName("dev-agent")).thenReturn(Optional.of(
+                Agent.builder().id(devId).name("dev-agent").role("developer")
+                        .healthStatus(HealthStatus.HEALTHY).build()));
+        UUID chainId = UUID.randomUUID();
+        when(workflowService.createAndStart(any())).thenReturn(WorkflowResponse.builder()
+                .id(chainId).name("generic").status(WorkflowChain.Status.RUNNING).totalSteps(1).build());
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("toolName", "create_workflow");
+        args.put("name", "generic");
+        args.put("steps", List.of(Map.of("agent", "dev-agent", "promptTemplate", "do generic work")));
+
+        String result = handler.execute(args);
+
+        assertTrue(result.contains("created and started"));
+        verify(workflowService).createAndStart(any());
+    }
+
+    @Test
+    void createWorkflow_propagatesStepKind() {
+        UUID agentId = UUID.randomUUID();
+        when(agentRepository.findByName("worker")).thenReturn(Optional.of(
+                Agent.builder().id(agentId).name("worker").role("developer")
+                        .healthStatus(HealthStatus.HEALTHY).build()));
+        when(workflowService.createAndStart(any())).thenReturn(WorkflowResponse.builder()
+                .id(UUID.randomUUID()).name("wf").status(WorkflowChain.Status.RUNNING).totalSteps(1).build());
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("toolName", "create_workflow");
+        args.put("name", "wf");
+        args.put("steps", List.of(Map.of(
+                "agent", "worker", "promptTemplate", "do it", "kind", "code_review")));
+
+        handler.execute(args);
+
+        ArgumentCaptor<CreateWorkflowRequest> captor = ArgumentCaptor.forClass(CreateWorkflowRequest.class);
+        verify(workflowService).createAndStart(captor.capture());
+        assertEquals(WorkflowStep.StepKind.CODE_REVIEW, captor.getValue().getSteps().get(0).getKind());
     }
 
     @Test

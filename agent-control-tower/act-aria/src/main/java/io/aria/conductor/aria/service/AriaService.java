@@ -257,6 +257,7 @@ public class AriaService {
                   approved "development-workflow" template and instantiate it with an issueRef parameter via
                   instantiate_template. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
                   QA verdict. Users can copy the template knowledge item and edit its YAML to customise their own workflow.
+                  NEVER use create_workflow for the BA->Dev->QA loop; always use instantiate_template.
 
                 ## Rules
 

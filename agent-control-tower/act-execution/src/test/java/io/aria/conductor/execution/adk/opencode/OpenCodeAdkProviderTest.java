@@ -369,7 +369,7 @@ class OpenCodeAdkProviderTest {
     }
 
     @Test
-    void executeTask_maxRoundsBudget_capsDeadlineBelowMaxDuration() {
+    void executeTask_maxRounds_doesNotCapDeadline_usesMaxDuration() {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
@@ -378,10 +378,29 @@ class OpenCodeAdkProviderTest {
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
 
-        // 2 rounds × 2 min = 4 min budget, tighter than the 30 min max duration.
+        // maxRounds no longer translates into a wall-clock cap: the deadline is
+        // maxDuration (30 min) even though 2 rounds × 2 min would be 4 min.
         provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, Duration.ofMinutes(30)));
 
-        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(4)));
+        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(30)));
+    }
+
+    @Test
+    void resolveMaxDuration_usesMaxTaskMinutesOnly() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        properties.setMaxTaskMinutes(120);
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
+
+        // Small maxRounds (2) + null maxDuration + large maxTaskMinutes (120)
+        // -> deadline must be maxTaskMinutes, not a round-derived budget.
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, null));
+
+        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(120)));
     }
 
     // ---- #10 concurrent runs for the same agent share one sandbox preparation ----

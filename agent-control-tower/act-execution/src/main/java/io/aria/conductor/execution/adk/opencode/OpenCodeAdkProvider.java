@@ -419,18 +419,13 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     }
 
     private Duration resolveMaxDuration(TaskContext context) {
-        Duration maxDuration = (context != null && context.maxDuration() != null)
-                ? context.maxDuration()
-                : Duration.ofMinutes(properties.getMaxTaskMinutes());
-        if (context != null && context.maxRounds() > 0) {
-            // Translate the round budget into a time budget as well: allow at most
-            // 2 minutes per round, bounded by the overall max duration.
-            Duration roundBudget = Duration.ofMinutes(context.maxRounds() * 2L);
-            if (roundBudget.compareTo(maxDuration) < 0) {
-                return roundBudget;
-            }
+        // The round budget is a prompt-level constraint only (see buildSystemPrompt);
+        // it must NOT be translated into a wall-clock deadline, which would silently
+        // cap the run below the configured max duration / max-task-minutes.
+        if (context != null && context.maxDuration() != null) {
+            return context.maxDuration();
         }
-        return maxDuration;
+        return Duration.ofMinutes(properties.getMaxTaskMinutes());
     }
 
     private String buildSystemPrompt(Agent agent, TaskContext context) {

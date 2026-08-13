@@ -39,5 +39,5 @@ public class OpenCodeProperties {
     private Map<String, String> sandboxEnv = new LinkedHashMap<>();
 
     /** Default task timeout in minutes (used when TaskContext.maxDuration is null). */
-    private int maxTaskMinutes = 30;
+    private int maxTaskMinutes = 45;
 }

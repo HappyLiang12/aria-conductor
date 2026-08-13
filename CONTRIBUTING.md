@@ -35,6 +35,10 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
 
 See the [README](README.md) for development setup instructions.
 
+### Environment
+
+After switching branches, run `mvn install -DskipTests` once so dependent modules pick up updated SNAPSHOT jars (stale .m2 can cause ClassNotFound).
+
 ### Code Style
 
 - Java: Follow existing code conventions (no enforced formatter yet)

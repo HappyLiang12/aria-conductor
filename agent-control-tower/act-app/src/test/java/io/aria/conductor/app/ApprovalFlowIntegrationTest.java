@@ -89,7 +89,7 @@ class ApprovalFlowIntegrationTest extends BaseH2IntegrationTest {
 
     private List<Map<String, Object>> listPending() {
         ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
-                "/api/v1/approvals", HttpMethod.GET, null,
+                "/api/v1/approvals?status=PENDING", HttpMethod.GET, null,
                 new ParameterizedTypeReference<>() {});
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         return response.getBody();

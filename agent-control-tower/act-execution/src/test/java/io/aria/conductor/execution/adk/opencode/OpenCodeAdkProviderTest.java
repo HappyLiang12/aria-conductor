@@ -191,6 +191,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -212,6 +213,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession(anyString())).thenReturn("sess-1");
         when(httpClient.sendMessage(any(), any(), any(), any()))
                 .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT, "deadline exceeded"));
@@ -306,6 +308,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         // Simulate a cancel landing in the session-creation window: runClients is
         // already registered (executeTask registers it before createSession) but
         // runSessions is not yet populated — abortTask must record a pending abort.
@@ -332,6 +335,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -350,6 +354,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -368,6 +373,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -413,5 +419,48 @@ class OpenCodeAdkProviderTest {
 
         verify(sandboxManager, times(1)).createSandbox(eq(agentId), eq(IMAGE), any());
         assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    // ---- #F12 fresh sandbox health probe before reuse ----
+
+    @Test
+    void getOrPrepareInstance_staleHealthyCachedInstance_destroysAndRebuilds() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-old", true, Instant.now(), 0, httpClient));
+        // Cached instance reports healthy, but a fresh probe reports false.
+        when(httpClient.isHealthy()).thenReturn(false, true);
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-new");
+        when(sandboxManager.getSandboxUrl("sb-new", 4096)).thenReturn("http://127.0.0.1:4096");
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(sandboxManager).killSandbox("sb-old");
+        verify(sandboxManager).createSandbox(eq(agentId), eq(IMAGE), any());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-new");
+    }
+
+    @Test
+    void getOrPrepareInstance_healthyInstance_isReused() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(sandboxManager, never()).createSandbox(any(), any(), any());
+        verify(sandboxManager, never()).killSandbox(any());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-1");
+    }
+
+    @Test
+    void getOrPrepareInstance_probesHealthOnEveryInvocation() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(httpClient, times(2)).isHealthy();
     }
 }

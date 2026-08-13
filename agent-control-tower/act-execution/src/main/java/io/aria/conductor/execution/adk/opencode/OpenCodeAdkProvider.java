@@ -258,7 +258,10 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
 
     private OpenCodeInstance getOrPrepareInstance(UUID agentId, Agent agent) {
         OpenCodeInstance existing = instances.get(agentId);
-        if (existing != null && existing.healthy()) {
+        // Reuse a cached instance only when it both reported healthy on the last
+        // probe AND a fresh probe succeeds right now — a dead sandbox must fall
+        // through to the destroy-and-rebuild path below instead of being reused.
+        if (existing != null && existing.healthy() && existing.client().isHealthy()) {
             return existing;
         }
         if (existing != null) {

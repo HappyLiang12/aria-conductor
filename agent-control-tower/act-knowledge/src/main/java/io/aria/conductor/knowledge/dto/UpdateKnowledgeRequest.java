@@ -17,4 +17,6 @@ public class UpdateKnowledgeRequest {
     private String content;
 
     private Sensitivity sensitivity;
+
+    private String yamlContent;
 }

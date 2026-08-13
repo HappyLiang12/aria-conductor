@@ -360,7 +360,9 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         assertThat(ver.getYamlContent()).contains("kind: QA");
 
         // Instantiate the template
-        Map<String, String> params = Map.of("issueRef", "ISSUE-42", "specRef", "SPEC-1");
+        // specRef is a system placeholder (reserved for the coordinator to inject the
+        // approved spec UUID); callers must NOT pass it - the whitelist rejects it.
+        Map<String, String> params = Map.of("issueRef", "ISSUE-42");
         WorkflowResponse response = workflowTemplateService.instantiateTemplate(templateId, params);
 
         // Verify chain created

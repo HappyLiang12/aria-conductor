@@ -45,7 +45,9 @@ import io.aria.conductor.execution.tool.WorkspaceManager;
 import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
@@ -326,6 +328,40 @@ public class AgentLoopEngine {
     /** Check if a run has an active execution context (used by ZombieRunReaper). */
     public boolean hasActiveContext(UUID runId) {
         return activeContexts.containsKey(runId);
+    }
+
+    /**
+     * Startup recovery: mark runs left in RUNNING or INITIALIZING by a previous backend
+     * process (JVM crash/restart) as FAILED and publish {@link RunCompletedEvent} so
+     * downstream listeners (workflow chainer, kanban, WS broadcast) reconcile instead of
+     * leaving chains/boards stuck. Runs are saved individually so one failure cannot roll
+     * back the recovery of the others.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        recoverOrphanedRuns();
+    }
+
+    /** Extracted so tests can invoke recovery without firing Spring lifecycle events. */
+    void recoverOrphanedRuns() {
+        List<Run> orphaned = runRepository.findByStatusIn(
+                List.of(RunStatus.RUNNING, RunStatus.INITIALIZING));
+        if (orphaned.isEmpty()) {
+            return;
+        }
+        log.info("Recovering {} orphaned run(s) left by backend restart", orphaned.size());
+        for (Run run : orphaned) {
+            try {
+                run.setStatus(RunStatus.FAILED);
+                run.setErrorMessage("Run orphaned by backend restart");
+                run.setCompletedAt(Instant.now());
+                runRepository.save(run);
+                eventPublisher.publishEvent(new RunCompletedEvent(
+                        this, run.getId(), run.getAgentId(), RunStatus.FAILED, null));
+            } catch (Exception e) {
+                log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
+            }
+        }
     }
 
     /**

@@ -12,6 +12,7 @@ import java.util.UUID;
 public interface RunRepository extends JpaRepository<Run, UUID> {
     List<Run> findByAgentId(UUID agentId);
     List<Run> findByStatus(RunStatus status);
+    List<Run> findByStatusIn(List<RunStatus> statuses);
     List<Run> findByAgentIdAndStatus(UUID agentId, RunStatus status);
     long countByStatus(RunStatus status);
     List<Run> findByConversationIdOrderByCreatedAtAsc(String conversationId);

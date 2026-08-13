@@ -40,6 +40,10 @@ import java.util.UUID;
 @Component
 public class SpecReviewCoordinator {
 
+    /** Upper bound on stored spec content (DB bloat guard): 50 KB. */
+    private static final int MAX_SPEC_CONTENT_LENGTH = 50 * 1024;
+    private static final String SPEC_ID_MARKER = "SPEC_ID=";
+
     private final KnowledgeService knowledgeService;
     private final KnowledgeItemRepository itemRepository;
     private final KnowledgeVersionRepository versionRepository;
@@ -87,12 +91,13 @@ public class SpecReviewCoordinator {
         }
 
         String specName = specName(chainId);
-        UUID specItemId = upsertSpecKnowledge(specName, event.getFinalOutput());
+        String specContent = cleanSpecContent(event.getFinalOutput());
+        UUID specItemId = upsertSpecKnowledge(specName, specContent);
 
         Approval approval = Approval.builder()
                 .runId(baRunId)
                 .approvalType(Approval.ApprovalType.SPEC_REVIEW)
-                .content(event.getFinalOutput())
+                .content(specContent)
                 .contentKind(Approval.ContentKind.MARKDOWN)
                 .knowledgeItemId(specItemId)
                 .status(ApprovalStatus.PENDING)
@@ -272,4 +277,46 @@ public class SpecReviewCoordinator {
     }
 
     private String specName(UUID chainId) { return "spec-" + chainId; }
+
+    /**
+     * Conservative cleanup of the BA step's raw output before storage:
+     * <ol>
+     *   <li>If the content contains a {@code # Spec} or {@code ## } heading, extract from the
+     *       first heading onward (strip any stream-of-consciousness preamble).</li>
+     *   <li>Strip a trailing {@code SPEC_ID=<uuid>} marker.</li>
+     *   <li>Truncate to {@value #MAX_SPEC_CONTENT_LENGTH} characters.</li>
+     * </ol>
+     * If no heading marker exists, the content is stored verbatim (never guess-truncated
+     * beyond the size guard).
+     */
+    static String cleanSpecContent(String content) {
+        if (content == null) return null;
+        String cleaned = content;
+
+        int headingIdx = firstHeadingIndex(cleaned);
+        if (headingIdx >= 0) {
+            cleaned = cleaned.substring(headingIdx);
+        }
+
+        int markerIdx = cleaned.lastIndexOf(SPEC_ID_MARKER);
+        if (markerIdx >= 0) {
+            String tail = cleaned.substring(markerIdx + SPEC_ID_MARKER.length());
+            if (tail.matches("[0-9a-fA-F-]{36}\\s*")) {
+                cleaned = cleaned.substring(0, markerIdx).stripTrailing();
+            }
+        }
+
+        if (cleaned.length() > MAX_SPEC_CONTENT_LENGTH) {
+            cleaned = cleaned.substring(0, MAX_SPEC_CONTENT_LENGTH);
+        }
+        return cleaned;
+    }
+
+    private static int firstHeadingIndex(String content) {
+        int specIdx = content.indexOf("# Spec");
+        int h2Idx = content.indexOf("## ");
+        if (specIdx >= 0 && h2Idx >= 0) return Math.min(specIdx, h2Idx);
+        if (specIdx >= 0) return specIdx;
+        return h2Idx;
+    }
 }

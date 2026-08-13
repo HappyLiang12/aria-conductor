@@ -285,4 +285,74 @@ class SpecReviewCoordinatorTest {
         assertThat(specReviewApproval.getReason()).isEqualTo("Workflow cancelled");
         verify(approvalRepository).save(specReviewApproval);
     }
+
+    // ==================== F18: cleanSpecContent ====================
+
+    @Test
+    void cleanSpecContent_marked_stripsPreambleAndMarker() {
+        String input = "Stream of consciousness preamble\n"
+                + "# Spec\n\n"
+                + "## Requirements\n- A\n- B\n\n"
+                + "SPEC_ID=123e4567-e89b-12d3-a456-426614174000\n";
+
+        String cleaned = SpecReviewCoordinator.cleanSpecContent(input);
+
+        assertThat(cleaned).isEqualTo("# Spec\n\n## Requirements\n- A\n- B");
+    }
+
+    @Test
+    void cleanSpecContent_h2Heading_stripsPreamble() {
+        String input = "thinking out loud...\n## Overview\nDetails here.";
+
+        assertThat(SpecReviewCoordinator.cleanSpecContent(input))
+                .isEqualTo("## Overview\nDetails here.");
+    }
+
+    @Test
+    void cleanSpecContent_unmarked_returnsVerbatim() {
+        String input = "Just some notes without any heading marker.";
+
+        assertThat(SpecReviewCoordinator.cleanSpecContent(input)).isEqualTo(input);
+    }
+
+    @Test
+    void cleanSpecContent_oversized_truncatesTo50Kb() {
+        String input = "# Spec\n" + "x".repeat(51 * 1024);
+
+        String cleaned = SpecReviewCoordinator.cleanSpecContent(input);
+
+        assertThat(cleaned).startsWith("# Spec");
+        assertThat(cleaned).hasSize(50 * 1024);
+    }
+
+    @Test
+    void cleanSpecContent_cleanContent_isIdentity() {
+        assertThat(SpecReviewCoordinator.cleanSpecContent(specContent)).isEqualTo(specContent);
+    }
+
+    @Test
+    void onBaStepCompleted_stripsMarkerAndTruncates() {
+        String preamble = "Stream-of-consciousness preamble to strip.\n";
+        String marker = "\nSPEC_ID=123e4567-e89b-12d3-a456-426614174000\n";
+        String body = "# Spec\n\n## Requirements\n- A\n";
+        String raw = preamble + body + "x".repeat(51 * 1024) + marker;
+
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, raw));
+
+        String expected = SpecReviewCoordinator.cleanSpecContent(raw);
+        assertThat(expected).startsWith("# Spec");
+        assertThat(expected).doesNotContain("preamble");
+        assertThat(expected).doesNotContain("SPEC_ID=");
+        assertThat(expected).hasSize(50 * 1024);
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && expected.equals(r.getContent())));
+        ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(approvalCaptor.capture());
+        assertThat(approvalCaptor.getValue().getContent()).isEqualTo(expected);
+    }
 }

@@ -67,9 +67,9 @@ fi
 
 cd "$BACKEND_DIR"
 
-if [ "$SKIP_BUILD" != "true" ] && [ ! -f "act-app/target/act-app-0.1.0-SNAPSHOT.jar" ]; then
-    echo "Building..."
-    mvn clean install -DskipTests -B
+if [ "$SKIP_BUILD" != "true" ]; then
+    echo "Installing backend modules (mvn install -DskipTests -q)..."
+    mvn install -DskipTests -q
 fi
 
 echo "Launching Spring Boot..."

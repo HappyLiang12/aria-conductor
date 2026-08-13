@@ -21,6 +21,38 @@ function Test-Command($cmd, $hint) {
 Test-Command "java" "Install JDK 21: https://adoptium.net/"
 Test-Command "mvn" "Install Maven 3.9+: https://maven.apache.org/"
 
+# ── Preflight: report toolchain status (non-fatal warnings only) ──
+Write-Host "Preflight:" -ForegroundColor Cyan
+
+$javaVersion = (java -version 2>&1 | Select-Object -First 1)
+Write-Host "  Java  : $javaVersion"
+if ($javaVersion -notmatch '"21') {
+    Write-Warning "JDK 21 is recommended (found: $javaVersion)."
+}
+
+$mvnVersion = (mvn -version 2>&1 | Select-Object -First 1)
+Write-Host "  Maven : $mvnVersion"
+
+if (Get-Command docker -ErrorAction SilentlyContinue) {
+    docker info 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Docker: running"
+    } else {
+        Write-Warning "Docker Desktop is not running. Required only for -AdkProvider opencode."
+    }
+} else {
+    Write-Warning "Docker is not installed. Required only for -AdkProvider opencode."
+}
+
+if (-not $env:DEEPSEEK_API_KEY) {
+    Write-Warning "DEEPSEEK_API_KEY is not set; real LLM calls will fail."
+} else {
+    Write-Host "  DeepSeek API key: set"
+}
+
+# Windows: prefer the `py` launcher so the ADK subprocess can find a Python runtime.
+$env:ADK_PYTHON = "py"
+
 # ── OpenSandbox server (required for opencode provider) ──
 if ($AdkProvider -eq "opencode" -and -not $SkipSandbox) {
     Write-Host "Checking OpenSandbox server..." -ForegroundColor Cyan
@@ -62,11 +94,10 @@ if ($AdkProvider -eq "opencode") {
 
 Set-Location $BackendDir
 
-$jarPath = "act-app\target\act-app-0.1.0-SNAPSHOT.jar"
-if (-not $SkipBuild -and -not (Test-Path $jarPath)) {
-    Write-Host "Building..." -ForegroundColor Yellow
-    mvn clean install -DskipTests -B
-    if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
+if (-not $SkipBuild) {
+    Write-Host "Installing backend modules (mvn install -DskipTests -q)..." -ForegroundColor Yellow
+    mvn install -DskipTests -q
+    if ($LASTEXITCODE -ne 0) { Write-Error "mvn install failed"; exit 1 }
 }
 
 Write-Host "Launching Spring Boot..." -ForegroundColor Green

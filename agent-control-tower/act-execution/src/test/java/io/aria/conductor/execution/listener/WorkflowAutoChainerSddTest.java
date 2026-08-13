@@ -29,6 +29,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -273,7 +274,7 @@ class WorkflowAutoChainerSddTest {
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
 
-        verify(workflowService).markStepFailed(chain.getId(), 0, "QA completed but no verdict submitted");
+        verify(workflowService).markStepFailed(eq(chain.getId()), eq(0), contains("submit_dod_review"));
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any());
     }

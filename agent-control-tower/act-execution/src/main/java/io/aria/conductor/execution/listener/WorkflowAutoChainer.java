@@ -178,8 +178,11 @@ public class WorkflowAutoChainer {
         }
         DoDStageReview latest = dodService.latestQaReview(record);
         if (latest == null || latest.getVerdict() == null) {
+            // F17: give the operator an actionable retry hint instead of a bare failure message.
             workflowService.markStepFailed(chain.getId(), stepIndex,
-                    "QA completed but no verdict submitted");
+                    "QA completed but no verdict submitted. The QA agent must call submit_dod_review "
+                            + "with verdict=PASS|DEFECT|SPEC_GAP before finishing. "
+                            + "Retry the step after fixing the QA tool configuration.");
             return;
         }
         String verdict = latest.getVerdict().toUpperCase(Locale.ROOT);

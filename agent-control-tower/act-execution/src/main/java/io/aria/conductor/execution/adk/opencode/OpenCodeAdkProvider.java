@@ -251,6 +251,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             shutdownAgent(agentId);
         }
         instances.clear();
+        preparing.clear();
         prepareExecutor.shutdown();
     }
 
@@ -269,40 +270,41 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             destroyInstance(existing.sandboxId());
             instances.remove(agentId);
         }
-        // Concurrent runs for the same agent share a single sandbox preparation: the
-        // thread that wins putIfAbsent owns the prepare and completes the shared
-        // future; followers simply wait on the same future instead of each creating
-        // (and leaking) their own sandbox.
-        CompletableFuture<OpenCodeInstance> future = preparing.get(agentId);
-        if (future == null) {
-            // Re-check instances: the previous owner may have published its instance and
-            // removed the preparing future between our earlier instances.get and this
-            // preparing.get — without this re-check we would prepare a second sandbox.
-            OpenCodeInstance completed = instances.get(agentId);
-            if (completed != null && completed.healthy()) {
-                return completed;
+        // Concurrent runs for the same agent share a single sandbox preparation.
+        // Ownership is decided atomically inside `preparing.compute` and the completed
+        // future is KEPT in the map (never removed) so a late caller can never observe
+        // a null mapping after the owner finished and race to become a second owner
+        // (TOCTOU fix — the previous get/putIfAbsent/remove sequence left such a window).
+        CompletableFuture<OpenCodeInstance>[] ownerHolder = new CompletableFuture[1];
+        CompletableFuture<OpenCodeInstance> future = preparing.compute(agentId, (k, prev) -> {
+            if (prev != null && !prev.isDone()) {
+                return prev; // someone is preparing — join them
             }
+            // prev is done (or absent). Reuse only if the instance is still registered.
+            OpenCodeInstance inst = instances.get(agentId);
+            if (inst != null && inst.healthy()) {
+                return prev != null ? prev : CompletableFuture.completedFuture(inst);
+            }
+            // prev done but instance gone (destroyed/rebuild), or nothing yet — become owner.
             CompletableFuture<OpenCodeInstance> fresh = new CompletableFuture<>();
-            CompletableFuture<OpenCodeInstance> raced = preparing.putIfAbsent(agentId, fresh);
-            if (raced == null) {
-                // Owner: prepare on the shared executor and complete the future.
-                try {
-                    prepareExecutor.execute(() -> {
-                        try {
-                            fresh.complete(prepareInstance(agentId, agent));
-                        } catch (Throwable t) {
-                            fresh.completeExceptionally(t);
-                        } finally {
-                            preparing.remove(agentId);
-                        }
-                    });
-                } catch (java.util.concurrent.RejectedExecutionException e) {
-                    // Executor shut down (provider teardown) — fail the waiters fast.
-                    fresh.completeExceptionally(e);
-                }
-                future = fresh;
-            } else {
-                future = raced;
+            ownerHolder[0] = fresh;
+            return fresh;
+        });
+        if (ownerHolder[0] != null) {
+            // Owner: prepare on the shared executor and complete the future. The
+            // completed future stays in `preparing` so late callers reuse it via the
+            // compute path above instead of racing to become a second owner.
+            try {
+                prepareExecutor.execute(() -> {
+                    try {
+                        ownerHolder[0].complete(prepareInstance(agentId, agent));
+                    } catch (Throwable t) {
+                        ownerHolder[0].completeExceptionally(t);
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // Executor shut down (provider teardown) — fail the waiters fast.
+                ownerHolder[0].completeExceptionally(e);
             }
         }
         try {

@@ -62,7 +62,7 @@ public class WorkflowService {
                 .collect(Collectors.toList());
 
         WorkflowChain chain = WorkflowChain.builder()
-                .name(request.getName())
+                .name(sanitizeName(request.getName()))
                 .description(request.getDescription())
                 .status(WorkflowChain.Status.PENDING)
                 .currentStepIndex(0)
@@ -482,6 +482,12 @@ public class WorkflowService {
     }
 
     // ==================== Internal helpers ====================
+
+    /** Sanitizes a chain name to printable ASCII, replacing any non-ASCII chars with "-". */
+    private static String sanitizeName(String name) {
+        if (name == null || name.isBlank()) return "workflow";
+        return name.replaceAll("[^\\x20-\\x7E]", "-").trim();
+    }
 
     private void startStep(WorkflowChain chain, int stepIndex, String previousOutput) {
         List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());

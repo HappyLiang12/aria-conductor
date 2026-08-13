@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -22,9 +24,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -45,15 +49,15 @@ class ApprovalControllerTest extends WebMvcTestBase {
             approvalRepository, approvalGate, toolCallRepository, toolRiskResolver));
 
     @Test
-    void listPending_enrichesApprovalsWithToolNameAndRiskTier() throws Exception {
+    void listApprovals_enrichesApprovalsWithToolNameAndRiskTier() throws Exception {
         UUID toolCallId = UUID.randomUUID();
         Approval withTool = anApproval().withToolCallId(toolCallId).withReason("push gate").build();
         Approval withoutTool = anApproval().build(); // toolCallId null → no enrichment
         ToolCall toolCall = aToolCall().withId(toolCallId)
                 .withToolName("git_push").withArguments("{\"remote\":\"origin\"}").build();
 
-        when(approvalRepository.findByStatus(ApprovalStatus.PENDING))
-                .thenReturn(List.of(withTool, withoutTool));
+        when(approvalRepository.findAll(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(withTool, withoutTool)));
         when(toolCallRepository.findAllById(List.of(toolCallId))).thenReturn(List.of(toolCall));
         when(toolRiskResolver.resolve("git_push")).thenReturn(RiskTier.PUSH);
 
@@ -71,11 +75,11 @@ class ApprovalControllerTest extends WebMvcTestBase {
     }
 
     @Test
-    void listPending_batchLoadsDistinctToolCallIds_avoidingNPlusOne() throws Exception {
+    void listApprovals_batchLoadsDistinctToolCallIds_avoidingNPlusOne() throws Exception {
         UUID sharedToolCallId = UUID.randomUUID();
         Approval first = anApproval().withToolCallId(sharedToolCallId).build();
         Approval second = anApproval().withToolCallId(sharedToolCallId).build();
-        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of(first, second));
+        when(approvalRepository.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of(first, second)));
         when(toolCallRepository.findAllById(List.of(sharedToolCallId)))
                 .thenReturn(List.of(aToolCall().withId(sharedToolCallId).withToolName("read_file").build()));
         when(toolRiskResolver.resolve("read_file")).thenReturn(RiskTier.READ);
@@ -93,13 +97,40 @@ class ApprovalControllerTest extends WebMvcTestBase {
     }
 
     @Test
-    void listPending_noPendingApprovals_returnsEmptyArray() throws Exception {
-        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of());
+    void listApprovals_noApprovals_returnsEmptyArray() throws Exception {
+        when(approvalRepository.findAll(any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/v1/approvals"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray())
                 .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void listApprovals_noStatus_returnsAllIncludingDecided() throws Exception {
+        Approval pending = anApproval().build();
+        Approval approved = anApproval().withStatus(ApprovalStatus.APPROVED).build();
+        when(approvalRepository.findAll(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(pending, approved)));
+
+        mvc.perform(get("/api/v1/approvals"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].status").value("PENDING"))
+                .andExpect(jsonPath("$[1].status").value("APPROVED"));
+        verify(approvalRepository, never()).findByStatus(any());
+    }
+
+    @Test
+    void listApprovals_pendingStatus_filtersOnly() throws Exception {
+        Approval pending = anApproval().build();
+        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of(pending));
+
+        mvc.perform(get("/api/v1/approvals").param("status", "PENDING"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].status").value("PENDING"));
+        verify(approvalRepository, never()).findAll(any(Pageable.class));
     }
 
     @Test

@@ -440,6 +440,44 @@ class OpenCodeAdkProviderTest {
         assertThat(provider.instancesForTest()).containsKey(agentId);
     }
 
+    @Test
+    void concurrentExecuteTask_repeatRounds_createsSandboxOnce() throws Exception {
+        when(sandboxManager.createSandbox(any(), eq(IMAGE), any()))
+                .thenAnswer(inv -> "sb-" + UUID.randomUUID());
+        when(sandboxManager.getSandboxUrl(anyString(), eq(4096))).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession(anyString())).thenAnswer(inv -> "sess-" + UUID.randomUUID());
+        when(httpClient.sendMessage(any(), any(), any(), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "done", 1, 1));
+
+        int rounds = 15;
+        int threads = 4;
+        for (int round = 0; round < rounds; round++) {
+            UUID agentId = UUID.randomUUID();
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            CountDownLatch ready = new CountDownLatch(threads);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<TaskResult>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                UUID runId = UUID.randomUUID();
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    return provider.executeTask(agent(agentId), runId, "task-" + runId,
+                            new TaskContext(0, Duration.ofMinutes(5)));
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS))
+                    .as("round %d: all threads must reach the barrier", round).isTrue();
+            go.countDown();
+            for (Future<TaskResult> f : futures) {
+                assertThat(f.get(30, TimeUnit.SECONDS).finalOutput()).isEqualTo("done");
+            }
+            pool.shutdownNow();
+            verify(sandboxManager, times(1)).createSandbox(eq(agentId), eq(IMAGE), any());
+        }
+    }
+
     // ---- #F12 fresh sandbox health probe before reuse ----
 
     @Test

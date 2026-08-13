@@ -14,8 +14,11 @@ import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
+import io.aria.conductor.knowledge.dto.UpdateKnowledgeRequest;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
+import io.aria.conductor.knowledge.service.KnowledgeService;
 import io.aria.conductor.knowledge.service.WorkflowTemplateService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +76,8 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     private KnowledgeVersionRepository knowledgeVersionRepository;
     @Autowired
     private WorkflowTemplateService workflowTemplateService;
+    @Autowired
+    private KnowledgeService knowledgeService;
 
     @MockBean
     private AdkProviderRegistry adkProviderRegistry;
@@ -376,6 +381,70 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         DoDRecord dod = dodService.getStatus(chainId.toString());
         assertThat(dod).isNotNull();
         assertThat(dod.getCurrentStage()).isEqualTo("dev");
+    }
+
+    @Test
+    void updateKnowledgeRoundTrip_carriesYamlForward_thenInstantiateSucceeds() throws Exception {
+        UUID templateId = UUID.randomUUID();
+
+        // Create APPROVED WORKFLOW knowledge item (mirrors seedIntegrity)
+        knowledgeItemRepository.save(KnowledgeItem.builder()
+                .id(templateId)
+                .name("development-workflow")
+                .type(KnowledgeType.WORKFLOW)
+                .status(KnowledgeStatus.APPROVED)
+                .sensitivity(Sensitivity.INTERNAL)
+                .currentVersion("v1.0.0")
+                .escalationCount(0)
+                .createdAt(Instant.now())
+                .build());
+
+        String yamlContent = """
+                schema_version: "1.0"
+                name: development-workflow
+                steps:
+                  - agent_id: "%s"
+                    prompt_template: "Write spec for {issueRef}"
+                    max_iterations: 3
+                    kind: BA
+                  - agent_id: "%s"
+                    prompt_template: "Implement {specRef}"
+                    max_iterations: 5
+                    kind: DEV
+                  - agent_id: "%s"
+                    prompt_template: "Verify {specRef}"
+                    max_iterations: 3
+                    kind: QA
+                """.formatted(baAgentId.toString(), devAgentId.toString(), qaAgentId.toString());
+
+        knowledgeVersionRepository.save(KnowledgeVersion.builder()
+                .knowledgeItemId(templateId)
+                .version("v1.0.0")
+                .status(VersionStatus.APPROVED)
+                .yamlContent(yamlContent)
+                .createdAt(Instant.now())
+                .approvedAt(Instant.now())
+                .build());
+
+        // PUT-style update with a description-only change: yamlContent omitted.
+        // updateKnowledge must carry the YAML forward from the current version (F10).
+        knowledgeService.updateKnowledge(templateId, UpdateKnowledgeRequest.builder()
+                .description("updated description - template still carries its YAML")
+                .build());
+
+        KnowledgeVersion updated = knowledgeVersionRepository
+                .findByKnowledgeItemIdAndVersion(templateId, "v1.1.0").orElseThrow();
+        assertThat(updated.getYamlContent()).isEqualTo(yamlContent);
+
+        // Re-approve the updated item, then the template must still instantiate.
+        knowledgeService.reviewKnowledge(templateId, ReviewDecisionRequest.builder()
+                .decision(ReviewDecisionRequest.ReviewDecision.APPROVED)
+                .reason("ok")
+                .build());
+
+        WorkflowResponse response = workflowTemplateService.instantiateTemplate(
+                templateId, Map.of("issueRef", "ISSUE-42"));
+        assertThat(workflowChainRepository.findById(response.getId())).isPresent();
     }
 
     // ================================================================

@@ -19,6 +19,7 @@ public class KnowledgeVersionResponse {
     private String version;
     private VersionStatus status;
     private String content;
+    private String yamlContent;
     private Instant createdAt;
     private Instant approvedAt;
 }

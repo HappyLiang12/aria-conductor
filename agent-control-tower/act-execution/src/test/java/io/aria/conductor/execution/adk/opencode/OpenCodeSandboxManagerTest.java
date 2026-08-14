@@ -287,7 +287,7 @@ class OpenCodeSandboxManagerTest {
 
             assertThat(diagnosis)
                     .contains("== metrics ==")
-                    .contains("SandboxMetrics")
+                    .contains("\"cpuCount\"")
                     .contains("== processes ==")
                     .contains("PID CMD")
                     .contains("== opencode log tail ==");
@@ -326,8 +326,77 @@ class OpenCodeSandboxManagerTest {
 
             assertThat(diagnosis)
                     .contains("== metrics == ERROR metrics down")
-                    .contains("== processes ==")
+                    .contains("== processes")
                     .contains("== opencode log tail ==");
+        }
+    }
+
+    @Test
+    void diagnose_processFallback_readsProcWhenPsMissing() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            when(sandbox.getMetrics()).thenReturn(new SandboxMetrics(2f, 30f, 2048f, 512f, 123L));
+
+            Commands commands = mock(Commands.class);
+            when(sandbox.commands()).thenReturn(commands);
+            // ps is missing — the manager must fall back to a /proc scan
+            when(commands.run("ps aux 2>/dev/null | head -30 || ps -ef | head -30"))
+                    .thenThrow(new RuntimeException("ps: command not found"));
+            Execution procExec = mock(Execution.class);
+            when(procExec.getLogs()).thenReturn(new ExecutionLogs(
+                    List.of(new OutputMessage("1\n2\n3\n", 0L, false)), List.of()));
+            when(procExec.getResult()).thenReturn(List.of());
+            when(commands.run("ls /proc | grep -E '^[0-9]+$' | head -30")).thenReturn(procExec);
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+
+            String diagnosis = manager.diagnose("sb-1");
+
+            assertThat(diagnosis)
+                    .contains("== processes (proc fallback) ==")
+                    .contains("1\n2\n3");
+        }
+    }
+
+    @Test
+    void diagnose_metricsSection_isJson() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            when(sandbox.getMetrics()).thenReturn(new SandboxMetrics(2f, 30f, 2048f, 512f, 123L));
+
+            Commands commands = mock(Commands.class);
+            when(sandbox.commands()).thenReturn(commands);
+            when(commands.run(anyString())).thenReturn(mock(Execution.class));
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+
+            String diagnosis = manager.diagnose("sb-1");
+
+            assertThat(diagnosis)
+                    .contains("\"cpuCount\"")
+                    .contains("\"memoryUsedInMiB\"");
         }
     }
 

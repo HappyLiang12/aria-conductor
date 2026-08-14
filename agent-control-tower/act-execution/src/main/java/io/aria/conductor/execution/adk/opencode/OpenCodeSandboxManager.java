@@ -8,6 +8,7 @@ import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionR
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import lombok.extern.slf4j.Slf4j;
 
@@ -59,6 +60,8 @@ public class OpenCodeSandboxManager {
     private static final int MAX_UPLOAD_DEPTH = 3;
     /** Cap on a single uploaded file to keep requests sane. */
     private static final long MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+    /** JSON serializer for the metrics section (shared, thread-safe). */
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ConnectionConfig connectionConfig;
     /** Raw server base URL (used for the service-level health probe). */
@@ -240,16 +243,33 @@ public class OpenCodeSandboxManager {
         StringBuilder sb = new StringBuilder();
         // 1. metrics (CPU/memory) — proves opencode is actually working
         try {
-            sb.append("== metrics ==\n").append(sandbox.getMetrics()).append('\n');
+            var metrics = sandbox.getMetrics();
+            String metricsText;
+            try {
+                metricsText = OBJECT_MAPPER.writeValueAsString(metrics);
+            } catch (Exception jsonEx) {
+                metricsText = String.valueOf(metrics);
+            }
+            sb.append("== metrics ==\n").append(metricsText).append('\n');
         } catch (Exception e) {
             sb.append("== metrics == ERROR ").append(e.getMessage()).append('\n');
         }
         // 2. process snapshot inside the sandbox
         try {
             var exec = sandbox.commands().run("ps aux 2>/dev/null | head -30 || ps -ef | head -30");
-            sb.append("== processes ==\n").append(renderExecution(exec)).append('\n');
+            String rendered = renderExecution(exec);
+            if (rendered == null || rendered.isBlank()) {
+                throw new IllegalStateException("ps returned no output");
+            }
+            sb.append("== processes ==\n").append(rendered).append('\n');
         } catch (Exception e) {
-            sb.append("== processes == ERROR ").append(e.getMessage()).append('\n');
+            // ps unavailable or empty — fall back to a /proc scan
+            try {
+                var exec = sandbox.commands().run("ls /proc | grep -E '^[0-9]+$' | head -30");
+                sb.append("== processes (proc fallback) ==\n").append(renderExecution(exec)).append('\n');
+            } catch (Exception fallbackEx) {
+                sb.append("== processes == ERROR ").append(e.getMessage()).append('\n');
+            }
         }
         // 3. opencode log tail (best-effort single command, two common log locations)
         try {

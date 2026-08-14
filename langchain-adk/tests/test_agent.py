@@ -204,6 +204,78 @@ class TestParseToolCallsFromText:
         assert elapsed < 2.0
 
 
+# ── R-F9: fallback argument decoding (DSML entities, key=value, empty fallback)
+
+class TestFallbackArgumentDecoding:
+    def test_xml_key_value_content(self):
+        content = '<tool_call name="submit_dod_review">verdict=PASS</tool_call>'
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "submit_dod_review"
+        assert json.loads(result[0].arguments) == {"verdict": "PASS"}
+
+    def test_xml_json_content_with_entities(self):
+        content = (
+            '<tool_call name="submit_dod_review">'
+            '{&quot;verdict&quot;: &quot;PASS&quot;}'
+            '</tool_call>'
+        )
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "submit_dod_review"
+        assert json.loads(result[0].arguments) == {"verdict": "PASS"}
+
+    def test_invoke_json_content_with_entities(self):
+        content = (
+            '<function_calls><invoke name="search">'
+            '{&quot;q&quot;: &quot;cats&quot;}'
+            '</invoke></function_calls>'
+        )
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "search"
+        assert json.loads(result[0].arguments) == {"q": "cats"}
+
+    def test_xml_multiple_key_value_lines(self):
+        content = (
+            '<tool_call name="submit_dod_review">'
+            'verdict=PASS\nsummary=all good'
+            '</tool_call>'
+        )
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "submit_dod_review"
+        assert json.loads(result[0].arguments) == {"verdict": "PASS", "summary": "all good"}
+
+    def test_xml_key_value_variants_colon_and_quoted(self):
+        content = (
+            '<tool_call name="submit_dod_review">'
+            'verdict: PASS, summary = "all good"'
+            '</tool_call>'
+        )
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert json.loads(result[0].arguments) == {"verdict": "PASS", "summary": "all good"}
+
+    def test_xml_garbage_content_becomes_empty_dict(self):
+        content = '<tool_call name="submit_dod_review">abc def</tool_call>'
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "submit_dod_review"
+        assert result[0].arguments == "{}"
+
+    def test_markdown_json_string_arguments_kept_as_is(self):
+        content = (
+            '```json\n'
+            '{"name": "calc", "arguments": "{\\"verdict\\": \\"PASS\\"}"}\n'
+            '```'
+        )
+        result = parse_tool_calls_from_text(content)
+        assert len(result) == 1
+        assert result[0].name == "calc"
+        assert result[0].arguments == '{"verdict": "PASS"}'
+
+
 # ── to_langchain_tools ──────────────────────────────────────────────────────
 
 class TestToLangchainTools:

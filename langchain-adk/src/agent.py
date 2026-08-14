@@ -6,6 +6,7 @@ The agent process stores no session/memory state.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -41,6 +42,7 @@ _RE_MARKDOWN_JSON_FENCE = re.compile(
     r'```(?:json|js)\s*\n(.*?)```',
     re.IGNORECASE | re.DOTALL,
 )
+_RE_KEY_VALUE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.*)')
 
 
 # ── In-memory status tracking (not persisted, per-process only) ─────────────
@@ -119,8 +121,48 @@ def parse_tool_calls(response: AIMessage) -> list[ToolCall]:
 
 
 
+def _parse_key_value(args_str):
+    """Parse ``k=v`` / ``k: v`` segments into a dict.
+
+    Weak models emit tool arguments as ``verdict=PASS``, ``verdict: PASS`` or
+    ``verdict = "PASS"``. Segments are separated by newlines or commas. Values
+    are typed via :func:`json.loads` when possible and fall back to the raw
+    string otherwise.
+
+    Returns ``None`` when no ``k=v`` segment parses so the caller can fall back
+    to ``{}`` instead of fabricating arguments from garbage content.
+    """
+    result = {}
+    found = False
+    for segment in re.split(r'[\n,]+', args_str):
+        segment = segment.strip()
+        if not segment:
+            continue
+        m = _RE_KEY_VALUE.match(segment)
+        if not m:
+            # A non-key=value segment poisons the whole parse: refuse to
+            # fabricate partial arguments from undecodable content.
+            return None
+        key = m.group(1)
+        value_raw = m.group(2).strip()
+        if len(value_raw) >= 2 and value_raw[0] == value_raw[-1] and value_raw[0] in ('"', "'"):
+            value_raw = value_raw[1:-1]
+        try:
+            value = json.loads(value_raw)
+        except (json.JSONDecodeError, TypeError):
+            value = value_raw
+        result[key] = value
+        found = True
+    return result if found else None
+
+
 def _normalize_call(name, arguments):
-    """Coerce a (name, arguments) pair into a valid name + JSON argument string."""
+    """Coerce a (name, arguments) pair into a valid name + JSON argument string.
+
+    Never wraps an undecodable raw string with ``json.dumps``: corrupted args
+    are worse than empty args, because downstream tools fail visibly instead of
+    silently misbehaving.
+    """
     name = (name or "").strip()
     if isinstance(arguments, str):
         args_str = arguments.strip()
@@ -130,7 +172,15 @@ def _normalize_call(name, arguments):
             try:
                 json.loads(args_str)
             except (json.JSONDecodeError, TypeError):
-                args_str = json.dumps(arguments)
+                parsed = _parse_key_value(args_str)
+                if parsed:
+                    args_str = json.dumps(parsed)
+                else:
+                    logger.warning(
+                        "Fallback parser could not decode arguments for tool %s; using {}",
+                        name,
+                    )
+                    args_str = "{}"
     elif arguments is None:
         args_str = "{}"
     else:
@@ -190,12 +240,19 @@ def _iter_json_object_spans(text):
 
 
 def _parse_xml_dsml(content):
-    """Extract tool calls from XML/DSML forms (<tool_call> and <invoke>)."""
+    """Extract tool calls from XML/DSML forms (<tool_call> and <invoke>).
+
+    Tag content is unescaped here (``html.unescape``) because XML/DSML is the
+    only serialization that emits entities like ``&quot;`` / ``&amp;``.
+    Unescaping at capture time keeps ``_normalize_call`` generic for the JSON
+    and Markdown sources, and applies uniformly to both ``<tool_call>`` and
+    ``<invoke>`` blocks.
+    """
     calls = []
     for m in _RE_TOOL_CALL_TAG.finditer(content):
-        calls.append((m.group(1), m.group(2)))
+        calls.append((m.group(1), html.unescape(m.group(2))))
     for m in _RE_INVOKE_TAG.finditer(content):
-        calls.append((m.group(1), m.group(2)))
+        calls.append((m.group(1), html.unescape(m.group(2))))
     return calls
 
 

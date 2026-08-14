@@ -416,6 +416,139 @@ git commit -m "feat(sdd): Aria prompt guidance for issueRepo/repoUrl and rejecti
 
 ---
 
+### Task 8: MCP-layer verification - full SDD loop driven through Aria MCP tools
+
+Aria exposes its orchestration surface as MCP tools (`packages/mcp-server`):
+`aria_chat`, `create_workflow`, `list_workflows`, `get_workflow`,
+`list_pending_approvals`, `get_approval`, `decide_approval`, `submit_knowledge`.
+This task proves the D1-D7 fixes through that public surface.
+
+**Files:**
+- Create: `packages/mcp-server/src/__tests__/sdd-fixes.test.ts`
+- Create: `scripts/sdd-mcp-e2e.ps1` (real-stack manual/nightly driver)
+
+- [ ] **Step 1: Write the failing vitest tests (automated layer)**
+
+In `packages/mcp-server/src/__tests__/sdd-fixes.test.ts` (mirror the http mock
+pattern of `http-client.test.ts`; the MCP tools call `http.post`/`http.get`
+against the backend REST API, so mock at the http layer):
+
+```ts
+import { describe, expect, it, vi } from 'vitest';
+import * as http from '../http-client';
+import { registerWorkflowTools } from '../tools/workflows';
+
+// R-F4 via MCP: create_workflow with SDD kinds must surface the backend rejection.
+it('create_workflow rejects SDD kinds with the governance message', async () => {
+  const post = vi.spyOn(http, 'post').mockRejectedValue(
+    new Error('400: SDD workflow steps (BA/DEV/QA) must be created via instantiate_template to ensure the SPEC_REVIEW gate'));
+  const tools = registerWorkflowTools();
+  const create = tools.find(t => t.name === 'create_workflow')!;
+  const result = await create.handler({ name: 'x', agentIds: ['<uuid1>'], steps: [{ kind: 'BA' }] });
+  expect(result.isError).toBe(true);
+  expect(result.content?.[0]?.text).toContain('instantiate_template');
+});
+
+// D6 feedback loop via MCP: pending SPEC_REVIEW -> decide REJECT with answers.
+it('decide_approval reject flows answers back to the BA reschedule', async () => {
+  const post = vi.spyOn(http, 'post').mockResolvedValue({ approvalId: 'a1', status: 'processed' } as never);
+  const tools = registerApprovalTools(); // import from ../tools/approvals
+  const decide = tools.find(t => t.name === 'decide_approval')!;
+  const result = await decide.handler({ approvalId: 'a1', approved: false, reason: 'Use postgres instead' });
+  expect(result.isError).toBe(false);
+  // reason must round-trip to the backend so SpecReviewCoordinator reschedules BA with it
+  expect(post).toHaveBeenCalledWith('/api/v1/approvals/a1/decide', expect.objectContaining({ reason: 'Use postgres instead' }));
+});
+
+// Workflow state observation via MCP (used to watch the BA run without waiting blind).
+it('get_workflow exposes chain state', async () => {
+  const get = vi.spyOn(http, 'get').mockResolvedValue({ id: 'c1', status: 'RUNNING', steps: [] } as never);
+  const tools = registerWorkflowTools();
+  const getWf = tools.find(t => t.name === 'get_workflow')!;
+  const result = await getWf.handler({ id: 'c1' });
+  expect(result.isError).toBe(false);
+});
+```
+
+Adjust tool names/handler signatures to the actual exports in
+`packages/mcp-server/src/tools/*.ts` (inspect `workflows.ts` and `approvals.ts`
+first - the handler contract is `{ ...params } => { isError, content }`).
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `cd packages/mcp-server && npx vitest run src/__tests__/sdd-fixes.test.ts`
+Expected: FAIL (file/tool registrations not wired yet, or assertions failing on
+the current handler behavior).
+
+- [ ] **Step 3: Implement/adapt until green**
+
+If the tools already behave correctly (the fixes live in the backend), the
+tests should go green once written; if a handler swallows errors or drops
+fields, fix the handler minimally (e.g. propagate the backend 400 body).
+
+Run: `cd packages/mcp-server && npx vitest run`
+Expected: PASS (full MCP suite green).
+
+- [ ] **Step 4: Write the real-stack MCP E2E driver**
+
+Create `scripts/sdd-mcp-e2e.ps1` that drives the MCP stdio protocol against a
+running stack (backend 8080 + OpenSandbox 8090 + MCP server via
+`npx tsx packages/mcp-server/src/server.ts stdio`):
+
+```powershell
+# Prerequisites: scripts/start-backend.ps1 -AdkProvider opencode already ran;
+# GH_TOKEN exported; an active DB LlmProvider exists.
+$steps = @(
+  'initialize + tools/list: assert create_workflow/aria_chat/decide_approval present',
+  'create_workflow with a BA-kind step: EXPECT error containing instantiate_template (R-F4)',
+  'aria_chat: "instantiate development-workflow with issueRef=#38 issueRepo=owner/repo repoUrl=https://github.com/owner/repo.git" -> capture chainId',
+  'poll get_workflow: BA step RUNNING; optionally hit GET /api/v1/adk/opencode/sandboxes/{agentId}/diagnosis to watch the sandbox live',
+  'poll list_pending_approvals until SPEC_REVIEW appears -> get_approval: spec content clean (no <tool_call> chatter) and optionally contains ## Questions (D4/D6)',
+  'decide_approval REJECT with reason=answer text -> poll get_workflow: BA rescheduled (D6 feedback loop)',
+  'after next SPEC_REVIEW: decide_approval APPROVE -> poll get_workflow: chain advances to DEV (D5 clone prompt exercised on the real stack)'
+)
+```
+
+Write the script as a documented manual/nightly harness (JSON-RPC over stdio,
+newline-delimited frames, `tools/call` per step). If implementing a full MCP
+client in PowerShell is too heavy, implement it in Node: `scripts/sdd-mcp-e2e.mjs`
+using `@modelcontextprotocol/sdk` `Client` over `StdioClientTransport` (the SDK
+is already a dependency of packages/mcp-server). Mark it nightly-optional
+(DEEPSEEK_API_KEY + GH_TOKEN gated).
+
+- [ ] **Step 5: Verify the driver against the real stack**
+
+Run: `scripts/sdd-mcp-e2e.mjs` (or .ps1) with the stack up.
+Expected: steps 1-4 pass; step 5 shows a clean spec (this is the R4-F2 proof:
+BA read the issue via gh and produced spec content); steps 6-7 prove the
+feedback loop and Dev advancement.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/mcp-server/src/__tests__/sdd-fixes.test.ts scripts/sdd-mcp-e2e.mjs
+git commit -m "test(sdd): MCP-layer verification - governance, feedback loop, real-stack E2E driver (Task 8)"
+```
+
+---
+
+## Test plan (extended verification matrix)
+
+| Layer | Test | Proves |
+|-------|------|--------|
+| Image smoke | `docker run --rm aria-conductor/opencode-sandbox:1.1 gh --version` | D1 gh installed |
+| Image smoke | `docker run --rm -e GH_TOKEN=$GH_TOKEN aria-conductor/opencode-sandbox:1.1 sh -c "gh issue view 1 -R octocat/hello-world --json title \| head -5"` | D2 headless gh works |
+| Unit | OpenCodeAdkProviderTest: opencode.json contains question=deny + active provider model | D3 |
+| Unit | OpenCodeAdkProviderTest: fallback deepseek defaults when no active provider | D3 |
+| Unit | OpenCodeSandboxManagerTest: diagnose /proc fallback + metrics JSON | D7b |
+| Integration | V43SeedConfigTest: V44 BA prompt contains gh issue view + ## Questions + Spec was rejected; DEV prompt contains git clone {repoUrl} | D4/D5/D6 |
+| Integration | MigrationIntegrationTest: V44 applies cleanly on H2 | D4/D5/D6 |
+| MCP automated | sdd-fixes.test.ts: create_workflow SDD rejection surfaces through MCP | R-F4 via MCP |
+| MCP automated | sdd-fixes.test.ts: decide_approval reason round-trips to backend | D6 via MCP |
+| MCP E2E (real stack, nightly) | sdd-mcp-e2e.mjs: aria_chat -> instantiate with issueRepo/repoUrl -> BA completes -> SPEC_REVIEW -> REJECT with answers -> BA reschedule -> APPROVE -> Dev advances | full D1-D6 loop |
+| Sandbox live check | GET /api/v1/adk/opencode/sandboxes/{agentId}/diagnosis during the BA run: metrics show CPU work + processes non-empty | no zombie; task alive |
+| Regression | full `mvn test`, `pnpm vitest run` (mcp-server), Playwright suites, Python pytest | no regressions |
+
 ## Dependencies
 
 ```
@@ -426,7 +559,7 @@ T4 (yml 45) independent
 T5 (diagnosis) independent
 T6 (V44)    independent (depends on V43's stored prompt text - verify exact strings)
 T7 (Aria prompts) independent
-Merge order: any; recommended T1 -> T2 -> T3 -> T4 -> T5 -> T6 -> T7
+Merge order: any; recommended T1 -> T2 -> T3 -> T4 -> T5 -> T6 -> T7 -> T8 (T8 is the integration gate: it needs the stack + all fixes)
 ```
 
 ## Risks and Mitigations

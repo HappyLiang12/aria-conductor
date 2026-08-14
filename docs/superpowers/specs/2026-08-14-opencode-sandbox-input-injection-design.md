@@ -45,17 +45,30 @@ sections because `ps` is missing in the image (R4-F5).
 
 ## 3. Design
 
-### D1: Sandbox image - install gh CLI (opencode-sandbox)
+### D1: Sandbox image - generic reusable agent image (gh CLI added)
 
 File: `agent-control-tower/opencode-sandbox/Dockerfile`
 
+- The image is a REUSABLE TEMPLATE, not a per-agent artifact: BA/Dev/QA (and
+  any future agent role) all instantiate sandboxes from this SAME image via
+  `opencode.sandbox.image` + OpenSandbox SDK `Sandbox.builder().image(...)`.
+  Dev reuses it unchanged for `git clone` + coding (D5); the only agent-runtime
+  difference is the per-agent workspace and env injected at instantiation.
+- Image contents = TOOLS ONLY (opencode CLI + git + gh). It NEVER embeds
+  credentials, repo URLs, or agent-specific config - all of that is injected
+  per-sandbox by aria-conductor (D2/D3).
 - Install `gh` via the official GitHub CLI apt repo (Debian bookworm has no gh
   in default sources): keyring + sources.list.d + apt-get install gh.
 - `git` already present in node:22-slim (buildpack-deps base).
 - Bump image tag usage: `aria-conductor/opencode-sandbox:1.1` in
   `application.yml` (image property). Keep the 1.0 build instructions working.
 
-### D2: GH_TOKEN credential injection
+### D2: GH_TOKEN credential injection (aria-conductor owns auth)
+
+- Credential responsibility: aria-conductor (the backend) is the sole holder of
+  GitHub credentials. At sandbox creation, the token is injected as an env var
+  into THAT sandbox instance via `opencode.sandbox-env`; it never enters the
+  image layer and is scoped to the agent's task lifetime.
 
 Files:
 - `agent-control-tower/act-app/src/main/resources/application.yml`:

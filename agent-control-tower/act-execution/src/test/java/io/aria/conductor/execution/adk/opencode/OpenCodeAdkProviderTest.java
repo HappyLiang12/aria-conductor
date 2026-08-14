@@ -1,6 +1,9 @@
 package io.aria.conductor.execution.adk.opencode;
 
+import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.LlmProvider;
+import io.aria.conductor.common.model.LlmProviderType;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
@@ -14,12 +17,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -52,6 +57,7 @@ class OpenCodeAdkProviderTest {
 
     @Mock OpenCodeSandboxManager sandboxManager;
     @Mock OpenCodeHttpClient httpClient;
+    @Mock LlmProviderRepository providerRepository;
 
     @TempDir Path tempDir;
 
@@ -66,7 +72,7 @@ class OpenCodeAdkProviderTest {
         properties.setImage(IMAGE);
         properties.setPort(4096);
         properties.setMaxTaskMinutes(30);
-        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient);
+        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient, providerRepository);
         provider.setWorkspaceBaseForTest(tempDir);
     }
 
@@ -595,5 +601,41 @@ class OpenCodeAdkProviderTest {
                 .isInstanceOf(TaskExecutionException.class)
                 .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+    }
+
+    // ---- D3: opencode.json generation (question=deny + active provider model) ----
+
+    @Test
+    void prepareInstance_writesOpenCodeJsonWithQuestionDeniedAndActiveProvider() throws Exception {
+        LlmProvider active = LlmProvider.builder().name("deepseek").type(LlmProviderType.OPENAI)
+                .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
+                .apiKey("k").active(true).build();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("\"question\": \"deny\"");
+        assertThat(json).contains("deepseek/deepseek-v4-flash");
+        assertThat(json).contains("https://api.deepseek.com/v1");
+    }
+
+    @Test
+    void prepareInstance_usesDeepseekDefaultsWhenNoActiveProvider() throws Exception {
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("deepseek/deepseek-chat");
+        assertThat(json).contains("\"question\": \"deny\"");
     }
 }

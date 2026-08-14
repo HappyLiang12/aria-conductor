@@ -61,6 +61,15 @@ public class WorkflowService {
                         .build())
                 .collect(Collectors.toList());
 
+        // R-F4: SDD loop steps (BA/DEV/QA) must be created through the governed
+        // instantiate_template path so the SPEC_REVIEW gate is enforced. This guard is the
+        // single choke point for ALL direct callers (REST controller, Aria tool, execute-yaml).
+        // WorkflowTemplateService sets allowSddSteps=true after validating an APPROVED template.
+        if (!request.isAllowSddSteps() && steps.stream().anyMatch(s -> isSddKind(s.getKind()))) {
+            throw new IllegalArgumentException("SDD workflow steps (BA/DEV/QA) must be created via "
+                    + "instantiate_template to ensure the SPEC_REVIEW gate.");
+        }
+
         WorkflowChain chain = WorkflowChain.builder()
                 .name(sanitizeName(request.getName()))
                 .description(request.getDescription())
@@ -487,6 +496,13 @@ public class WorkflowService {
     private static String sanitizeName(String name) {
         if (name == null || name.isBlank()) return "workflow";
         return name.replaceAll("[^\\x20-\\x7E]", "-").trim();
+    }
+
+    /** @return true when the step kind is an SDD loop kind (BA/DEV/QA). */
+    private static boolean isSddKind(WorkflowStep.StepKind kind) {
+        return kind == WorkflowStep.StepKind.BA
+                || kind == WorkflowStep.StepKind.DEV
+                || kind == WorkflowStep.StepKind.QA;
     }
 
     private void startStep(WorkflowChain chain, int stepIndex, String previousOutput) {

@@ -158,6 +158,7 @@ public class WorkflowTemplateService {
                 .name(item.getName() + "-instance")
                 .description("Instantiated from template: " + item.getName())
                 .steps(stepDefs)
+                .allowSddSteps(true)
                 .build();
 
         WorkflowResponse response = workflowService.createAndStart(request);

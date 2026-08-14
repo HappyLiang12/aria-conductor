@@ -1,6 +1,5 @@
 package io.aria.conductor.app.sdd;
 
-import io.aria.conductor.agent.dto.CreateWorkflowRequest;
 import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
@@ -464,36 +463,57 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         return agentRepository.save(agent).getId();
     }
 
-    /** Create an SDD chain with BA/DEV/QA steps and initialise the DoD record. */
+    /** Create an SDD chain (BA/DEV/QA) via the governed template instantiation path. */
     private WorkflowResponse createSddChain(String name) {
-        WorkflowResponse response = workflowService.createAndStart(
-                CreateWorkflowRequest.builder()
-                        .name("sdd-" + name)
-                        .steps(List.of(
-                                stepDef(baAgentId, "Write spec for {issueRef}", 3,
-                                        WorkflowStep.StepKind.BA),
-                                stepDef(devAgentId, "Implement {specRef}", 5,
-                                        WorkflowStep.StepKind.DEV),
-                                stepDef(qaAgentId, "Verify {specRef}", 3,
-                                        WorkflowStep.StepKind.QA)
-                        ))
-                        .build()
-        );
-        // Initialise DoD with custom stages [dev, qa] — this is normally done by
-        // WorkflowTemplateService.instantiateTemplate but createAndStart does not do it.
-        dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
-        return response;
+        UUID templateId = createTemplate();
+        // instantiateTemplate initialises the DoD record (custom stages [dev, qa]) and
+        // is the only legitimate path to create SDD chains (createAndStart rejects SDD kinds).
+        return workflowTemplateService.instantiateTemplate(templateId, Map.of("issueRef", "ISSUE-42"));
     }
 
-    private static CreateWorkflowRequest.StepDef stepDef(UUID agentId, String prompt,
-                                                          int maxIterations,
-                                                          WorkflowStep.StepKind kind) {
-        return CreateWorkflowRequest.StepDef.builder()
-                .agentId(agentId)
-                .promptTemplate(prompt)
-                .maxIterations(maxIterations)
-                .kind(kind)
-                .build();
+    /** Create an APPROVED development-workflow template knowledge item + version (mirrors seedIntegrity). */
+    private UUID createTemplate() {
+        UUID templateId = UUID.randomUUID();
+
+        knowledgeItemRepository.save(KnowledgeItem.builder()
+                .id(templateId)
+                .name("development-workflow")
+                .type(KnowledgeType.WORKFLOW)
+                .status(KnowledgeStatus.APPROVED)
+                .sensitivity(Sensitivity.INTERNAL)
+                .currentVersion("v1")
+                .escalationCount(0)
+                .createdAt(Instant.now())
+                .build());
+
+        String yamlContent = """
+                schema_version: "1.0"
+                name: development-workflow
+                steps:
+                  - agent_id: "%s"
+                    prompt_template: "Write spec for {issueRef}"
+                    max_iterations: 3
+                    kind: BA
+                  - agent_id: "%s"
+                    prompt_template: "Implement {specRef}"
+                    max_iterations: 5
+                    kind: DEV
+                  - agent_id: "%s"
+                    prompt_template: "Verify {specRef}"
+                    max_iterations: 3
+                    kind: QA
+                """.formatted(baAgentId.toString(), devAgentId.toString(), qaAgentId.toString());
+
+        knowledgeVersionRepository.save(KnowledgeVersion.builder()
+                .knowledgeItemId(templateId)
+                .version("v1")
+                .status(VersionStatus.APPROVED)
+                .yamlContent(yamlContent)
+                .createdAt(Instant.now())
+                .approvedAt(Instant.now())
+                .build());
+
+        return templateId;
     }
 
     /** Poll until the chain reaches the given status. */

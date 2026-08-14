@@ -43,6 +43,9 @@ public class SpecReviewCoordinator {
     /** Upper bound on stored spec content (DB bloat guard): 50 KB. */
     private static final int MAX_SPEC_CONTENT_LENGTH = 50 * 1024;
     private static final String SPEC_ID_MARKER = "SPEC_ID=";
+    /** Matches a bare JSON tool-call object on a single trailing line (e.g. {@code {"name":...,"arguments":...}}). */
+    private static final java.util.regex.Pattern TRAILING_TOOL_CALL_JSON =
+            java.util.regex.Pattern.compile("^\\s*\\{.*\"name\"\\s*:.*\"arguments\".*}\\s*$");
 
     private final KnowledgeService knowledgeService;
     private final KnowledgeItemRepository itemRepository;
@@ -291,7 +294,7 @@ public class SpecReviewCoordinator {
      */
     static String cleanSpecContent(String content) {
         if (content == null) return null;
-        String cleaned = content;
+        String cleaned = stripToolCallChatter(content);
 
         int headingIdx = firstHeadingIndex(cleaned);
         if (headingIdx >= 0) {
@@ -310,6 +313,38 @@ public class SpecReviewCoordinator {
             cleaned = cleaned.substring(0, MAX_SPEC_CONTENT_LENGTH);
         }
         return cleaned;
+    }
+
+    /**
+     * R-F12: strip DSML/tool-call chatter that leaks into the BA output. Conservative by
+     * design — only removes obvious tool-call structures, never prose.
+     * <ol>
+     *   <li>{@code <tool_call...>...</tool_call>} and {@code <invoke...>...</invoke>} XML blocks</li>
+     *   <li>{@code ```json ... ```} fenced blocks</li>
+     *   <li>trailing lines that look like bare JSON tool-call objects</li>
+     * </ol>
+     */
+    private static String stripToolCallChatter(String content) {
+        String cleaned = content;
+        cleaned = cleaned.replaceAll("(?is)<tool_call\\b[^>]*>.*?</tool_call>", "");
+        cleaned = cleaned.replaceAll("(?is)<invoke\\b[^>]*>.*?</invoke>", "");
+        cleaned = cleaned.replaceAll("(?s)```json.*?```", "");
+        return stripTrailingToolCallJson(cleaned);
+    }
+
+    /** Repeatedly removes a trailing line that looks like a bare JSON tool-call object. */
+    private static String stripTrailingToolCallJson(String content) {
+        String result = content;
+        while (true) {
+            String trimmed = result.stripTrailing();
+            int lastNewline = trimmed.lastIndexOf('\n');
+            String lastLine = (lastNewline >= 0) ? trimmed.substring(lastNewline + 1) : trimmed;
+            if (!TRAILING_TOOL_CALL_JSON.matcher(lastLine).matches()) {
+                break;
+            }
+            result = (lastNewline >= 0) ? trimmed.substring(0, lastNewline) : "";
+        }
+        return result;
     }
 
     private static int firstHeadingIndex(String content) {

@@ -330,6 +330,47 @@ class SpecReviewCoordinatorTest {
         assertThat(SpecReviewCoordinator.cleanSpecContent(specContent)).isEqualTo(specContent);
     }
 
+    // ==================== F12: DSML/tool-call chatter stripping ====================
+
+    @Test
+    void cleanSpecContent_stripsToolCallXmlBlocks() {
+        // Chatter AFTER the heading (trailing) — heading extraction alone cannot remove it.
+        String input = "# Spec\n\n## Requirements\n- A\n- B\n\n"
+                + "<tool_call name=\"write_spec\">\n{\"query\":\"draft\"}\n</tool_call>\n"
+                + "<invoke name=\"tools\">raw chatter</invoke>";
+
+        String cleaned = SpecReviewCoordinator.cleanSpecContent(input);
+
+        assertThat(cleaned).startsWith("# Spec");
+        assertThat(cleaned).doesNotContain("tool_call");
+        assertThat(cleaned).doesNotContain("invoke");
+        assertThat(cleaned).doesNotContain("write_spec");
+        assertThat(cleaned).contains("## Requirements");
+    }
+
+    @Test
+    void cleanSpecContent_stripsJsonFencedToolCallBlocks() {
+        String input = "# Spec\n\nBody here.\n\n"
+                + "```json\n{\"name\":\"create_spec\",\"arguments\":{\"a\":1}}\n```";
+
+        String cleaned = SpecReviewCoordinator.cleanSpecContent(input);
+
+        assertThat(cleaned).startsWith("# Spec");
+        assertThat(cleaned).doesNotContain("```");
+        assertThat(cleaned).doesNotContain("create_spec");
+    }
+
+    @Test
+    void cleanSpecContent_stripsTrailingBareJsonToolCallObjects() {
+        String input = "# Spec\n\n## Requirements\n- A\n"
+                + "{\"name\": \"create_spec\", \"arguments\": \"{}\"}";
+
+        String cleaned = SpecReviewCoordinator.cleanSpecContent(input);
+
+        assertThat(cleaned).isEqualTo("# Spec\n\n## Requirements\n- A");
+        assertThat(cleaned).doesNotContain("\"name\"");
+    }
+
     @Test
     void onBaStepCompleted_stripsMarkerAndTruncates() {
         String preamble = "Stream-of-consciousness preamble to strip.\n";

@@ -85,6 +85,17 @@ class V43SeedConfigTest {
     }
 
     @Test
+    void v44_promptGuidance_presentInTemplateYaml() {
+        String yaml = templateYaml();
+        // BA prompt: fetch the issue via gh, emit a Questions section, carry rejection feedback.
+        assertThat(yaml).contains("gh issue view");
+        assertThat(yaml).contains("## Questions");
+        assertThat(yaml).contains("Spec was rejected");
+        // DEV prompt: clone the project independently before implementing.
+        assertThat(yaml).contains("git clone {repoUrl}");
+    }
+
+    @Test
     void systemConfig_tokenBudgetIs300000() {
         String value = jdbc.queryForObject(
                 "SELECT config_value FROM system_config WHERE config_key = 'circuit.breaker.max.tokens.per.run'",

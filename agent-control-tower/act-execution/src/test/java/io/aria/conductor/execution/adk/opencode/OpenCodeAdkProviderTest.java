@@ -26,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -519,5 +521,57 @@ class OpenCodeAdkProviderTest {
         provider.prepareAgent(agentId, agent(agentId));
 
         verify(httpClient, times(2)).isHealthy();
+    }
+
+    // ---- R3-F2 sandbox TTL renewal during long tasks ----
+
+    @Test
+    void executeTask_renewsSandboxDuringLongTask() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+
+        // Short renew interval so the heartbeat fires while sendMessage is blocked.
+        properties.setSandboxRenewInterval(Duration.ofMillis(100));
+
+        CountDownLatch releaseSend = new CountDownLatch(1);
+        CountDownLatch renewed = new CountDownLatch(1);
+        AtomicInteger renewCount = new AtomicInteger();
+        doAnswer(inv -> {
+            renewCount.incrementAndGet();
+            renewed.countDown();
+            return null;
+        }).when(sandboxManager).renewSandbox(eq("sb-1"), any(Duration.class));
+
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenAnswer(inv -> {
+                    releaseSend.await(10, TimeUnit.SECONDS);
+                    return new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45);
+                });
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<TaskResult> future = pool.submit(() -> provider.executeTask(agent(agentId), runId,
+                    "do the task", new TaskContext(0, Duration.ofMinutes(5))));
+
+            assertThat(renewed.await(5, TimeUnit.SECONDS))
+                    .as("sandbox TTL renewal must fire while the task blocks")
+                    .isTrue();
+
+            releaseSend.countDown();
+            TaskResult result = future.get(10, TimeUnit.SECONDS);
+            assertThat(result.finalOutput()).isEqualTo("task done");
+
+            // Heartbeat must stop after the task completes: no further renewals.
+            int afterComplete = renewCount.get();
+            Thread.sleep(300);
+            assertThat(renewCount.get())
+                    .as("heartbeat must stop after task completion")
+                    .isEqualTo(afterComplete);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

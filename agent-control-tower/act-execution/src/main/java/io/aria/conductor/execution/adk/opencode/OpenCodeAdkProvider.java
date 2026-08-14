@@ -1,6 +1,8 @@
 package io.aria.conductor.execution.adk.opencode;
 
+import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.execution.adk.AbstractAdkProvider;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
@@ -65,6 +67,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private final OpenCodeSandboxManager sandboxManager;
     /** Injected in tests; {@code null} in production (per-instance clients are created). */
     private final OpenCodeHttpClient fixedHttpClient;
+    /** Active DB provider source for opencode.json generation. */
+    private final LlmProviderRepository providerRepository;
 
     private final Map<UUID, OpenCodeInstance> instances = new ConcurrentHashMap<>();
     private final Map<UUID, String> runSessions = new ConcurrentHashMap<>();
@@ -84,21 +88,23 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
 
     /** Spring constructor. */
     @Autowired
-    public OpenCodeAdkProvider(OpenCodeProperties properties) {
+    public OpenCodeAdkProvider(OpenCodeProperties properties, LlmProviderRepository providerRepository) {
         this(properties, new OpenCodeSandboxManager(
-                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null);
+                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository);
     }
 
     /**
-     * Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager}
-     * and a fixed {@link OpenCodeHttpClient}.
+     * Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager},
+     * a fixed {@link OpenCodeHttpClient} and the provider repository.
      */
     OpenCodeAdkProvider(OpenCodeProperties properties,
                         OpenCodeSandboxManager sandboxManager,
-                        OpenCodeHttpClient httpClient) {
+                        OpenCodeHttpClient httpClient,
+                        LlmProviderRepository providerRepository) {
         this.properties = properties;
         this.sandboxManager = sandboxManager;
         this.fixedHttpClient = httpClient;
+        this.providerRepository = providerRepository;
     }
 
     @Override
@@ -363,6 +369,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Cannot create workspace dir " + workspace + ": " + e.getMessage(), e);
         }
+        writeOpenCodeConfig(workspace);
 
         String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), properties.getSandboxEnv());
         OpenCodeHttpClient client = null;
@@ -387,6 +394,49 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             instances.remove(agentId);
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "OpenCode sandbox setup failed for agent " + agentId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Write the sandbox {@code opencode.json} into the agent workspace so the next
+     * {@code uploadWorkspace} ships it into the sandbox. The config disables the
+     * interactive question tool ({@code question=deny}) and points opencode at the
+     * ACTIVE DB {@link LlmProvider} model, falling back to deepseek defaults when
+     * no provider is active (first-run keeps working without DB setup).
+     *
+     * <p>Best-effort: a write failure is logged and the sandbox still comes up.
+     */
+    private void writeOpenCodeConfig(Path workspace) {
+        try {
+            LlmProvider active = providerRepository.findByActiveTrue().orElse(null);
+            String providerId = active != null && active.getName() != null && !active.getName().isBlank()
+                    ? active.getName().toLowerCase().replaceAll("[^a-z0-9-]", "-")
+                    : "deepseek";
+            String model = active != null && active.getDefaultModel() != null && !active.getDefaultModel().isBlank()
+                    ? active.getDefaultModel()
+                    : "deepseek-chat";
+            String baseUrl = active != null && active.getBaseUrl() != null && !active.getBaseUrl().isBlank()
+                    ? active.getBaseUrl()
+                    : "https://api.deepseek.com/v1";
+            String json = """
+                    {
+                      "$schema": "https://opencode.ai/config.json",
+                      "permission": { "question": "deny" },
+                      "model": "%s/%s",
+                      "provider": {
+                        "%s": {
+                          "options": {
+                            "apiKey": "{env:LLM_API_KEY}",
+                            "baseURL": "%s"
+                          }
+                        }
+                      }
+                    }
+                    """.formatted(providerId, model, providerId, baseUrl);
+            Files.writeString(workspace.resolve("opencode.json"), json);
+            log.info("Wrote opencode.json for workspace {} (provider={}, model={})", workspace, providerId, model);
+        } catch (IOException e) {
+            log.warn("Could not write opencode.json to {}: {}", workspace, e.getMessage());
         }
     }
 

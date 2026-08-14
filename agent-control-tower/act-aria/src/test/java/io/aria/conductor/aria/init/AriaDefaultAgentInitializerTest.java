@@ -15,6 +15,7 @@ import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.ApplicationArguments;
@@ -22,6 +23,7 @@ import org.springframework.core.env.Environment;
 
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -132,5 +134,22 @@ class AriaDefaultAgentInitializerTest {
 
         verify(agentToolRepository).save(any()); // run_agent assigned
         verify(agentToolRepository).deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), "tool-git_push"));
+    }
+
+    @Test
+    void sddPrompt_containsIssueRepoAndFeedbackGuidanceInSavedConfig() {
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+
+        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
+
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository).save(captor.capture());
+        String config = captor.getValue().getConfig();
+        assertThat(config).contains("pass issueRepo");
+        assertThat(config).contains("answer trivial questions");
     }
 }

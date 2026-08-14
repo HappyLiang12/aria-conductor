@@ -145,6 +145,18 @@ class AriaKnowledgeContextTest {
     }
 
     @Test
+    void sddPrompt_containsIssueRepoAndFeedbackGuidance() {
+        when(knowledgeService.buildKnowledgeContextPrompt(5)).thenReturn("");
+
+        String prompt = ariaService.buildSystemPrompt();
+
+        // D6: Aria must pass issueRepo/repoUrl when instantiating the SDD template and
+        // carry SPEC_REVIEW rejection answers back into the resubmission.
+        assertThat(prompt).contains("pass issueRepo");
+        assertThat(prompt).contains("answer trivial questions");
+    }
+
+    @Test
     void buildSystemPrompt_shouldExcludePrivateMemory() {
         // Knowledge context is ONLY from knowledge_items table with APPROVED status.
         // Session history (conversation messages) must never appear in the knowledge section.

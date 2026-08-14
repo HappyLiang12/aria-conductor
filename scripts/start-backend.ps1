@@ -50,6 +50,10 @@ if (-not $env:DEEPSEEK_API_KEY) {
     Write-Host "  DeepSeek API key: set"
 }
 
+if (-not $env:GH_TOKEN) {
+    Write-Warning "GH_TOKEN is not set; BA/Dev agents cannot read issues or clone repos in the sandbox."
+}
+
 # Windows: prefer the `py` launcher so the ADK subprocess can find a Python runtime.
 $env:ADK_PYTHON = "py"
 

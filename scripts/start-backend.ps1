@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BackendDir = Join-Path $ProjectRoot "agent-control-tower"
 
 # Prerequisites check
@@ -101,4 +101,8 @@ if (-not $SkipBuild) {
 }
 
 Write-Host "Launching Spring Boot..." -ForegroundColor Green
-mvn spring-boot:run -pl act-app "-Dspring-boot.run.profiles=$Profile" "-Dspring-boot.run.jvmArguments=--enable-preview" "-Dspring-boot.run.arguments=--adk.default-provider=$AdkProvider"
+# R-F6 mitigation: JDK 21 HttpClient HTTP/1.1 idle-connection keep-alive tuning.
+# The default keepalive.timeout (1200s = 20min) is below the 15-31min opencode task window,
+# so idle connections get dropped mid-task; raising it (plus a larger connection pool) reduces
+# those drops. NOTE: this cannot fix opencode serve's own timeout on the sandbox side.
+mvn spring-boot:run -pl act-app "-Dspring-boot.run.profiles=$Profile" "-Dspring-boot.run.jvmArguments=--enable-preview -Djdk.httpclient.keepalive.timeout=3600 -Djdk.httpclient.connectionPoolSize=8" "-Dspring-boot.run.arguments=--adk.default-provider=$AdkProvider"

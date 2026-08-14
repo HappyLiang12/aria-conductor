@@ -57,6 +57,10 @@ if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -n "${LLM_API_KEY:-}" ]; then
     export DEEPSEEK_API_KEY="$LLM_API_KEY"
 fi
 
+if [ -z "${GH_TOKEN:-}" ]; then
+    echo "WARN: GH_TOKEN is not set; BA/Dev agents cannot read issues or clone repos in the sandbox."
+fi
+
 echo "Starting Aria Conductor backend..."
 echo "  Profile: $PROFILE"
 echo "  ADK Provider: $ADK_PROVIDER"

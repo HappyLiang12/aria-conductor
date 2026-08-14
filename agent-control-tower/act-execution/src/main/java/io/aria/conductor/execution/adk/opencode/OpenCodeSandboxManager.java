@@ -200,6 +200,30 @@ public class OpenCodeSandboxManager {
     }
 
     /**
+     * Renew the sandbox TTL by the given extension (R3-F2).
+     *
+     * <p>The OpenSandbox SDK's own heartbeat fires ~9s too late at the 30-minute
+     * TTL boundary, so a long-lived synchronous task must renew proactively via
+     * {@link Sandbox#renew(Duration)}.
+     *
+     * @param sandboxId sandbox to renew
+     * @param extension TTL extension to request
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the sandbox
+     *         is unknown or the renewal call fails
+     */
+    public void renewSandbox(String sandboxId, Duration extension) {
+        Sandbox sandbox = requireSandbox(sandboxId);
+        try {
+            var resp = sandbox.renew(extension);
+            log.info("Sandbox {} renewed until {}", sandboxId, resp.getExpiresAt());
+        } catch (Exception e) {
+            log.warn("Failed to renew sandbox {}: {}", sandboxId, e.getMessage());
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Sandbox renewal failed for " + sandboxId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Service-level health probe for the OpenSandbox server itself:
      * {@code GET {serverUrl}/health}. No sandbox / agent context needed.
      *

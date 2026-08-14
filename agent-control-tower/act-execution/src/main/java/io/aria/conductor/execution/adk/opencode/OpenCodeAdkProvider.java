@@ -26,6 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * OpenCode agent provider — one {@code opencode serve} instance per agent,
@@ -54,6 +56,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private static final Duration READY_POLL_INTERVAL = Duration.ofMillis(500);
     /** Default per-request timeout for the serve HTTP client. */
     private static final Duration HTTP_TIMEOUT = Duration.ofMinutes(5);
+    /** TTL extension requested on each renewal during a long task (matches the sandbox TTL). */
+    private static final Duration RENEW_EXTENSION = Duration.ofMinutes(30);
     /** Relative workspace base dir (resolved against the agent-control-tower working dir). */
     private static final String WORKSPACE_BASE = "act-app/data/workspaces";
 
@@ -145,12 +149,20 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         try {
             String systemPrompt = buildSystemPrompt(agent, context);
             Duration deadline = resolveMaxDuration(context);
-            OpenCodeHttpClient.MessageResponse resp =
-                    client.sendMessage(sessionId, systemPrompt, taskPrompt, deadline);
-            log.info("OpenCode task {} finished for agent {} ({} input / {} output tokens)",
-                    runId, agent.getId(), resp.inputTokens(), resp.outputTokens());
-            return new TaskResult(runId, sessionId, resp.finalOutput(),
-                    resp.inputTokens(), resp.outputTokens(), false);
+            // Renew the sandbox TTL while the long-lived synchronous sendMessage
+            // blocks — the SDK's own heartbeat fires ~9s too late at the 30-minute
+            // TTL boundary (R3-F2).
+            ScheduledExecutorService renewExecutor = startRenewHeartbeat(inst);
+            try {
+                OpenCodeHttpClient.MessageResponse resp =
+                        client.sendMessage(sessionId, systemPrompt, taskPrompt, deadline);
+                log.info("OpenCode task {} finished for agent {} ({} input / {} output tokens)",
+                        runId, agent.getId(), resp.inputTokens(), resp.outputTokens());
+                return new TaskResult(runId, sessionId, resp.finalOutput(),
+                        resp.inputTokens(), resp.outputTokens(), false);
+            } finally {
+                renewExecutor.shutdownNow();
+            }
         } catch (TaskExecutionException e) {
             if (e.cause() == TaskExecutionException.Cause.TIMEOUT) {
                 log.warn("OpenCode task {} timed out for agent {} — aborting", runId, agent.getId());
@@ -414,6 +426,32 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
 
     private OpenCodeHttpClient clientFor(OpenCodeInstance inst) {
         return fixedHttpClient != null ? fixedHttpClient : inst.client();
+    }
+
+    /**
+     * Start a daemon heartbeat that renews the sandbox TTL while {@code sendMessage}
+     * blocks on the long-lived synchronous task (R3-F2).
+     *
+     * <p>Renewal failures are non-fatal (logged) — the hard failure surfaces through
+     * {@code sendMessage}. The returned executor must be {@code shutdownNow()}ed by
+     * the caller once the task finishes.
+     */
+    private ScheduledExecutorService startRenewHeartbeat(OpenCodeInstance inst) {
+        Duration interval = properties.getSandboxRenewInterval();
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "opencode-sandbox-renew-" + inst.sandboxId());
+            t.setDaemon(true);
+            return t;
+        });
+        executor.scheduleAtFixedRate(() -> {
+            try {
+                log.info("Renewing OpenSandbox TTL for sandbox {}", inst.sandboxId());
+                sandboxManager.renewSandbox(inst.sandboxId(), RENEW_EXTENSION);
+            } catch (Exception e) {
+                log.warn("Sandbox TTL renewal failed for {}: {}", inst.sandboxId(), e.getMessage());
+            }
+        }, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
+        return executor;
     }
 
     private OpenCodeHttpClient clientForUrl(String serveUrl) {

@@ -3,15 +3,20 @@ package io.aria.conductor.execution.adk.opencode;
 import com.alibaba.opensandbox.sandbox.Sandbox;
 import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxRenewResponse;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -209,6 +214,40 @@ class OpenCodeSandboxManagerTest {
 
             assertThat(url).isEqualTo("http://127.0.0.1:40369/proxy/4096");
         }
+    }
+
+    @Test
+    void renewSandbox_delegatesToSdk() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+            when(sandbox.renew(any(Duration.class)))
+                    .thenReturn(new SandboxRenewResponse(OffsetDateTime.now().plusMinutes(30)));
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+            manager.renewSandbox("sb-1", Duration.ofMinutes(30));
+
+            verify(sandbox).renew(Duration.ofMinutes(30));
+        }
+    }
+
+    @Test
+    void renewSandbox_unknownId_throws() {
+        OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+
+        assertThatThrownBy(() -> manager.renewSandbox("missing", Duration.ofMinutes(30)))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
     }
 
     @Test

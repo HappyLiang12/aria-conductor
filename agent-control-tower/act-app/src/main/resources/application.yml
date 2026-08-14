@@ -40,7 +40,7 @@ opencode:
   sandbox-api-key: ${OPENSANDBOX_API_KEY:}
   image: aria-conductor/opencode-sandbox:1.1
   port: 4096
-  max-task-minutes: 30
+  max-task-minutes: 45
   # Env vars injected into every agent sandbox (e.g. LLM model credentials for opencode)
   sandbox-env:
     DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:}

@@ -236,6 +236,24 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         return sandboxManager.isServerHealthy();
     }
 
+    /**
+     * Diagnostic snapshot of an agent's live sandbox (metrics, processes, opencode
+     * serve logs). Read-only: never creates or rebuilds a sandbox.
+     *
+     * @param agentId agent whose sandbox to inspect
+     * @return a human-readable multi-section diagnostic text
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the agent has no
+     *         live sandbox instance
+     */
+    public String diagnoseSandbox(UUID agentId) {
+        OpenCodeInstance inst = instances.get(agentId);
+        if (inst == null) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "No OpenCode sandbox instance for agent " + agentId);
+        }
+        return sandboxManager.diagnose(inst.sandboxId());
+    }
+
     @Override
     public void shutdownAgent(UUID agentId) {
         OpenCodeInstance inst = instances.remove(agentId);

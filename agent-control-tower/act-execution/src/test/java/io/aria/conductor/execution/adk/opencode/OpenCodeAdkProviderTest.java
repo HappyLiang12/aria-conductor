@@ -574,4 +574,26 @@ class OpenCodeAdkProviderTest {
             pool.shutdownNow();
         }
     }
+
+    // ---- R3-F2 sandbox diagnosis ----
+
+    @Test
+    void diagnoseSandbox_delegatesToManager() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(sandboxManager.diagnose("sb-1")).thenReturn("== metrics ==\nok");
+
+        String result = provider.diagnoseSandbox(agentId);
+
+        assertThat(result).isEqualTo("== metrics ==\nok");
+        verify(sandboxManager).diagnose("sb-1");
+    }
+
+    @Test
+    void diagnoseSandbox_unknownAgent_throws() {
+        assertThatThrownBy(() -> provider.diagnoseSandbox(UUID.randomUUID()))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+    }
 }

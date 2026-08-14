@@ -2,6 +2,10 @@ package io.aria.conductor.execution.adk.opencode;
 
 import com.alibaba.opensandbox.sandbox.Sandbox;
 import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionLogs;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionResult;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
 import io.aria.conductor.execution.adk.TaskExecutionException;
@@ -221,6 +225,63 @@ public class OpenCodeSandboxManager {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Sandbox renewal failed for " + sandboxId + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Aggregate a diagnostic snapshot of a sandbox: metrics (CPU/memory), the
+     * process table, and the recent opencode serve log tail. Never throws — each
+     * section is collected independently and failures are recorded as ERROR markers.
+     *
+     * @param sandboxId sandbox to inspect
+     * @return a human-readable multi-section diagnostic text
+     */
+    public String diagnose(String sandboxId) {
+        Sandbox sandbox = requireSandbox(sandboxId);
+        StringBuilder sb = new StringBuilder();
+        // 1. metrics (CPU/memory) — proves opencode is actually working
+        try {
+            sb.append("== metrics ==\n").append(sandbox.getMetrics()).append('\n');
+        } catch (Exception e) {
+            sb.append("== metrics == ERROR ").append(e.getMessage()).append('\n');
+        }
+        // 2. process snapshot inside the sandbox
+        try {
+            var exec = sandbox.commands().run("ps aux 2>/dev/null | head -30 || ps -ef | head -30");
+            sb.append("== processes ==\n").append(renderExecution(exec)).append('\n');
+        } catch (Exception e) {
+            sb.append("== processes == ERROR ").append(e.getMessage()).append('\n');
+        }
+        // 3. opencode log tail (best-effort single command, two common log locations)
+        try {
+            var exec = sandbox.commands().run(
+                    "tail -50 $(ls -t ~/.opencode/log/*.log 2>/dev/null | head -1) 2>/dev/null"
+                    + " || tail -50 $(ls -t ~/.local/share/opencode/log/*.log 2>/dev/null | head -1) 2>/dev/null"
+                    + " || echo 'no opencode log found'");
+            sb.append("== opencode log tail ==\n").append(renderExecution(exec)).append('\n');
+        } catch (Exception e) {
+            sb.append("== opencode log tail == ERROR ").append(e.getMessage()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** Best-effort text rendering of a command {@link Execution} (stdout + result text). */
+    private String renderExecution(Execution exec) {
+        if (exec == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        ExecutionLogs logs = exec.getLogs();
+        if (logs != null && logs.getStdout() != null) {
+            for (OutputMessage msg : logs.getStdout()) {
+                sb.append(msg.getText());
+            }
+        }
+        if (exec.getResult() != null) {
+            for (ExecutionResult result : exec.getResult()) {
+                sb.append(result.getText());
+            }
+        }
+        return sb.toString();
     }
 
     /**

@@ -38,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -363,8 +364,6 @@ class WorkflowAutoChainerSddTest {
         when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
         DoDRecord record = record("qa");
         when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        // No tool verdict recorded — the chainer must fall back to the output marker.
-        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
         String output = "QA complete.\nVERDICT=PASS\n";
         when(workflowService.advanceWorkflow(chain.getId(), 0, output)).thenReturn(true);
 
@@ -385,8 +384,6 @@ class WorkflowAutoChainerSddTest {
         when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
         DoDRecord record = record("qa");
         when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        // No tool verdict recorded — the marker path must record the qa review itself.
-        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
         String output = "QA complete.\nVERDICT=PASS\n";
         when(workflowService.advanceWorkflow(chain.getId(), 0, output)).thenReturn(true);
 
@@ -408,7 +405,6 @@ class WorkflowAutoChainerSddTest {
         when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
         DoDRecord record = record("qa");
         when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
         when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Parser crashes.\nVERDICT=DEFECT"));
@@ -428,7 +424,6 @@ class WorkflowAutoChainerSddTest {
         when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
         DoDRecord record = record("qa");
         when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
         when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Parser crashes.\nVERDICT=DEFECT"));
@@ -450,7 +445,6 @@ class WorkflowAutoChainerSddTest {
         when(workflowService.stepAt(chain, 2)).thenReturn(qaStep);
         DoDRecord record = record("qa");
         when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
         when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
 
         // Lowercase + spaces exercise the case-insensitive, whitespace-tolerant regex.
@@ -472,7 +466,6 @@ class WorkflowAutoChainerSddTest {
         when(workflowService.stepAt(chain, 2)).thenReturn(qaStep);
         DoDRecord record = record("qa");
         when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
         when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
 
         // Lowercase + spaces exercise the case-insensitive, whitespace-tolerant regex.
@@ -483,6 +476,34 @@ class WorkflowAutoChainerSddTest {
         verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    // ---- 7e. QA: a stale marker-derived DoD verdict must not shadow a fresh PASS marker (R9 regression) ----
+
+    @Test
+    void qaCompletion_staleMarkerVerdict_freshPassMarkerRoutesPass() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        // R9-F5 records the marker verdict onto the DoD qa review, so a previous
+        // DEFECT marker routing leaves a non-null "DEFECT" verdict that must NOT
+        // shadow this run's fresh PASS marker. The marker is routed first, so this
+        // stale review is never consulted (lenient stub documents its existence).
+        lenient().when(dodService.latestQaReview(record))
+                .thenReturn(review("DEFECT", "verdict from output marker"));
+        String output = "All tests passed.\nVERDICT=PASS\n";
+        when(workflowService.advanceWorkflow(chain.getId(), 1, output)).thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, output));
+
+        verify(workflowService).advanceWorkflow(chain.getId(), 1, output);
+        verify(workflowService, never()).rescheduleStep(any(), anyInt(), any());
+        verifyAdvancedEvent(1, 2, WorkflowChain.Status.RUNNING);
     }
 
     @Test

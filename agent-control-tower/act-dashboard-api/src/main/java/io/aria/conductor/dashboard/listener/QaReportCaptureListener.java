@@ -53,7 +53,11 @@ public class QaReportCaptureListener {
 
     @EventListener
     public void onWorkflowAdvanced(WorkflowAdvancedEvent event) {
-        if (event.getChainStatus() != WorkflowChain.Status.COMPLETED) {
+        // Capture on ANY terminal state (COMPLETED or FAILED): a chain that failed at
+        // Dev rework or a DEFECT/SPEC_GAP loop still produced a qa_report.md worth
+        // surfacing to the platform (R9-F4).
+        if (event.getChainStatus() != WorkflowChain.Status.COMPLETED
+                && event.getChainStatus() != WorkflowChain.Status.FAILED) {
             return;
         }
         try {

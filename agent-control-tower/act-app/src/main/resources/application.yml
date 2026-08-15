@@ -41,6 +41,8 @@ opencode:
   image: aria-conductor/opencode-sandbox:1.1
   port: 4096
   max-task-minutes: 45
+  # Default repo URL for SDD templates that declare {repoUrl} but the caller omits it (R8-F1).
+  repo-url: ${SDD_REPO_URL:}
   # Env vars injected into every agent sandbox (e.g. LLM model credentials for opencode)
   sandbox-env:
     DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:}

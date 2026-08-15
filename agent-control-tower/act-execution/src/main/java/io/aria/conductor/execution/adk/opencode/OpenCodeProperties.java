@@ -48,4 +48,11 @@ public class OpenCodeProperties {
      * 30-minute TTL boundary (R3-F2), so this provider renews proactively.
      */
     private Duration sandboxRenewInterval = Duration.ofMinutes(5);
+
+    /**
+     * Default target repository URL used as a fallback when an SDD workflow
+     * template declares {@code {repoUrl}} but the caller omits it
+     * (env: {@code SDD_REPO_URL}).
+     */
+    private String repoUrl = "";
 }

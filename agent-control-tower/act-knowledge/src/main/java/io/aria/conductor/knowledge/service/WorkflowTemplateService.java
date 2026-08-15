@@ -11,6 +11,7 @@ import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.KnowledgeVersion;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
@@ -24,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,6 +48,7 @@ public class WorkflowTemplateService {
     private final KnowledgeService knowledgeService;
     private final DoDService dodService;
     private final KanbanService kanbanService;
+    private final OpenCodeProperties openCodeProperties;
 
     public WorkflowTemplateService(KnowledgeItemRepository itemRepository,
                                    KnowledgeVersionRepository versionRepository,
@@ -54,7 +57,8 @@ public class WorkflowTemplateService {
                                    WorkflowChainRepository chainRepository,
                                    KnowledgeService knowledgeService,
                                    DoDService dodService,
-                                   KanbanService kanbanService) {
+                                   KanbanService kanbanService,
+                                   OpenCodeProperties openCodeProperties) {
         this.itemRepository = itemRepository;
         this.versionRepository = versionRepository;
         this.templateConverter = templateConverter;
@@ -63,6 +67,7 @@ public class WorkflowTemplateService {
         this.knowledgeService = knowledgeService;
         this.dodService = dodService;
         this.kanbanService = kanbanService;
+        this.openCodeProperties = openCodeProperties;
     }
 
     /**
@@ -125,9 +130,11 @@ public class WorkflowTemplateService {
         // Parse YAML to steps
         List<WorkflowStep> steps = templateConverter.yamlToWorkflowSteps(yamlContent);
 
-        // Validate that all parameter keys are declared in the template
+        // Validate that all parameter keys are declared in the template and build
+        // the resolved parameter map used for substitution and persistence.
+        Set<String> declaredParams = templateConverter.extractParameterNames(steps);
+        Map<String, String> resolvedParams = parameters;
         if (parameters != null) {
-            Set<String> declaredParams = templateConverter.extractParameterNames(steps);
             for (String key : parameters.keySet()) {
                 if (!declaredParams.contains(key)) {
                     throw new IllegalArgumentException(
@@ -137,11 +144,32 @@ public class WorkflowTemplateService {
             }
         }
 
+        // R8-F1: resolve repoUrl. Caller-supplied values win; otherwise fall back to
+        // the system-configured default (opencode.repo-url). Fail fast when the
+        // template declares {repoUrl} but neither source provides one — without this,
+        // the Dev prompt keeps a literal {repoUrl} and the spec-approval coordinator
+        // skips branch creation (Dev then "guesses" the repo).
+        if (declaredParams.contains(GitHandoffMetadata.KEY_REPO_URL)) {
+            String repoUrl = resolvedParams == null ? null : resolvedParams.get(GitHandoffMetadata.KEY_REPO_URL);
+            if (repoUrl == null || repoUrl.isBlank()) {
+                String sysRepoUrl = openCodeProperties.getRepoUrl();
+                if (sysRepoUrl != null && !sysRepoUrl.isBlank()) {
+                    resolvedParams = resolvedParams == null
+                            ? new LinkedHashMap<>()
+                            : new LinkedHashMap<>(resolvedParams);
+                    resolvedParams.put(GitHandoffMetadata.KEY_REPO_URL, sysRepoUrl);
+                } else {
+                    throw new IllegalArgumentException(
+                            "Template requires repoUrl parameter; pass it or set opencode.repo-url");
+                }
+            }
+        }
+
         // Substitute parameters
-        if (parameters != null) {
+        if (resolvedParams != null && !resolvedParams.isEmpty()) {
             for (WorkflowStep step : steps) {
                 step.setPromptTemplate(
-                        templateConverter.substituteParameters(step.getPromptTemplate(), parameters));
+                        templateConverter.substituteParameters(step.getPromptTemplate(), resolvedParams));
             }
         }
 
@@ -186,8 +214,8 @@ public class WorkflowTemplateService {
             // Persist the instantiation parameters (e.g. repoUrl) on the chain so the
             // spec-approval coordinator and Dev-completion fallback can resolve the
             // target repository without re-querying the template (T5 D-A).
-            if (parameters != null && !parameters.isEmpty()) {
-                newChain.setTemplateParams(GitHandoffMetadata.toJson(parameters));
+            if (resolvedParams != null && !resolvedParams.isEmpty()) {
+                newChain.setTemplateParams(GitHandoffMetadata.toJson(resolvedParams));
             }
             String branchName = "sdd/" + newChain.getId();
             List<WorkflowStep> instantiatedSteps = workflowService.deserializeSteps(newChain.getStepsJson());

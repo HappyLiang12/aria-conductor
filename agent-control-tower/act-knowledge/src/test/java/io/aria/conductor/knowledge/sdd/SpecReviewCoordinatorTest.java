@@ -8,6 +8,8 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.execution.git.GitBranchException;
+import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
@@ -47,6 +49,7 @@ class SpecReviewCoordinatorTest {
     @Mock WorkflowService workflowService;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PlatformTransactionManager transactionManager;
+    @Mock GitBranchService gitBranchService;
 
     SpecReviewCoordinator coordinator;
 
@@ -97,7 +100,8 @@ class SpecReviewCoordinatorTest {
 
         coordinator = new SpecReviewCoordinator(
                 knowledgeService, itemRepository, versionRepository, approvalRepository,
-                chainRepository, workflowService, eventPublisher, transactionManager, 1800000L);
+                chainRepository, workflowService, eventPublisher, transactionManager,
+                gitBranchService, 1800000L);
     }
 
     @Test
@@ -284,6 +288,58 @@ class SpecReviewCoordinatorTest {
         assertThat(specReviewApproval.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
         assertThat(specReviewApproval.getReason()).isEqualTo("Workflow cancelled");
         verify(approvalRepository).save(specReviewApproval);
+    }
+
+    // ==================== T5: spec approval -> git branch handoff ====================
+
+    @Test
+    void onApproved_createsBranchAndCommitsSpec() {
+        String repoUrl = "https://github.com/acme/repo.git";
+        chain.setTemplateParams("{\"repoUrl\":\"" + repoUrl + "\"}");
+        when(approvalRepository.findById(approvalId)).thenReturn(Optional.of(specReviewApproval));
+        when(workflowService.findChainByRunId(baRunId)).thenReturn(chain);
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        WorkflowStep devStep = WorkflowStep.builder()
+                .kind(WorkflowStep.StepKind.DEV)
+                .promptTemplate("Implement {specRef}")
+                .build();
+        when(workflowService.deserializeSteps(anyString())).thenReturn(List.of(devStep));
+        doAnswer(inv -> "[{\"kind\":\"DEV\",\"promptTemplate\":\"Implement " + specItemId + "\"}]")
+                .when(workflowService).serializeSteps(anyList());
+
+        String rawContent = "thinking preamble\n" + specContent
+                + "\nSPEC_ID=123e4567-e89b-12d3-a456-426614174000\n";
+        specReviewApproval.setContent(rawContent);
+        specReviewApproval.setStatus(ApprovalStatus.APPROVED);
+
+        String branch = "sdd/" + chainId;
+        when(gitBranchService.branchHeadSha(repoUrl, branch)).thenReturn(Optional.of("spec-sha-abc"));
+
+        coordinator.onApprovalDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED));
+
+        String cleaned = SpecReviewCoordinator.cleanSpecContent(rawContent);
+        verify(gitBranchService).createBranch(repoUrl, branch);
+        verify(gitBranchService).putFile(eq(repoUrl), eq(branch), eq("spec/spec.md"), eq(cleaned), anyString());
+        assertThat(chain.getTemplateParams()).contains("spec-sha-abc");
+        verify(workflowService).advanceWorkflow(eq(chainId), eq(0), eq(rawContent));
+    }
+
+    @Test
+    void onApproved_gitFailure_failsTransitionLoudly() {
+        String repoUrl = "https://github.com/acme/repo.git";
+        chain.setTemplateParams("{\"repoUrl\":\"" + repoUrl + "\"}");
+        when(approvalRepository.findById(approvalId)).thenReturn(Optional.of(specReviewApproval));
+        when(workflowService.findChainByRunId(baRunId)).thenReturn(chain);
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+        specReviewApproval.setStatus(ApprovalStatus.APPROVED);
+        doThrow(new GitBranchException(401, "GitHub API error 401: Bad credentials"))
+                .when(gitBranchService).createBranch(eq(repoUrl), anyString());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> coordinator.onApprovalDecided(
+                        new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED)))
+                .isInstanceOf(GitBranchException.class)
+                .hasMessageContaining("Bad credentials");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
     }
 
     // ==================== F18: cleanSpecContent ====================

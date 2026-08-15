@@ -8,6 +8,8 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.execution.git.GitBranchService;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
@@ -28,6 +30,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -55,6 +58,7 @@ public class SpecReviewCoordinator {
     private final WorkflowService workflowService;
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
+    private final GitBranchService gitBranchService;
     private final Duration approvalTimeout;
 
     public SpecReviewCoordinator(KnowledgeService knowledgeService,
@@ -65,6 +69,7 @@ public class SpecReviewCoordinator {
                                  WorkflowService workflowService,
                                  ApplicationEventPublisher eventPublisher,
                                  PlatformTransactionManager transactionManager,
+                                 GitBranchService gitBranchService,
                                  @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.knowledgeService = knowledgeService;
         this.itemRepository = itemRepository;
@@ -74,6 +79,7 @@ public class SpecReviewCoordinator {
         this.workflowService = workflowService;
         this.eventPublisher = eventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.gitBranchService = gitBranchService;
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
     }
 
@@ -157,6 +163,7 @@ public class SpecReviewCoordinator {
 
         int baIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA);
         if (approved) {
+            createBranchAndCommitSpec(chain, approval);
             injectSpecReference(chain, specItemId);
             chain.setStatus(WorkflowChain.Status.RUNNING);
             chainRepository.save(chain);
@@ -277,6 +284,34 @@ public class SpecReviewCoordinator {
             }
         }
         chain.setStepsJson(workflowService.serializeSteps(steps));
+    }
+
+    /**
+     * Create the chain-scoped branch, commit the cleaned spec to it, then record the
+     * resulting HEAD sha so the Dev-completion handler can detect a missing agent push.
+     * No-op when the chain carries no repoUrl (non-GitHub SDD flows).
+     *
+     * @throws io.aria.conductor.execution.git.GitBranchException on any GitHub API failure
+     *         (the approval handler propagates it so the transition fails loudly).
+     */
+    private void createBranchAndCommitSpec(WorkflowChain chain, Approval approval) {
+        String repoUrl = GitHandoffMetadata.parse(chain.getTemplateParams())
+                .get(GitHandoffMetadata.KEY_REPO_URL);
+        if (repoUrl == null || repoUrl.isBlank()) {
+            log.info("SDD chain {} has no repoUrl; skipping Git branch handoff", chain.getId());
+            return;
+        }
+        String branchName = GitHandoffMetadata.branchName(chain.getId());
+        String specContent = cleanSpecContent(approval.getContent());
+        gitBranchService.createBranch(repoUrl, branchName);
+        gitBranchService.putFile(repoUrl, branchName, "spec/spec.md", specContent, "sdd: approve spec");
+        Optional<String> headSha = gitBranchService.branchHeadSha(repoUrl, branchName);
+        headSha.ifPresent(sha -> {
+            chain.setTemplateParams(GitHandoffMetadata.withEntry(
+                    chain.getTemplateParams(), GitHandoffMetadata.KEY_SPEC_COMMIT_SHA, sha));
+            log.info("SDD spec committed to branch {} of {}; recorded spec-commit sha",
+                    branchName, repoUrl);
+        });
     }
 
     private String specName(UUID chainId) { return "spec-" + chainId; }

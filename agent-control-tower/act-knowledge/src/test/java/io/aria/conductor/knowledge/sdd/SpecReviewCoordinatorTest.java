@@ -8,6 +8,8 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.git.GitBranchException;
 import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -50,6 +52,7 @@ class SpecReviewCoordinatorTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PlatformTransactionManager transactionManager;
     @Mock GitBranchService gitBranchService;
+    @Mock OpenCodeAdkProvider openCodeAdkProvider;
 
     SpecReviewCoordinator coordinator;
 
@@ -101,7 +104,7 @@ class SpecReviewCoordinatorTest {
         coordinator = new SpecReviewCoordinator(
                 knowledgeService, itemRepository, versionRepository, approvalRepository,
                 chainRepository, workflowService, eventPublisher, transactionManager,
-                gitBranchService, 1800000L);
+                gitBranchService, openCodeAdkProvider, 1800000L);
     }
 
     @Test
@@ -123,6 +126,74 @@ class SpecReviewCoordinatorTest {
         assertThat(saved.getExpiresAt()).isNotNull();
         assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.WAITING_APPROVAL);
         verify(eventPublisher).publishEvent(any(ApprovalRequestedEvent.class));
+    }
+
+    @Test
+    void onBaStepCompleted_readsSpecFileFromSandbox() {
+        UUID baAgentId = UUID.randomUUID();
+        String fullSpec = "# Spec\n\n## Requirements\n- Full sandbox spec body.";
+        String summary = "Spec ready. SPEC_ID=123e4567-e89b-12d3-a456-426614174000";
+
+        WorkflowStep baStep = WorkflowStep.builder()
+                .kind(WorkflowStep.StepKind.BA).runId(baRunId).agentId(baAgentId).build();
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowService.stepAt(chain, 0)).thenReturn(baStep);
+        when(openCodeAdkProvider.runSandboxCommand(baAgentId, "cat /workspace/spec.md"))
+                .thenReturn(fullSpec);
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, summary));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && fullSpec.equals(r.getContent())));
+        ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(approvalCaptor.capture());
+        assertThat(approvalCaptor.getValue().getContent()).isEqualTo(fullSpec);
+        assertThat(approvalCaptor.getValue().getContent()).doesNotContain("SPEC_ID=");
+    }
+
+    @Test
+    void onBaStepCompleted_fallsBackToFinalOutputWhenFileMissing() {
+        UUID baAgentId = UUID.randomUUID();
+        WorkflowStep baStep = WorkflowStep.builder()
+                .kind(WorkflowStep.StepKind.BA).runId(baRunId).agentId(baAgentId).build();
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowService.stepAt(chain, 0)).thenReturn(baStep);
+        when(openCodeAdkProvider.runSandboxCommand(baAgentId, "cat /workspace/spec.md"))
+                .thenReturn(""); // blank -> fall back to finalOutput
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && specContent.equals(r.getContent())));
+        ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(approvalCaptor.capture());
+        assertThat(approvalCaptor.getValue().getContent()).isEqualTo(specContent);
+    }
+
+    @Test
+    void onBaStepCompleted_fallsBackToFinalOutputWhenSandboxCommandThrows() {
+        UUID baAgentId = UUID.randomUUID();
+        WorkflowStep baStep = WorkflowStep.builder()
+                .kind(WorkflowStep.StepKind.BA).runId(baRunId).agentId(baAgentId).build();
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowService.stepAt(chain, 0)).thenReturn(baStep);
+        when(openCodeAdkProvider.runSandboxCommand(baAgentId, "cat /workspace/spec.md"))
+                .thenThrow(new TaskExecutionException(
+                        TaskExecutionException.Cause.SANDBOX_UNAVAILABLE, "sandbox gone"));
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && specContent.equals(r.getContent())));
+        ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(approvalCaptor.capture());
+        assertThat(approvalCaptor.getValue().getContent()).isEqualTo(specContent);
     }
 
     @Test

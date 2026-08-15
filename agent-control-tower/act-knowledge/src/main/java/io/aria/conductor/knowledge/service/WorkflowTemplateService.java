@@ -12,6 +12,7 @@ import io.aria.conductor.common.model.KnowledgeVersion;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
@@ -182,6 +183,12 @@ public class WorkflowTemplateService {
                 .orElse(null);
         if (newChain != null) {
             newChain.setSourceKnowledgeItemId(templateItemId);
+            // Persist the instantiation parameters (e.g. repoUrl) on the chain so the
+            // spec-approval coordinator and Dev-completion fallback can resolve the
+            // target repository without re-querying the template (T5 D-A).
+            if (parameters != null && !parameters.isEmpty()) {
+                newChain.setTemplateParams(GitHandoffMetadata.toJson(parameters));
+            }
             String branchName = "sdd/" + newChain.getId();
             List<WorkflowStep> instantiatedSteps = workflowService.deserializeSteps(newChain.getStepsJson());
             boolean branchInjected = false;

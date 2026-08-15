@@ -63,8 +63,11 @@ test('development-workflow: spec approval then PASS verdict completes the chain'
   const tpl = (await templates.json()).find((k: any) => k.name === 'development-workflow');
   expect(tpl).toBeTruthy();
 
+  // R8-F1: the template declares {repoUrl} (V45 prompts) and instantiation fails fast
+  // when neither the caller nor the system config (opencode.repo-url) provides it.
+  // CI has no GH_TOKEN, so the branch-creation step is a no-op - the URL is inert here.
   const inst = await request.post(`${API_URL}/api/v1/knowledge/${tpl.id}/instantiate-workflow`, {
-    data: { parameters: { issueRef: '#1-test' } },
+    data: { parameters: { issueRef: '#1-test', repoUrl: 'https://github.com/HappyLiang12/aria-conductor.git' } },
   });
   expect(inst.ok()).toBeTruthy();
   const chain = await inst.json();

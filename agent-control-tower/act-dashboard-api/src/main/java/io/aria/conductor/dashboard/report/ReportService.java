@@ -103,6 +103,37 @@ public class ReportService {
         }
     }
 
+    /**
+     * Capture an externally-produced report (e.g. the SDD QA report written by the
+     * QA agent into its sandbox) directly into a report artifact, bypassing LLM
+     * generation. The raw content is stored verbatim as the artifact's body.
+     */
+    @Transactional
+    public ReportArtifact capture(String title, String owner, String content) {
+        ReportArtifact artifact = ReportArtifact.builder()
+                .title(title)
+                .owner(owner)
+                .sensitivity("internal")
+                .version(1)
+                .status("GENERATED")
+                .amendmentHistory(serializeHistory(List.of(Map.of(
+                        "version", 1,
+                        "instruction", "captured from agent output",
+                        "at", Instant.now().toString()
+                ))))
+                .build();
+
+        ReportArtifact saved = repository.save(artifact);
+        String path = saveHtml(saved.getId(), 1, content == null ? "" : content);
+        saved.setHtmlPath(path);
+        ReportArtifact persisted = repository.save(saved);
+        log.info("Report captured, id={}, title={}", persisted.getId(), persisted.getTitle());
+        eventPublisher.publishEvent(new ReportGeneratedEvent(
+                this, persisted.getId(), persisted.getTitle(),
+                persisted.getOwner() != null ? persisted.getOwner() : ""));
+        return persisted;
+    }
+
     @Transactional
     public ReportArtifact amend(String reportId, AmendReportRequest request) {
         MDC.put("operation", "report.amend");

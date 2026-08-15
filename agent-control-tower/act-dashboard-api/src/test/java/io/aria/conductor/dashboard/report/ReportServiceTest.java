@@ -1,5 +1,6 @@
 package io.aria.conductor.dashboard.report;
 
+import io.aria.conductor.common.event.ReportGeneratedEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.execution.llm.LlmClient;
 import io.aria.conductor.execution.llm.LlmRequest;
@@ -98,6 +99,22 @@ class ReportServiceTest {
         String html = Files.readString(onDisk);
         assertThat(html).contains("Report generation requires LLM connection");
         assertThat(html).contains("Outage Report");
+    }
+
+    @Test
+    void capture_storesContentVerbatimAndPublishesEvent() throws Exception {
+        ReportArtifact result = service.capture("SDD QA Report", "owner-1", "# QA Report\n\nAll checks passed.");
+
+        assertThat(result.getId()).isNotBlank();
+        assertThat(result.getTitle()).isEqualTo("SDD QA Report");
+        assertThat(result.getOwner()).isEqualTo("owner-1");
+        assertThat(result.getStatus()).isEqualTo("GENERATED");
+        assertThat(result.getHtmlPath()).isNotNull();
+
+        Path onDisk = Path.of(result.getHtmlPath());
+        assertThat(Files.readString(onDisk)).contains("All checks passed");
+        verify(repository, times(2)).save(any(ReportArtifact.class));
+        verify(eventPublisher).publishEvent(any(ReportGeneratedEvent.class));
     }
 
     @Test

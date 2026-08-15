@@ -116,6 +116,15 @@ class V43SeedConfigTest {
     }
 
     @Test
+    void v47_qaPrompt_pushesReportToBranch() {
+        String yaml = templateYaml();
+        // QA prompt: copy qa_report.md into the branch and push it so the backend
+        // can capture it into a platform report artifact (R8-F4).
+        assertThat(yaml).contains("cp /workspace/qa_report.md ./qa_report.md");
+        assertThat(yaml).contains("git commit -m 'sdd qa report'");
+    }
+
+    @Test
     void systemConfig_tokenBudgetIs300000() {
         String value = jdbc.queryForObject(
                 "SELECT config_value FROM system_config WHERE config_key = 'circuit.breaker.max.tokens.per.run'",

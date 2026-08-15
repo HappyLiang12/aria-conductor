@@ -6,6 +6,8 @@ import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.app.BaseH2IntegrationTest;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.dashboard.report.ReportArtifact;
+import io.aria.conductor.dashboard.report.ReportService;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
@@ -85,6 +87,8 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     private KnowledgeVersionRepository knowledgeVersionRepository;
     @Autowired
     private WorkflowTemplateService workflowTemplateService;
+    @Autowired
+    private ReportService reportService;
 
     @MockBean
     private AdkProviderRegistry adkProviderRegistry;
@@ -109,6 +113,8 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     private static final String QA_MARKER_DEFECT = "Parser crashes on empty input.\nVERDICT=DEFECT";
     private static final String QA_MARKER_SPEC_GAP = "Error handling not specified.\nVERDICT=SPEC_GAP";
     private static final String QA_NO_VERDICT = "QA completed but forgot to submit a verdict.";
+    private static final String QA_REPORT_CONTENT =
+            "# SDD QA Report\n\nAll checks passed.\n\n## Summary\n- Unit tests green";
 
     @BeforeEach
     void setUp() {
@@ -160,9 +166,9 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         verify(openCodeAdkProvider).runSandboxCommand(eq(devAgentId),
                 contains("git push origin " + branch));
 
-        // DoD dev stage auto-passed on Dev completion -> record advanced to "qa"
+        // DoD qa review recorded via the VERDICT=PASS marker path (R8-F2) -> DoD completed + PASSED
         DoDRecord dod = dodService.getStatus(chainId.toString());
-        assertThat(dod.getCurrentStage()).isEqualTo("qa");
+        assertThat(dod.getOverallStatus()).isEqualTo("PASSED");
 
         // REPORT_ID captured from the QA marker output (no tool verdict was submitted)
         WorkflowChain completed = workflowChainRepository.findById(chainId).orElseThrow();
@@ -247,6 +253,46 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         assertThat(qaStep.getStatus()).isEqualTo(WorkflowStep.Status.FAILED);
         assertThat(qaStep.getOutput()).contains("QA completed but no verdict submitted");
         assertThat(qaStep.getOutput()).contains("submit_dod_review");
+    }
+
+    // ================================================================
+    //  FULL CYCLE 5: VERDICT=PASS -> QA report captured into a platform report artifact
+    // ================================================================
+
+    @Test
+    void fullCycle_qaMarkerPass_capturesReportArtifactFromBranch() {
+        configureMockAdk(QA_MARKER_PASS);
+
+        WorkflowResponse created = createSddGitChain();
+        UUID chainId = created.getId();
+        String branch = "sdd/" + chainId;
+
+        // The QA agent committed qa_report.md to the sdd branch, so the backend pulls it
+        // from the branch when the chain completes (R8-F4).
+        when(gitBranchService.getFile(eq(REPO_URL), eq(branch), eq("qa_report.md")))
+                .thenReturn(Optional.of(QA_REPORT_CONTENT));
+
+        awaitChainStatus(chainId, WorkflowChain.Status.WAITING_APPROVAL);
+        approveSpecReview(chainId);
+        awaitChainStatus(chainId, WorkflowChain.Status.COMPLETED);
+
+        // The capture listener runs synchronously on the run-completion thread just after
+        // the chain is marked COMPLETED; wait for it to attach the real artifact id.
+        await().atMost(10, TimeUnit.SECONDS).until(() -> {
+            WorkflowChain c = workflowChainRepository.findById(chainId).orElse(null);
+            return c != null && c.getReportArtifactId() != null
+                    && !REPORT_ID.equals(c.getReportArtifactId());
+        });
+
+        // The report artifact is created from the branch's qa_report.md content.
+        verify(gitBranchService).getFile(eq(REPO_URL), eq(branch), eq("qa_report.md"));
+        WorkflowChain completed = workflowChainRepository.findById(chainId).orElseThrow();
+        assertThat(completed.getReportArtifactId()).isNotNull();
+        assertThat(completed.getReportArtifactId()).isNotEqualTo(REPORT_ID);
+
+        ReportArtifact artifact = reportService.get(completed.getReportArtifactId().toString());
+        assertThat(artifact.getTitle()).isEqualTo("SDD QA Report");
+        assertThat(reportService.getHtml(artifact.getId())).contains("All checks passed");
     }
 
     // ================================================================

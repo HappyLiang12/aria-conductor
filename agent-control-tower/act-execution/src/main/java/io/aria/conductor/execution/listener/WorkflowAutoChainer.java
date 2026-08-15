@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -160,7 +161,11 @@ public class WorkflowAutoChainer {
         }
     }
 
-    /** Route a completed QA step on its latest recorded qa-stage verdict. */
+    /** Regex for the QA output fallback: VERDICT=PASS|DEFECT|SPEC_GAP (case-insensitive). */
+    private static final Pattern VERDICT_MARKER_PATTERN =
+            Pattern.compile("VERDICT\\s*=\\s*(PASS|DEFECT|SPEC_GAP)", Pattern.CASE_INSENSITIVE);
+
+    /** Route a completed QA step on its latest recorded qa-stage verdict, or the output marker. */
     private void routeOnQaVerdict(WorkflowChain chain, int stepIndex, String finalOutput) {
         // Mark the QA step COMPLETED and persist its output BEFORE routing on verdict.
         // DEFECT and SPEC_GAP branches never advance (they reschedule instead), so without
@@ -177,15 +182,29 @@ public class WorkflowAutoChainer {
             return;
         }
         DoDStageReview latest = dodService.latestQaReview(record);
-        if (latest == null || latest.getVerdict() == null) {
-            // F17: give the operator an actionable retry hint instead of a bare failure message.
-            workflowService.markStepFailed(chain.getId(), stepIndex,
-                    "QA completed but no verdict submitted. The QA agent must call submit_dod_review "
-                            + "with verdict=PASS|DEFECT|SPEC_GAP before finishing. "
-                            + "Retry the step after fixing the QA tool configuration.");
+        if (latest != null && latest.getVerdict() != null) {
+            String verdict = latest.getVerdict().toUpperCase(Locale.ROOT);
+            applyVerdict(chain, stepIndex, verdict, latest.getComment(), finalOutput);
             return;
         }
-        String verdict = latest.getVerdict().toUpperCase(Locale.ROOT);
+        // No tool verdict recorded — fall back to the VERDICT= marker in the QA output.
+        Optional<String> marker = parseVerdictMarker(finalOutput);
+        if (marker.isPresent()) {
+            applyVerdict(chain, stepIndex, marker.get(), "verdict from output marker", finalOutput);
+            return;
+        }
+        // F17: give the operator an actionable retry hint instead of a bare failure message.
+        workflowService.markStepFailed(chain.getId(), stepIndex,
+                "QA completed but no verdict submitted. The QA agent must call submit_dod_review "
+                        + "with verdict=PASS|DEFECT|SPEC_GAP before finishing. "
+                        + "Retry the step after fixing the QA tool configuration.");
+    }
+
+    /**
+     * Apply a normalized QA verdict ({@code PASS}/{@code DEFECT}/{@code SPEC_GAP}) to the chain.
+     * Shared by the tool-verdict path and the VERDICT= marker fallback so both route identically.
+     */
+    private void applyVerdict(WorkflowChain chain, int stepIndex, String verdict, String reason, String finalOutput) {
         switch (verdict) {
             case "PASS" -> {
                 storeQaReportIdIfPresent(chain, finalOutput);
@@ -199,7 +218,7 @@ public class WorkflowAutoChainer {
                             "DEFECT verdict but chain has no DEV step");
                     return;
                 }
-                workflowService.rescheduleStep(chain.getId(), devIdx, latest.getComment());
+                workflowService.rescheduleStep(chain.getId(), devIdx, reason);
             }
             case "SPEC_GAP" -> {
                 int baIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA);
@@ -208,11 +227,26 @@ public class WorkflowAutoChainer {
                             "SPEC_GAP verdict but chain has no BA step");
                     return;
                 }
-                workflowService.rescheduleStep(chain.getId(), baIdx, latest.getComment());
+                workflowService.rescheduleStep(chain.getId(), baIdx, reason);
             }
             default -> workflowService.markStepFailed(chain.getId(), stepIndex,
-                    "Unknown QA verdict: " + latest.getVerdict());
+                    "Unknown QA verdict: " + verdict);
         }
+    }
+
+    /**
+     * Parse the VERDICT= marker from the QA run's finalOutput, or empty when absent.
+     * Regex: {@code VERDICT\s*=\s*(PASS|DEFECT|SPEC_GAP)}, case-insensitive, first match wins.
+     */
+    private static Optional<String> parseVerdictMarker(String output) {
+        if (output == null) {
+            return Optional.empty();
+        }
+        Matcher matcher = VERDICT_MARKER_PATTERN.matcher(output);
+        if (matcher.find()) {
+            return Optional.of(matcher.group(1).toUpperCase(Locale.ROOT));
+        }
+        return Optional.empty();
     }
 
     private void publishAdvanced(WorkflowChain chain, int stepIndex, boolean started) {

@@ -10,6 +10,7 @@ import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.KnowledgeVersion;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanService;
@@ -57,6 +58,7 @@ class WorkflowTemplateServiceSddTest {
     @Mock KnowledgeService knowledgeService;
     @Mock DoDService dodService;
     @Mock KanbanService kanbanService;
+    @Mock OpenCodeProperties openCodeProperties;
 
     WorkflowTemplateService service;
 
@@ -64,7 +66,7 @@ class WorkflowTemplateServiceSddTest {
     void setUp() {
         service = new WorkflowTemplateService(itemRepository, versionRepository,
                 templateConverter, workflowService, chainRepository, knowledgeService,
-                dodService, kanbanService);
+                dodService, kanbanService, openCodeProperties);
     }
 
     @Test

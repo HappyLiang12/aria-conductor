@@ -9,8 +9,10 @@ import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.approval.ApprovalGate;
+import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
@@ -78,6 +80,8 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     private WorkflowTemplateService workflowTemplateService;
     @Autowired
     private KnowledgeService knowledgeService;
+    @Autowired
+    private OpenCodeProperties openCodeProperties;
 
     @MockBean
     private AdkProviderRegistry adkProviderRegistry;
@@ -98,6 +102,8 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
 
     @BeforeEach
     void setUp() {
+        // Isolate each test from cross-test config leakage (R8-F1 repoUrl fallback).
+        openCodeProperties.setRepoUrl("");
         baAgentId = createAgent("BA-Agent-" + shortUuid());
         devAgentId = createAgent("DEV-Agent-" + shortUuid());
         qaAgentId = createAgent("QA-Agent-" + shortUuid());
@@ -481,6 +487,59 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     }
 
     // ================================================================
+    //  R8-F1: repoUrl system-config fallback
+    // ================================================================
+
+    @Test
+    void instantiateTemplate_repoUrlFromSystemConfigWhenCallerOmits() {
+        AtomicInteger adkCalls = new AtomicInteger(0);
+        configureMockAdkNoGating(adkCalls);
+
+        String configuredUrl = "https://github.com/acme/demo.git";
+        openCodeProperties.setRepoUrl(configuredUrl);
+
+        UUID templateId = createTemplateWithRepoUrl();
+        WorkflowResponse response = workflowTemplateService.instantiateTemplate(
+                templateId, Map.of("issueRef", "ISSUE-42"));
+        UUID chainId = response.getId();
+
+        WorkflowChain chain = workflowChainRepository.findById(chainId).orElseThrow();
+        assertThat(chain.getStepsJson()).contains(configuredUrl);
+        assertThat(chain.getStepsJson()).doesNotContain("{repoUrl}");
+        assertThat(GitHandoffMetadata.parse(chain.getTemplateParams()))
+                .containsEntry(GitHandoffMetadata.KEY_REPO_URL, configuredUrl);
+    }
+
+    @Test
+    void instantiateTemplate_failsFastWhenRepoUrlMissing() {
+        UUID templateId = createTemplateWithRepoUrl();
+        assertThatThrownBy(() -> workflowTemplateService.instantiateTemplate(
+                templateId, Map.of("issueRef", "ISSUE-42")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("repoUrl");
+    }
+
+    @Test
+    void instantiateTemplate_callerRepoUrlWins() {
+        AtomicInteger adkCalls = new AtomicInteger(0);
+        configureMockAdkNoGating(adkCalls);
+
+        openCodeProperties.setRepoUrl("https://github.com/acme/system-default.git");
+        String callerUrl = "https://github.com/acme/caller.git";
+
+        UUID templateId = createTemplateWithRepoUrl();
+        WorkflowResponse response = workflowTemplateService.instantiateTemplate(
+                templateId, Map.of("issueRef", "ISSUE-42", "repoUrl", callerUrl));
+        UUID chainId = response.getId();
+
+        WorkflowChain chain = workflowChainRepository.findById(chainId).orElseThrow();
+        assertThat(chain.getStepsJson()).contains(callerUrl);
+        assertThat(chain.getStepsJson()).doesNotContain("https://github.com/acme/system-default.git");
+        assertThat(GitHandoffMetadata.parse(chain.getTemplateParams()))
+                .containsEntry(GitHandoffMetadata.KEY_REPO_URL, callerUrl);
+    }
+
+    // ================================================================
     //  PRIVATE HELPERS
     // ================================================================
 
@@ -579,6 +638,51 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
                     kind: DEV
                   - agent_id: "%s"
                     prompt_template: "git clone --branch {branchName} /workspace/repo; verify {specRef}"
+                    max_iterations: 3
+                    kind: QA
+                """.formatted(baAgentId.toString(), devAgentId.toString(), qaAgentId.toString());
+
+        knowledgeVersionRepository.save(KnowledgeVersion.builder()
+                .knowledgeItemId(templateId)
+                .version("v1")
+                .status(VersionStatus.APPROVED)
+                .yamlContent(yamlContent)
+                .createdAt(Instant.now())
+                .approvedAt(Instant.now())
+                .build());
+
+        return templateId;
+    }
+
+    /** Create an APPROVED template whose DEV/QA prompts declare the {repoUrl} parameter. */
+    private UUID createTemplateWithRepoUrl() {
+        UUID templateId = UUID.randomUUID();
+
+        knowledgeItemRepository.save(KnowledgeItem.builder()
+                .id(templateId)
+                .name("development-workflow")
+                .type(KnowledgeType.WORKFLOW)
+                .status(KnowledgeStatus.APPROVED)
+                .sensitivity(Sensitivity.INTERNAL)
+                .currentVersion("v1")
+                .escalationCount(0)
+                .createdAt(Instant.now())
+                .build());
+
+        String yamlContent = """
+                schema_version: "1.0"
+                name: development-workflow
+                steps:
+                  - agent_id: "%s"
+                    prompt_template: "Write spec for {issueRef}"
+                    max_iterations: 3
+                    kind: BA
+                  - agent_id: "%s"
+                    prompt_template: "git clone {repoUrl}; implement {specRef}"
+                    max_iterations: 5
+                    kind: DEV
+                  - agent_id: "%s"
+                    prompt_template: "git clone {repoUrl}; verify {specRef}"
                     max_iterations: 3
                     kind: QA
                 """.formatted(baAgentId.toString(), devAgentId.toString(), qaAgentId.toString());

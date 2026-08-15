@@ -399,10 +399,15 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
 
     /**
      * Write the sandbox {@code opencode.json} into the agent workspace so the next
-     * {@code uploadWorkspace} ships it into the sandbox. The config disables the
-     * interactive question tool ({@code question=deny}) and points opencode at the
-     * ACTIVE DB {@link LlmProvider} model, falling back to deepseek defaults when
-     * no provider is active (first-run keeps working without DB setup).
+     * {@code uploadWorkspace} ships it into the sandbox. The config enforces a
+     * headless-safe permission policy — no permission may resolve to {@code ask}
+     * (which would block forever on human input in headless mode): the {@code *}
+     * wildcard allows every non-interactive tool, while {@code question} and
+     * {@code external_directory} are explicitly denied so tools touching paths
+     * outside /workspace get a visible error the model can read and continue from
+     * instead of hanging (R6-F1). It also points opencode at the ACTIVE DB
+     * {@link LlmProvider} model, falling back to deepseek defaults when no
+     * provider is active (first-run keeps working without DB setup).
      *
      * <p>Best-effort: a write failure is logged and the sandbox still comes up.
      */
@@ -421,7 +426,11 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             String json = """
                     {
                       "$schema": "https://opencode.ai/config.json",
-                      "permission": { "question": "deny" },
+                      "permission": {
+                        "*": "allow",
+                        "question": "deny",
+                        "external_directory": "deny"
+                      },
                       "model": "%s/%s",
                       "provider": {
                         "%s": {

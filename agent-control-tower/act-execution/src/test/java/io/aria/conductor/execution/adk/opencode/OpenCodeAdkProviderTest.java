@@ -57,6 +57,14 @@ class OpenCodeAdkProviderTest {
 
     private static final String IMAGE = "test-image";
 
+    /**
+     * Full permission key set documented for opencode (https://opencode.ai/docs/permissions/).
+     * Used to verify the generated opencode.json never resolves any permission to "ask".
+     */
+    private static final List<String> DOCUMENTED_PERMISSION_KEYS = List.of(
+            "read", "edit", "glob", "grep", "bash", "task", "skill", "lsp",
+            "question", "webfetch", "websearch", "external_directory", "doom_loop");
+
     @Mock OpenCodeSandboxManager sandboxManager;
     @Mock OpenCodeHttpClient httpClient;
     @Mock LlmProviderRepository providerRepository;
@@ -648,7 +656,16 @@ class OpenCodeAdkProviderTest {
         String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
         ObjectMapper mapper = new ObjectMapper();
         JsonNode root = mapper.readTree(json);
-        assertThat(root.path("permission").path("question").asText()).isEqualTo("deny");
+        JsonNode permission = root.path("permission");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        // R6-F1: external_directory must also be denied — otherwise tools touching
+        // paths outside /workspace hang forever on an interactive "ask" prompt.
+        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
+        // Headless invariant: no permission entry may resolve to "ask" (zero
+        // blocking on human input in headless mode).
+        permission.fields().forEachRemaining(e -> assertThat(e.getValue().asText())
+                .as("permission '%s' must not equal 'ask'", e.getKey())
+                .isNotEqualTo("ask"));
         JsonNode providerNode = root.path("provider").path("deepseek-qa");
         assertThat(providerNode.path("npm").asText()).isEqualTo("@ai-sdk/openai-compatible");
         assertThat(providerNode.path("models").has("deepseek-v4-flash")).isTrue();
@@ -669,5 +686,44 @@ class OpenCodeAdkProviderTest {
         String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
         assertThat(json).contains("deepseek/deepseek-chat");
         assertThat(json).contains("\"question\": \"deny\"");
+    }
+
+    // ---- R6-F1 headless-safe permission policy ----
+
+    @Test
+    void prepareInstance_openCodeJson_permissionPolicy_isHeadlessSafe() throws Exception {
+        LlmProvider active = LlmProvider.builder().name("deepseek-qa").type(LlmProviderType.OPENAI)
+                .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
+                .apiKey("k").active(true).build();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        JsonNode permission = new ObjectMapper().readTree(json).path("permission");
+
+        // R6-F1: the "*" wildcard allows the whole non-interactive tool set, so
+        // every key absent from this map falls back to "allow" instead of opencode's
+        // interactive "ask" default.
+        assertThat(permission.path("*").asText())
+                .as("wildcard '*' must allow the non-interactive tool set")
+                .isEqualTo("allow");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
+
+        // Iterate the full documented key set: no key may resolve to "ask" — that
+        // is the headless hang risk R6-F1 fixes.
+        for (String key : DOCUMENTED_PERMISSION_KEYS) {
+            String effective = permission.path(key).isMissingNode()
+                    ? permission.path("*").asText()
+                    : permission.path(key).asText();
+            assertThat(effective)
+                    .as("permission '%s' must not resolve to 'ask' (headless hang risk)", key)
+                    .isNotEqualTo("ask");
+        }
     }
 }

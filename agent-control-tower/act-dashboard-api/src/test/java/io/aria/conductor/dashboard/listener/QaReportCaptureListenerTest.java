@@ -104,6 +104,31 @@ class QaReportCaptureListenerTest {
     }
 
     @Test
+    void failedChain_withQaReport_stillCapturesArtifact() {
+        WorkflowChain chain = gitChain();
+        chain.setStatus(WorkflowChain.Status.FAILED);
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(gitBranchService.getFile(REPO_URL, "sdd/" + chainId, "qa_report.md"))
+                .thenReturn(Optional.of("# QA Report\n\nTests failed: 2 defects found."));
+        when(reportService.capture("SDD QA Report", chainId.toString(),
+                "# QA Report\n\nTests failed: 2 defects found."))
+                .thenReturn(ReportArtifact.builder()
+                        .id(ARTIFACT_ID.toString())
+                        .title("SDD QA Report")
+                        .owner(chainId.toString())
+                        .version(1)
+                        .status("GENERATED")
+                        .build());
+
+        listener.onWorkflowAdvanced(failedEvent());
+
+        verify(reportService).capture("SDD QA Report", chainId.toString(),
+                "# QA Report\n\nTests failed: 2 defects found.");
+        assertThat(chain.getReportArtifactId()).isEqualTo(ARTIFACT_ID);
+        verify(chainRepository).save(chain);
+    }
+
+    @Test
     void onCompletedEvent_nonGitChain_skipsCapture() {
         WorkflowChain chain = WorkflowChain.builder()
                 .id(chainId)
@@ -136,6 +161,11 @@ class QaReportCaptureListenerTest {
     private WorkflowAdvancedEvent completedEvent() {
         return new WorkflowAdvancedEvent(
                 this, chainId, "development-workflow-instance", 2, -1, WorkflowChain.Status.COMPLETED);
+    }
+
+    private WorkflowAdvancedEvent failedEvent() {
+        return new WorkflowAdvancedEvent(
+                this, chainId, "development-workflow-instance", 2, -1, WorkflowChain.Status.FAILED);
     }
 
     private WorkflowChain gitChain() {

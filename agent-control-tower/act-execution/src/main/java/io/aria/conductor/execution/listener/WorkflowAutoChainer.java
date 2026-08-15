@@ -235,16 +235,21 @@ public class WorkflowAutoChainer {
                     "QA completed but no DoD record");
             return;
         }
+        // The VERDICT= marker in the QA run's finalOutput is the fresh, authoritative
+        // signal for THIS run, so it must be routed first. R9-F5 records the marker verdict
+        // onto the DoD qa review for auditability, which leaves a non-null (stale) verdict on
+        // the record; reading the DoD review first would re-route a previous DEFECT/SPEC_GAP
+        // verdict and ignore this run's fresh PASS marker (reschedule never completes).
+        Optional<String> marker = parseVerdictMarker(finalOutput);
+        if (marker.isPresent()) {
+            applyVerdict(chain, stepIndex, marker.get(), "verdict from output marker", finalOutput);
+            return;
+        }
+        // No marker — fall back to the tool-submitted qa-stage verdict (submit_dod_review).
         DoDStageReview latest = dodService.latestQaReview(record);
         if (latest != null && latest.getVerdict() != null) {
             String verdict = latest.getVerdict().toUpperCase(Locale.ROOT);
             applyVerdict(chain, stepIndex, verdict, latest.getComment(), finalOutput);
-            return;
-        }
-        // No tool verdict recorded — fall back to the VERDICT= marker in the QA output.
-        Optional<String> marker = parseVerdictMarker(finalOutput);
-        if (marker.isPresent()) {
-            applyVerdict(chain, stepIndex, marker.get(), "verdict from output marker", finalOutput);
             return;
         }
         // F17: give the operator an actionable retry hint instead of a bare failure message.

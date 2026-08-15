@@ -92,7 +92,19 @@ class V43SeedConfigTest {
         assertThat(yaml).contains("## Questions");
         assertThat(yaml).contains("Spec was rejected");
         // DEV prompt: clone the project independently before implementing.
-        assertThat(yaml).contains("git clone {repoUrl}");
+        assertThat(yaml).contains("git clone");
+    }
+
+    @Test
+    void v45_pipelinePrompts_presentInTemplateYaml() {
+        String yaml = templateYaml();
+        // DEV prompt: branch-scoped clone, spec.md read, push, real-test honesty.
+        assertThat(yaml).contains("git clone --branch {branchName} {repoUrl}");
+        assertThat(yaml).contains("spec/spec.md");
+        assertThat(yaml).contains("git push origin {branchName}");
+        assertThat(yaml).contains("Do NOT claim tests passed");
+        // QA prompt: branch-scoped clone + verdict marker.
+        assertThat(yaml).contains("VERDICT=<PASS|DEFECT|SPEC_GAP>");
     }
 
     @Test

@@ -284,6 +284,28 @@ public class OpenCodeSandboxManager {
         return sb.toString();
     }
 
+    /**
+     * Run a shell command inside the sandbox and return the combined stdout +
+     * result text (same accessor as {@link #diagnose(String)}). Blocking until the
+     * command exits — callers must not launch long-lived processes here.
+     *
+     * @param sandboxId sandbox to execute the command in
+     * @param command   shell command to run
+     * @return the command's combined stdout/result text
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the sandbox is
+     *         unknown or the command execution fails
+     */
+    public String runCommand(String sandboxId, String command) {
+        Sandbox sandbox = requireSandbox(sandboxId);
+        try {
+            var exec = sandbox.commands().run(command);
+            return renderExecution(exec);
+        } catch (Exception e) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Command execution failed in sandbox " + sandboxId + ": " + e.getMessage(), e);
+        }
+    }
+
     /** Best-effort text rendering of a command {@link Execution} (stdout + result text). */
     private String renderExecution(Execution exec) {
         if (exec == null) {

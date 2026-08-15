@@ -260,6 +260,26 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         return sandboxManager.diagnose(inst.sandboxId());
     }
 
+    /**
+     * Run a shell command inside the agent's live sandbox and return its combined
+     * stdout/result text. Read-only from the provider's perspective — never creates
+     * or rebuilds a sandbox.
+     *
+     * @param agentId agent whose sandbox should execute the command
+     * @param command shell command to run
+     * @return the command's combined stdout/result text
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the agent has no
+     *         live sandbox instance
+     */
+    public String runSandboxCommand(UUID agentId, String command) {
+        OpenCodeInstance inst = instances.get(agentId);
+        if (inst == null) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "No OpenCode sandbox instance for agent " + agentId);
+        }
+        return sandboxManager.runCommand(inst.sandboxId(), command);
+    }
+
     @Override
     public void shutdownAgent(UUID agentId) {
         OpenCodeInstance inst = instances.remove(agentId);

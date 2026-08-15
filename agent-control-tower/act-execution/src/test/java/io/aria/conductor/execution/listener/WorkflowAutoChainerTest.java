@@ -6,7 +6,9 @@ import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,6 +43,8 @@ class WorkflowAutoChainerTest {
     @Mock private DoDService dodService;
     @Mock private WorkflowChainRepository chainRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private GitBranchService gitBranchService;
+    @Mock private OpenCodeAdkProvider openCodeAdkProvider;
 
     private WorkflowAutoChainer chainer;
 
@@ -50,7 +54,8 @@ class WorkflowAutoChainerTest {
 
     @BeforeEach
     void setUp() {
-        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher);
+        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher,
+                gitBranchService, openCodeAdkProvider);
         chain = TestDataBuilder.aWorkflowChain()
                 .withName("release-train")
                 .withStatus(WorkflowChain.Status.RUNNING)

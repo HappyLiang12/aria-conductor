@@ -350,6 +350,30 @@ class WorkflowAutoChainerSddTest {
         verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
     }
 
+    // ---- 7c. QA: VERDICT=PASS marker must record the DoD qa review (R8-F2) ----
+
+    @Test
+    void qaCompletion_verdictMarkerPass_recordsDoDQaReview() {
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        // No tool verdict recorded — the marker path must record the qa review itself.
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+        String output = "QA complete.\nVERDICT=PASS\n";
+        when(workflowService.advanceWorkflow(chain.getId(), 0, output)).thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, output));
+
+        verify(dodService).submitStageReview(chain.getId().toString(),
+                "engine", "SDD Engine", true, "verdict from output marker");
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, output);
+        verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
     @Test
     void qaCompletion_verdictMarkerDefect_reschedulesDev() {
         WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
@@ -368,6 +392,27 @@ class WorkflowAutoChainerSddTest {
         verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    @Test
+    void qaCompletion_verdictMarkerDefect_recordsDoDQaReview() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Parser crashes.\nVERDICT=DEFECT"));
+
+        verify(dodService).submitStageReview(chain.getId().toString(),
+                "engine", "SDD Engine", false, "verdict from output marker");
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
     }
 
     @Test

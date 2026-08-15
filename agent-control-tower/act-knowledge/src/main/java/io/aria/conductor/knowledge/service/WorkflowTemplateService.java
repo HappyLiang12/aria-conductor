@@ -175,11 +175,26 @@ public class WorkflowTemplateService {
             dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
         }
 
-        // Link source knowledge item to the newly created chain
+        // Link source knowledge item to the newly created chain and inject the
+        // system-derived branchName (sdd/<chainId>) into any {branchName} placeholders.
+        // branchName is reserved (SYSTEM_PLACEHOLDERS) so callers cannot supply it.
         WorkflowChain newChain = chainRepository.findById(response.getId())
                 .orElse(null);
         if (newChain != null) {
             newChain.setSourceKnowledgeItemId(templateItemId);
+            String branchName = "sdd/" + newChain.getId();
+            List<WorkflowStep> instantiatedSteps = workflowService.deserializeSteps(newChain.getStepsJson());
+            boolean branchInjected = false;
+            for (WorkflowStep step : instantiatedSteps) {
+                String prompt = step.getPromptTemplate();
+                if (prompt != null && prompt.contains("{branchName}")) {
+                    step.setPromptTemplate(prompt.replace("{branchName}", branchName));
+                    branchInjected = true;
+                }
+            }
+            if (branchInjected) {
+                newChain.setStepsJson(workflowService.serializeSteps(instantiatedSteps));
+            }
             chainRepository.save(newChain);
         }
 

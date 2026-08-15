@@ -32,6 +32,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -447,6 +448,39 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     }
 
     // ================================================================
+    //  T4: branchName system placeholder injection
+    // ================================================================
+
+    @Test
+    void instantiateTemplate_injectsBranchNameSystemPlaceholder() {
+        AtomicInteger adkCalls = new AtomicInteger(0);
+        configureMockAdkNoGating(adkCalls);
+
+        UUID templateId = createTemplateWithBranchName();
+        WorkflowResponse response = workflowTemplateService.instantiateTemplate(
+                templateId, Map.of("issueRef", "ISSUE-42"));
+        UUID chainId = response.getId();
+
+        WorkflowChain chain = workflowChainRepository.findById(chainId).orElseThrow();
+        // The system injects the chain-scoped branch into DEV/QA prompts.
+        assertThat(chain.getStepsJson()).contains("sdd/" + chainId);
+        assertThat(chain.getStepsJson()).doesNotContain("{branchName}");
+
+        List<WorkflowStep> steps = workflowService.deserializeSteps(chain.getStepsJson());
+        assertThat(steps.get(1).getPromptTemplate()).contains("sdd/" + chainId);
+        assertThat(steps.get(2).getPromptTemplate()).contains("sdd/" + chainId);
+    }
+
+    @Test
+    void instantiateTemplate_rejectsBranchNameInCallerParams() {
+        UUID templateId = createTemplateWithBranchName();
+        assertThatThrownBy(() -> workflowTemplateService.instantiateTemplate(
+                templateId, Map.of("issueRef", "ISSUE-42", "branchName", "evil/branch")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("branchName");
+    }
+
+    // ================================================================
     //  PRIVATE HELPERS
     // ================================================================
 
@@ -500,6 +534,51 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
                     kind: DEV
                   - agent_id: "%s"
                     prompt_template: "Verify {specRef}"
+                    max_iterations: 3
+                    kind: QA
+                """.formatted(baAgentId.toString(), devAgentId.toString(), qaAgentId.toString());
+
+        knowledgeVersionRepository.save(KnowledgeVersion.builder()
+                .knowledgeItemId(templateId)
+                .version("v1")
+                .status(VersionStatus.APPROVED)
+                .yamlContent(yamlContent)
+                .createdAt(Instant.now())
+                .approvedAt(Instant.now())
+                .build());
+
+        return templateId;
+    }
+
+    /** Create an APPROVED template whose DEV/QA prompts use the {branchName} system placeholder. */
+    private UUID createTemplateWithBranchName() {
+        UUID templateId = UUID.randomUUID();
+
+        knowledgeItemRepository.save(KnowledgeItem.builder()
+                .id(templateId)
+                .name("development-workflow")
+                .type(KnowledgeType.WORKFLOW)
+                .status(KnowledgeStatus.APPROVED)
+                .sensitivity(Sensitivity.INTERNAL)
+                .currentVersion("v1")
+                .escalationCount(0)
+                .createdAt(Instant.now())
+                .build());
+
+        String yamlContent = """
+                schema_version: "1.0"
+                name: development-workflow
+                steps:
+                  - agent_id: "%s"
+                    prompt_template: "Write spec for {issueRef}"
+                    max_iterations: 3
+                    kind: BA
+                  - agent_id: "%s"
+                    prompt_template: "git clone --branch {branchName} /workspace/repo; implement {specRef}"
+                    max_iterations: 5
+                    kind: DEV
+                  - agent_id: "%s"
+                    prompt_template: "git clone --branch {branchName} /workspace/repo; verify {specRef}"
                     max_iterations: 3
                     kind: QA
                 """.formatted(baAgentId.toString(), devAgentId.toString(), qaAgentId.toString());

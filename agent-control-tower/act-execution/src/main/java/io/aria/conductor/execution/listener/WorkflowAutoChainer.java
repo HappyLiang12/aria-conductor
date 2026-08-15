@@ -274,6 +274,7 @@ public class WorkflowAutoChainer {
                             "DEFECT verdict but chain has no DEV step");
                     return;
                 }
+                resetAgentInstance(chain, devIdx);
                 workflowService.rescheduleStep(chain.getId(), devIdx, reason);
             }
             case "SPEC_GAP" -> {
@@ -284,10 +285,40 @@ public class WorkflowAutoChainer {
                             "SPEC_GAP verdict but chain has no BA step");
                     return;
                 }
+                resetAgentInstance(chain, baIdx);
                 workflowService.rescheduleStep(chain.getId(), baIdx, reason);
             }
             default -> workflowService.markStepFailed(chain.getId(), stepIndex,
                     "Unknown QA verdict: " + verdict);
+        }
+    }
+
+    /**
+     * R9-F3: a rescheduled step (DEFECT / SPEC_GAP loop-back) must not reuse the
+     * previous run's sandbox/session — the opencode {@code serve} process may have
+     * died during the long QA gap (sandbox TTL expiry) while the cached healthy
+     * flag still reports true, so the rerun would fail with a stale session
+     * (IOException -> ConnectException). Force-reset the rescheduled step's agent
+     * instance so the rerun prepares a fresh sandbox + session.
+     *
+     * <p>The new run id maps to a fresh session regardless ({@code createSession}
+     * is called per run), but a dead {@code serve} cannot honor that call — hence
+     * the full instance reset. Failures are logged loudly but never crash routing.
+     */
+    private void resetAgentInstance(WorkflowChain chain, int stepIndex) {
+        WorkflowStep step = workflowService.stepAt(chain, stepIndex);
+        UUID agentId = step != null ? step.getAgentId() : null;
+        if (agentId == null) {
+            log.warn("SDD reschedule: step {} for chain {} has no agentId; skipping provider reset",
+                    stepIndex, chain.getId());
+            return;
+        }
+        try {
+            openCodeAdkProvider.resetAgent(agentId);
+            log.info("SDD reschedule: reset opencode instance for agent {} (chain {})", agentId, chain.getId());
+        } catch (Exception e) {
+            log.warn("SDD reschedule: failed to reset provider instance for agent {} (chain {}): {}",
+                    agentId, chain.getId(), e.getMessage());
         }
     }
 

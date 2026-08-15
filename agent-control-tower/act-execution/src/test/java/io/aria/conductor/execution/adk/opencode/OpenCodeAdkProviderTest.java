@@ -319,6 +319,45 @@ class OpenCodeAdkProviderTest {
         verify(httpClient, never()).close();
     }
 
+    // ---- R9-F3 resetAgent: force a fresh sandbox on a rescheduled run ----
+
+    @Test
+    void resetAgent_destroysInstanceAndForcesRebuild() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+
+        provider.resetAgent(agentId);
+
+        verify(sandboxManager).killSandbox("sb-1");
+        assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
+
+        // The next executeTask must build a fresh sandbox instead of reusing the old one.
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-2");
+        when(sandboxManager.getSandboxUrl("sb-2", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        UUID runId = UUID.randomUUID();
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-2");
+        when(httpClient.sendMessage(eq("sess-2"), anyString(), eq("do the task"), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-2", "fresh done", 10, 10));
+
+        TaskResult result = provider.executeTask(agent(agentId), runId, "do the task",
+                new TaskContext(0, Duration.ofMinutes(5)));
+
+        assertThat(result.finalOutput()).isEqualTo("fresh done");
+        verify(sandboxManager).createSandbox(eq(agentId), eq(IMAGE), any());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-2");
+    }
+
+    @Test
+    void resetAgent_noInstance_isNoop() {
+        UUID agentId = UUID.randomUUID();
+
+        provider.resetAgent(agentId);
+
+        verify(sandboxManager, never()).killSandbox(any());
+        assertThat(provider.instancesForTest()).doesNotContainKey(agentId);
+    }
+
     // ---- #1 cancel race: pending abort recorded before session creation ----
 
     @Test

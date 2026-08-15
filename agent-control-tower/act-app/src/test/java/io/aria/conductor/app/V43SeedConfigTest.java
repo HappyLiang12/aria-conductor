@@ -108,6 +108,14 @@ class V43SeedConfigTest {
     }
 
     @Test
+    void v46_qaPrompt_blessesMarkerVerdict() {
+        String yaml = templateYaml();
+        // QA prompt: the VERDICT= marker is blessed as the official sandbox verdict channel.
+        assertThat(yaml).contains("marker in your final output IS the official verdict submission");
+        assertThat(yaml).contains("submit_dod_review tool may not be available");
+    }
+
+    @Test
     void systemConfig_tokenBudgetIs300000() {
         String value = jdbc.queryForObject(
                 "SELECT config_value FROM system_config WHERE config_key = 'circuit.breaker.max.tokens.per.run'",

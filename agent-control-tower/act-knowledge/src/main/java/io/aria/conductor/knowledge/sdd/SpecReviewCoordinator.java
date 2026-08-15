@@ -8,6 +8,7 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
+import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -59,6 +60,7 @@ public class SpecReviewCoordinator {
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
     private final GitBranchService gitBranchService;
+    private final OpenCodeAdkProvider openCodeAdkProvider;
     private final Duration approvalTimeout;
 
     public SpecReviewCoordinator(KnowledgeService knowledgeService,
@@ -70,6 +72,7 @@ public class SpecReviewCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  PlatformTransactionManager transactionManager,
                                  GitBranchService gitBranchService,
+                                 OpenCodeAdkProvider openCodeAdkProvider,
                                  @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.knowledgeService = knowledgeService;
         this.itemRepository = itemRepository;
@@ -80,6 +83,7 @@ public class SpecReviewCoordinator {
         this.eventPublisher = eventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.gitBranchService = gitBranchService;
+        this.openCodeAdkProvider = openCodeAdkProvider;
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
     }
 
@@ -100,7 +104,7 @@ public class SpecReviewCoordinator {
         }
 
         String specName = specName(chainId);
-        String specContent = cleanSpecContent(event.getFinalOutput());
+        String specContent = resolveSpecContent(chainId, event);
         UUID specItemId = upsertSpecKnowledge(specName, specContent);
 
         Approval approval = Approval.builder()
@@ -261,6 +265,50 @@ public class SpecReviewCoordinator {
         eventPublisher.publishEvent(new ApprovalRequestedEvent(
                 this, saved.getId(), saved.getRunId(), null, "SPEC_REVIEW"));
         return saved;
+    }
+
+    /**
+     * Resolve the spec content for a BA completion: prefer the full spec file the BA
+     * wrote to its sandbox ({@code /workspace/spec.md}); fall back to the BA run's
+     * finalOutput when the sandbox file is unavailable (langchain path, or a BA that
+     * did not write the file). Either way the content is cleaned before storage.
+     */
+    private String resolveSpecContent(UUID chainId, BaStepCompletedEvent event) {
+        String sandboxSpec = readSpecFromSandbox(chainId, event);
+        if (sandboxSpec != null && !sandboxSpec.isBlank()) {
+            return cleanSpecContent(sandboxSpec);
+        }
+        return cleanSpecContent(event.getFinalOutput());
+    }
+
+    /** Read the full spec the BA wrote to its sandbox, or null when unavailable. */
+    private String readSpecFromSandbox(UUID chainId, BaStepCompletedEvent event) {
+        UUID baAgentId = resolveBaAgentId(chainId, event);
+        if (baAgentId == null) {
+            return null;
+        }
+        try {
+            return openCodeAdkProvider.runSandboxCommand(baAgentId, "cat /workspace/spec.md");
+        } catch (Exception e) {
+            log.warn("Cannot cat /workspace/spec.md in BA sandbox for chain {}: {}",
+                    chainId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Resolve the BA step's agent id from the chain steps, or null when unavailable. */
+    private UUID resolveBaAgentId(UUID chainId, BaStepCompletedEvent event) {
+        try {
+            WorkflowChain chain = chainRepository.findById(chainId).orElse(null);
+            if (chain == null) {
+                return null;
+            }
+            WorkflowStep baStep = workflowService.stepAt(chain, event.getBaStepIndex());
+            return baStep != null ? baStep.getAgentId() : null;
+        } catch (Exception e) {
+            log.warn("Cannot resolve BA agent for chain {}: {}", chainId, e.getMessage());
+            return null;
+        }
     }
 
     private UUID upsertSpecKnowledge(String name, String content) {

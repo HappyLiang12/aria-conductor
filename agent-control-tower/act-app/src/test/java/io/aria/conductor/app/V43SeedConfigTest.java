@@ -125,6 +125,15 @@ class V43SeedConfigTest {
     }
 
     @Test
+    void v48_baPrompt_writesFullSpecToSandboxFile() {
+        String yaml = templateYaml();
+        // BA prompt: write the FULL spec to /workspace/spec.md so the backend can
+        // read it; finalOutput carries only a short summary plus the SPEC_ID marker.
+        assertThat(yaml).contains("/workspace/spec.md");
+        assertThat(yaml).contains("short summary alone is NOT enough");
+    }
+
+    @Test
     void systemConfig_tokenBudgetIs300000() {
         String value = jdbc.queryForObject(
                 "SELECT config_value FROM system_config WHERE config_key = 'circuit.breaker.max.tokens.per.run'",

@@ -299,6 +299,29 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         log.info("OpenCode agent {} shut down (sandbox {})", agentId, inst.sandboxId());
     }
 
+    /**
+     * Force-reset an agent's runtime so the next run rebuilds a fresh sandbox +
+     * session (R9-F3).
+     *
+     * <p>Used when a step is rescheduled after a long gap (DEFECT / SPEC_GAP
+     * loop-back). The sandbox's {@code opencode serve} process may have died during
+     * that gap (sandbox TTL expires ~30 min after the last renewal, and the
+     * renewal heartbeat only runs while a task is in-flight), while the cached
+     * {@code healthy} flag still reports true — so the fresh-probe reuse path
+     * cannot be relied on to catch a serve that died between probes. Destroying
+     * the cached instance forces {@link #getOrPrepareInstance} down the
+     * destroy-and-rebuild path.
+     *
+     * <p>Reuses {@link #shutdownAgent} internals (kill sandbox + close owned
+     * client + remove instance) and additionally clears any cached prepare future
+     * so the next run becomes the owner of a fresh preparation. No-op when the
+     * agent has no cached instance.
+     */
+    public void resetAgent(UUID agentId) {
+        preparing.remove(agentId);
+        shutdownAgent(agentId);
+    }
+
     @PreDestroy
     @Override
     public void shutdownAll() {

@@ -230,6 +230,30 @@ class WorkflowAutoChainerSddTest {
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
     }
 
+    // ---- 5d. QA: verdict DEFECT -> rescheduled Dev step's provider instance reset (R9-F3) ----
+
+    @Test
+    void qaCompletion_verdictDefect_resetsDevProviderInstance() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review("DEFECT", "parser crashes on empty input"));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
+
+        // The rescheduled Dev agent's opencode instance must be reset so the rerun
+        // prepares a fresh sandbox + session instead of reusing a stale one.
+        verify(openCodeAdkProvider).resetAgent(devStep.getAgentId());
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "parser crashes on empty input");
+    }
+
     // ---- 5b. QA: verdict DEFECT -> QA step must be COMPLETED, not left RUNNING ----
 
     @Test

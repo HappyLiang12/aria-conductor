@@ -22,7 +22,7 @@ import java.util.regex.Pattern;
 public class WorkflowTemplateConverter {
 
     /** Placeholder names reserved for the system — never user-substitutable or exposed. */
-    private static final Set<String> SYSTEM_PLACEHOLDERS = Set.of("previousOutput", "specRef");
+    private static final Set<String> SYSTEM_PLACEHOLDERS = Set.of("previousOutput", "specRef", "branchName");
 
     /** Matches {@code {paramName}} placeholders but NOT system placeholders. */
     private static final Pattern PARAM_PATTERN =
@@ -208,8 +208,8 @@ public class WorkflowTemplateConverter {
 
     /**
      * Replace {@code {key}} placeholders in the template with values from the map.
-     * System placeholders such as {@code {previousOutput}} and {@code {specRef}}
-     * are left untouched (resolved at runtime by the framework).
+     * System placeholders such as {@code {previousOutput}}, {@code {specRef}} and
+     * {@code {branchName}} are left untouched (resolved at runtime by the framework).
      */
     public String substituteParameters(String template, Map<String, String> params) {
         if (template == null || params == null || params.isEmpty()) return template;
@@ -268,7 +268,7 @@ public class WorkflowTemplateConverter {
      * Scan all step prompt templates for {@code {paramName}} patterns.
      *
      * @return a sorted set of unique parameter names (excludes system placeholders
-     *         such as {@code previousOutput} and {@code specRef}).
+     *         such as {@code previousOutput}, {@code specRef} and {@code branchName}).
      */
     public Set<String> extractParameterNames(List<WorkflowStep> steps) {
         if (steps == null || steps.isEmpty()) return Collections.emptySet();

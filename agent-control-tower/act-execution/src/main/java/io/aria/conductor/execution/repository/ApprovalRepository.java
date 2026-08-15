@@ -14,4 +14,5 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
     List<Approval> findByStatus(ApprovalStatus status);
     List<Approval> findByRunId(UUID runId);
     List<Approval> findByStatusAndExpiresAtBefore(ApprovalStatus status, Instant expiresAtBefore);
+    List<Approval> findByStatusAndApprovalType(ApprovalStatus status, Approval.ApprovalType type);
 }

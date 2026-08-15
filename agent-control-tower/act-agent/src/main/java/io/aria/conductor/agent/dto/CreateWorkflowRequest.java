@@ -1,5 +1,6 @@
 package io.aria.conductor.agent.dto;
 
+import io.aria.conductor.common.model.WorkflowStep;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -23,6 +24,13 @@ public class CreateWorkflowRequest {
     @Valid
     private List<StepDef> steps;
 
+    /**
+     * Set by the governed {@code instantiate_template} path to permit BA/DEV/QA step kinds.
+     * Direct REST/tool callers leave this {@code false}, so {@code createAndStart} rejects SDD
+     * kinds and forces the SPEC_REVIEW gate.
+     */
+    private boolean allowSddSteps;
+
     @Data
     @Builder
     @NoArgsConstructor
@@ -33,5 +41,6 @@ public class CreateWorkflowRequest {
         private String promptTemplate;
         @Builder.Default
         private int maxIterations = 3;
+        private WorkflowStep.StepKind kind;
     }
 }

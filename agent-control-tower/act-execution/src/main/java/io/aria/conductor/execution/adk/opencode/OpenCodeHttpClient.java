@@ -39,7 +39,11 @@ import java.util.concurrent.Executors;
 @Slf4j
 public class OpenCodeHttpClient implements AutoCloseable {
 
-    /** Default request timeout applied to all calls. */
+    /**
+     * Default request timeout applied to non-task paths (abort / health probes).
+     * Task paths ({@link #sendMessage(String, String, String, Duration)}) use the
+     * per-request deadline derived from the run budget instead of this default.
+     */
     public static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofMinutes(5);
 
     private final String baseUrl;
@@ -61,6 +65,9 @@ public class OpenCodeHttpClient implements AutoCloseable {
         this.baseUrl = stripTrailingSlash(baseUrl);
         this.requestTimeout = requestTimeout != null ? requestTimeout : DEFAULT_REQUEST_TIMEOUT;
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        // Keep-alive is governed by the JDK's jdk.httpclient.keepalive.timeout
+        // system property (default 20 min) — HttpClient.Builder has no
+        // per-client keepAlive(...) method.
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .executor(executor)
@@ -148,7 +155,7 @@ public class OpenCodeHttpClient implements AutoCloseable {
      * @return {@code true} if the server acknowledged the abort
      */
     public boolean abortSession(String sessionId) {
-        HttpResponse<String> resp = send("POST", "/session/" + sessionId + "/abort", "", requestTimeout);
+        HttpResponse<String> resp = sendNoRetry("POST", "/session/" + sessionId + "/abort", "", requestTimeout);
         if (resp.statusCode() / 100 != 2) {
             throw providerError("POST /session/" + sessionId + "/abort returned status " + resp.statusCode());
         }
@@ -167,7 +174,7 @@ public class OpenCodeHttpClient implements AutoCloseable {
      */
     public boolean isHealthy() {
         try {
-            HttpResponse<String> resp = send("GET", "/global/health", null, Duration.ofSeconds(3));
+            HttpResponse<String> resp = sendNoRetry("GET", "/global/health", null, Duration.ofSeconds(3));
             if (resp.statusCode() / 100 != 2) {
                 return false;
             }
@@ -181,7 +188,69 @@ public class OpenCodeHttpClient implements AutoCloseable {
 
     // ---- internal helpers ----
 
+    /**
+     * Send a request with retry on transient I/O failures.
+     *
+     * <p>Retries (up to 2, backoff 1s then 4s) only on {@link IOException}s that
+     * are NOT {@link HttpTimeoutException}: a connection reset is transient and
+     * worth retrying, but a timeout means the server is too slow to answer and
+     * must surface immediately as {@link TaskExecutionException.Cause#TIMEOUT}.
+     * Non-2xx responses are returned as-is (no retry).
+     */
     private HttpResponse<String> send(String method, String path, String jsonBody, Duration timeout) {
+        return sendWithRetry(method, path, jsonBody, timeout);
+    }
+
+    /**
+     * Retry wrapper over {@link #sendOnce} — see {@link #send} for the policy.
+     */
+    private HttpResponse<String> sendWithRetry(String method, String path, String jsonBody, Duration timeout) {
+        final int maxRetries = 2;
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return sendOnce(method, path, jsonBody, timeout);
+            } catch (HttpTimeoutException e) {
+                // HttpTimeoutException extends IOException — catch it FIRST so a
+                // timeout is translated to TIMEOUT without retrying.
+                throw timeoutError(method, path, timeout, e);
+            } catch (IOException e) {
+                if (attempt >= maxRetries) {
+                    throw providerError(method, path, e);
+                }
+                log.warn("OpenCode HTTP {} {} failed with {} - retrying attempt {}/{}",
+                        method, path, e.getClass().getSimpleName(), attempt + 1, maxRetries);
+                try {
+                    Thread.sleep(attempt == 0 ? 1_000L : 4_000L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw abortedError(method, path, ie);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw abortedError(method, path, e);
+            }
+        }
+    }
+
+    /**
+     * Single-shot send with no retry — used by abort / health probes where a
+     * dead sandbox must fail fast instead of amplifying latency via backoff.
+     */
+    private HttpResponse<String> sendNoRetry(String method, String path, String jsonBody, Duration timeout) {
+        try {
+            return sendOnce(method, path, jsonBody, timeout);
+        } catch (HttpTimeoutException e) {
+            throw timeoutError(method, path, timeout, e);
+        } catch (IOException e) {
+            throw providerError(method, path, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw abortedError(method, path, e);
+        }
+    }
+
+    private HttpResponse<String> sendOnce(String method, String path, String jsonBody, Duration timeout)
+            throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
                 .timeout(timeout)
@@ -194,19 +263,22 @@ public class OpenCodeHttpClient implements AutoCloseable {
             case "GET" -> builder.GET();
             default -> throw new IllegalArgumentException("Unsupported HTTP method " + method);
         }
-        try {
-            return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-        } catch (HttpTimeoutException e) {
-            throw new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
-                    "OpenCode request timed out after " + timeout.toMillis() + "ms: " + method + " " + path, e);
-        } catch (IOException e) {
-            throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
-                    "OpenCode request failed: " + method + " " + path + " — " + e.getMessage(), e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
-                    "OpenCode request interrupted: " + method + " " + path, e);
-        }
+        return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private TaskExecutionException timeoutError(String method, String path, Duration timeout, HttpTimeoutException e) {
+        return new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
+                "OpenCode request timed out after " + timeout.toMillis() + "ms: " + method + " " + path, e);
+    }
+
+    private TaskExecutionException providerError(String method, String path, IOException e) {
+        return new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
+                "OpenCode request failed: " + method + " " + path + " — " + e.getMessage(), e);
+    }
+
+    private TaskExecutionException abortedError(String method, String path, InterruptedException e) {
+        return new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                "OpenCode request interrupted: " + method + " " + path, e);
     }
 
     private MessageResponse parseMessageResponse(String body) {

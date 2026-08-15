@@ -23,6 +23,8 @@ import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
+import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.llm.LlmToolCall;
@@ -43,7 +45,9 @@ import io.aria.conductor.execution.tool.WorkspaceManager;
 import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
@@ -92,6 +96,8 @@ public class AgentLoopEngine {
     private final ToolSteeringGuard toolSteeringGuard;
     private final ApprovalRepository approvalRepository;
     private final OpenCodeProperties openCodeProperties;
+    private final DoDService dodService;
+    private final KanbanService kanbanService;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -117,7 +123,9 @@ public class AgentLoopEngine {
                            HarnessProfileService harnessProfileService,
                            ToolSteeringGuard toolSteeringGuard,
                            ApprovalRepository approvalRepository,
-                           OpenCodeProperties openCodeProperties) {
+                           OpenCodeProperties openCodeProperties,
+                           DoDService dodService,
+                           KanbanService kanbanService) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -140,6 +148,8 @@ public class AgentLoopEngine {
         this.toolSteeringGuard = toolSteeringGuard;
         this.approvalRepository = approvalRepository;
         this.openCodeProperties = openCodeProperties;
+        this.dodService = dodService;
+        this.kanbanService = kanbanService;
     }
 
     /**
@@ -321,6 +331,40 @@ public class AgentLoopEngine {
     }
 
     /**
+     * Startup recovery: mark runs left in RUNNING or INITIALIZING by a previous backend
+     * process (JVM crash/restart) as FAILED and publish {@link RunCompletedEvent} so
+     * downstream listeners (workflow chainer, kanban, WS broadcast) reconcile instead of
+     * leaving chains/boards stuck. Runs are saved individually so one failure cannot roll
+     * back the recovery of the others.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        recoverOrphanedRuns();
+    }
+
+    /** Extracted so tests can invoke recovery without firing Spring lifecycle events. */
+    void recoverOrphanedRuns() {
+        List<Run> orphaned = runRepository.findByStatusIn(
+                List.of(RunStatus.RUNNING, RunStatus.INITIALIZING));
+        if (orphaned.isEmpty()) {
+            return;
+        }
+        log.info("Recovering {} orphaned run(s) left by backend restart", orphaned.size());
+        for (Run run : orphaned) {
+            try {
+                run.setStatus(RunStatus.FAILED);
+                run.setErrorMessage("Run orphaned by backend restart");
+                run.setCompletedAt(Instant.now());
+                runRepository.save(run);
+                eventPublisher.publishEvent(new RunCompletedEvent(
+                        this, run.getId(), run.getAgentId(), RunStatus.FAILED, null));
+            } catch (Exception e) {
+                log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
      * Execute a workflow directly from a YAML template, bypassing Aria LLM orchestration.
      * Each step creates a Run that executes sequentially on a virtual thread.
      * <p>
@@ -363,6 +407,7 @@ public class AgentLoopEngine {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations())
+                        .kind(s.getKind() != null ? s.getKind() : WorkflowStep.StepKind.GENERIC)
                         .build())
                 .toList();
 
@@ -374,6 +419,17 @@ public class AgentLoopEngine {
         // Delegate to WorkflowService which handles chain creation + first step start.
         // WorkflowAutoChainer will advance subsequent steps when runs complete.
         WorkflowResponse response = workflowService.createAndStart(request);
+
+        // SDD wiring for YAML-defined BA/DEV/QA chains (mirrors instantiateTemplate):
+        // custom DoD stages. Per-run kanban items are created exclusively by
+        // RunKanbanAutoCreator — no chain-level kanban item here.
+        boolean isSdd = steps.stream().anyMatch(s ->
+                s.getKind() == WorkflowStep.StepKind.BA
+                || s.getKind() == WorkflowStep.StepKind.DEV
+                || s.getKind() == WorkflowStep.StepKind.QA);
+        if (isSdd) {
+            dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
+        }
 
         // Load and return the full chain entity
         return workflowChainRepository.findById(response.getId())
@@ -432,10 +488,25 @@ public class AgentLoopEngine {
                 step.setMaxIterations(3);
             }
 
+            // SDD step kind (case-normalised; unknown/missing -> GENERIC).
+            Object kindVal = raw.get("kind");
+            step.setKind(parseStepKind(kindVal != null ? kindVal.toString() : null));
+
             step.setStatus(WorkflowStep.Status.PENDING);
             result.add(step);
         }
         return result;
+    }
+
+    /** Parse a step kind with case normalisation; null/unknown -> GENERIC. */
+    private static WorkflowStep.StepKind parseStepKind(String raw) {
+        if (raw == null || raw.isBlank()) return WorkflowStep.StepKind.GENERIC;
+        try {
+            return WorkflowStep.StepKind.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown workflow step kind '{}', defaulting to GENERIC", raw);
+            return WorkflowStep.StepKind.GENERIC;
+        }
     }
 
     /**

@@ -1,11 +1,13 @@
 package io.aria.conductor.knowledge.controller;
 
+import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.common.model.VersionStatus;
+import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.dto.KnowledgeStatsResponse;
@@ -14,6 +16,7 @@ import io.aria.conductor.knowledge.dto.PromoteKnowledgeRequest;
 import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
 import io.aria.conductor.knowledge.dto.UpdateKnowledgeRequest;
 import io.aria.conductor.knowledge.service.KnowledgeService;
+import io.aria.conductor.knowledge.service.WorkflowTemplateService;
 import io.aria.conductor.test.WebMvcTestBase;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -32,6 +35,8 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -48,7 +53,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class KnowledgeControllerTest extends WebMvcTestBase {
 
     private final KnowledgeService knowledgeService = mock(KnowledgeService.class);
-    private final MockMvc mvc = mockMvcFor(new KnowledgeController(knowledgeService));
+    private final WorkflowTemplateService workflowTemplateService = mock(WorkflowTemplateService.class);
+    private final MockMvc mvc = mockMvcFor(new KnowledgeController(knowledgeService, workflowTemplateService));
 
     private static KnowledgeItemResponse.KnowledgeItemResponseBuilder itemResponse(UUID id) {
         return KnowledgeItemResponse.builder()
@@ -542,6 +548,38 @@ class KnowledgeControllerTest extends WebMvcTestBase {
     // -----------------------------------------------------------------
     // GET /api/v1/knowledge/stats
     // -----------------------------------------------------------------
+
+    @Test
+    void instantiateWorkflow_delegatesWithParameters() throws Exception {
+        UUID id = UUID.randomUUID();
+        WorkflowResponse response = WorkflowResponse.builder()
+                .id(UUID.randomUUID())
+                .name("development-workflow-instance")
+                .status(WorkflowChain.Status.RUNNING)
+                .build();
+        when(workflowTemplateService.instantiateTemplate(eq(id), anyMap()))
+                .thenReturn(response);
+
+        mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
+                        .contentType("application/json")
+                        .content("{\"parameters\":{\"issueRef\":\"#1\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(response.getId().toString()))
+                .andExpect(jsonPath("$.name").value("development-workflow-instance"));
+
+        verify(workflowTemplateService).instantiateTemplate(eq(id), argThat(p -> "#1".equals(p.get("issueRef"))));
+    }
+
+    @Test
+    void instantiateWorkflow_missingAgent_returns400() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(workflowTemplateService.instantiateTemplate(eq(id), anyMap()))
+                .thenThrow(new IllegalArgumentException("Cannot resolve agent for YAML step: role='ba'"));
+        mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
+                        .contentType("application/json")
+                        .content("{\"parameters\":{}}"))
+                .andExpect(status().isBadRequest());
+    }
 
     @Test
     void getStats_returnsAggregatedCounts() throws Exception {

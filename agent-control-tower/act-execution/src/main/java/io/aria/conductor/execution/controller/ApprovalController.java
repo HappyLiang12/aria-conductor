@@ -8,6 +8,8 @@ import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -53,22 +55,35 @@ public class ApprovalController {
             Instant requestedAt,
             Instant decidedAt,
             Instant expiresAt,
+            String approvalType,
+            String content,
+            String contentKind,
+            UUID knowledgeItemId,
             String toolName,
             String arguments,
             String riskTier) {}
 
+    /**
+     * List approvals, optionally filtered by {@link ApprovalStatus}. With no status the endpoint
+     * returns a bounded, most-recent-first page (F21) instead of an unbounded {@code findAll()},
+     * so the approvals/history UI keeps working against a large table.
+     */
     @GetMapping
-    public ResponseEntity<List<ApprovalDetail>> listPending() {
-        List<Approval> pending = approvalRepository.findByStatus(ApprovalStatus.PENDING);
+    public ResponseEntity<List<ApprovalDetail>> listApprovals(
+            @RequestParam(required = false) ApprovalStatus status) {
+        List<Approval> approvals = status != null
+                ? approvalRepository.findByStatus(status)
+                : approvalRepository.findAll(
+                        PageRequest.of(0, 200, Sort.by("requestedAt").descending())).getContent();
         // Batch-load tool calls to avoid N+1; risk tier comes from the cached ToolRiskResolver.
-        List<UUID> toolCallIds = pending.stream()
+        List<UUID> toolCallIds = approvals.stream()
                 .map(Approval::getToolCallId)
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
         Map<UUID, ToolCall> toolCalls = toolCallRepository.findAllById(toolCallIds).stream()
                 .collect(Collectors.toMap(ToolCall::getId, Function.identity(), (a, b) -> a));
-        List<ApprovalDetail> details = pending.stream()
+        List<ApprovalDetail> details = approvals.stream()
                 .map(a -> toDetail(a, toolCalls.get(a.getToolCallId())))
                 .toList();
         return ResponseEntity.ok(details);
@@ -112,6 +127,10 @@ public class ApprovalController {
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
+                a.getApprovalType() != null ? a.getApprovalType().name() : "TOOL_CALL",
+                a.getContent(),
+                a.getContentKind() != null ? a.getContentKind().name() : null,
+                a.getKnowledgeItemId(),
                 toolName, tc != null ? tc.getArguments() : null, riskTier);
     }
 

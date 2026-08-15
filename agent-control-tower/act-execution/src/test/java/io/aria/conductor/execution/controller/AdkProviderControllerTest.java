@@ -3,15 +3,19 @@ package io.aria.conductor.execution.controller;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.AdkSystemProperties;
+import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
@@ -31,6 +35,7 @@ class AdkProviderControllerTest {
     @Mock AdkSystemProperties systemProperties;
     @Mock AdkProvider openCode;
     @Mock AdkProvider langChain;
+    @Mock OpenCodeAdkProvider openCodeProvider;
 
     @InjectMocks
     AdkProviderController controller;
@@ -119,6 +124,43 @@ class AdkProviderControllerTest {
         when(registry.getProvider("nope")).thenReturn(null);
 
         ResponseEntity<Map<String, Object>> response = controller.getProviderHealth("nope");
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+    }
+
+    // ---- R3-F2 sandbox diagnosis endpoint ----
+
+    @Test
+    void diagnosis_returnsTextPlainDiagnosis() {
+        UUID agentId = UUID.randomUUID();
+        when(registry.getProvider("opencode")).thenReturn(openCodeProvider);
+        when(openCodeProvider.diagnoseSandbox(agentId)).thenReturn("== metrics ==\nok");
+
+        ResponseEntity<Object> response = controller.diagnoseOpenCodeSandbox(agentId);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.TEXT_PLAIN);
+        assertThat(response.getBody()).isEqualTo("== metrics ==\nok");
+    }
+
+    @Test
+    void diagnosis_returnsNotFoundForUnknownProvider() {
+        when(registry.getProvider("opencode")).thenReturn(null);
+
+        ResponseEntity<Object> response = controller.diagnoseOpenCodeSandbox(UUID.randomUUID());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
+    void diagnosis_returnsNotFoundWhenNoSandboxForAgent() {
+        UUID agentId = UUID.randomUUID();
+        when(registry.getProvider("opencode")).thenReturn(openCodeProvider);
+        when(openCodeProvider.diagnoseSandbox(agentId))
+                .thenThrow(new TaskExecutionException(
+                        TaskExecutionException.Cause.SANDBOX_UNAVAILABLE, "no sandbox"));
+
+        ResponseEntity<Object> response = controller.diagnoseOpenCodeSandbox(agentId);
 
         assertThat(response.getStatusCode().value()).isEqualTo(404);
     }

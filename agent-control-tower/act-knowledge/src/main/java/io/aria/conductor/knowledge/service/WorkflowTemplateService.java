@@ -11,6 +11,10 @@ import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.KnowledgeVersion;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
+import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
+import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -22,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -39,19 +44,25 @@ public class WorkflowTemplateService {
     private final WorkflowService workflowService;
     private final WorkflowChainRepository chainRepository;
     private final KnowledgeService knowledgeService;
+    private final DoDService dodService;
+    private final KanbanService kanbanService;
 
     public WorkflowTemplateService(KnowledgeItemRepository itemRepository,
                                    KnowledgeVersionRepository versionRepository,
                                    WorkflowTemplateConverter templateConverter,
                                    WorkflowService workflowService,
                                    WorkflowChainRepository chainRepository,
-                                   KnowledgeService knowledgeService) {
+                                   KnowledgeService knowledgeService,
+                                   DoDService dodService,
+                                   KanbanService kanbanService) {
         this.itemRepository = itemRepository;
         this.versionRepository = versionRepository;
         this.templateConverter = templateConverter;
         this.workflowService = workflowService;
         this.chainRepository = chainRepository;
         this.knowledgeService = knowledgeService;
+        this.dodService = dodService;
+        this.kanbanService = kanbanService;
     }
 
     /**
@@ -114,6 +125,18 @@ public class WorkflowTemplateService {
         // Parse YAML to steps
         List<WorkflowStep> steps = templateConverter.yamlToWorkflowSteps(yamlContent);
 
+        // Validate that all parameter keys are declared in the template
+        if (parameters != null) {
+            Set<String> declaredParams = templateConverter.extractParameterNames(steps);
+            for (String key : parameters.keySet()) {
+                if (!declaredParams.contains(key)) {
+                    throw new IllegalArgumentException(
+                            "Unknown parameter '" + key + "': not declared in template " + templateItemId
+                            + ". Declared: " + declaredParams);
+                }
+            }
+        }
+
         // Substitute parameters
         if (parameters != null) {
             for (WorkflowStep step : steps) {
@@ -128,6 +151,7 @@ public class WorkflowTemplateService {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations())
+                        .kind(s.getKind())
                         .build())
                 .toList();
 
@@ -135,15 +159,49 @@ public class WorkflowTemplateService {
                 .name(item.getName() + "-instance")
                 .description("Instantiated from template: " + item.getName())
                 .steps(stepDefs)
+                .allowSddSteps(true)
                 .build();
 
         WorkflowResponse response = workflowService.createAndStart(request);
 
-        // Link source knowledge item to the newly created chain
+        // SDD wiring: templates carrying BA/DEV/QA step kinds initialise a DoD
+        // record (custom stages [dev, qa], taskId = chainId) and a chain-level
+        // kanban item without a linked run, so RunKanbanAutoCreator does not
+        // auto-transition it.
+        boolean isSdd = steps.stream().anyMatch(s ->
+                s.getKind() == WorkflowStep.StepKind.BA
+                        || s.getKind() == WorkflowStep.StepKind.DEV
+                        || s.getKind() == WorkflowStep.StepKind.QA);
+        if (isSdd) {
+            dodService.init(response.getId().toString(), "SDD", List.of("dev", "qa"));
+        }
+
+        // Link source knowledge item to the newly created chain and inject the
+        // system-derived branchName (sdd/<chainId>) into any {branchName} placeholders.
+        // branchName is reserved (SYSTEM_PLACEHOLDERS) so callers cannot supply it.
         WorkflowChain newChain = chainRepository.findById(response.getId())
                 .orElse(null);
         if (newChain != null) {
             newChain.setSourceKnowledgeItemId(templateItemId);
+            // Persist the instantiation parameters (e.g. repoUrl) on the chain so the
+            // spec-approval coordinator and Dev-completion fallback can resolve the
+            // target repository without re-querying the template (T5 D-A).
+            if (parameters != null && !parameters.isEmpty()) {
+                newChain.setTemplateParams(GitHandoffMetadata.toJson(parameters));
+            }
+            String branchName = "sdd/" + newChain.getId();
+            List<WorkflowStep> instantiatedSteps = workflowService.deserializeSteps(newChain.getStepsJson());
+            boolean branchInjected = false;
+            for (WorkflowStep step : instantiatedSteps) {
+                String prompt = step.getPromptTemplate();
+                if (prompt != null && prompt.contains("{branchName}")) {
+                    step.setPromptTemplate(prompt.replace("{branchName}", branchName));
+                    branchInjected = true;
+                }
+            }
+            if (branchInjected) {
+                newChain.setStepsJson(workflowService.serializeSteps(instantiatedSteps));
+            }
             chainRepository.save(newChain);
         }
 

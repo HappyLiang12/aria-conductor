@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -251,6 +252,26 @@ class ApprovalGateTest {
         // Already-decided approval is left completely untouched.
         assertThat(alreadyDecided.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
         assertThat(alreadyDecided.getReason()).isEqualTo("already approved");
+    }
+
+    @Test
+    void cancelAllPendingForRun_leavesSpecReviewApprovalsAlive() {
+        RunContext ctx = ctx();
+        Approval specReview = TestDataBuilder.anApproval()
+                .withRunId(ctx.getRunId())
+                .withApprovalType(Approval.ApprovalType.SPEC_REVIEW)
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("Spec ready for review")
+                .build();
+        approvalStore.put(specReview.getId(), specReview);
+        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(specReview));
+
+        gate.cancelAllPendingForRun(ctx.getRunId());
+
+        // SPEC_REVIEW approvals are governed by the spec-approval flow, not the run lifecycle.
+        assertThat(specReview.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(specReview.getReason()).isEqualTo("Spec ready for review");
+        verify(approvalRepository, never()).save(any());
     }
 
     @Test

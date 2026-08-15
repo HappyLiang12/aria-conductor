@@ -2,16 +2,27 @@ package io.aria.conductor.execution.adk.opencode;
 
 import com.alibaba.opensandbox.sandbox.Sandbox;
 import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionLogs;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxMetrics;
+import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxRenewResponse;
+import com.alibaba.opensandbox.sandbox.domain.services.Commands;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -208,6 +219,184 @@ class OpenCodeSandboxManagerTest {
             String url = manager.getSandboxUrl("sb-1", 4096);
 
             assertThat(url).isEqualTo("http://127.0.0.1:40369/proxy/4096");
+        }
+    }
+
+    @Test
+    void renewSandbox_delegatesToSdk() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+            when(sandbox.renew(any(Duration.class)))
+                    .thenReturn(new SandboxRenewResponse(OffsetDateTime.now().plusMinutes(30)));
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+            manager.renewSandbox("sb-1", Duration.ofMinutes(30));
+
+            verify(sandbox).renew(Duration.ofMinutes(30));
+        }
+    }
+
+    @Test
+    void renewSandbox_unknownId_throws() {
+        OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+
+        assertThatThrownBy(() -> manager.renewSandbox("missing", Duration.ofMinutes(30)))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+    }
+
+    @Test
+    void diagnose_returnsMetricsAndProcessSections() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            when(sandbox.getMetrics()).thenReturn(new SandboxMetrics(2f, 30f, 2048f, 512f, 123L));
+
+            Commands commands = mock(Commands.class);
+            when(sandbox.commands()).thenReturn(commands);
+            Execution exec = mock(Execution.class);
+            when(commands.run(anyString())).thenReturn(exec);
+            when(exec.getLogs()).thenReturn(new ExecutionLogs(
+                    List.of(new OutputMessage("PID CMD\n", 0L, false)), List.of()));
+            when(exec.getResult()).thenReturn(List.of());
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+
+            String diagnosis = manager.diagnose("sb-1");
+
+            assertThat(diagnosis)
+                    .contains("== metrics ==")
+                    .contains("\"cpuCount\"")
+                    .contains("== processes ==")
+                    .contains("PID CMD")
+                    .contains("== opencode log tail ==");
+        }
+    }
+
+    @Test
+    void diagnose_survivesSectionFailures() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            // metrics section fails — the other sections must still be collected
+            // and the failure surfaced with an ERROR marker.
+            when(sandbox.getMetrics()).thenThrow(new RuntimeException("metrics down"));
+
+            Commands commands = mock(Commands.class);
+            when(sandbox.commands()).thenReturn(commands);
+            Execution exec = mock(Execution.class);
+            when(commands.run(anyString())).thenReturn(exec);
+            when(exec.getLogs()).thenReturn(null);
+            when(exec.getResult()).thenReturn(List.of());
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+
+            String diagnosis = manager.diagnose("sb-1");
+
+            assertThat(diagnosis)
+                    .contains("== metrics == ERROR metrics down")
+                    .contains("== processes")
+                    .contains("== opencode log tail ==");
+        }
+    }
+
+    @Test
+    void diagnose_processFallback_readsProcWhenPsMissing() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            when(sandbox.getMetrics()).thenReturn(new SandboxMetrics(2f, 30f, 2048f, 512f, 123L));
+
+            Commands commands = mock(Commands.class);
+            when(sandbox.commands()).thenReturn(commands);
+            // ps is missing — the manager must fall back to a /proc scan
+            when(commands.run("ps aux 2>/dev/null | head -30 || ps -ef | head -30"))
+                    .thenThrow(new RuntimeException("ps: command not found"));
+            Execution procExec = mock(Execution.class);
+            when(procExec.getLogs()).thenReturn(new ExecutionLogs(
+                    List.of(new OutputMessage("1\n2\n3\n", 0L, false)), List.of()));
+            when(procExec.getResult()).thenReturn(List.of());
+            when(commands.run("ls /proc | grep -E '^[0-9]+$' | head -30")).thenReturn(procExec);
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+
+            String diagnosis = manager.diagnose("sb-1");
+
+            assertThat(diagnosis)
+                    .contains("== processes (proc fallback) ==")
+                    .contains("1\n2\n3");
+        }
+    }
+
+    @Test
+    void diagnose_metricsSection_isJson() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            when(sandbox.getMetrics()).thenReturn(new SandboxMetrics(2f, 30f, 2048f, 512f, 123L));
+
+            Commands commands = mock(Commands.class);
+            when(sandbox.commands()).thenReturn(commands);
+            when(commands.run(anyString())).thenReturn(mock(Execution.class));
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8090", null);
+            manager.createSandbox(agentId, "test-image", null);
+
+            String diagnosis = manager.diagnose("sb-1");
+
+            assertThat(diagnosis)
+                    .contains("\"cpuCount\"")
+                    .contains("\"memoryUsedInMiB\"");
         }
     }
 

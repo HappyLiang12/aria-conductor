@@ -29,6 +29,8 @@ public interface KnowledgeItemRepository extends JpaRepository<KnowledgeItem, UU
 
     Optional<KnowledgeItem> findByNameAndType(String name, KnowledgeType type);
 
+    Optional<KnowledgeItem> findByName(String name);
+
     /**
      * Pessimistic-write lookup used by the review state machine. Acquiring a row
      * write-lock serializes concurrent reviews of the same item so two opposing

@@ -1,6 +1,8 @@
 package io.aria.conductor.execution.adk.opencode;
 
+import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.execution.adk.AbstractAdkProvider;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
@@ -26,6 +28,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * OpenCode agent provider — one {@code opencode serve} instance per agent,
@@ -54,6 +58,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private static final Duration READY_POLL_INTERVAL = Duration.ofMillis(500);
     /** Default per-request timeout for the serve HTTP client. */
     private static final Duration HTTP_TIMEOUT = Duration.ofMinutes(5);
+    /** TTL extension requested on each renewal during a long task (matches the sandbox TTL). */
+    private static final Duration RENEW_EXTENSION = Duration.ofMinutes(30);
     /** Relative workspace base dir (resolved against the agent-control-tower working dir). */
     private static final String WORKSPACE_BASE = "act-app/data/workspaces";
 
@@ -61,6 +67,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private final OpenCodeSandboxManager sandboxManager;
     /** Injected in tests; {@code null} in production (per-instance clients are created). */
     private final OpenCodeHttpClient fixedHttpClient;
+    /** Active DB provider source for opencode.json generation. */
+    private final LlmProviderRepository providerRepository;
 
     private final Map<UUID, OpenCodeInstance> instances = new ConcurrentHashMap<>();
     private final Map<UUID, String> runSessions = new ConcurrentHashMap<>();
@@ -80,21 +88,23 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
 
     /** Spring constructor. */
     @Autowired
-    public OpenCodeAdkProvider(OpenCodeProperties properties) {
+    public OpenCodeAdkProvider(OpenCodeProperties properties, LlmProviderRepository providerRepository) {
         this(properties, new OpenCodeSandboxManager(
-                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null);
+                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository);
     }
 
     /**
-     * Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager}
-     * and a fixed {@link OpenCodeHttpClient}.
+     * Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager},
+     * a fixed {@link OpenCodeHttpClient} and the provider repository.
      */
     OpenCodeAdkProvider(OpenCodeProperties properties,
                         OpenCodeSandboxManager sandboxManager,
-                        OpenCodeHttpClient httpClient) {
+                        OpenCodeHttpClient httpClient,
+                        LlmProviderRepository providerRepository) {
         this.properties = properties;
         this.sandboxManager = sandboxManager;
         this.fixedHttpClient = httpClient;
+        this.providerRepository = providerRepository;
     }
 
     @Override
@@ -145,12 +155,20 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         try {
             String systemPrompt = buildSystemPrompt(agent, context);
             Duration deadline = resolveMaxDuration(context);
-            OpenCodeHttpClient.MessageResponse resp =
-                    client.sendMessage(sessionId, systemPrompt, taskPrompt, deadline);
-            log.info("OpenCode task {} finished for agent {} ({} input / {} output tokens)",
-                    runId, agent.getId(), resp.inputTokens(), resp.outputTokens());
-            return new TaskResult(runId, sessionId, resp.finalOutput(),
-                    resp.inputTokens(), resp.outputTokens(), false);
+            // Renew the sandbox TTL while the long-lived synchronous sendMessage
+            // blocks — the SDK's own heartbeat fires ~9s too late at the 30-minute
+            // TTL boundary (R3-F2).
+            ScheduledExecutorService renewExecutor = startRenewHeartbeat(inst);
+            try {
+                OpenCodeHttpClient.MessageResponse resp =
+                        client.sendMessage(sessionId, systemPrompt, taskPrompt, deadline);
+                log.info("OpenCode task {} finished for agent {} ({} input / {} output tokens)",
+                        runId, agent.getId(), resp.inputTokens(), resp.outputTokens());
+                return new TaskResult(runId, sessionId, resp.finalOutput(),
+                        resp.inputTokens(), resp.outputTokens(), false);
+            } finally {
+                renewExecutor.shutdownNow();
+            }
         } catch (TaskExecutionException e) {
             if (e.cause() == TaskExecutionException.Cause.TIMEOUT) {
                 log.warn("OpenCode task {} timed out for agent {} — aborting", runId, agent.getId());
@@ -224,6 +242,44 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         return sandboxManager.isServerHealthy();
     }
 
+    /**
+     * Diagnostic snapshot of an agent's live sandbox (metrics, processes, opencode
+     * serve logs). Read-only: never creates or rebuilds a sandbox.
+     *
+     * @param agentId agent whose sandbox to inspect
+     * @return a human-readable multi-section diagnostic text
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the agent has no
+     *         live sandbox instance
+     */
+    public String diagnoseSandbox(UUID agentId) {
+        OpenCodeInstance inst = instances.get(agentId);
+        if (inst == null) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "No OpenCode sandbox instance for agent " + agentId);
+        }
+        return sandboxManager.diagnose(inst.sandboxId());
+    }
+
+    /**
+     * Run a shell command inside the agent's live sandbox and return its combined
+     * stdout/result text. Read-only from the provider's perspective — never creates
+     * or rebuilds a sandbox.
+     *
+     * @param agentId agent whose sandbox should execute the command
+     * @param command shell command to run
+     * @return the command's combined stdout/result text
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the agent has no
+     *         live sandbox instance
+     */
+    public String runSandboxCommand(UUID agentId, String command) {
+        OpenCodeInstance inst = instances.get(agentId);
+        if (inst == null) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "No OpenCode sandbox instance for agent " + agentId);
+        }
+        return sandboxManager.runCommand(inst.sandboxId(), command);
+    }
+
     @Override
     public void shutdownAgent(UUID agentId) {
         OpenCodeInstance inst = instances.remove(agentId);
@@ -251,6 +307,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             shutdownAgent(agentId);
         }
         instances.clear();
+        preparing.clear();
         prepareExecutor.shutdown();
     }
 
@@ -258,7 +315,10 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
 
     private OpenCodeInstance getOrPrepareInstance(UUID agentId, Agent agent) {
         OpenCodeInstance existing = instances.get(agentId);
-        if (existing != null && existing.healthy()) {
+        // Reuse a cached instance only when it both reported healthy on the last
+        // probe AND a fresh probe succeeds right now — a dead sandbox must fall
+        // through to the destroy-and-rebuild path below instead of being reused.
+        if (existing != null && existing.healthy() && existing.client().isHealthy()) {
             return existing;
         }
         if (existing != null) {
@@ -266,40 +326,41 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             destroyInstance(existing.sandboxId());
             instances.remove(agentId);
         }
-        // Concurrent runs for the same agent share a single sandbox preparation: the
-        // thread that wins putIfAbsent owns the prepare and completes the shared
-        // future; followers simply wait on the same future instead of each creating
-        // (and leaking) their own sandbox.
-        CompletableFuture<OpenCodeInstance> future = preparing.get(agentId);
-        if (future == null) {
-            // Re-check instances: the previous owner may have published its instance and
-            // removed the preparing future between our earlier instances.get and this
-            // preparing.get — without this re-check we would prepare a second sandbox.
-            OpenCodeInstance completed = instances.get(agentId);
-            if (completed != null && completed.healthy()) {
-                return completed;
+        // Concurrent runs for the same agent share a single sandbox preparation.
+        // Ownership is decided atomically inside `preparing.compute` and the completed
+        // future is KEPT in the map (never removed) so a late caller can never observe
+        // a null mapping after the owner finished and race to become a second owner
+        // (TOCTOU fix — the previous get/putIfAbsent/remove sequence left such a window).
+        CompletableFuture<OpenCodeInstance>[] ownerHolder = new CompletableFuture[1];
+        CompletableFuture<OpenCodeInstance> future = preparing.compute(agentId, (k, prev) -> {
+            if (prev != null && !prev.isDone()) {
+                return prev; // someone is preparing — join them
             }
+            // prev is done (or absent). Reuse only if the instance is still registered.
+            OpenCodeInstance inst = instances.get(agentId);
+            if (inst != null && inst.healthy()) {
+                return prev != null ? prev : CompletableFuture.completedFuture(inst);
+            }
+            // prev done but instance gone (destroyed/rebuild), or nothing yet — become owner.
             CompletableFuture<OpenCodeInstance> fresh = new CompletableFuture<>();
-            CompletableFuture<OpenCodeInstance> raced = preparing.putIfAbsent(agentId, fresh);
-            if (raced == null) {
-                // Owner: prepare on the shared executor and complete the future.
-                try {
-                    prepareExecutor.execute(() -> {
-                        try {
-                            fresh.complete(prepareInstance(agentId, agent));
-                        } catch (Throwable t) {
-                            fresh.completeExceptionally(t);
-                        } finally {
-                            preparing.remove(agentId);
-                        }
-                    });
-                } catch (java.util.concurrent.RejectedExecutionException e) {
-                    // Executor shut down (provider teardown) — fail the waiters fast.
-                    fresh.completeExceptionally(e);
-                }
-                future = fresh;
-            } else {
-                future = raced;
+            ownerHolder[0] = fresh;
+            return fresh;
+        });
+        if (ownerHolder[0] != null) {
+            // Owner: prepare on the shared executor and complete the future. The
+            // completed future stays in `preparing` so late callers reuse it via the
+            // compute path above instead of racing to become a second owner.
+            try {
+                prepareExecutor.execute(() -> {
+                    try {
+                        ownerHolder[0].complete(prepareInstance(agentId, agent));
+                    } catch (Throwable t) {
+                        ownerHolder[0].completeExceptionally(t);
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // Executor shut down (provider teardown) — fail the waiters fast.
+                ownerHolder[0].completeExceptionally(e);
             }
         }
         try {
@@ -328,6 +389,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Cannot create workspace dir " + workspace + ": " + e.getMessage(), e);
         }
+        writeOpenCodeConfig(workspace);
 
         String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), properties.getSandboxEnv());
         OpenCodeHttpClient client = null;
@@ -352,6 +414,62 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             instances.remove(agentId);
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "OpenCode sandbox setup failed for agent " + agentId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Write the sandbox {@code opencode.json} into the agent workspace so the next
+     * {@code uploadWorkspace} ships it into the sandbox. The config enforces a
+     * headless-safe permission policy — no permission may resolve to {@code ask}
+     * (which would block forever on human input in headless mode): the {@code *}
+     * wildcard allows every non-interactive tool, while {@code question} and
+     * {@code external_directory} are explicitly denied so tools touching paths
+     * outside /workspace get a visible error the model can read and continue from
+     * instead of hanging (R6-F1). It also points opencode at the ACTIVE DB
+     * {@link LlmProvider} model, falling back to deepseek defaults when no
+     * provider is active (first-run keeps working without DB setup).
+     *
+     * <p>Best-effort: a write failure is logged and the sandbox still comes up.
+     */
+    private void writeOpenCodeConfig(Path workspace) {
+        try {
+            LlmProvider active = providerRepository.findByActiveTrue().orElse(null);
+            String providerId = active != null && active.getName() != null && !active.getName().isBlank()
+                    ? active.getName().toLowerCase().replaceAll("[^a-z0-9-]", "-")
+                    : "deepseek";
+            String model = active != null && active.getDefaultModel() != null && !active.getDefaultModel().isBlank()
+                    ? active.getDefaultModel()
+                    : "deepseek-chat";
+            String baseUrl = active != null && active.getBaseUrl() != null && !active.getBaseUrl().isBlank()
+                    ? active.getBaseUrl()
+                    : "https://api.deepseek.com/v1";
+            String json = """
+                    {
+                      "$schema": "https://opencode.ai/config.json",
+                      "permission": {
+                        "*": "allow",
+                        "question": "deny",
+                        "external_directory": "deny"
+                      },
+                      "model": "%s/%s",
+                      "provider": {
+                        "%s": {
+                          "npm": "@ai-sdk/openai-compatible",
+                          "options": {
+                            "apiKey": "{env:LLM_API_KEY}",
+                            "baseURL": "%s"
+                          },
+                          "models": {
+                            "%s": {}
+                          }
+                        }
+                      }
+                    }
+                    """.formatted(providerId, model, providerId, baseUrl, model);
+            Files.writeString(workspace.resolve("opencode.json"), json);
+            log.info("Wrote opencode.json for workspace {} (provider={}, model={})", workspace, providerId, model);
+        } catch (IOException e) {
+            log.warn("Could not write opencode.json to {}: {}", workspace, e.getMessage());
         }
     }
 
@@ -411,23 +529,44 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         return fixedHttpClient != null ? fixedHttpClient : inst.client();
     }
 
+    /**
+     * Start a daemon heartbeat that renews the sandbox TTL while {@code sendMessage}
+     * blocks on the long-lived synchronous task (R3-F2).
+     *
+     * <p>Renewal failures are non-fatal (logged) — the hard failure surfaces through
+     * {@code sendMessage}. The returned executor must be {@code shutdownNow()}ed by
+     * the caller once the task finishes.
+     */
+    private ScheduledExecutorService startRenewHeartbeat(OpenCodeInstance inst) {
+        Duration interval = properties.getSandboxRenewInterval();
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "opencode-sandbox-renew-" + inst.sandboxId());
+            t.setDaemon(true);
+            return t;
+        });
+        executor.scheduleAtFixedRate(() -> {
+            try {
+                log.info("Renewing OpenSandbox TTL for sandbox {}", inst.sandboxId());
+                sandboxManager.renewSandbox(inst.sandboxId(), RENEW_EXTENSION);
+            } catch (Exception e) {
+                log.warn("Sandbox TTL renewal failed for {}: {}", inst.sandboxId(), e.getMessage());
+            }
+        }, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
+        return executor;
+    }
+
     private OpenCodeHttpClient clientForUrl(String serveUrl) {
         return fixedHttpClient != null ? fixedHttpClient : new OpenCodeHttpClient(serveUrl, HTTP_TIMEOUT);
     }
 
     private Duration resolveMaxDuration(TaskContext context) {
-        Duration maxDuration = (context != null && context.maxDuration() != null)
-                ? context.maxDuration()
-                : Duration.ofMinutes(properties.getMaxTaskMinutes());
-        if (context != null && context.maxRounds() > 0) {
-            // Translate the round budget into a time budget as well: allow at most
-            // 2 minutes per round, bounded by the overall max duration.
-            Duration roundBudget = Duration.ofMinutes(context.maxRounds() * 2L);
-            if (roundBudget.compareTo(maxDuration) < 0) {
-                return roundBudget;
-            }
+        // The round budget is a prompt-level constraint only (see buildSystemPrompt);
+        // it must NOT be translated into a wall-clock deadline, which would silently
+        // cap the run below the configured max duration / max-task-minutes.
+        if (context != null && context.maxDuration() != null) {
+            return context.maxDuration();
         }
-        return maxDuration;
+        return Duration.ofMinutes(properties.getMaxTaskMinutes());
     }
 
     private String buildSystemPrompt(Agent agent, TaskContext context) {

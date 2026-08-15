@@ -55,7 +55,7 @@ adk:
       host: 127.0.0.1
       port-range-start: 9300
       port-range-end: 9400
-      python-path: ${PYTHON_PATH:python3}
+      python-path: ${ADK_PYTHON:${PYTHON_PATH:python}}
       server-script: ../langchain-adk/src/server.py
       shutdown-timeout-ms: 10000
       max-restart-backoff-ms: 30000

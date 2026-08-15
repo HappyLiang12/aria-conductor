@@ -221,6 +221,7 @@ public final class TestDataBuilder {
         private UUID id = UUID.randomUUID();
         private UUID runId = UUID.randomUUID();
         private UUID toolCallId;
+        private Approval.ApprovalType approvalType = Approval.ApprovalType.TOOL_CALL;
         private ApprovalStatus status = ApprovalStatus.PENDING;
         private String reason = "Test approval fixture";
         private Instant requestedAt = Instant.now();
@@ -230,6 +231,9 @@ public final class TestDataBuilder {
         public ApprovalBuilder withId(UUID id) { this.id = id; return this; }
         public ApprovalBuilder withRunId(UUID runId) { this.runId = runId; return this; }
         public ApprovalBuilder withToolCallId(UUID toolCallId) { this.toolCallId = toolCallId; return this; }
+        public ApprovalBuilder withApprovalType(Approval.ApprovalType approvalType) {
+            this.approvalType = approvalType; return this;
+        }
         public ApprovalBuilder withStatus(ApprovalStatus status) { this.status = status; return this; }
         public ApprovalBuilder withReason(String reason) { this.reason = reason; return this; }
         public ApprovalBuilder withRequestedAt(Instant requestedAt) { this.requestedAt = requestedAt; return this; }
@@ -241,6 +245,7 @@ public final class TestDataBuilder {
                     .id(id)
                     .runId(runId)
                     .toolCallId(toolCallId)
+                    .approvalType(approvalType)
                     .status(status)
                     .reason(reason)
                     .requestedAt(requestedAt)

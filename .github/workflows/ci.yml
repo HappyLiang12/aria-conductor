@@ -126,6 +126,8 @@ jobs:
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Run integration tier only
         run: cd agent-control-tower && mvn verify -Dskip.unit.tests=true -Dspring.profiles.active=h2
+      # SchemaConsistencySmokeTest runs in the unit tier (surefire includes *SmokeTest);
+      # no dedicated step needed - the V40 columns are pinned there with full coverage.
 
   frontend-build:
     name: Frontend Build Check

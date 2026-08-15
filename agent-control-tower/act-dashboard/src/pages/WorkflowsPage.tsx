@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml } from '../api/workflows';
+import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml, resubmitApproval } from '../api/workflows';
 import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
 import type { WorkflowChain, WorkflowStepInfo, WorkflowStatus, WorkflowStepStatus } from '../types';
@@ -9,6 +9,7 @@ const statusColor = (s: WorkflowStatus): string => {
   switch (s) {
     case 'COMPLETED': return 'var(--ok, #22c55e)';
     case 'RUNNING': return 'var(--warn, #f59e0b)';
+    case 'WAITING_APPROVAL': return 'var(--warn, #f59e0b)';
     case 'FAILED': return 'var(--err, #ef4444)';
     case 'CANCELLED': return 'var(--muted, #94a3b8)';
     default: return 'var(--muted, #94a3b8)';
@@ -65,13 +66,14 @@ function StepCard({ step, agentName }: { step: WorkflowStepInfo; agentName: stri
   );
 }
 
-function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRetry, onDelete }: {
+function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRetry, onResubmit, onDelete }: {
   wf: WorkflowChain;
   agentMap: Map<string, string>;
   isSelected: boolean;
   onToggleSelect: (id: string) => void;
   onCancel: (id: string) => void;
   onRetry: (id: string, stepIndex: number) => void;
+  onResubmit: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
   const completedSteps = wf.steps.filter(s => s.status === 'COMPLETED').length;
@@ -149,9 +151,14 @@ function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRe
 
       {/* Action buttons */}
       <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {['RUNNING', 'PENDING'].includes(wf.status) && (
+        {['RUNNING', 'PENDING', 'WAITING_APPROVAL'].includes(wf.status) && (
           <button className="btn danger" onClick={() => onCancel(wf.id)}>
             Cancel
+          </button>
+        )}
+        {wf.status === 'WAITING_APPROVAL' && (
+          <button className="btn btn-warning" onClick={() => onResubmit(wf.id)}>
+            Resubmit approval
           </button>
         )}
         {wf.status === 'FAILED' && (
@@ -198,6 +205,11 @@ export function WorkflowsPage() {
 
   const retryMutation = useMutation({
     mutationFn: ({ id, stepIndex }: { id: string; stepIndex: number }) => retryWorkflow(id, stepIndex),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+  });
+
+  const resubmitMutation = useMutation({
+    mutationFn: (id: string) => resubmitApproval(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
   });
 
@@ -324,6 +336,7 @@ export function WorkflowsPage() {
           onToggleSelect={toggleSelect}
           onCancel={(id) => cancelMutation.mutate(id)}
           onRetry={(id, stepIndex) => retryMutation.mutate({ id, stepIndex })}
+          onResubmit={(id) => resubmitMutation.mutate(id)}
           onDelete={(id) => deleteMutation.mutate(id)}
         />
       ))}

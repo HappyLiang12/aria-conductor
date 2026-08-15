@@ -1,6 +1,11 @@
 package io.aria.conductor.execution.adk.opencode;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.LlmProvider;
+import io.aria.conductor.common.model.LlmProviderType;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
@@ -14,18 +19,21 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -48,8 +57,17 @@ class OpenCodeAdkProviderTest {
 
     private static final String IMAGE = "test-image";
 
+    /**
+     * Full permission key set documented for opencode (https://opencode.ai/docs/permissions/).
+     * Used to verify the generated opencode.json never resolves any permission to "ask".
+     */
+    private static final List<String> DOCUMENTED_PERMISSION_KEYS = List.of(
+            "read", "edit", "glob", "grep", "bash", "task", "skill", "lsp",
+            "question", "webfetch", "websearch", "external_directory", "doom_loop");
+
     @Mock OpenCodeSandboxManager sandboxManager;
     @Mock OpenCodeHttpClient httpClient;
+    @Mock LlmProviderRepository providerRepository;
 
     @TempDir Path tempDir;
 
@@ -64,7 +82,7 @@ class OpenCodeAdkProviderTest {
         properties.setImage(IMAGE);
         properties.setPort(4096);
         properties.setMaxTaskMinutes(30);
-        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient);
+        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient, providerRepository);
         provider.setWorkspaceBaseForTest(tempDir);
     }
 
@@ -191,6 +209,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -212,6 +231,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession(anyString())).thenReturn("sess-1");
         when(httpClient.sendMessage(any(), any(), any(), any()))
                 .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT, "deadline exceeded"));
@@ -306,6 +326,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         // Simulate a cancel landing in the session-creation window: runClients is
         // already registered (executeTask registers it before createSession) but
         // runSessions is not yet populated — abortTask must record a pending abort.
@@ -332,6 +353,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -350,6 +372,7 @@ class OpenCodeAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
@@ -364,18 +387,38 @@ class OpenCodeAdkProviderTest {
     }
 
     @Test
-    void executeTask_maxRoundsBudget_capsDeadlineBelowMaxDuration() {
+    void executeTask_maxRounds_doesNotCapDeadline_usesMaxDuration() {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
         provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
         when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
         when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
                 .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
 
-        // 2 rounds × 2 min = 4 min budget, tighter than the 30 min max duration.
+        // maxRounds no longer translates into a wall-clock cap: the deadline is
+        // maxDuration (30 min) even though 2 rounds × 2 min would be 4 min.
         provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, Duration.ofMinutes(30)));
 
-        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(4)));
+        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(30)));
+    }
+
+    @Test
+    void resolveMaxDuration_usesMaxTaskMinutesOnly() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        properties.setMaxTaskMinutes(120);
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45));
+
+        // Small maxRounds (2) + null maxDuration + large maxTaskMinutes (120)
+        // -> deadline must be maxTaskMinutes, not a round-derived budget.
+        provider.executeTask(agent(agentId), runId, "do the task", new TaskContext(2, null));
+
+        verify(httpClient).sendMessage(eq("sess-1"), anyString(), eq("do the task"), eq(Duration.ofMinutes(120)));
     }
 
     // ---- #10 concurrent runs for the same agent share one sandbox preparation ----
@@ -413,5 +456,296 @@ class OpenCodeAdkProviderTest {
 
         verify(sandboxManager, times(1)).createSandbox(eq(agentId), eq(IMAGE), any());
         assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    @Test
+    void concurrentExecuteTask_repeatRounds_createsSandboxOnce() throws Exception {
+        when(sandboxManager.createSandbox(any(), eq(IMAGE), any()))
+                .thenAnswer(inv -> "sb-" + UUID.randomUUID());
+        when(sandboxManager.getSandboxUrl(anyString(), eq(4096))).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession(anyString())).thenAnswer(inv -> "sess-" + UUID.randomUUID());
+        when(httpClient.sendMessage(any(), any(), any(), any()))
+                .thenReturn(new OpenCodeHttpClient.MessageResponse("msg-1", "done", 1, 1));
+
+        int rounds = 15;
+        int threads = 4;
+        for (int round = 0; round < rounds; round++) {
+            UUID agentId = UUID.randomUUID();
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            CountDownLatch ready = new CountDownLatch(threads);
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<TaskResult>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                UUID runId = UUID.randomUUID();
+                futures.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    return provider.executeTask(agent(agentId), runId, "task-" + runId,
+                            new TaskContext(0, Duration.ofMinutes(5)));
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS))
+                    .as("round %d: all threads must reach the barrier", round).isTrue();
+            go.countDown();
+            for (Future<TaskResult> f : futures) {
+                assertThat(f.get(30, TimeUnit.SECONDS).finalOutput()).isEqualTo("done");
+            }
+            pool.shutdownNow();
+            verify(sandboxManager, times(1)).createSandbox(eq(agentId), eq(IMAGE), any());
+        }
+    }
+
+    // ---- #F12 fresh sandbox health probe before reuse ----
+
+    @Test
+    void getOrPrepareInstance_staleHealthyCachedInstance_destroysAndRebuilds() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-old", true, Instant.now(), 0, httpClient));
+        // Cached instance reports healthy, but a fresh probe reports false.
+        when(httpClient.isHealthy()).thenReturn(false, true);
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-new");
+        when(sandboxManager.getSandboxUrl("sb-new", 4096)).thenReturn("http://127.0.0.1:4096");
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(sandboxManager).killSandbox("sb-old");
+        verify(sandboxManager).createSandbox(eq(agentId), eq(IMAGE), any());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-new");
+    }
+
+    @Test
+    void getOrPrepareInstance_healthyInstance_isReused() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(sandboxManager, never()).createSandbox(any(), any(), any());
+        verify(sandboxManager, never()).killSandbox(any());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-1");
+    }
+
+    @Test
+    void getOrPrepareInstance_probesHealthOnEveryInvocation() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+        provider.prepareAgent(agentId, agent(agentId));
+
+        verify(httpClient, times(2)).isHealthy();
+    }
+
+    // ---- R3-F2 sandbox TTL renewal during long tasks ----
+
+    @Test
+    void executeTask_renewsSandboxDuringLongTask() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+
+        // Short renew interval so the heartbeat fires while sendMessage is blocked.
+        properties.setSandboxRenewInterval(Duration.ofMillis(100));
+
+        CountDownLatch releaseSend = new CountDownLatch(1);
+        CountDownLatch renewed = new CountDownLatch(1);
+        AtomicInteger renewCount = new AtomicInteger();
+        doAnswer(inv -> {
+            renewCount.incrementAndGet();
+            renewed.countDown();
+            return null;
+        }).when(sandboxManager).renewSandbox(eq("sb-1"), any(Duration.class));
+
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenAnswer(inv -> {
+                    releaseSend.await(10, TimeUnit.SECONDS);
+                    return new OpenCodeHttpClient.MessageResponse("msg-1", "task done", 120, 45);
+                });
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<TaskResult> future = pool.submit(() -> provider.executeTask(agent(agentId), runId,
+                    "do the task", new TaskContext(0, Duration.ofMinutes(5))));
+
+            assertThat(renewed.await(5, TimeUnit.SECONDS))
+                    .as("sandbox TTL renewal must fire while the task blocks")
+                    .isTrue();
+
+            releaseSend.countDown();
+            TaskResult result = future.get(10, TimeUnit.SECONDS);
+            assertThat(result.finalOutput()).isEqualTo("task done");
+
+            // Heartbeat must stop after the task completes: no further renewals.
+            int afterComplete = renewCount.get();
+            Thread.sleep(300);
+            assertThat(renewCount.get())
+                    .as("heartbeat must stop after task completion")
+                    .isEqualTo(afterComplete);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    // ---- R3-F2 sandbox diagnosis ----
+
+    @Test
+    void diagnoseSandbox_delegatesToManager() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(sandboxManager.diagnose("sb-1")).thenReturn("== metrics ==\nok");
+
+        String result = provider.diagnoseSandbox(agentId);
+
+        assertThat(result).isEqualTo("== metrics ==\nok");
+        verify(sandboxManager).diagnose("sb-1");
+    }
+
+    @Test
+    void diagnoseSandbox_unknownAgent_throws() {
+        assertThatThrownBy(() -> provider.diagnoseSandbox(UUID.randomUUID()))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+    }
+
+    // ---- T6: run a shell command inside the agent's sandbox ----
+
+    @Test
+    void runSandboxCommand_delegatesToManager() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(sandboxManager.runCommand("sb-1", "git status")).thenReturn("M file.txt");
+
+        String result = provider.runSandboxCommand(agentId, "git status");
+
+        assertThat(result).isEqualTo("M file.txt");
+        verify(sandboxManager).runCommand("sb-1", "git status");
+    }
+
+    @Test
+    void runSandboxCommand_unknownAgent_throws() {
+        assertThatThrownBy(() -> provider.runSandboxCommand(UUID.randomUUID(), "git status"))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+    }
+
+    // ---- D3: opencode.json generation (question=deny + active provider model) ----
+
+    @Test
+    void prepareInstance_writesOpenCodeJsonWithQuestionDeniedAndActiveProvider() throws Exception {
+        LlmProvider active = LlmProvider.builder().name("deepseek-qa").type(LlmProviderType.OPENAI)
+                .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
+                .apiKey("k").active(true).build();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("\"question\": \"deny\"");
+        assertThat(json).contains("deepseek-qa/deepseek-v4-flash");
+        assertThat(json).contains("https://api.deepseek.com/v1");
+        // R5-F1: opencode requires custom providers to declare the SDK adapter
+        // (npm) and a non-empty models map — without them the provider resolves to
+        // zero models and opencode fails with ProviderModelNotFoundError at runtime.
+        assertThat(json).contains("\"npm\": \"@ai-sdk/openai-compatible\"");
+        assertThat(json).contains("\"models\"");
+        assertThat(json).contains("\"deepseek-v4-flash\": {}");
+    }
+
+    @Test
+    void prepareInstance_openCodeJson_isParseableAndSchemaComplete() throws Exception {
+        LlmProvider active = LlmProvider.builder().name("deepseek-qa").type(LlmProviderType.OPENAI)
+                .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
+                .apiKey("k").active(true).build();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(json);
+        JsonNode permission = root.path("permission");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        // R6-F1: external_directory must also be denied — otherwise tools touching
+        // paths outside /workspace hang forever on an interactive "ask" prompt.
+        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
+        // Headless invariant: no permission entry may resolve to "ask" (zero
+        // blocking on human input in headless mode).
+        permission.fields().forEachRemaining(e -> assertThat(e.getValue().asText())
+                .as("permission '%s' must not equal 'ask'", e.getKey())
+                .isNotEqualTo("ask"));
+        JsonNode providerNode = root.path("provider").path("deepseek-qa");
+        assertThat(providerNode.path("npm").asText()).isEqualTo("@ai-sdk/openai-compatible");
+        assertThat(providerNode.path("models").has("deepseek-v4-flash")).isTrue();
+        assertThat(providerNode.path("options").path("baseURL").asText())
+                .isEqualTo("https://api.deepseek.com/v1");
+    }
+
+    @Test
+    void prepareInstance_usesDeepseekDefaultsWhenNoActiveProvider() throws Exception {
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("deepseek/deepseek-chat");
+        assertThat(json).contains("\"question\": \"deny\"");
+    }
+
+    // ---- R6-F1 headless-safe permission policy ----
+
+    @Test
+    void prepareInstance_openCodeJson_permissionPolicy_isHeadlessSafe() throws Exception {
+        LlmProvider active = LlmProvider.builder().name("deepseek-qa").type(LlmProviderType.OPENAI)
+                .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
+                .apiKey("k").active(true).build();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        JsonNode permission = new ObjectMapper().readTree(json).path("permission");
+
+        // R6-F1: the "*" wildcard allows the whole non-interactive tool set, so
+        // every key absent from this map falls back to "allow" instead of opencode's
+        // interactive "ask" default.
+        assertThat(permission.path("*").asText())
+                .as("wildcard '*' must allow the non-interactive tool set")
+                .isEqualTo("allow");
+        assertThat(permission.path("question").asText()).isEqualTo("deny");
+        assertThat(permission.path("external_directory").asText()).isEqualTo("deny");
+
+        // Iterate the full documented key set: no key may resolve to "ask" — that
+        // is the headless hang risk R6-F1 fixes.
+        for (String key : DOCUMENTED_PERMISSION_KEYS) {
+            String effective = permission.path(key).isMissingNode()
+                    ? permission.path("*").asText()
+                    : permission.path(key).asText();
+            assertThat(effective)
+                    .as("permission '%s' must not resolve to 'ask' (headless hang risk)", key)
+                    .isNotEqualTo("ask");
+        }
     }
 }

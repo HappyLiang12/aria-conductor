@@ -4,6 +4,7 @@ import { listApprovals, decideApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
+import { MarkdownViewer } from '../components/MarkdownViewer';
 import type { ApprovalStatus } from '../types';
 
 interface ApprovalWithReason {
@@ -121,17 +122,31 @@ export function ApprovalsPage() {
                     {countdown.urgent && <span className="urgency-badge">URGENT</span>}
                   </div>
                   <div className="approval-card-body">
-                    <div className="approval-info-row">
-                      <span className="approval-label">Tool/Action</span>
-                      <span className="cell-mono">{approval.toolName ?? approval.toolCallId.slice(0, 8)}</span>
-                    </div>
-                    {approval.arguments && (
-                      <div className="approval-info-row">
-                        <span className="approval-label">Arguments</span>
-                        <span className="cell-mono approval-args" title={approval.arguments}>
-                          {approval.arguments.length > 160 ? approval.arguments.slice(0, 160) + '…' : approval.arguments}
-                        </span>
-                      </div>
+                    {approval.approvalType === 'SPEC_REVIEW' ? (
+                      <>
+                        <div className="approval-info-row">
+                          <span className="approval-label">Spec Review</span>
+                          <span className="cell-mono">
+                            {approval.knowledgeItemId ? approval.knowledgeItemId.slice(0, 8) : '—'}
+                          </span>
+                        </div>
+                        <MarkdownViewer content={approval.content ?? ''} />
+                      </>
+                    ) : (
+                      <>
+                        <div className="approval-info-row">
+                          <span className="approval-label">Tool/Action</span>
+                          <span className="cell-mono">{approval.toolName ?? (approval.toolCallId ? approval.toolCallId.slice(0, 8) : '—')}</span>
+                        </div>
+                        {approval.arguments && (
+                          <div className="approval-info-row">
+                            <span className="approval-label">Arguments</span>
+                            <span className="cell-mono approval-args" title={approval.arguments}>
+                              {approval.arguments.length > 160 ? approval.arguments.slice(0, 160) + '…' : approval.arguments}
+                            </span>
+                          </div>
+                        )}
+                      </>
                     )}
                     <div className="approval-info-row">
                       <span className="approval-label">Risk Level</span>

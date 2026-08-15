@@ -154,12 +154,21 @@ public class KnowledgeService implements KnowledgeContextProvider {
             fileService.storeContent(item.getType(), item.getName(), newVersion, content);
         }
 
+        String yamlContent = request.getYamlContent();
+        if (yamlContent == null) {
+            yamlContent = versionRepository
+                    .findByKnowledgeItemIdAndVersion(item.getId(), item.getCurrentVersion())
+                    .map(KnowledgeVersion::getYamlContent)
+                    .orElse(null);
+        }
+
         KnowledgeVersion version = KnowledgeVersion.builder()
                 .id(UUID.randomUUID())
                 .knowledgeItemId(item.getId())
                 .version(newVersion)
                 .status(VersionStatus.PENDING)
                 .content(content)
+                .yamlContent(yamlContent)
                 .createdAt(Instant.now())
                 .build();
         version = versionRepository.save(version);
@@ -281,6 +290,7 @@ public class KnowledgeService implements KnowledgeContextProvider {
                 .version(kv.getVersion())
                 .status(kv.getStatus())
                 .content(content)
+                .yamlContent(kv.getYamlContent())
                 .createdAt(kv.getCreatedAt())
                 .approvedAt(kv.getApprovedAt())
                 .build();
@@ -419,6 +429,7 @@ public class KnowledgeService implements KnowledgeContextProvider {
                 .version(version.getVersion())
                 .status(version.getStatus())
                 .content(version.getContent())
+                .yamlContent(version.getYamlContent())
                 .createdAt(version.getCreatedAt())
                 .approvedAt(version.getApprovedAt())
                 .build();

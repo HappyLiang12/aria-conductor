@@ -21,9 +21,12 @@ import java.util.regex.Pattern;
 @Component
 public class WorkflowTemplateConverter {
 
-    /** Matches {@code {paramName}} placeholders but NOT {@code {previousOutput}}. */
+    /** Placeholder names reserved for the system — never user-substitutable or exposed. */
+    private static final Set<String> SYSTEM_PLACEHOLDERS = Set.of("previousOutput", "specRef", "branchName");
+
+    /** Matches {@code {paramName}} placeholders but NOT system placeholders. */
     private static final Pattern PARAM_PATTERN =
-            Pattern.compile("\\{(?!" + "previousOutput" + ")([a-zA-Z_][a-zA-Z0-9_]*)\\}");
+            Pattern.compile("\\{(?!(?:" + String.join("|", SYSTEM_PLACEHOLDERS) + "))([a-zA-Z_][a-zA-Z0-9_]*)\\}");
 
     private final AgentRepository agentRepository;
 
@@ -122,6 +125,9 @@ public class WorkflowTemplateConverter {
                 ys.put("agent_id", step.getAgentId() != null ? step.getAgentId().toString() : "");
                 ys.put("prompt_template", step.getPromptTemplate() != null ? step.getPromptTemplate() : "");
                 ys.put("max_iterations", step.getMaxIterations());
+                if (step.getKind() != null && step.getKind() != WorkflowStep.StepKind.GENERIC) {
+                    ys.put("kind", step.getKind().name());
+                }
                 yamlSteps.add(ys);
             }
         }
@@ -180,6 +186,9 @@ public class WorkflowTemplateConverter {
 
             step.setPromptTemplate(getStringValue(raw, "prompt_template"));
 
+            // SDD step kind (case-normalised; unknown/missing -> GENERIC).
+            step.setKind(parseKind(getStringValue(raw, "kind")));
+
             Object maxIter = raw.get("max_iterations");
             if (maxIter instanceof Number) {
                 step.setMaxIterations(((Number) maxIter).intValue());
@@ -199,15 +208,16 @@ public class WorkflowTemplateConverter {
 
     /**
      * Replace {@code {key}} placeholders in the template with values from the map.
-     * The {@code {previousOutput}} placeholder is left untouched (resolved at runtime).
+     * System placeholders such as {@code {previousOutput}}, {@code {specRef}} and
+     * {@code {branchName}} are left untouched (resolved at runtime by the framework).
      */
     public String substituteParameters(String template, Map<String, String> params) {
         if (template == null || params == null || params.isEmpty()) return template;
 
         String result = template;
         for (Map.Entry<String, String> entry : params.entrySet()) {
+            if (SYSTEM_PLACEHOLDERS.contains(entry.getKey())) continue;
             String placeholder = "{" + entry.getKey() + "}";
-            if ("{previousOutput}".equals(placeholder)) continue;
             result = result.replace(placeholder, entry.getValue() != null ? entry.getValue() : "");
         }
         return result;
@@ -257,7 +267,8 @@ public class WorkflowTemplateConverter {
     /**
      * Scan all step prompt templates for {@code {paramName}} patterns.
      *
-     * @return a sorted set of unique parameter names (excludes {@code previousOutput}).
+     * @return a sorted set of unique parameter names (excludes system placeholders
+     *         such as {@code previousOutput}, {@code specRef} and {@code branchName}).
      */
     public Set<String> extractParameterNames(List<WorkflowStep> steps) {
         if (steps == null || steps.isEmpty()) return Collections.emptySet();
@@ -329,5 +340,16 @@ public class WorkflowTemplateConverter {
     private static String getStringValue(Map<String, Object> map, String key) {
         Object val = map.get(key);
         return val != null ? val.toString() : null;
+    }
+
+    /** Parse a step kind with case normalisation; null/unknown -> GENERIC. */
+    static WorkflowStep.StepKind parseKind(String raw) {
+        if (raw == null || raw.isBlank()) return WorkflowStep.StepKind.GENERIC;
+        try {
+            return WorkflowStep.StepKind.valueOf(raw.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown workflow step kind '{}', defaulting to GENERIC", raw);
+            return WorkflowStep.StepKind.GENERIC;
+        }
     }
 }

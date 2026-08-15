@@ -8,5 +8,6 @@ public record SubmitReviewRequest(
         String reviewerName,
         boolean passed,
         String evidence,
-        String comment
+        String comment,
+        String verdict
 ) {}

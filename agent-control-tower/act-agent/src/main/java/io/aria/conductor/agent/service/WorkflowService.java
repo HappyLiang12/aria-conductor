@@ -28,6 +28,9 @@ public class WorkflowService {
 
     private static final int MAX_OUTPUT_PREVIEW = 200;
 
+    /** Max re-schedule attempts per step before the SDD loop is considered exhausted. */
+    private static final int DEFAULT_MAX_ATTEMPTS = 3;
+
     private final WorkflowChainRepository workflowChainRepository;
     private final RunService runService;
     private final ObjectMapper objectMapper;
@@ -53,12 +56,22 @@ public class WorkflowService {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations() > 0 ? s.getMaxIterations() : 3)
+                        .kind(s.getKind() != null ? s.getKind() : WorkflowStep.StepKind.GENERIC)
                         .status(WorkflowStep.Status.PENDING)
                         .build())
                 .collect(Collectors.toList());
 
+        // R-F4: SDD loop steps (BA/DEV/QA) must be created through the governed
+        // instantiate_template path so the SPEC_REVIEW gate is enforced. This guard is the
+        // single choke point for ALL direct callers (REST controller, Aria tool, execute-yaml).
+        // WorkflowTemplateService sets allowSddSteps=true after validating an APPROVED template.
+        if (!request.isAllowSddSteps() && steps.stream().anyMatch(s -> isSddKind(s.getKind()))) {
+            throw new IllegalArgumentException("SDD workflow steps (BA/DEV/QA) must be created via "
+                    + "instantiate_template to ensure the SPEC_REVIEW gate.");
+        }
+
         WorkflowChain chain = WorkflowChain.builder()
-                .name(request.getName())
+                .name(sanitizeName(request.getName()))
                 .description(request.getDescription())
                 .status(WorkflowChain.Status.PENDING)
                 .currentStepIndex(0)
@@ -158,8 +171,9 @@ public class WorkflowService {
     @Transactional(readOnly = true)
     public WorkflowChain findChainByRunId(UUID runId) {
         List<WorkflowChain> activeChains = workflowChainRepository.findByStatus(WorkflowChain.Status.RUNNING);
-        // Also check PENDING chains
+        // Also check PENDING and WAITING_APPROVAL chains
         activeChains.addAll(workflowChainRepository.findByStatus(WorkflowChain.Status.PENDING));
+        activeChains.addAll(workflowChainRepository.findByStatus(WorkflowChain.Status.WAITING_APPROVAL));
 
         for (WorkflowChain chain : activeChains) {
             List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
@@ -185,6 +199,13 @@ public class WorkflowService {
         return -1;
     }
 
+    /** Null-safe accessor for a step by index. */
+    public WorkflowStep stepAt(WorkflowChain chain, int index) {
+        if (chain == null) return null;
+        List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        return (index >= 0 && index < steps.size()) ? steps.get(index) : null;
+    }
+
     // ==================== Lifecycle methods ====================
 
     /**
@@ -196,9 +217,11 @@ public class WorkflowService {
                 .orElseThrow(() -> new ResourceNotFoundException("WorkflowChain", chainId));
 
         if (chain.getStatus() != WorkflowChain.Status.RUNNING
-                && chain.getStatus() != WorkflowChain.Status.PENDING) {
+                && chain.getStatus() != WorkflowChain.Status.PENDING
+                && chain.getStatus() != WorkflowChain.Status.WAITING_APPROVAL) {
             throw new IllegalArgumentException(
-                    "Cannot cancel workflow in status " + chain.getStatus() + "; must be RUNNING or PENDING");
+                    "Cannot cancel workflow in status " + chain.getStatus()
+                            + "; must be RUNNING, PENDING or WAITING_APPROVAL");
         }
 
         List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
@@ -266,6 +289,63 @@ public class WorkflowService {
     }
 
     /**
+     * Re-runs a step within the same chain (SDD DEFECT / SPEC_GAP loop-back).
+     * Increments the attempt counter, appends feedback to the prompt, starts a new run.
+     * Fails the chain if maxAttempts is exceeded.
+     */
+    @Transactional
+    public WorkflowResponse rescheduleStep(UUID chainId, int stepIndex, String feedback) {
+        WorkflowChain chain = workflowChainRepository.findById(chainId)
+                .orElseThrow(() -> new ResourceNotFoundException("WorkflowChain", chainId));
+        if (chain.getStatus() != WorkflowChain.Status.RUNNING
+                && chain.getStatus() != WorkflowChain.Status.PENDING
+                && chain.getStatus() != WorkflowChain.Status.WAITING_APPROVAL) {
+            throw new IllegalArgumentException(
+                    "Cannot reschedule step: workflow status is " + chain.getStatus()
+                            + "; must be RUNNING, PENDING or WAITING_APPROVAL");
+        }
+        List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        if (stepIndex < 0 || stepIndex >= steps.size()) {
+            throw new IllegalArgumentException("Step index out of range: " + stepIndex);
+        }
+        WorkflowStep step = steps.get(stepIndex);
+        if (step.getAttemptCount() >= DEFAULT_MAX_ATTEMPTS) {
+            chain.setStatus(WorkflowChain.Status.FAILED);
+            chain.setCompletedAt(Instant.now());
+            chain.setStepsJson(serializeSteps(steps));
+            workflowChainRepository.save(chain);
+            log.info("SDD loop exhausted: chain={} step={} attempts={}", chainId, stepIndex, step.getAttemptCount());
+            return toResponse(chain);
+        }
+        step.setAttemptCount(step.getAttemptCount() + 1);
+        step.setStatus(WorkflowStep.Status.PENDING);
+        String base = step.getPromptTemplate() != null ? step.getPromptTemplate() : "";
+        String augmented = feedback != null && !feedback.isBlank()
+                ? base + "\n\nFeedback from the previous round:\n" + feedback
+                : base;
+        step.setPromptTemplate(augmented); // note: startStep truncates at 10,000 chars; reschedules are bounded by DEFAULT_MAX_ATTEMPTS so the latest feedback stays visible in practice
+        chain.setStepsJson(serializeSteps(steps));
+        workflowChainRepository.save(chain);
+        startStep(chain, stepIndex, null);
+        log.info("SDD step rescheduled: chain={} step={} attempt={}", chainId, stepIndex, step.getAttemptCount());
+        return toResponse(chain);
+    }
+
+    /**
+     * Find the index of the first step with the given kind, or -1.
+     * Legacy steps deserialized from steps_json may carry a null kind; those are treated as GENERIC.
+     */
+    public int findStepIndexByKind(WorkflowChain chain, WorkflowStep.StepKind kind) {
+        List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        for (int i = 0; i < steps.size(); i++) {
+            WorkflowStep.StepKind stepKind = steps.get(i).getKind();
+            if (stepKind == null) stepKind = WorkflowStep.StepKind.GENERIC;
+            if (stepKind == kind) return i;
+        }
+        return -1;
+    }
+
+    /**
      * Updates a pending or failed workflow chain's metadata and/or appends new steps.
      */
     @Transactional
@@ -294,6 +374,7 @@ public class WorkflowService {
                         .agentId(sd.getAgentId())
                         .promptTemplate(sd.getPromptTemplate())
                         .maxIterations(sd.getMaxIterations() > 0 ? sd.getMaxIterations() : 3)
+                        .kind(sd.getKind() != null ? sd.getKind() : WorkflowStep.StepKind.GENERIC)
                         .status(WorkflowStep.Status.PENDING)
                         .build());
             }
@@ -349,6 +430,7 @@ public class WorkflowService {
                         .agentId(s.getAgentId())
                         .promptTemplate(s.getPromptTemplate())
                         .maxIterations(s.getMaxIterations())
+                        .kind(s.getKind())
                         .build())
                 .collect(Collectors.toList());
 
@@ -387,6 +469,7 @@ public class WorkflowService {
                     .agentId(step.getAgentId())
                     .promptTemplate(prompt)
                     .maxIterations(step.getMaxIterations())
+                    .kind(step.getKind())
                     .build());
         }
 
@@ -408,6 +491,19 @@ public class WorkflowService {
     }
 
     // ==================== Internal helpers ====================
+
+    /** Sanitizes a chain name to printable ASCII, replacing any non-ASCII chars with "-". */
+    private static String sanitizeName(String name) {
+        if (name == null || name.isBlank()) return "workflow";
+        return name.replaceAll("[^\\x20-\\x7E]", "-").trim();
+    }
+
+    /** @return true when the step kind is an SDD loop kind (BA/DEV/QA). */
+    private static boolean isSddKind(WorkflowStep.StepKind kind) {
+        return kind == WorkflowStep.StepKind.BA
+                || kind == WorkflowStep.StepKind.DEV
+                || kind == WorkflowStep.StepKind.QA;
+    }
 
     private void startStep(WorkflowChain chain, int stepIndex, String previousOutput) {
         List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
@@ -459,7 +555,7 @@ public class WorkflowService {
         }
     }
 
-    private String serializeSteps(List<WorkflowStep> steps) {
+    public String serializeSteps(List<WorkflowStep> steps) {
         try {
             return objectMapper.writeValueAsString(steps);
         } catch (JsonProcessingException e) {
@@ -467,7 +563,7 @@ public class WorkflowService {
         }
     }
 
-    private List<WorkflowStep> deserializeSteps(String json) {
+    public List<WorkflowStep> deserializeSteps(String json) {
         if (json == null || json.isBlank()) return new ArrayList<>();
         try {
             return objectMapper.readValue(json, new TypeReference<List<WorkflowStep>>() {});

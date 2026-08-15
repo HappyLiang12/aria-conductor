@@ -1,0 +1,114 @@
+name: Nightly SDD LLM Smoke
+
+# Runs one real-LLM Spec-Driven Development loop (BA -> spec approval gate) against
+# the DeepSeek API via the LangChain ADK. Gated on the DEEPSEEK_API_KEY repository
+# secret: when unset, every LLM-dependent step is skipped (no-op).
+#
+# This is a nightly canary for the governed SDD path — it proves the BA agent can
+# actually produce a spec through a live provider and pause the chain at WAITING_APPROVAL.
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 02:00 UTC nightly
+  workflow_dispatch: {}
+
+jobs:
+  nightly-sdd-llm-smoke:
+    name: Real-LLM SDD Loop Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build backend (skip tests)
+        if: env.DEEPSEEK_API_KEY != ''
+        run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
+
+      - name: Setup LangChain ADK venv
+        if: env.DEEPSEEK_API_KEY != ''
+        run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Start backend (H2 + langchain ADK)
+        if: env.DEEPSEEK_API_KEY != ''
+        env:
+          # LangChain ADK subprocess reads LLM_API_KEY / LLM_BASE_URL / LLM_DEFAULT_MODEL;
+          # AriaDefaultAgentInitializer also auto-creates an active provider from these.
+          LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLM_BASE_URL: https://api.deepseek.com/v1
+          LLM_MODEL: deepseek-chat
+          # application-h2.yml resolves adk.runtime.langchain.llm-* from these.
+          LLM_PROVIDER_BASE_URL: https://api.deepseek.com/v1
+          LLM_PROVIDER_MODEL: deepseek-chat
+        run: |
+          cd agent-control-tower
+          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python \
+            java --enable-preview -jar act-app/target/act-app-*.jar \
+            --spring.profiles.active=h2 --adk.default-provider=langchain > ../backend.log 2>&1 &
+          timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
+
+      - name: Run SDD loop until WAITING_APPROVAL
+        if: env.DEEPSEEK_API_KEY != ''
+        run: |
+          set -euo pipefail
+          API=http://localhost:8080
+
+          # Resolve the seeded development-workflow template (V40 seed).
+          TPL_ID=$(curl -sf "$API/api/v1/knowledge?type=WORKFLOW&status=APPROVED" \
+            | jq -r '.[] | select(.name == "development-workflow") | .id')
+          test -n "$TPL_ID" && test "$TPL_ID" != "null"
+          echo "template id: $TPL_ID"
+
+          # Instantiate the template -> starts the BA run with a real LLM.
+          CHAIN_ID=$(curl -sf -X POST "$API/api/v1/knowledge/$TPL_ID/instantiate-workflow" \
+            -H 'Content-Type: application/json' \
+            -d '{"parameters":{"issueRef":"#1-nightly-smoke"}}' | jq -r '.id')
+          test -n "$CHAIN_ID" && test "$CHAIN_ID" != "null"
+          echo "chain id: $CHAIN_ID"
+
+          # Poll for the spec-approval gate. A real BA run must produce a spec and pause.
+          for _ in $(seq 1 180); do
+            STATUS=$(curl -sf "$API/api/v1/workflows/$CHAIN_ID" | jq -r '.status')
+            echo "chain status: $STATUS"
+            if [ "$STATUS" = "WAITING_APPROVAL" ]; then
+              echo "PASS: SDD loop reached WAITING_APPROVAL with a real LLM."
+              exit 0
+            fi
+            case "$STATUS" in
+              FAILED|CANCELLED|COMPLETED)
+                echo "FAIL: SDD loop ended unexpectedly in $STATUS."
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "FAIL: timed out waiting for WAITING_APPROVAL."
+          exit 1
+
+      - name: Cleanup residual RUNNING runs (best-effort)
+        # No dedicated "fail run" maintenance endpoint exists; cancel each RUNNING run via
+        # the cancel endpoint. The H2 file DB is runner-scoped and discarded with the
+        # ephemeral runner, so residual state does not persist either way.
+        if: always()
+        run: |
+          set -uo pipefail
+          for id in $(curl -sf http://localhost:8080/api/v1/runs?status=RUNNING | jq -r '.[].id' 2>/dev/null); do
+            echo "cancelling residual RUNNING run $id"
+            curl -sf -X POST "http://localhost:8080/api/v1/runs/$id/cancel" > /dev/null || true
+          done
+          true
+
+      - name: Dump backend log tail (diagnose)
+        if: failure()
+        run: tail -n 300 backend.log || true

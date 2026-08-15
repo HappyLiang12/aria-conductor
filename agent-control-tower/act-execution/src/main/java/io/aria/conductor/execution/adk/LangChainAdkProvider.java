@@ -24,6 +24,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -439,6 +441,48 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
         return key != null ? key : "";
     }
 
+    /**
+     * R-F3: resolve the configured {@code server-script} path against the repo root rather
+     * than the JVM working directory (which breaks when the app is launched from a different
+     * CWD). The configured value is expressed relative to the {@code agent-control-tower}
+     * module directory (e.g. {@code ../langchain-adk/src/server.py}), so after locating the
+     * repo root (nearest ancestor containing BOTH {@code agent-control-tower} and
+     * {@code langchain-adk}) it is anchored at {@code <repo-root>/agent-control-tower}.
+     * Absolute paths pass through unchanged; if no repo root is found the path falls back to
+     * working-directory resolution (the previous behavior).
+     */
+    static String resolveServerScript(String configured) {
+        return resolveServerScript(configured, Path.of(System.getProperty("user.dir", ".")));
+    }
+
+    /** Testable overload with an explicit working directory to walk up from. */
+    static String resolveServerScript(String configured, Path workingDir) {
+        if (configured == null || configured.isBlank()) {
+            return configured;
+        }
+        Path script = Path.of(configured);
+        if (script.isAbsolute()) {
+            return configured;
+        }
+        Path repoRoot = findRepoRoot(workingDir);
+        if (repoRoot == null) {
+            return workingDir.toAbsolutePath().normalize().resolve(script).normalize().toString();
+        }
+        return repoRoot.resolve("agent-control-tower").resolve(script).normalize().toString();
+    }
+
+    private static Path findRepoRoot(Path start) {
+        Path dir = start.toAbsolutePath().normalize();
+        while (dir != null) {
+            if (Files.isDirectory(dir.resolve("agent-control-tower"))
+                    && Files.isDirectory(dir.resolve("langchain-adk"))) {
+                return dir;
+            }
+            dir = dir.getParent();
+        }
+        return null;
+    }
+
     private AdkInstance startNewInstance(UUID agentId) {
         // In remote mode, ADK runs as a standalone container — skip subprocess startup and port allocation
         if ("remote".equalsIgnoreCase(properties.getMode())) {
@@ -451,14 +495,15 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
         }
 
         int port = allocatePort();
+        String serverScript = resolveServerScript(properties.getServerScript());
         log.info("Starting LangChain ADK instance for agent {} on port {}: python={} script={} apiKey={} baseUrl={}",
                 agentId, port,
-                properties.getPythonPath(), properties.getServerScript(),
+                properties.getPythonPath(), serverScript,
                 !resolveAdkApiKey().isBlank() ? "***" : "MISSING",
                 properties.getLlmBaseUrl());
         try {
             ProcessBuilder pb = new ProcessBuilder(
-                    properties.getPythonPath(), properties.getServerScript(), String.valueOf(port));
+                    properties.getPythonPath(), serverScript, String.valueOf(port));
             pb.redirectErrorStream(true);
 
             // Pass LLM config as environment variables to the Python process

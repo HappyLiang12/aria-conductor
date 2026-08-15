@@ -81,6 +81,7 @@ public class KnowledgeFileService {
             case TEMPLATE -> ".md";
             case GUIDELINE -> ".md";
             case WORKFLOW -> ".md";
+            case SPEC -> ".md";
         };
     }
 }

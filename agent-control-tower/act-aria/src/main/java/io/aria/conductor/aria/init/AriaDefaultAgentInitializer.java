@@ -93,6 +93,15 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             - list_workflows: List all workflow chains
             - cancel_workflow: Cancel a running/pending workflow (requires id)
             - retry_workflow_step: Retry a failed step in a failed workflow (requires id, stepIndex)
+            - instantiate_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with
+              optional parameters (e.g. {"issueRef": "#12"}). USE THIS for the spec-driven development loop.
+
+            - Spec-driven development: to run the BA->Dev->QA development loop on a GitHub issue, find the
+              approved "development-workflow" template and instantiate it with an issueRef parameter via
+              instantiate_template. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
+              QA verdict. Users can copy the template knowledge item and edit its YAML to customise their own workflow.
+              NEVER use create_workflow for the BA->Dev->QA loop; always use instantiate_template.
+              Always pass issueRepo (owner/repo) and repoUrl parameters when instantiating the development-workflow template. When a SPEC_REVIEW rejection contains user answers, carry them into the resubmission; answer trivial questions yourself from the issue body before escalating to the user.
 
             ## Rules
 
@@ -162,6 +171,7 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             "get_dashboard_summary",
             // workflows (BA->Dev->QA multi-agent orchestration)
             "create_workflow", "get_workflow", "list_workflows", "cancel_workflow", "retry_workflow_step",
+            "instantiate_template",
             // web (issue/content discovery for orchestration)
             "web_search", "web_fetch",
             // HITL

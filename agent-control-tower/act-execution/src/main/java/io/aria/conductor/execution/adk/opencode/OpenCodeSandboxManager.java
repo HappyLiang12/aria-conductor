@@ -2,8 +2,13 @@ package io.aria.conductor.execution.adk.opencode;
 
 import com.alibaba.opensandbox.sandbox.Sandbox;
 import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionLogs;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionResult;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import lombok.extern.slf4j.Slf4j;
 
@@ -55,6 +60,8 @@ public class OpenCodeSandboxManager {
     private static final int MAX_UPLOAD_DEPTH = 3;
     /** Cap on a single uploaded file to keep requests sane. */
     private static final long MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+    /** JSON serializer for the metrics section (shared, thread-safe). */
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ConnectionConfig connectionConfig;
     /** Raw server base URL (used for the service-level health probe). */
@@ -197,6 +204,126 @@ public class OpenCodeSandboxManager {
         } catch (Exception e) {
             log.warn("Failed to kill sandbox {}: {}", sandboxId, e.getMessage());
         }
+    }
+
+    /**
+     * Renew the sandbox TTL by the given extension (R3-F2).
+     *
+     * <p>The OpenSandbox SDK's own heartbeat fires ~9s too late at the 30-minute
+     * TTL boundary, so a long-lived synchronous task must renew proactively via
+     * {@link Sandbox#renew(Duration)}.
+     *
+     * @param sandboxId sandbox to renew
+     * @param extension TTL extension to request
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the sandbox
+     *         is unknown or the renewal call fails
+     */
+    public void renewSandbox(String sandboxId, Duration extension) {
+        Sandbox sandbox = requireSandbox(sandboxId);
+        try {
+            var resp = sandbox.renew(extension);
+            log.info("Sandbox {} renewed until {}", sandboxId, resp.getExpiresAt());
+        } catch (Exception e) {
+            log.warn("Failed to renew sandbox {}: {}", sandboxId, e.getMessage());
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Sandbox renewal failed for " + sandboxId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Aggregate a diagnostic snapshot of a sandbox: metrics (CPU/memory), the
+     * process table, and the recent opencode serve log tail. Never throws — each
+     * section is collected independently and failures are recorded as ERROR markers.
+     *
+     * @param sandboxId sandbox to inspect
+     * @return a human-readable multi-section diagnostic text
+     */
+    public String diagnose(String sandboxId) {
+        Sandbox sandbox = requireSandbox(sandboxId);
+        StringBuilder sb = new StringBuilder();
+        // 1. metrics (CPU/memory) — proves opencode is actually working
+        try {
+            var metrics = sandbox.getMetrics();
+            String metricsText;
+            try {
+                metricsText = OBJECT_MAPPER.writeValueAsString(metrics);
+            } catch (Exception jsonEx) {
+                metricsText = String.valueOf(metrics);
+            }
+            sb.append("== metrics ==\n").append(metricsText).append('\n');
+        } catch (Exception e) {
+            sb.append("== metrics == ERROR ").append(e.getMessage()).append('\n');
+        }
+        // 2. process snapshot inside the sandbox
+        try {
+            var exec = sandbox.commands().run("ps aux 2>/dev/null | head -30 || ps -ef | head -30");
+            String rendered = renderExecution(exec);
+            if (rendered == null || rendered.isBlank()) {
+                throw new IllegalStateException("ps returned no output");
+            }
+            sb.append("== processes ==\n").append(rendered).append('\n');
+        } catch (Exception e) {
+            // ps unavailable or empty — fall back to a /proc scan
+            try {
+                var exec = sandbox.commands().run("ls /proc | grep -E '^[0-9]+$' | head -30");
+                sb.append("== processes (proc fallback) ==\n").append(renderExecution(exec)).append('\n');
+            } catch (Exception fallbackEx) {
+                sb.append("== processes == ERROR ").append(e.getMessage()).append('\n');
+            }
+        }
+        // 3. opencode log tail (best-effort single command, two common log locations)
+        try {
+            var exec = sandbox.commands().run(
+                    "tail -50 $(ls -t ~/.opencode/log/*.log 2>/dev/null | head -1) 2>/dev/null"
+                    + " || tail -50 $(ls -t ~/.local/share/opencode/log/*.log 2>/dev/null | head -1) 2>/dev/null"
+                    + " || echo 'no opencode log found'");
+            sb.append("== opencode log tail ==\n").append(renderExecution(exec)).append('\n');
+        } catch (Exception e) {
+            sb.append("== opencode log tail == ERROR ").append(e.getMessage()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Run a shell command inside the sandbox and return the combined stdout +
+     * result text (same accessor as {@link #diagnose(String)}). Blocking until the
+     * command exits — callers must not launch long-lived processes here.
+     *
+     * @param sandboxId sandbox to execute the command in
+     * @param command   shell command to run
+     * @return the command's combined stdout/result text
+     * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if the sandbox is
+     *         unknown or the command execution fails
+     */
+    public String runCommand(String sandboxId, String command) {
+        Sandbox sandbox = requireSandbox(sandboxId);
+        try {
+            var exec = sandbox.commands().run(command);
+            return renderExecution(exec);
+        } catch (Exception e) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Command execution failed in sandbox " + sandboxId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Best-effort text rendering of a command {@link Execution} (stdout + result text). */
+    private String renderExecution(Execution exec) {
+        if (exec == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        ExecutionLogs logs = exec.getLogs();
+        if (logs != null && logs.getStdout() != null) {
+            for (OutputMessage msg : logs.getStdout()) {
+                sb.append(msg.getText());
+            }
+        }
+        if (exec.getResult() != null) {
+            for (ExecutionResult result : exec.getResult()) {
+                sb.append(result.getText());
+            }
+        }
+        return sb.toString();
     }
 
     /**

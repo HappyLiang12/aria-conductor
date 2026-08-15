@@ -16,15 +16,26 @@ public class WorkflowStep {
 
     public enum Status { PENDING, RUNNING, COMPLETED, FAILED, SKIPPED }
 
+    /** Semantic role of the step; drives SDD routing. Null-safe via @Builder.Default. */
+    public enum StepKind { GENERIC, BA, DEV, QA, CODE_REVIEW }
+
     /** Agent to execute this step. */
     private UUID agentId;
 
-    /** Prompt template; may contain {@code {previousOutput}} placeholder. */
+    /** Prompt template; may contain {@code {previousOutput}} and {@code {specRef}} placeholders. */
     private String promptTemplate;
 
     /** Max LLM iterations for this step's run. */
     @Builder.Default
     private int maxIterations = 3;
+
+    /** Semantic kind for SDD routing. Defaults to GENERIC (existing behaviour). */
+    @Builder.Default
+    private StepKind kind = StepKind.GENERIC;
+
+    /** Number of times this step has been (re)scheduled. */
+    @Builder.Default
+    private int attemptCount = 0;
 
     /** Run ID once this step has been started. */
     private UUID runId;

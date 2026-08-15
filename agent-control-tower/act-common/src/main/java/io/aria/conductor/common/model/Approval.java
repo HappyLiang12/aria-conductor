@@ -17,6 +17,9 @@ import java.util.UUID;
 @AllArgsConstructor
 public class Approval {
 
+    public enum ApprovalType { TOOL_CALL, SPEC_REVIEW }
+    public enum ContentKind { MARKDOWN, HTML }
+
     @Id
     @Column(columnDefinition = "UUID")
     private UUID id;
@@ -31,6 +34,21 @@ public class Approval {
     private ApprovalStatus status;
 
     private String reason;
+
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "approval_type", nullable = false, length = 20)
+    private ApprovalType approvalType = ApprovalType.TOOL_CALL;
+
+    @Column(columnDefinition = "TEXT")
+    private String content;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "content_kind", length = 20)
+    private ContentKind contentKind;
+
+    @Column(name = "knowledge_item_id", columnDefinition = "UUID")
+    private UUID knowledgeItemId;
 
     @Column(nullable = false)
     private Instant requestedAt;

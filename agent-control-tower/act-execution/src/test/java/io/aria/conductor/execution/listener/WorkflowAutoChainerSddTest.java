@@ -279,6 +279,88 @@ class WorkflowAutoChainerSddTest {
         verify(eventPublisher, never()).publishEvent(any());
     }
 
+    // ---- 7b. QA: VERDICT= marker (no tool verdict) routes like the tool path ----
+
+    @Test
+    void qaCompletion_verdictMarkerPass_routesToPassWithoutToolCall() {
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        // No tool verdict recorded — the chainer must fall back to the output marker.
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+        String output = "QA complete.\nVERDICT=PASS\n";
+        when(workflowService.advanceWorkflow(chain.getId(), 0, output)).thenReturn(true);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, output));
+
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, output);
+        verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
+    @Test
+    void qaCompletion_verdictMarkerDefect_reschedulesDev() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
+        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Parser crashes.\nVERDICT=DEFECT"));
+
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    @Test
+    void qaCompletion_verdictMarkerSpecGap_reschedulesBa() {
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, UUID.randomUUID());
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(baStep, devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(2);
+        when(workflowService.stepAt(chain, 2)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+
+        // Lowercase + spaces exercise the case-insensitive, whitespace-tolerant regex.
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Auth flows missing.\nverdict = spec_gap"));
+
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    @Test
+    void qaCompletion_noMarkerNoToolCall_failsWithRetryHint() {
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "no verdict anywhere"));
+
+        verify(workflowService).markStepFailed(eq(chain.getId()), eq(0), contains("submit_dod_review"));
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
     // ---- 8. GENERIC: existing linear advance, DoD untouched ----
 
     @Test

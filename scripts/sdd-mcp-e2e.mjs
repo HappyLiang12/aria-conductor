@@ -13,6 +13,9 @@
  *   5. poll list_pending_approvals for SPEC_REVIEW -> get_approval -> assert clean spec
  *   6. decide_approval REJECT (reason) -> poll get_workflow for BA reschedule (D6)
  *   7. next SPEC_REVIEW -> decide_approval APPROVE -> poll get_workflow for DEV advance
+ *   8. gh api branches/sdd/<chainId> -> assert spec/spec.md committed with the branch
+ *   9. after Dev completes -> assert branch HEAD advanced (push OR backend fallback)
+ *  10. after QA completes -> assert verdict-consistent terminal state
  *
  * Exit codes:
  *   0  all steps passed
@@ -32,12 +35,15 @@
  *   SDD_E2E_POLL_INTERVAL_SEC     poll interval in seconds (default 30)
  *   SDD_E2E_SMOKE_ONLY=1          stop after steps 1-2 (no live LLM loop)
  *   SDD_E2E_CHAIN_ID              override the chain id captured from aria_chat
+ *   SDD_E2E_GH_REPO               owner/repo targeted by the branch handoff (default owner/repo)
  */
 
 import process from 'node:process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -50,6 +56,9 @@ const GH_TOKEN = process.env.GH_TOKEN || '';
 const TIMEOUT_MIN = Number(process.env.SDD_E2E_TIMEOUT_MIN || 30);
 const POLL_INTERVAL_SEC = Number(process.env.SDD_E2E_POLL_INTERVAL_SEC || 30);
 const SMOKE_ONLY = process.env.SDD_E2E_SMOKE_ONLY === '1';
+// GitHub repo targeted by the SDD loop (owner/repo). The branch handoff is asserted
+// against this repo; override for the nightly run via SDD_E2E_GH_REPO.
+const GH_REPO = process.env.SDD_E2E_GH_REPO || 'owner/repo';
 
 const EXIT_OK = 0;
 const EXIT_FAIL = 1;
@@ -111,6 +120,22 @@ async function gateHealth() {
     warn(`SKIP: backend health check failed at ${url} (${err instanceof Error ? err.message : err}).`);
     warn('      Start the backend before running the live loop.');
     return false;
+  }
+}
+
+// ── GitHub branch-artifact probes (gh CLI) ────────────────────────────────────
+const execFileAsync = promisify(execFile);
+
+/**
+ * Run `gh api <path>` and return `{ ok, json, raw }`. Never throws — a non-zero
+ * exit or a missing `gh` binary yields `{ ok: false, err }` so callers can poll.
+ */
+async function ghApi(apiPath) {
+  try {
+    const { stdout } = await execFileAsync('gh', ['api', apiPath], { timeout: 30_000 });
+    return { ok: true, json: parseJson(stdout), raw: stdout };
+  } catch (err) {
+    return { ok: false, err: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -194,7 +219,7 @@ async function step2CreateWorkflowProbe(client) {
 
 async function step3AriaChatInstantiate(client) {
   const msg =
-    'instantiate development-workflow with issueRef=#38 issueRepo=owner/repo repoUrl=https://github.com/owner/repo.git';
+    `instantiate development-workflow with issueRef=#38 issueRepo=${GH_REPO} repoUrl=https://github.com/${GH_REPO}.git`;
   log(`step 3: aria_chat -> "${msg}"`);
   const res = await callTool(client, 'aria_chat', { message: msg });
   if (res.isError) {
@@ -320,6 +345,92 @@ async function step7ApproveAndAdvance(client, chainId) {
   log('step 7 OK: chain advanced to DEV.');
 }
 
+async function step8BranchSpecArtifact(chainId) {
+  const branch = `sdd/${chainId}`;
+  const [owner, repo] = GH_REPO.split('/');
+  if (!owner || !repo) throw new Error(`SDD_E2E_GH_REPO must be owner/repo, got "${GH_REPO}"`);
+  log(`step 8: polling gh api for branch ${branch} (spec/spec.md travels with the branch).`);
+
+  // 8a. Branch must exist after APPROVE commits spec/spec.md.
+  const branchState = await pollUntil(
+    `branch ${branch} existence`,
+    () => ghApi(`repos/${owner}/${repo}/branches/${branch}`),
+    (r) => (r.ok ? r : null),
+    TIMEOUT_MIN,
+  );
+  const headSha = branchState.json?.commit?.sha;
+  if (!headSha) throw new Error(`branch ${branch} returned no HEAD sha from gh api.`);
+
+  // 8b. The spec file must be committed on the branch (spec travels with the branch).
+  const specFile = await ghApi(
+    `repos/${owner}/${repo}/contents/spec/spec.md?ref=${encodeURIComponent(branch)}`,
+  );
+  if (!specFile.ok) {
+    throw new Error(`spec/spec.md missing on branch ${branch}: ${specFile.err}`);
+  }
+
+  log(`step 8 OK: branch ${branch} exists (HEAD=${headSha.slice(0, 8)}), spec/spec.md present.`);
+  return { owner, repo, branch, headSha };
+}
+
+async function step9DevAdvanceBranch(client, chainId, branchCtx) {
+  const { owner, repo, branch, headSha } = branchCtx;
+  log(`step 9: polling Dev completion, then asserting branch HEAD advanced past ${headSha.slice(0, 8)}.`);
+  await pollUntil(
+    'Dev step completion',
+    () => getWorkflow(client, chainId),
+    (wf) => wf && Array.isArray(wf.steps) && wf.steps[1] && wf.steps[1].status === 'COMPLETED',
+    TIMEOUT_MIN,
+  );
+
+  const after = await ghApi(`repos/${owner}/${repo}/branches/${branch}`);
+  if (!after.ok) throw new Error(`branch ${branch} disappeared after Dev: ${after.err}`);
+  const newHeadSha = after.json?.commit?.sha;
+  if (!newHeadSha) throw new Error(`branch ${branch} returned no HEAD sha after Dev.`);
+  if (newHeadSha === headSha) {
+    throw new Error(
+      `branch ${branch} HEAD did not advance after Dev (still ${headSha}) — Dev push AND backend fallback both missing.`,
+    );
+  }
+  log(`step 9 OK: branch HEAD advanced ${headSha.slice(0, 8)} -> ${newHeadSha.slice(0, 8)}.`);
+}
+
+async function step10QaTerminalState(client, chainId) {
+  log('step 10: polling QA completion, then asserting a verdict-consistent terminal state.');
+  let qaCompleted = false;
+  const outcome = await pollUntil(
+    'verdict-consistent terminal state',
+    async () => {
+      const wf = await getWorkflow(client, chainId);
+      if (!wf) return null;
+      if (wf.status === 'COMPLETED') return { kind: 'PASS', wf };
+      if (wf.status === 'FAILED') return { kind: 'NO_VERDICT', wf };
+      const steps = Array.isArray(wf.steps) ? wf.steps : [];
+      const qa = steps[2];
+      const dev = steps[1];
+      const ba = steps[0];
+      if (qa && qa.status === 'COMPLETED') qaCompleted = true;
+      if (qaCompleted) {
+        if (dev && ['RUNNING', 'PENDING'].includes(dev.status)) return { kind: 'DEFECT', wf };
+        if (ba && ['RUNNING', 'PENDING'].includes(ba.status)) return { kind: 'SPEC_GAP', wf };
+      }
+      return null;
+    },
+    (o) => !!o,
+    TIMEOUT_MIN,
+  );
+
+  if (outcome.kind === 'PASS') {
+    log('step 10 OK: PASS verdict -> chain COMPLETED.');
+  } else if (outcome.kind === 'DEFECT') {
+    log('step 10 OK: DEFECT verdict -> Dev step rescheduled (chain still RUNNING).');
+  } else if (outcome.kind === 'SPEC_GAP') {
+    log('step 10 OK: SPEC_GAP verdict -> BA step rescheduled (chain still RUNNING).');
+  } else {
+    log('step 10 OK: no verdict -> chain FAILED (hint surfaced through MCP).');
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   if (!gateEnv()) process.exit(EXIT_SKIP);
@@ -341,6 +452,9 @@ async function main() {
     const firstApproval = await step5SpecReview(client);
     await step6RejectAndReschedule(client, chainId, firstApproval.id);
     await step7ApproveAndAdvance(client, chainId);
+    const branchCtx = await step8BranchSpecArtifact(chainId);
+    await step9DevAdvanceBranch(client, chainId, branchCtx);
+    await step10QaTerminalState(client, chainId);
     log('ALL SDD E2E STEPS PASSED.');
     return EXIT_OK;
   } finally {

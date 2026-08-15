@@ -261,13 +261,13 @@ public class WorkflowAutoChainer {
     private void applyVerdict(WorkflowChain chain, int stepIndex, String verdict, String reason, String finalOutput) {
         switch (verdict) {
             case "PASS" -> {
-                recordQaVerdictReview(chain, true);
+                recordQaVerdictReview(chain, true, verdict);
                 storeQaReportIdIfPresent(chain, finalOutput);
                 boolean started = workflowService.advanceWorkflow(chain.getId(), stepIndex, finalOutput);
                 publishAdvanced(chain, stepIndex, started);
             }
             case "DEFECT" -> {
-                recordQaVerdictReview(chain, false);
+                recordQaVerdictReview(chain, false, verdict);
                 int devIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV);
                 if (devIdx < 0) {
                     workflowService.markStepFailed(chain.getId(), stepIndex,
@@ -278,7 +278,7 @@ public class WorkflowAutoChainer {
                 workflowService.rescheduleStep(chain.getId(), devIdx, reason);
             }
             case "SPEC_GAP" -> {
-                recordQaVerdictReview(chain, false);
+                recordQaVerdictReview(chain, false, verdict);
                 int baIdx = workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA);
                 if (baIdx < 0) {
                     workflowService.markStepFailed(chain.getId(), stepIndex,
@@ -326,13 +326,15 @@ public class WorkflowAutoChainer {
      * Record the qa-stage DoD review for a VERDICT= marker routing (R8-F2).
      * Mirrors the tool path (submit_dod_review), which records a qa review for
      * every verdict — PASS maps to {@code passed=true}, DEFECT/SPEC_GAP to false.
+     * R9-F5: the verdict STRING is now populated too (auditability), matching the
+     * tool path which writes the normalized verdict on the DoDStageReview.
      * Guarded like {@link #autoSubmitDevStageReviewIfAtDev}: a missing or already
      * completed DoD record must never crash the chain.
      */
-    private void recordQaVerdictReview(WorkflowChain chain, boolean approved) {
+    private void recordQaVerdictReview(WorkflowChain chain, boolean approved, String verdict) {
         try {
-            dodService.submitStageReview(chain.getId().toString(), "engine", "SDD Engine",
-                    approved, "verdict from output marker");
+            dodService.review(chain.getId().toString(), "engine", "SDD Engine",
+                    approved, null, "verdict from output marker", verdict);
         } catch (IllegalStateException e) {
             log.debug("Cannot record qa verdict review for chain {}: {}", chain.getId(), e.getMessage());
         }

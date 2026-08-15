@@ -392,8 +392,8 @@ class WorkflowAutoChainerSddTest {
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, output));
 
-        verify(dodService).submitStageReview(chain.getId().toString(),
-                "engine", "SDD Engine", true, "verdict from output marker");
+        verify(dodService).review(chain.getId().toString(),
+                "engine", "SDD Engine", true, null, "verdict from output marker", "PASS");
         verify(workflowService).advanceWorkflow(chain.getId(), 0, output);
         verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
     }
@@ -433,8 +433,8 @@ class WorkflowAutoChainerSddTest {
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Parser crashes.\nVERDICT=DEFECT"));
 
-        verify(dodService).submitStageReview(chain.getId().toString(),
-                "engine", "SDD Engine", false, "verdict from output marker");
+        verify(dodService).review(chain.getId().toString(),
+                "engine", "SDD Engine", false, null, "verdict from output marker", "DEFECT");
         verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
     }
@@ -456,6 +456,30 @@ class WorkflowAutoChainerSddTest {
         // Lowercase + spaces exercise the case-insensitive, whitespace-tolerant regex.
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Auth flows missing.\nverdict = spec_gap"));
 
+        verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
+        verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+    }
+
+    @Test
+    void qaCompletion_verdictMarkerSpecGap_recordsDoDQaReview() {
+        WorkflowStep baStep = step(WorkflowStep.StepKind.BA, UUID.randomUUID());
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
+        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
+        chain = chainWith(baStep, devStep, qaStep);
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(2);
+        when(workflowService.stepAt(chain, 2)).thenReturn(qaStep);
+        DoDRecord record = record("qa");
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
+        when(dodService.latestQaReview(record)).thenReturn(review(null, null));
+        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.BA)).thenReturn(0);
+
+        // Lowercase + spaces exercise the case-insensitive, whitespace-tolerant regex.
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "Auth flows missing.\nverdict = spec_gap"));
+
+        verify(dodService).review(chain.getId().toString(),
+                "engine", "SDD Engine", false, null, "verdict from output marker", "SPEC_GAP");
         verify(workflowService).rescheduleStep(chain.getId(), 0, "verdict from output marker");
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));

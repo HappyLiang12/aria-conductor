@@ -8,9 +8,12 @@ import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.dod.DoDStageReview;
+import io.aria.conductor.execution.git.GitBranchService;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -52,15 +55,21 @@ public class WorkflowAutoChainer {
     private final DoDService dodService;
     private final WorkflowChainRepository chainRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final GitBranchService gitBranchService;
+    private final OpenCodeAdkProvider openCodeAdkProvider;
 
     public WorkflowAutoChainer(WorkflowService workflowService,
                                DoDService dodService,
                                WorkflowChainRepository chainRepository,
-                               ApplicationEventPublisher eventPublisher) {
+                               ApplicationEventPublisher eventPublisher,
+                               GitBranchService gitBranchService,
+                               OpenCodeAdkProvider openCodeAdkProvider) {
         this.workflowService = workflowService;
         this.dodService = dodService;
         this.chainRepository = chainRepository;
         this.eventPublisher = eventPublisher;
+        this.gitBranchService = gitBranchService;
+        this.openCodeAdkProvider = openCodeAdkProvider;
     }
 
     @EventListener
@@ -132,6 +141,7 @@ public class WorkflowAutoChainer {
             }
             case DEV -> {
                 autoSubmitDevStageReviewIfAtDev(chain);
+                runDevBackendPushFallback(chain, step);
                 boolean started = workflowService.advanceWorkflow(chain.getId(), stepIndex, finalOutput);
                 publishAdvanced(chain, stepIndex, started);
             }
@@ -140,6 +150,50 @@ public class WorkflowAutoChainer {
                 boolean started = workflowService.advanceWorkflow(chain.getId(), stepIndex, finalOutput);
                 publishAdvanced(chain, stepIndex, started);
             }
+        }
+    }
+
+    /**
+     * T6 D-A insurance path: when the Dev run finishes but the branch HEAD has not
+     * advanced past the spec commit (the agent forgot to commit/push), run a
+     * backend git commit+push inside the Dev agent's sandbox. Failures are logged
+     * loudly but never crash the chain.
+     */
+    private void runDevBackendPushFallback(WorkflowChain chain, WorkflowStep devStep) {
+        java.util.Map<String, String> meta = GitHandoffMetadata.parse(chain.getTemplateParams());
+        String repoUrl = meta.get(GitHandoffMetadata.KEY_REPO_URL);
+        String specSha = meta.get(GitHandoffMetadata.KEY_SPEC_COMMIT_SHA);
+        if (repoUrl == null || repoUrl.isBlank() || specSha == null || specSha.isBlank()) {
+            return; // not a git-handoff chain (no repoUrl) or no recorded spec commit
+        }
+        String branchName = GitHandoffMetadata.branchName(chain.getId());
+        Optional<String> headSha;
+        try {
+            headSha = gitBranchService.branchHeadSha(repoUrl, branchName);
+        } catch (Exception e) {
+            log.warn("SDD backend push fallback: cannot resolve branch HEAD for chain {}: {}",
+                    chain.getId(), e.getMessage());
+            return;
+        }
+        if (headSha.isPresent() && !specSha.equals(headSha.get())) {
+            log.info("SDD backend push fallback: branch {} advanced ({} != spec commit); skipping",
+                    branchName, headSha.get());
+            return;
+        }
+        UUID devAgentId = devStep.getAgentId();
+        if (devAgentId == null) {
+            log.warn("SDD backend push fallback: Dev step for chain {} has no agentId; skipping",
+                    chain.getId());
+            return;
+        }
+        String command = "cd /workspace/repo && git add -A && git commit -m 'sdd dev (backend fallback)'"
+                + " && git push origin " + branchName;
+        try {
+            String output = openCodeAdkProvider.runSandboxCommand(devAgentId, command);
+            log.info("SDD backend push fallback executed for chain {}: {}", chain.getId(), output);
+        } catch (Exception e) {
+            log.error("SDD backend push fallback failed for chain {} (non-fatal): {}",
+                    chain.getId(), e.getMessage());
         }
     }
 

@@ -10,9 +10,11 @@ import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.dod.DoDStageReview;
+import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,6 +60,8 @@ class WorkflowAutoChainerSddTest {
     @Mock private DoDService dodService;
     @Mock private WorkflowChainRepository chainRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private GitBranchService gitBranchService;
+    @Mock private OpenCodeAdkProvider openCodeAdkProvider;
 
     private WorkflowAutoChainer chainer;
 
@@ -66,7 +71,8 @@ class WorkflowAutoChainerSddTest {
 
     @BeforeEach
     void setUp() {
-        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher);
+        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher,
+                gitBranchService, openCodeAdkProvider);
     }
 
     // ---- 1. BA: hand off to the coordinator, do NOT advance ----
@@ -134,6 +140,49 @@ class WorkflowAutoChainerSddTest {
         verify(dodService, never()).submitStageReview(anyString(), anyString(), anyString(), anyBoolean(), anyString());
         verify(workflowService).advanceWorkflow(chain.getId(), 0, "rework done");
         verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
+    }
+
+    // ---- 3b. DEV backend push fallback: no new commit -> sandbox git commit+push ----
+
+    @Test
+    void devCompletion_noNewCommit_triggersBackendPush() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, runId);
+        String repoUrl = "https://github.com/acme/repo.git";
+        chain = chainWithTemplateParams(devStep,
+                "{\"repoUrl\":\"" + repoUrl + "\",\"specCommitSha\":\"base-sha-1\"}");
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record("dev"));
+        when(workflowService.advanceWorkflow(chain.getId(), 0, "dev done")).thenReturn(true);
+        when(gitBranchService.branchHeadSha(repoUrl, "sdd/" + chain.getId()))
+                .thenReturn(Optional.of("base-sha-1"));
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "dev done"));
+
+        verify(openCodeAdkProvider).runSandboxCommand(eq(agentId),
+                contains("git push origin sdd/" + chain.getId()));
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, "dev done");
+    }
+
+    @Test
+    void devCompletion_branchHeadAdvanced_skipsFallback() {
+        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, runId);
+        String repoUrl = "https://github.com/acme/repo.git";
+        chain = chainWithTemplateParams(devStep,
+                "{\"repoUrl\":\"" + repoUrl + "\",\"specCommitSha\":\"base-sha-1\"}");
+        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
+        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
+        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
+        when(dodService.getStatus(chain.getId().toString())).thenReturn(record("dev"));
+        when(workflowService.advanceWorkflow(chain.getId(), 0, "dev done")).thenReturn(true);
+        when(gitBranchService.branchHeadSha(repoUrl, "sdd/" + chain.getId()))
+                .thenReturn(Optional.of("advanced-sha-2"));
+
+        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "dev done"));
+
+        verify(openCodeAdkProvider, never()).runSandboxCommand(any(), anyString());
+        verify(workflowService).advanceWorkflow(chain.getId(), 0, "dev done");
     }
 
     // ---- 4. QA: verdict PASS -> advance (and capture REPORT_ID) ----
@@ -440,6 +489,15 @@ class WorkflowAutoChainerSddTest {
                 .withName("sdd-loop")
                 .withStatus(WorkflowChain.Status.RUNNING)
                 .withStepsJson(stepsJson(steps))
+                .build();
+    }
+
+    private WorkflowChain chainWithTemplateParams(WorkflowStep step, String templateParams) {
+        return TestDataBuilder.aWorkflowChain()
+                .withName("sdd-loop")
+                .withStatus(WorkflowChain.Status.RUNNING)
+                .withStepsJson(stepsJson(step))
+                .withTemplateParams(templateParams)
                 .build();
     }
 

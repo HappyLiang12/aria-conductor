@@ -613,6 +613,28 @@ class OpenCodeAdkProviderTest {
                         .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
     }
 
+    // ---- T6: run a shell command inside the agent's sandbox ----
+
+    @Test
+    void runSandboxCommand_delegatesToManager() {
+        UUID agentId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(sandboxManager.runCommand("sb-1", "git status")).thenReturn("M file.txt");
+
+        String result = provider.runSandboxCommand(agentId, "git status");
+
+        assertThat(result).isEqualTo("M file.txt");
+        verify(sandboxManager).runCommand("sb-1", "git status");
+    }
+
+    @Test
+    void runSandboxCommand_unknownAgent_throws() {
+        assertThatThrownBy(() -> provider.runSandboxCommand(UUID.randomUUID(), "git status"))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+    }
+
     // ---- D3: opencode.json generation (question=deny + active provider model) ----
 
     @Test

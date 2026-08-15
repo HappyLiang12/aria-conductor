@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.adk.opencode;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.LlmProvider;
@@ -607,7 +609,7 @@ class OpenCodeAdkProviderTest {
 
     @Test
     void prepareInstance_writesOpenCodeJsonWithQuestionDeniedAndActiveProvider() throws Exception {
-        LlmProvider active = LlmProvider.builder().name("deepseek").type(LlmProviderType.OPENAI)
+        LlmProvider active = LlmProvider.builder().name("deepseek-qa").type(LlmProviderType.OPENAI)
                 .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
                 .apiKey("k").active(true).build();
         when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
@@ -620,8 +622,38 @@ class OpenCodeAdkProviderTest {
 
         String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
         assertThat(json).contains("\"question\": \"deny\"");
-        assertThat(json).contains("deepseek/deepseek-v4-flash");
+        assertThat(json).contains("deepseek-qa/deepseek-v4-flash");
         assertThat(json).contains("https://api.deepseek.com/v1");
+        // R5-F1: opencode requires custom providers to declare the SDK adapter
+        // (npm) and a non-empty models map — without them the provider resolves to
+        // zero models and opencode fails with ProviderModelNotFoundError at runtime.
+        assertThat(json).contains("\"npm\": \"@ai-sdk/openai-compatible\"");
+        assertThat(json).contains("\"models\"");
+        assertThat(json).contains("\"deepseek-v4-flash\": {}");
+    }
+
+    @Test
+    void prepareInstance_openCodeJson_isParseableAndSchemaComplete() throws Exception {
+        LlmProvider active = LlmProvider.builder().name("deepseek-qa").type(LlmProviderType.OPENAI)
+                .baseUrl("https://api.deepseek.com/v1").defaultModel("deepseek-v4-flash")
+                .apiKey("k").active(true).build();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.of(active));
+        UUID agentId = UUID.randomUUID();
+        when(sandboxManager.createSandbox(eq(agentId), eq(IMAGE), any())).thenReturn("sb-1");
+        when(sandboxManager.getSandboxUrl("sb-1", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        String json = Files.readString(tempDir.resolve(agentId.toString()).resolve("opencode.json"));
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(json);
+        assertThat(root.path("permission").path("question").asText()).isEqualTo("deny");
+        JsonNode providerNode = root.path("provider").path("deepseek-qa");
+        assertThat(providerNode.path("npm").asText()).isEqualTo("@ai-sdk/openai-compatible");
+        assertThat(providerNode.path("models").has("deepseek-v4-flash")).isTrue();
+        assertThat(providerNode.path("options").path("baseURL").asText())
+                .isEqualTo("https://api.deepseek.com/v1");
     }
 
     @Test

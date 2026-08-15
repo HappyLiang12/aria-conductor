@@ -425,14 +425,18 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                       "model": "%s/%s",
                       "provider": {
                         "%s": {
+                          "npm": "@ai-sdk/openai-compatible",
                           "options": {
                             "apiKey": "{env:LLM_API_KEY}",
                             "baseURL": "%s"
+                          },
+                          "models": {
+                            "%s": {}
                           }
                         }
                       }
                     }
-                    """.formatted(providerId, model, providerId, baseUrl);
+                    """.formatted(providerId, model, providerId, baseUrl, model);
             Files.writeString(workspace.resolve("opencode.json"), json);
             log.info("Wrote opencode.json for workspace {} (provider={}, model={})", workspace, providerId, model);
         } catch (IOException e) {

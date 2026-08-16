@@ -293,3 +293,35 @@ else
 ```
 
 报告提交：`docs(podman): task6 report`（hash 见 `git log --oneline -2`，本文件提交自身无法自引用）
+
+---
+
+## Task 6 质量评审修复（2026-08-17）
+
+评审产出 5 项 Minor findings，本次处理其中 3 项代码修复 + 2 项记录决策。
+
+### 已修复
+
+- **Minor 3 — 运行时标签措辞统一（与 start-backend spec §4.2 一致）**
+  - ps1：`$rtLabel` explicit 分支由 `"configured via CONTAINER_RUNTIME"` → `"explicit: CONTAINER_RUNTIME"`
+  - sh：explicit 提示由 `(configured via CONTAINER_RUNTIME)` → `(explicit: CONTAINER_RUNTIME)`
+- **Minor 4 — 残留文案 "install Docker" → "install Docker or podman"**
+  - ps1 / sh 回退分支 missing-prerequisites 错误提示中的 `install Docker for the easiest setup` → `install Docker or podman for the easiest setup`
+- **Minor 2 — ps1 compose up 失败检测（消除 ps1/sh 不对称）**
+  - `& $rt compose up -d --build` 后新增 `$LASTEXITCODE` 检查：非 0 时 `Write-Error "Compose failed to start services (exit $LASTEXITCODE). Check $rt logs."` + `exit 1`（与 Task 5/6 既定模式一致）
+
+### 记录决策（不改代码）
+
+- **Minor 1 — ps1 catch 块 `exit 1` 在 EAP=Stop 下为死代码**：接受（效果等价：错误信息显示、退出码 1）。仅在 catch 块添加说明注释 `# exit 1 is defensive: Write-Error throws under EAP=Stop (message still displays, exit code still 1)`。
+- **Minor 5 — .env 在首次创建前被 Load-DotEnv 提前加载**：接受，仅记录。首次运行无 .env 时 Load-DotEnv 无副作用；后续运行 .env 已存在，行为正确。
+
+### 修复提交
+
+```text
+46f260a fix(scripts): unify runtime label wording, fix fallback hint, check compose exit code
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+ Pre-commit Guardrail: [1/3] Format ✓ [2/3] TS skip ✓ [3/3] Sensitive scan ✓ ALL CHECKS PASSED
+
+本报告提交：docs(podman): task6 review fixes report（hash 见 git log）
+```
+

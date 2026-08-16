@@ -7,9 +7,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import java.util.Locale;
 
 @Slf4j
 @Service
@@ -24,9 +24,10 @@ public class SandboxRunner {
     }
 
     private void detectRuntime() {
-        containerRuntime = resolveRuntime(System.getenv("CONTAINER_RUNTIME"),
-                commandExists("docker"), commandExists("podman"));
-        if (containerRuntime == null) {
+        String explicit = System.getenv("CONTAINER_RUNTIME");
+        boolean explicitlyConfigured = explicit != null && !explicit.isBlank();
+        containerRuntime = resolveRuntime(explicit, commandExists("docker"), commandExists("podman"));
+        if (containerRuntime == null && !explicitlyConfigured) {
             log.warn("No container runtime detected. Sandbox tools disabled.");
         }
     }
@@ -47,7 +48,7 @@ public class SandboxRunner {
                 if (("docker".equals(rt) && dockerExists) || ("podman".equals(rt) && podmanExists)) {
                     return rt;
                 }
-                log.warn("CONTAINER_RUNTIME='{}' is set but its CLI is unavailable. Sandbox tools disabled.", rt);
+                log.warn("CONTAINER_RUNTIME='{}' is set but its CLI is unavailable. Sandbox tools disabled.", explicitEnv);
                 return null;
             }
             log.warn("CONTAINER_RUNTIME='{}' is invalid (expected docker|podman). Ignoring and auto-detecting.", explicitEnv);

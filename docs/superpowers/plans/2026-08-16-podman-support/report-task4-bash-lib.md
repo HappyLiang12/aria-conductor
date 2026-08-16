@@ -105,3 +105,40 @@ All scenarios PASSED   # 退出码 0，stderr 无 "Is a directory" 噪声
 ```
 
 Fix 2 手动检查（bash）：`FOO=""` 已设置时 source 库并加载含 `FOO=bar` 的 `.env` → `FOO` 保持为空；未设置的 `BAZ` 正常从 `.env` 加载为 `qux`（`${!name+x}` 语义正确区分"已设置但为空"与"未设置"）。
+
+## Task 4 代码质量评审修复（Quality Review Fixes）
+
+- 日期: 2026-08-17
+- 提交: `8aff251` fix(scripts): strip CRLF from .env values, assert exit codes in bash harness, trap cleanup
+
+| # | 严重度 | 修复内容 | 文件 |
+|---|---|---|---|
+| C1 | Critical | `.env` 值 CRLF 泄漏：仓库 `.env.example` 为 CRLF 行尾，`cp .env.example .env` 后 `load_dotenv` 读到 `CONTAINER_RUNTIME=podman\r`，strict 模式判定 `podman\r` ≠ podman → 硬错误 "is invalid"（`SANDBOX_SOCKET` 同理）。修复：read 后立即 `line="${line%$'\r'}"` 去除行尾 `\r`（bash 内建展开，bash 4+ 可用，不用 sed/tr 外部命令以兼容 harness 隔离 PATH） | `scripts/lib/container-runtime.sh` |
+| I1 | Important | harness 退出码契约：scenario.sh 捕获并 `exit $rc` 传播 `resolve_container_runtime` 退出码；`run_scenario` 返回子进程退出码；8 个 resolution 场景断言扩展 `rc=0`（success / auto-neither）/ `rc=1`（hard error 场景），rc=1 场景用双向交替 pattern `*rc=1*"msg"*\|*"msg"*rc=1*`（ERROR 行在 RESULT 行之前，单方向 pattern 会漏匹配） | `e2e/container-runtime-e2e.sh` |
+| M1 | Minor | trap 清理：`trap 'rm -rf "$STUB_ROOT"' EXIT` 统一清理，删除脚本末尾显式 `rm -rf`，避免双重删除 | `e2e/container-runtime-e2e.sh` |
+| M2 | Minor | bash 版本要求文档化：头注释增加 `# Requires bash 4.0+ (uses ${var,,} and ${!name+x} parameter expansions).` | `scripts/lib/container-runtime.sh` |
+| 回归 | C1 覆盖 | 新增 CRLF 回归场景：`crtlf_dir` 下写入 CRLF `.env`（`CONTAINER_RUNTIME=podman\r\n` + `SANDBOX_SOCKET=...\r\n`），断言 `load_dotenv` 剥离行尾 `\r` 后值为 `podman` / socket 路径。harness 场景数 10 → 11 | `e2e/container-runtime-e2e.sh` |
+
+### 修复后验证
+
+```bash
+$ bash e2e/container-runtime-e2e.sh   # 11/11 PASS，退出码 0，stderr 0 字节
+Container-runtime resolution scenarios:
+  PASS: explicit docker + docker available
+  PASS: explicit podman + podman available
+  PASS: explicit docker + CLI missing -> hard error (rc=1)
+  PASS: explicit podman + engine not running -> hard error with podman hint (rc=1)
+  PASS: explicit invalid value -> hard error (rc=1)
+  PASS: auto + docker running -> docker
+  PASS: auto + only podman running -> podman
+  PASS: auto + neither available -> null runtime (rc=0)
+load_dotenv scenarios:
+  PASS: load_dotenv parses KEY=VALUE, preserves existing env
+  PASS: load_dotenv missing .env is a no-op
+  PASS: load_dotenv strips CRLF line endings
+
+All scenarios PASSED
+```
+
+CR bug 复现验证：CRLF `.env`（`CONTAINER_RUNTIME=podman\r\n`）+ podman stub CLI（隔离 PATH），fresh bash 中 `load_dotenv` + `resolve_container_runtime` → `RESULT rc=0 runtime=podman mode=explicit`（修复前硬错误 "is invalid"）。
+

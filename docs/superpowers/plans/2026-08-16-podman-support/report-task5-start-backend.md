@@ -349,3 +349,53 @@ dd568ce feat(scripts): runtime-aware OpenSandbox startup in start-backend
 ```
 
 报告提交：`docs(podman): task5 report`（hash 见 `git log --oneline -2`，本文件提交自身无法自引用）
+
+---
+
+# Task 5 质量评审修复（2026-08-17）
+
+评审针对 `dd568ce` 版本，修复提交：`e259915`。
+
+## 已修复项
+
+### Fix I-1（重要，功能）：ps1 compose 失败时 podman 提示死代码
+
+- **问题**：脚本顶部 `$ErrorActionPreference = "Stop"` 使 `Write-Error` 立即抛出终止错误，其后置的 podman hint 行永远不执行。
+- **修复**：将 hint 输出移到 `Write-Error` **之前**（先打印提示，再由 Write-Error 终止）。
+- **验证（定向 stub）**：临时目录放置 stub `podman.ps1`（`info` 退出 0、其余子命令退出 1），注入 PATH 并设 `CONTAINER_RUNTIME=podman` 后 dot-source lib，经 `Resolve-ContainerRuntime` 得到 podman，再运行修复后的 compose 失败分支：
+  - `podman hint: verify the socket is enabled ...` 先于错误出现 ✓
+  - `Failed to start OpenSandbox server`（Write-Error）出现 ✓
+  - 退出码为 1 ✓
+
+### Fix M-2（次要）：sh grep -q + pipefail SIGPIPE 竞态
+
+- **问题**：`"$CONTAINER_RT" ps ... | grep -q` 在 `set -euo pipefail` 下，grep 命中即提前关闭管道，容器 CLI 写管道时可能触发 SIGPIPE 导致非零退出，进而误终止脚本。
+- **修复**：改为 capture-then-match：`sandbox_list="$("$CONTAINER_RT" ps ... 2>/dev/null || true)"`，再 `printf '%s' "$sandbox_list" | grep -q`。`printf` 输出单个小字符串驻留缓冲区，不会产生有意义的 SIGPIPE。
+
+### Fix M-3（次要）：preflight 文案统一
+
+- sh 侧 `selected: $CONTAINER_RT (...)` → `Container runtime: $CONTAINER_RT (...)`，与 ps1 侧 `Container runtime: $($runtimeInfo.Runtime) ($reason)` 对齐（explicit: CONTAINER_RUNTIME / auto-detected 均保留）。
+- ps1 保持不变。
+
+## 记录性决策（接受，不改）
+
+- **I-2**：preflight 中对非 opencode 提供方的严格模式失败降级为 WARNING 是**有意设计**——容器运行时仅 `-AdkProvider opencode` 必需；opencode 段仍通过 `$runtimeError` / `resolve_container_runtime` 失败硬错误（`exit 1`）。行为保持不变。ps1 输出 WARNING 与 sh 输出 ERROR（lib 消息走 stderr）的显示差异是接受的：lib 消息为 harness 断言契约。
+- **M-4**（sh 二次 resolve）：接受，仅记录。
+- **M-5**（通用 compose 失败消息）：接受，仅记录。
+- **M-6**（无脚本级测试）：接受；Task 9 Spike B 提供功能覆盖，仅记录。
+
+## 验证结果
+
+1. 语法检查：`pwsh ... [scriptblock]::Create(...)` → `PS1 SYNTAX OK`；`bash -n scripts/start-backend.sh` → `SH SYNTAX OK`。
+2. I-1 定向 stub 验证通过（见上，hint 先于错误、退出码 1）。
+3. 回归：`pwsh -NoProfile -File e2e/container-runtime-e2e.ps1` 与 `bash e2e/container-runtime-e2e.sh` 全部 PASS（11 个场景 × 2）。
+
+## 提交
+
+```text
+e259915 fix(scripts): emit podman hint before Write-Error, avoid grep SIGPIPE race, unify preflight wording
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+ Pre-commit Guardrail: [1/3] Format ✓ [2/3] TS skip ✓ [3/3] Sensitive scan ✓ ALL CHECKS PASSED
+```
+
+报告提交：`docs(podman): task5 review fixes report`（hash 见 `git log --oneline -2`，本文件提交自身无法自引用）

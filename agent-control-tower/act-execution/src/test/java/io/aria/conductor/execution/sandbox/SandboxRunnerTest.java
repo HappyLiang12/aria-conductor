@@ -119,4 +119,33 @@ class SandboxRunnerTest {
                 .doesNotContain("\\")
                 .contains("--entrypoint python3");
     }
+
+    // ---- runtime resolution precedence (CONTAINER_RUNTIME env override) ----
+
+    @Test
+    void resolveRuntime_noEnvVar_autoDetectsDockerFirstThenPodman() {
+        assertThat(SandboxRunner.resolveRuntime(null, true, true)).isEqualTo("docker");
+        assertThat(SandboxRunner.resolveRuntime("", false, true)).isEqualTo("podman");
+        assertThat(SandboxRunner.resolveRuntime("   ", false, false)).isNull();
+    }
+
+    @Test
+    void resolveRuntime_explicitEnvWithCliPresent_winsOverDetection() {
+        assertThat(SandboxRunner.resolveRuntime("docker", true, true)).isEqualTo("docker");
+        assertThat(SandboxRunner.resolveRuntime("DOCKER", true, false)).isEqualTo("docker");
+        assertThat(SandboxRunner.resolveRuntime(" podman ", false, true)).isEqualTo("podman");
+    }
+
+    @Test
+    void resolveRuntime_explicitEnvValidButCliMissing_disablesSandbox() {
+        // Strict: no cross-runtime fallback when the user explicitly chose one.
+        assertThat(SandboxRunner.resolveRuntime("docker", false, true)).isNull();
+        assertThat(SandboxRunner.resolveRuntime("podman", true, false)).isNull();
+    }
+
+    @Test
+    void resolveRuntime_invalidEnvValue_isIgnoredAndAutoDetected() {
+        assertThat(SandboxRunner.resolveRuntime("nerdctl", true, true)).isEqualTo("docker");
+        assertThat(SandboxRunner.resolveRuntime("containerd", false, true)).isEqualTo("podman");
+    }
 }

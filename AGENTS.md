@@ -21,7 +21,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 | `act-test-support` | Shared test utilities, mock ADK, test data builders | `agent-control-tower/act-test-support/src/main/java/io/aria/conductor/test/` |
 | `act-dashboard` | React frontend (pages, components, API layer) | `agent-control-tower/act-dashboard/src/App.tsx` |
 | `langchain-adk` | Python LangChain agent runtime (FastAPI) | `langchain-adk/src/server.py` |
-| `opencode-sandbox` | Docker image for OpenCode sandbox (opencode provider) | `agent-control-tower/opencode-sandbox/Dockerfile` |
+| `opencode-sandbox` | Container image (docker/podman) for OpenCode sandbox (opencode provider) | `agent-control-tower/opencode-sandbox/Dockerfile` |
 | `packages/mcp-server` | MCP protocol server (TypeScript) | `packages/mcp-server/src/server.ts` |
 
 ## Common Task Paths
@@ -42,7 +42,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 1. `act-knowledge/` → service/controller → 2. `act-common/model/KnowledgeItem.java` → 3. `act-dashboard/src/pages/` → UI
 
 ### Run full-stack locally
-1. OpenSandbox: `docker compose up -d opensandbox-server` (required for opencode provider)
+1. OpenSandbox: `docker compose up -d opensandbox-server` (podman: `podman compose up -d opensandbox-server`; set `SANDBOX_SOCKET` in .env; required for opencode provider)
 2. Backend: `cd agent-control-tower && OPENCODE_SANDBOX_SERVER_URL=http://localhost:8090 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2`
 3. Frontend: `cd agent-control-tower/act-dashboard && pnpm dev`
 4. ADK (langchain only): `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
@@ -59,6 +59,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 | WebSocket events (real-time dashboard) | Event loss, UI state desync | `cd agent-control-tower/act-dashboard && npx playwright test` |
 | Python ADK tool binding | Tool schema mismatch causes agent crash | `cd langchain-adk && python -m pytest tests/` |
 | OpenCode sandbox / OpenSandbox | Sandbox creation failure, endpoint unreachable | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*OpenCode*"` |
+| Container runtime selection (`scripts/lib/container-runtime.*`) | podman socket/config mismatch blocks opencode sandbox | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |
 
 ## Validation Command Mapping
 
@@ -72,6 +73,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 | MCP server tests | `cd packages/mcp-server && npx vitest run` |
 | Full build (skip tests) | `cd agent-control-tower && mvn install -DskipTests` |
 | Docker full-stack | `docker compose up -d` |
+| Container runtime scenario tests | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |
 
 ## Quick Reference
 

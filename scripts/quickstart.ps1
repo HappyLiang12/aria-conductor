@@ -18,9 +18,10 @@ $rtLabel = ""
 try {
     $runtimeInfo = Resolve-ContainerRuntime
     $rt = $runtimeInfo.Runtime
-    $rtLabel = if ($runtimeInfo.Mode -eq "explicit") { "configured via CONTAINER_RUNTIME" } else { "auto-detected" }
+    $rtLabel = if ($runtimeInfo.Mode -eq "explicit") { "explicit: CONTAINER_RUNTIME" } else { "auto-detected" }
 } catch {
     Write-Error $_.Exception.Message
+    # exit 1 is defensive: Write-Error throws under EAP=Stop (message still displays, exit code still 1)
     exit 1
 }
 
@@ -45,6 +46,10 @@ if ($rt) {
     Write-Host "Building and starting services..." -ForegroundColor Yellow
     Write-Host "  (includes OpenSandbox server for opencode agent runtime)" -ForegroundColor DarkGray
     & $rt compose up -d --build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Compose failed to start services (exit $LASTEXITCODE). Check $rt logs."
+        exit 1
+    }
 
     Write-Host ""
     Write-Host "Services:" -ForegroundColor Green
@@ -76,7 +81,7 @@ if ($rt) {
 
     if ($missing.Count -gt 0) {
         Write-Error "Missing prerequisites: $($missing -join ', ')"
-        Write-Host "Install them and try again, or install Docker for the easiest setup."
+        Write-Host "Install them and try again, or install Docker or podman for the easiest setup."
         exit 1
     }
 

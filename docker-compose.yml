@@ -92,8 +92,10 @@ services:
       # Container port 8080; host 8090 avoids clash with aria-backend's 8080 binding
       - "127.0.0.1:${OPENSANDBOX_PORT:-8090}:8080"
     volumes:
-      # Docker runtime mode: the server creates/kills sandbox containers via the Docker socket
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Container-runtime socket used to create/kill sandbox containers. Defaults to
+      # Docker; set SANDBOX_SOCKET for podman (rootless: /run/user/1000/podman/podman.sock,
+      # rootful: /run/podman/podman.sock).
+      - ${SANDBOX_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       # Persist server-managed metadata (SQLite store at ~/.opensandbox/opensandbox.db)
       - opensandbox_data:/root/.opensandbox
     configs:

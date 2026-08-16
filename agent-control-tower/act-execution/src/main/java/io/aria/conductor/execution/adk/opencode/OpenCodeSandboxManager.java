@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,6 +61,10 @@ public class OpenCodeSandboxManager {
     private static final int MAX_UPLOAD_DEPTH = 3;
     /** Cap on a single uploaded file to keep requests sane. */
     private static final long MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+    /** Max attempts to create a sandbox before giving up on transient start errors. */
+    private static final int MAX_SANDBOX_CREATE_ATTEMPTS = 3;
+    /** Base backoff (ms) between sandbox creation retries; doubles each attempt (2s, then 4s). */
+    private static final long SANDBOX_CREATE_BACKOFF_BASE_MS = 2000L;
     /** JSON serializer for the metrics section (shared, thread-safe). */
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -94,30 +99,82 @@ public class OpenCodeSandboxManager {
      * @throws TaskExecutionException {@code SANDBOX_UNAVAILABLE} if creation fails
      */
     public String createSandbox(UUID agentId, String image, Map<String, String> env) {
-        try {
-            Sandbox.Builder builder = Sandbox.builder()
-                    .connectionConfig(connectionConfig)
-                    .image(image)
-                    .timeout(SANDBOX_TIMEOUT)
-                    // The server reports execd endpoints without a scheme and with the
-                    // configured host (bridge mode: 127.0.0.1:{mapped}/proxy/{port}, see
-                    // docker-compose `[docker] host_ip`). We skip the SDK's built-in health
-                    // check (it would probe the scheme-less endpoint and fail) and instead
-                    // verify readiness ourselves against the URL built by {@link #getSandboxUrl}.
-                    .skipHealthCheck(true);
-            if (env != null && !env.isEmpty()) {
-                builder.env(env);
-                log.info("Injecting {} env var(s) into sandbox for agent {}", env.size(), agentId);
+        Sandbox sandbox = createSandboxWithRetry(agentId, image, env);
+        String sandboxId = sandbox.getId();
+        sandboxes.put(agentId, sandbox);
+        log.info("OpenSandbox sandbox created for agent {}: {}", agentId, sandboxId);
+        return sandboxId;
+    }
+
+    /**
+     * Create a sandbox, retrying transient start/port-bind failures with backoff.
+     *
+     * <p>The OpenSandbox server intermittently rejects sandbox start when it lands on a
+     * Windows excluded port range ({@code DOCKER::SANDBOX_START_FAILED} port-bind error).
+     * Such failures are transient, so we retry up to {@link #MAX_SANDBOX_CREATE_ATTEMPTS}
+     * attempts with an exponential backoff; any other failure fails fast.
+     */
+    private Sandbox createSandboxWithRetry(UUID agentId, String image, Map<String, String> env) {
+        Exception lastFailure = null;
+        for (int attempt = 1; attempt <= MAX_SANDBOX_CREATE_ATTEMPTS; attempt++) {
+            try {
+                return buildSandbox(agentId, image, env);
+            } catch (Exception e) {
+                lastFailure = e;
+                boolean transientError = isTransientStartError(e);
+                boolean lastAttempt = attempt == MAX_SANDBOX_CREATE_ATTEMPTS;
+                if (!transientError || lastAttempt) {
+                    log.error("Failed to create OpenSandbox sandbox for agent {}: {}", agentId, e.getMessage());
+                    throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                            "OpenSandbox sandbox creation failed for agent " + agentId + ": " + e.getMessage(), e);
+                }
+                long backoffMs = SANDBOX_CREATE_BACKOFF_BASE_MS << (attempt - 1);
+                log.warn("Sandbox creation attempt {}/{} failed for agent {} with transient error '{}'; retrying in {}ms",
+                        attempt, MAX_SANDBOX_CREATE_ATTEMPTS, agentId, e.getMessage(), backoffMs);
+                sleepQuietly(backoffMs);
             }
-            Sandbox sandbox = builder.build();
-            String sandboxId = sandbox.getId();
-            sandboxes.put(agentId, sandbox);
-            log.info("OpenSandbox sandbox created for agent {}: {}", agentId, sandboxId);
-            return sandboxId;
-        } catch (Exception e) {
-            log.error("Failed to create OpenSandbox sandbox for agent {}: {}", agentId, e.getMessage());
-            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                    "OpenSandbox sandbox creation failed for agent " + agentId + ": " + e.getMessage(), e);
+        }
+        throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "OpenSandbox sandbox creation failed for agent " + agentId + ": " + lastFailure.getMessage(), lastFailure);
+    }
+
+    private Sandbox buildSandbox(UUID agentId, String image, Map<String, String> env) {
+        Sandbox.Builder builder = Sandbox.builder()
+                .connectionConfig(connectionConfig)
+                .image(image)
+                .timeout(SANDBOX_TIMEOUT)
+                // The server reports execd endpoints without a scheme and with the
+                // configured host (bridge mode: 127.0.0.1:{mapped}/proxy/{port}, see
+                // docker-compose `[docker] host_ip`). We skip the SDK's built-in health
+                // check (it would probe the scheme-less endpoint and fail) and instead
+                // verify readiness ourselves against the URL built by {@link #getSandboxUrl}.
+                .skipHealthCheck(true);
+        if (env != null && !env.isEmpty()) {
+            builder.env(env);
+            log.info("Injecting {} env var(s) into sandbox for agent {}", env.size(), agentId);
+        }
+        return builder.build();
+    }
+
+    /**
+     * True when the failure looks like a transient sandbox start / port-bind error
+     * (e.g. {@code DOCKER::SANDBOX_START_FAILED} or an excluded port range).
+     */
+    private static boolean isTransientStartError(Exception e) {
+        if (e == null || e.getMessage() == null) {
+            return false;
+        }
+        String message = e.getMessage().toLowerCase(Locale.ROOT);
+        return message.contains("sandbox_start_failed")
+                || message.contains("excluded port")
+                || message.contains("port");
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
         }
     }
 

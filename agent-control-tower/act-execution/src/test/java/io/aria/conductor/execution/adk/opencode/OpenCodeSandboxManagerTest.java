@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -137,6 +138,81 @@ class OpenCodeSandboxManagerTest {
 
             assertThat(id).isEqualTo("sb-1");
             verify(builder, never()).env(anyMap());
+        }
+    }
+
+    @Test
+    void createSandbox_retriesOnPortBindFailure_thenSucceeds() {
+        // The OpenSandbox server rejects sandbox start on Windows excluded port ranges
+        // with a transient DOCKER::SANDBOX_START_FAILED port-bind error. Creation must
+        // retry (with backoff) instead of failing the whole chain immediately.
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            Sandbox sandbox = mock(Sandbox.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build())
+                    .thenThrow(new RuntimeException("DOCKER::SANDBOX_START_FAILED: port 40369 excluded"))
+                    .thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn("sb-1");
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8080", null);
+            String id = manager.createSandbox(agentId, "test-image", null);
+
+            assertThat(id).isEqualTo("sb-1");
+            verify(builder, times(2)).build();
+        }
+    }
+
+    @Test
+    void createSandbox_givesUpAfterMaxRetries() {
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build())
+                    .thenThrow(new RuntimeException("SANDBOX_START_FAILED: excluded port range"))
+                    .thenThrow(new RuntimeException("SANDBOX_START_FAILED: excluded port range"))
+                    .thenThrow(new RuntimeException("SANDBOX_START_FAILED: excluded port range"));
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8080", null);
+
+            assertThatThrownBy(() -> manager.createSandbox(agentId, "test-image", null))
+                    .isInstanceOf(TaskExecutionException.class)
+                    .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                            .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+            verify(builder, times(3)).build();
+        }
+    }
+
+    @Test
+    void createSandbox_noRetryOnNonTransientErrors() {
+        // Non-transient failures (e.g. auth) must fail fast — no retry, no backoff.
+        UUID agentId = UUID.randomUUID();
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = mock(Sandbox.Builder.class);
+            sandboxStatic.when(Sandbox::builder).thenReturn(builder);
+            when(builder.connectionConfig(any())).thenReturn(builder);
+            when(builder.image(anyString())).thenReturn(builder);
+            when(builder.timeout(any())).thenReturn(builder);
+            when(builder.skipHealthCheck(anyBoolean())).thenReturn(builder);
+            when(builder.build()).thenThrow(new RuntimeException("invalid API key: authentication failed"));
+
+            OpenCodeSandboxManager manager = new OpenCodeSandboxManager("http://localhost:8080", null);
+
+            assertThatThrownBy(() -> manager.createSandbox(agentId, "test-image", null))
+                    .isInstanceOf(TaskExecutionException.class)
+                    .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                            .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+            verify(builder, times(1)).build();
         }
     }
 

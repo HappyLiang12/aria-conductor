@@ -18,7 +18,7 @@ function Load-DotEnv {
         if ($trimmed -notmatch '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { continue }
         $name = $Matches[1]
         $value = $Matches[2]
-        if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+        if ($null -eq [Environment]::GetEnvironmentVariable($name)) {
             [Environment]::SetEnvironmentVariable($name, $value, "Process")
         }
     }
@@ -31,8 +31,12 @@ True when the given runtime CLI exists AND `info` succeeds (engine reachable).
 function Test-RuntimeCli {
     param([Parameter(Mandatory)][string]$Runtime)
     if (-not (Get-Command $Runtime -ErrorAction SilentlyContinue)) { return $false }
-    & $Runtime info *> $null
-    return ($LASTEXITCODE -eq 0)
+    try {
+        & $Runtime info *> $null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
 }
 
 <#
@@ -50,7 +54,10 @@ function Resolve-ContainerRuntime {
         }
         if (-not (Test-RuntimeCli $rt)) {
             if ($rt -eq "podman") {
-                throw "CONTAINER_RUNTIME=podman is set but podman is not available. Install podman, ensure a machine is running ('podman machine start'), then retry."
+                if ($IsWindows) {
+                    throw "CONTAINER_RUNTIME=podman is set but podman is not available. Install podman, ensure a machine is running ('podman machine start'), then retry."
+                }
+                throw "CONTAINER_RUNTIME=podman is set but podman is not available. Install podman (or start its service), then retry."
             }
             throw "CONTAINER_RUNTIME=docker is set but docker is not available. Install/start Docker Desktop, or switch CONTAINER_RUNTIME to podman."
         }

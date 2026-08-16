@@ -10,6 +10,7 @@ import {
   reportHtmlUrl,
 } from '../api/reports';
 import { useWebSocketContext } from '../components/Layout';
+import { ReportContentViewer } from '../components/ReportContentViewer';
 import type {
   GenerateReportRequest,
   ReportArtifact,
@@ -401,12 +402,10 @@ export function ReportsPage() {
               <div className="report-preview" style={{ position: 'relative' }}>
                 {selected ? (
                   <>
-                    <iframe
+                    <ReportContentViewer
                       key={`${selected.id}-${selected.version}-${selected.amendedAt ?? ''}`}
-                      className="report-frame"
+                      content={reportHtml}
                       title={selected.title}
-                      sandbox=""
-                      srcDoc={reportHtml || '<!doctype html><html><body style="font-family:system-ui;color:#666;padding:24px;">Loading report…</body></html>'}
                     />
                     {isBusy && (
                       <div

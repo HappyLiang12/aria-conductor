@@ -71,3 +71,37 @@ EXIT_CODE=0
 ```bash
 bash e2e/container-runtime-e2e.sh   # 10 场景 PASS，退出码 0
 ```
+
+## Task 4 评审修复（Review Fixes）
+
+- 日期: 2026-08-17
+- 提交: `2082ed2` fix(scripts): validate env name first char, preserve empty env vars, quiet empty stub specs
+
+| # | 严重度 | 修复内容 | 文件 |
+|---|---|---|---|
+| 1 | Important | `load_dotenv` 名称首字符校验：`''\|*[!A-Za-z0-9_]*` → `''\|[!A-Za-z_]*\|*[!A-Za-z0-9_]*`，首字符必须是字母或下划线，与 ps1 版 `^[A-Za-z_][A-Za-z0-9_]*$` 对齐（数字开头键如 `1BAD_NAME` 被静默跳过） | `scripts/lib/container-runtime.sh` |
+| 2 | low | 空但已设置的 env var 不被 `.env` 覆盖：`[ -z "${!name:-}" ]` → `[ -z "${!name+x}" ]`，用间接展开检测"已设置"（含空值），bash 3+ 兼容，与 ps1 版 cffc7ab 修复对齐 | `scripts/lib/container-runtime.sh` |
+| 3 | low | harness 空 stub spec 跳过：`for spec in "$@"` 中增加 `[ -n "$spec" ] || continue`，消除 `printf > "$dir/"` 产生的 `Is a directory` stderr 噪声 | `e2e/container-runtime-e2e.sh` |
+| 4 | 测试加固 | dotenv 场景 `.env` 增加 `1BAD_NAME=should-be-skipped` 行，证明数字开头键被跳过且不中断脚本（Fix 1 回归覆盖） | `e2e/container-runtime-e2e.sh` |
+
+### 修复后验证
+
+```bash
+$ bash e2e/container-runtime-e2e.sh
+Container-runtime resolution scenarios:
+  PASS: explicit docker + docker available
+  PASS: explicit podman + podman available
+  PASS: explicit docker + CLI missing -> hard error
+  PASS: explicit podman + engine not running -> hard error with podman hint
+  PASS: explicit invalid value -> hard error
+  PASS: auto + docker running -> docker
+  PASS: auto + only podman running -> podman
+  PASS: auto + neither available -> null runtime
+load_dotenv scenarios:
+  PASS: load_dotenv parses KEY=VALUE, preserves existing env
+  PASS: load_dotenv missing .env is a no-op
+
+All scenarios PASSED   # 退出码 0，stderr 无 "Is a directory" 噪声
+```
+
+Fix 2 手动检查（bash）：`FOO=""` 已设置时 source 库并加载含 `FOO=bar` 的 `.env` → `FOO` 保持为空；未设置的 `BAZ` 正常从 `.env` 加载为 `qux`（`${!name+x}` 语义正确区分"已设置但为空"与"未设置"）。

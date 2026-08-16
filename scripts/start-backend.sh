@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BACKEND_DIR="$PROJECT_ROOT/agent-control-tower"
 
+# Shared container-runtime helpers (load_dotenv, resolve_container_runtime)
+# shellcheck source=lib/container-runtime.sh
+source "$SCRIPT_DIR/lib/container-runtime.sh"
+load_dotenv "$PROJECT_ROOT"
+
 # Parse arguments
 PROFILE="${SPRING_PROFILES_ACTIVE:-h2}"
 ADK_PROVIDER="${ADK_PROVIDER:-langchain}"
@@ -34,17 +39,51 @@ check_command "mvn" "Install Maven 3.9+: https://maven.apache.org/"
 
 java -version 2>&1 | grep -q "21" || echo "WARNING: JDK 21 recommended. Current version may not be compatible."
 
+# Container runtime status (required only for the opencode provider)
+echo "Container runtimes:"
+for rt in docker podman; do
+    if command -v "$rt" &> /dev/null; then
+        if "$rt" info &> /dev/null; then
+            echo "  $rt: running"
+        else
+            echo "  WARNING: $rt is installed but not running. Required only for the opencode provider."
+        fi
+    else
+        echo "  $rt: not installed"
+    fi
+done
+if resolve_container_runtime; then
+    if [ -n "$CONTAINER_RT" ]; then
+        if [ "$CONTAINER_RT_MODE" = "explicit" ]; then
+            echo "  selected: $CONTAINER_RT (explicit: CONTAINER_RUNTIME)"
+        else
+            echo "  selected: $CONTAINER_RT (auto-detected)"
+        fi
+    else
+        echo "  WARNING: No container runtime available. Required only for the opencode provider."
+    fi
+fi
+
 # ── OpenSandbox server (required for opencode provider) ──
 if [ "$ADK_PROVIDER" = "opencode" ] && [ "$SKIP_SANDBOX" != "true" ]; then
     echo "Checking OpenSandbox server..."
-    if ! docker ps &>/dev/null; then
-        echo "ERROR: Docker is not running. Start Docker Desktop first, or use --skip-sandbox."
+    if ! resolve_container_runtime; then
+        exit 1
+    fi
+    if [ -z "$CONTAINER_RT" ]; then
+        echo "ERROR: Neither docker nor podman is available. The opencode provider requires a container runtime for the OpenSandbox server. Install Docker or podman, or use --skip-sandbox / ADK_PROVIDER=langchain."
         exit 1
     fi
 
-    if ! docker ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>/dev/null | grep -q "aria-opensandbox"; then
-        echo "Starting OpenSandbox server (docker compose)..."
-        (cd "$PROJECT_ROOT" && docker compose up -d opensandbox-server)
+    if ! "$CONTAINER_RT" ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>/dev/null | grep -q "aria-opensandbox"; then
+        echo "Starting OpenSandbox server ($CONTAINER_RT compose)..."
+        if ! (cd "$PROJECT_ROOT" && "$CONTAINER_RT" compose up -d opensandbox-server); then
+            echo "ERROR: Failed to start OpenSandbox server" >&2
+            if [ "$CONTAINER_RT" = "podman" ]; then
+                echo "podman hint: verify the socket is enabled (podman machine ssh 'systemctl --user is-active podman.socket') and SANDBOX_SOCKET in .env matches its VM path." >&2
+            fi
+            exit 1
+        fi
         sleep 3
     fi
 

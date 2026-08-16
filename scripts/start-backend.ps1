@@ -10,6 +10,10 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BackendDir = Join-Path $ProjectRoot "agent-control-tower"
 
+# Shared container-runtime helpers (Load-DotEnv, Resolve-ContainerRuntime)
+. (Join-Path $PSScriptRoot "lib/container-runtime.ps1")
+Load-DotEnv $ProjectRoot
+
 # Prerequisites check
 function Test-Command($cmd, $hint) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
@@ -33,15 +37,34 @@ if ($javaVersion -notmatch '"21') {
 $mvnVersion = (mvn -version 2>&1 | Select-Object -First 1)
 Write-Host "  Maven : $mvnVersion"
 
-if (Get-Command docker -ErrorAction SilentlyContinue) {
-    docker info 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Docker: running"
+# Container runtime status (required only for -AdkProvider opencode)
+foreach ($rt in @("docker", "podman")) {
+    if (Get-Command $rt -ErrorAction SilentlyContinue) {
+        & $rt info *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  $rt : running"
+        } else {
+            Write-Warning "$rt is installed but not running. Required only for -AdkProvider opencode."
+        }
     } else {
-        Write-Warning "Docker Desktop is not running. Required only for -AdkProvider opencode."
+        Write-Host "  $rt : not installed" -ForegroundColor DarkGray
     }
+}
+
+$runtimeInfo = $null
+$runtimeError = $null
+try {
+    $runtimeInfo = Resolve-ContainerRuntime
+} catch {
+    $runtimeError = $_.Exception.Message
+}
+if ($runtimeError) {
+    Write-Warning "Container runtime: $runtimeError"
+} elseif ($runtimeInfo.Runtime) {
+    $reason = if ($runtimeInfo.Mode -eq "explicit") { "explicit: CONTAINER_RUNTIME" } else { "auto-detected" }
+    Write-Host "  Container runtime: $($runtimeInfo.Runtime) ($reason)"
 } else {
-    Write-Warning "Docker is not installed. Required only for -AdkProvider opencode."
+    Write-Warning "No container runtime available. Required only for -AdkProvider opencode."
 }
 
 if (-not $env:DEEPSEEK_API_KEY) {
@@ -60,19 +83,28 @@ $env:ADK_PYTHON = "py"
 # ── OpenSandbox server (required for opencode provider) ──
 if ($AdkProvider -eq "opencode" -and -not $SkipSandbox) {
     Write-Host "Checking OpenSandbox server..." -ForegroundColor Cyan
-    try {
-        $null = docker ps 2>&1
-    } catch {
-        Write-Error "Docker is not running. Start Docker Desktop first, or use -SkipSandbox."
+    if ($runtimeError) {
+        Write-Error "Container runtime unavailable: $runtimeError"
+        exit 1
+    }
+    $rt = $runtimeInfo.Runtime
+    if (-not $rt) {
+        Write-Error "Neither docker nor podman is available. The opencode provider requires a container runtime for the OpenSandbox server. Install Docker or podman, or use -SkipSandbox / -AdkProvider langchain."
         exit 1
     }
 
-    $sandboxRunning = docker ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>$null
+    $sandboxRunning = & $rt ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>$null
     if (-not $sandboxRunning) {
-        Write-Host "Starting OpenSandbox server (docker compose)..." -ForegroundColor Yellow
+        Write-Host "Starting OpenSandbox server ($rt compose)..." -ForegroundColor Yellow
         Push-Location $ProjectRoot
-        docker compose up -d opensandbox-server
-        if ($LASTEXITCODE -ne 0) { Write-Error "Failed to start OpenSandbox server"; Pop-Location; exit 1 }
+        & $rt compose up -d opensandbox-server
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to start OpenSandbox server"
+            if ($rt -eq "podman") {
+                Write-Host "podman hint: verify the socket is enabled (podman machine ssh 'systemctl --user is-active podman.socket') and SANDBOX_SOCKET in .env matches its VM path." -ForegroundColor Yellow
+            }
+            Pop-Location; exit 1
+        }
         Pop-Location
         Start-Sleep -Seconds 3
     }

@@ -118,3 +118,62 @@ git commit -m "feat(scripts): container-runtime resolution lib + pwsh e2e scenar
 - **Status: DONE** — TDD 证据完整：Step 3.2 红灯（库缺失 ExitCode 1）→ Step 3.3 最小实现 → Step 3.4 绿灯（10 场景全 PASS，ExitCode 0，pre-commit 3/3 通过）。
 - 解析规则与 spec §3/§7.1 一致：显式 `CONTAINER_RUNTIME=docker|podman` → 严格模式（非法值/CLI 不可用抛错，podman 带 `podman machine start` 提示）；未设置 → 自动探测 docker → podman → 均不可用 `Runtime=$null`；`.env` 加载不覆盖已有环境变量。
 - 唯一记录项：Step 3.2 实际失败文本与计划预期的表述差异（dot-source 文件不存在 vs 函数不可识别）及父脚本提前中止，均属红灯阶段固有现象，Step 3.4 已证实不再出现，无需修复。
+
+## 10. Task 3 质量评审修复（2026-08-17）
+
+Task 3 质量评审发现 4 项问题，均已修复并验证（commit `cffc7ab`）。
+
+### Fix 1（重要）— Load-DotEnv 空字符串覆写
+
+- **问题**：`if ([string]::IsNullOrEmpty(...))` 把「已设置但为空」的环境变量当作未设置，导致 `.env` 中的值覆写空环境变量，违背「已有环境变量永不覆盖」约定。
+- **修复**：改为 `if ($null -eq [Environment]::GetEnvironmentVariable($name))`——只有变量**不存在**（`$null`）时才写入，空字符串视为已设置、永不被 `.env` 覆写。
+
+### Fix 2（重要）— harness 清理缺口
+
+- **问题**：`e2e/container-runtime-e2e.ps1` 若中途崩溃/中止（如场景内 `$ErrorActionPreference="Stop"` 触发），`$StubDir` 残留 `%TEMP%`；且删除语句在全部断言之后，任何中止都会跳过清理。
+- **修复**：(a) 创建 `$StubDir` 前自愈清理——删除 `%TEMP%` 下所有历史残留 `act-crt-*` 目录（GUID 命名保证先清理后创建，不会误删本会话内容）；(b) 全部 8 个解析场景 + 2 个 Load-DotEnv 场景包入 `try { ... }`，`Remove-Item $StubDir -Recurse -Force -ErrorAction SilentlyContinue` 移入 `finally`，无论成功/失败必然清理。
+
+### Fix 3（次要）— podman 错误提示按平台条件化
+
+- **问题**：podman 不可用时统一提示 `'podman machine start'`，该提示仅适用于 Windows/macOS 的 podman machine 模型，Linux 上 podman 是系统服务，提示有误导。
+- **修复**：`if ($IsWindows)` 分支保留原提示（`podman machine start`），非 Windows 分支提示 `Install podman (or start its service)`。Windows 分支提示不变，harness 场景 4 断言（`podman is not available.*podman machine start`）在本机仍通过。
+
+### Fix 4（次要）— Test-RuntimeCli 前瞻加固
+
+- **问题**：`& $Runtime info *> $null` 若 CLI 启动异常抛错（native command 终止性错误），会直接中断解析，而不是按「不可用」处理。
+- **修复**：包入 `try/catch`，异常时 `return $false`（视为引擎不可用）。
+
+### 验证结果
+
+| 验证项 | 结果 |
+|--------|------|
+| `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1` | **10/10 PASS，ExitCode 0**（场景 4 podman hint 断言在本机 Windows 仍通过） |
+| 空字符串不覆写：`$env:CONTAINER_RUNTIME=''` + dot-source 库 + 临时 `.env` 含 `CONTAINER_RUNTIME=podman` + `Load-DotEnv` | **`$env:CONTAINER_RUNTIME` 仍为空（未被覆写为 podman）** |
+| `%TEMP%` 残留检查（`act-crt-*`） | **无残留** |
+
+### 提交
+
+```bash
+git add scripts/lib/container-runtime.ps1 e2e/container-runtime-e2e.ps1
+git commit -m "fix(scripts): preserve empty env vars, try/finally cleanup, platform-aware podman hint"
+```
+
+输出摘要：
+
+```
+[feat/podman-support cffc7ab] fix(scripts): preserve empty env vars, try/finally cleanup, platform-aware podman hint
+ 2 files changed, 53 insertions(+), 40 deletions(-)
+[Aria Conductor · Pre-commit Guardrail]
+  [1/3] Format check... ✓ Passed
+  [2/3] Type check (TypeScript)... ✓ Skipped (no TS/TSX changes in act-dashboard/src)
+  [3/3] Sensitive file scan... ✓ No sensitive files detected
+  ✓ ALL CHECKS PASSED
+```
+
+### 更新后的提交列表
+
+| Commit | 说明 |
+|--------|------|
+| `95a2f20` | feat(scripts): container-runtime resolution lib + pwsh e2e scenario tests |
+| `4932b68` | docs(podman): task3 report |
+| `cffc7ab` | fix(scripts): preserve empty env vars, try/finally cleanup, platform-aware podman hint |

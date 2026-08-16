@@ -25,13 +25,13 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 | Sandbox | OpenSandbox (Docker-based isolation) |
 | Database | H2 (dev) / MariaDB (production) |
 | MCP Server | Node.js, TypeScript |
-| Containerization | Docker, Docker Compose |
+| Containerization | Docker / Podman, Docker Compose / Podman Compose |
 
 ## Quick Start (Docker)
 
 ### Prerequisites
 
-- Docker and Docker Compose v2
+- Docker (or podman) and Docker Compose v2 (or podman compose)
 - An LLM API key (OpenAI, DeepSeek, etc.)
 
 ### 1. Clone and configure
@@ -97,6 +97,33 @@ curl -X PUT http://localhost:8080/api/v1/agents/{id} \
   -d '{"adkProvider": "langchain"}'
 ```
 
+## Container Runtime Selection
+
+Startup scripts and the OpenSandbox server support **Docker** (default) and **podman**.
+
+- If `CONTAINER_RUNTIME` is unset, scripts auto-detect: docker (running) → podman (running).
+- Set `CONTAINER_RUNTIME=docker|podman` in `.env` to force one runtime (strict: hard error when unavailable).
+- The OpenSandbox server mounts the container socket from `SANDBOX_SOCKET` (default `/var/run/docker.sock`).
+
+### podman machine (Windows)
+
+1. `podman machine init` then `podman machine start` (Podman Desktop users: start from the app).
+2. Rootless (recommended): the user socket service is enabled by default inside the VM. Verify:
+   `podman machine ssh "ls -l /run/user/1000/podman/podman.sock"`
+   If missing: `podman machine ssh "systemctl --user enable --now podman.socket"`
+3. Rootful: `podman machine set --rootful`, then `podman machine ssh "sudo systemctl enable --now podman.socket"`.
+4. In `.env` set:
+   ```
+   CONTAINER_RUNTIME=podman
+   SANDBOX_SOCKET=/run/user/1000/podman/podman.sock   # rootless (or /run/podman/podman.sock for rootful)
+   ```
+5. Build the sandbox image into podman's store:
+   `podman build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox`
+6. Start as usual (`docker compose` commands become `podman compose ...`):
+   `podman compose up -d` or `./scripts/quickstart.sh`
+
+> Note: OpenSandbox has no native podman runtime; podman is served through its Docker-compatible socket. Sandbox support under podman is validated by the project's E2E suite (see `e2e/container-runtime-e2e.ps1`).
+
 ## Development Setup
 
 For local development without Docker:
@@ -110,7 +137,7 @@ For local development without Docker:
 | Node.js | 20+ | `node --version` |
 | pnpm | 9+ | `pnpm --version` |
 | Python | 3.11+ | `python --version` |
-| Docker | 24+ | `docker --version` (required for opencode provider) |
+| Docker / Podman | 24+ / 4.9+ | `docker --version` or `podman --version` (required for opencode provider) |
 
 ### Quick start with scripts
 
@@ -172,12 +199,15 @@ Required for the **opencode** ADK provider. Start via Docker Compose:
 
 ```bash
 docker compose up -d opensandbox-server
+# or with podman:
+# podman compose up -d opensandbox-server
 ```
 
 OpenSandbox server starts at `http://localhost:8090`. The opencode sandbox image must be built first:
 
 ```bash
 docker build -t aria-conductor/opencode-sandbox:1.0 agent-control-tower/opencode-sandbox
+# or: podman build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox
 ```
 
 ## Module Structure
@@ -212,6 +242,8 @@ docker build -t aria-conductor/opencode-sandbox:1.0 agent-control-tower/opencode
 | `DB_HOST` | `mariadb` | Database host (Docker) |
 | `DB_PORT` | `3306` | Database port |
 | `DB_NAME` | `aria_conductor` | Database name |
+| `CONTAINER_RUNTIME` | auto-detect | Container runtime: `docker` or `podman` (auto-detect: docker preferred) |
+| `SANDBOX_SOCKET` | `/var/run/docker.sock` | Host container-engine socket mounted into the OpenSandbox server |
 
 ### Spring Profiles
 

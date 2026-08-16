@@ -20,12 +20,15 @@ Aria Conductor's `OpenCodeAdkProvider` (exchangeable agent provider architecture
 
 ```bash
 docker build -t aria-conductor/opencode-sandbox:1.1 .
+# or with podman:
+podman build -t aria-conductor/opencode-sandbox:1.1 .
 ```
 
 ## Smoke test
 
 ```bash
 docker run --rm aria-conductor/opencode-sandbox:1.1
+# or: podman run --rm aria-conductor/opencode-sandbox:1.1
 # prints: opencode version X.Y.Z
 docker run --rm aria-conductor/opencode-sandbox:1.1 gh --version
 # prints: gh version X.Y.Z

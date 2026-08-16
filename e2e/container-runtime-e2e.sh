@@ -11,6 +11,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 LIB_PATH="$PROJECT_ROOT/scripts/lib/container-runtime.sh"
 
 STUB_ROOT="$(mktemp -d)"
+trap 'rm -rf "$STUB_ROOT"' EXIT
 FAILURES=0
 
 pass() { echo "  PASS: $1"; }
@@ -39,36 +40,42 @@ export PATH="$dir"
 export CONTAINER_RUNTIME="$runtime_env"
 source "$LIB_PATH"
 resolve_container_runtime
-echo "RESULT runtime=\${CONTAINER_RT:-} mode=\${CONTAINER_RT_MODE:-}"
+rc=\$?
+echo "RESULT rc=\${rc} runtime=\${CONTAINER_RT:-} mode=\${CONTAINER_RT_MODE:-}"
+exit \$rc
 EOF
-    bash "$dir/scenario.sh" 2>&1
+    local out
+    out="$(bash "$dir/scenario.sh" 2>&1)"
+    local rc=$?
+    echo "$out"
+    return $rc
 }
 
 echo "Container-runtime resolution scenarios:"
 
 out="$(run_scenario "docker" "docker")"
-case "$out" in *"runtime=docker mode=explicit"*) pass "explicit docker + docker available";; *) fail "explicit docker + docker available" "$out";; esac
+case "$out" in *"rc=0 runtime=docker mode=explicit"*) pass "explicit docker + docker available";; *) fail "explicit docker + docker available" "$out";; esac
 
 out="$(run_scenario "podman" "podman")"
-case "$out" in *"runtime=podman mode=explicit"*) pass "explicit podman + podman available";; *) fail "explicit podman + podman available" "$out";; esac
+case "$out" in *"rc=0 runtime=podman mode=explicit"*) pass "explicit podman + podman available";; *) fail "explicit podman + podman available" "$out";; esac
 
 out="$(run_scenario "docker" "")"
-case "$out" in *"docker is not available"*) pass "explicit docker + CLI missing -> hard error";; *) fail "explicit docker + CLI missing -> hard error" "$out";; esac
+case "$out" in *rc=1*"docker is not available"*|*"docker is not available"*rc=1*) pass "explicit docker + CLI missing -> hard error (rc=1)";; *) fail "explicit docker + CLI missing -> hard error (rc=1)" "$out";; esac
 
 out="$(run_scenario "podman" "podman:dead")"
-case "$out" in *"podman is not available"*) pass "explicit podman + engine not running -> hard error with podman hint";; *) fail "explicit podman + engine not running -> hard error" "$out";; esac
+case "$out" in *rc=1*"podman is not available"*|*"podman is not available"*rc=1*) pass "explicit podman + engine not running -> hard error with podman hint (rc=1)";; *) fail "explicit podman + engine not running -> hard error (rc=1)" "$out";; esac
 
 out="$(run_scenario "nerdctl" "docker")"
-case "$out" in *"is invalid"*) pass "explicit invalid value -> hard error";; *) fail "explicit invalid value -> hard error" "$out";; esac
+case "$out" in *rc=1*"is invalid"*|*"is invalid"*rc=1*) pass "explicit invalid value -> hard error (rc=1)";; *) fail "explicit invalid value -> hard error (rc=1)" "$out";; esac
 
 out="$(run_scenario "" "docker" "podman")"
-case "$out" in *"runtime=docker mode=auto"*) pass "auto + docker running -> docker";; *) fail "auto + docker running -> docker" "$out";; esac
+case "$out" in *"rc=0 runtime=docker mode=auto"*) pass "auto + docker running -> docker";; *) fail "auto + docker running -> docker" "$out";; esac
 
 out="$(run_scenario "" "podman")"
-case "$out" in *"runtime=podman mode=auto"*) pass "auto + only podman running -> podman";; *) fail "auto + only podman running -> podman" "$out";; esac
+case "$out" in *"rc=0 runtime=podman mode=auto"*) pass "auto + only podman running -> podman";; *) fail "auto + only podman running -> podman" "$out";; esac
 
 out="$(run_scenario "" "")"
-case "$out" in *"runtime= mode=auto"*) pass "auto + neither available -> null runtime";; *) fail "auto + neither available -> null runtime" "$out";; esac
+case "$out" in *"rc=0 runtime= mode=auto"*) pass "auto + neither available -> null runtime (rc=0)";; *) fail "auto + neither available -> null runtime (rc=0)" "$out";; esac
 
 echo "load_dotenv scenarios:"
 
@@ -99,7 +106,15 @@ echo RESULT ok
 ")"
 case "$out" in *"RESULT ok"*) pass "load_dotenv missing .env is a no-op";; *) fail "load_dotenv missing .env" "$out";; esac
 
-rm -rf "$STUB_ROOT"
+crtlf_dir="$STUB_ROOT/crtlf"
+mkdir -p "$crtlf_dir"
+printf 'CONTAINER_RUNTIME=podman\r\nSANDBOX_SOCKET=/run/user/1000/podman/podman.sock\r\n' > "$crtlf_dir/.env"
+out="$(bash -c "
+source '$LIB_PATH'
+load_dotenv '$crtlf_dir'
+echo RESULT runtime=\$CONTAINER_RUNTIME socket=\${SANDBOX_SOCKET:-}
+")"
+case "$out" in *"runtime=podman socket=/run/user/1000/podman/podman.sock"*) pass "load_dotenv strips CRLF line endings";; *) fail "load_dotenv CRLF" "$out";; esac
 
 echo ""
 if [ "$FAILURES" -gt 0 ]; then

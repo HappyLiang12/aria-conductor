@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared container-runtime resolution for Aria Conductor startup scripts.
 # Source from another script: source "$SCRIPT_DIR/lib/container-runtime.sh"
+# Requires bash 4.0+ (uses ${var,,} and ${!name+x} parameter expansions).
 
 # load_dotenv <project_root>: loads KEY=VALUE pairs from <project_root>/.env
 # into the environment. Existing environment variables are never overwritten.
@@ -10,6 +11,7 @@ load_dotenv() {
     local line name value
     [ -f "$env_file" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
         case "$line" in
             ''|'#'*) continue ;;
         esac

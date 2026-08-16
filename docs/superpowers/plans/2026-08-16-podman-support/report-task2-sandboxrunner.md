@@ -176,3 +176,25 @@ git commit -m "docs(podman): task2 report"
 |--------|------|
 | `c75d2e9` | feat(sandbox): honor CONTAINER_RUNTIME env in SandboxRunner detection |
 | `f992686` | docs(podman): task2 report |
+
+## 10. Task 2 复审 — 3 个 Minor 修复
+
+依据 Task 2 复审意见修复 `SandboxRunner.java` 的 3 个代码质量问题：
+
+1. **严格模式失败时双重警告** — `detectRuntime()` 原先在显式设置 `CONTAINER_RUNTIME` 但 CLI 缺失时，`resolveRuntime` 已记录 "its CLI is unavailable"，随后 `detectRuntime` 又记录通用 "No container runtime detected"，误导排查。修复：仅当环境变量**未**显式设置时才记录通用警告（`explicitlyConfigured` 判断）。
+2. **日志记录原始输入值** — CLI 缺失警告原先打印规范化后的 `rt`（小写、去空白），无法还原用户真实输入；改为打印原始 `explicitEnv`。
+3. **import 字典序** — `java.util.Locale` 移到 `java.util.concurrent.TimeUnit` 与 `java.util.regex.Pattern` 之前，`java.util` 块按字母序排列。
+
+### 10.1 验证结果
+
+- 单测：`mvn test -pl act-execution -Dtest=SandboxRunnerTest` → `Tests run: 18, Failures: 0, Errors: 0, Skipped: 0`，且本次 jacoco check 通过（与 Step 2.4 记录的 filtered-run by-design 失败不同，本次运行覆盖率达标）。
+- 全量回归：`mvn test -pl act-execution` → `Tests run: 643, Failures: 0, Errors: 0, Skipped: 0`，`All coverage checks have been met`，**BUILD SUCCESS**。
+
+### 10.2 提交
+
+| Commit | 说明 |
+|--------|------|
+| `88e61b8` | fix(sandbox): dedupe runtime warnings, log raw CONTAINER_RUNTIME value, import order |
+| 见 git log | docs(podman): task2 minor fixes report（本节报告） |
+
+行为语义不变：显式合法值 + CLI 存在 → 严格采用；CLI 缺失 → 沙箱禁用；未显式设置时自动探测 docker → podman → null；无效值忽略并自动探测。3 个修复均为日志/可读性层面，无逻辑行为变化。

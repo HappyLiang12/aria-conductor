@@ -6,13 +6,27 @@ echo "  Aria Conductor - Quick Start"
 echo "========================================="
 echo ""
 
-# Check Docker
-if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; then
-    echo "Docker detected. Starting with Docker Compose..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Shared container-runtime helpers (load_dotenv, resolve_container_runtime)
+# shellcheck source=lib/container-runtime.sh
+source "$SCRIPT_DIR/lib/container-runtime.sh"
+load_dotenv "$PROJECT_ROOT"
+
+# Resolve container runtime (docker | podman; strict when CONTAINER_RUNTIME is set)
+if ! resolve_container_runtime; then
+    exit 1
+fi
+
+if [ -n "$CONTAINER_RT" ]; then
+    if [ "$CONTAINER_RT_MODE" = "explicit" ]; then
+        echo "Container runtime: $CONTAINER_RT (configured via CONTAINER_RUNTIME). Starting with Compose..."
+    else
+        echo "Container runtime: $CONTAINER_RT (auto-detected). Starting with Compose..."
+    fi
     echo ""
 
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
     cd "$PROJECT_ROOT"
 
     if [ ! -f ".env" ]; then
@@ -29,7 +43,7 @@ if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; t
 
     echo "Building and starting services..."
     echo "  (includes OpenSandbox server for opencode agent runtime)"
-    docker compose up -d --build
+    "$CONTAINER_RT" compose up -d --build
 
     echo ""
     echo "Services starting:"
@@ -41,14 +55,14 @@ if command -v docker &> /dev/null && docker compose version &> /dev/null 2>&1; t
     echo ""
     echo "ADK provider: langchain (default); use opencode with sandbox by setting ADK_PROVIDER=opencode"
     echo ""
-    echo "Check status: docker compose ps"
-    echo "View logs:    docker compose logs -f"
-    echo "Stop:         docker compose down"
+    echo "Check status: $CONTAINER_RT compose ps"
+    echo "View logs:    $CONTAINER_RT compose logs -f"
+    echo "Stop:         $CONTAINER_RT compose down"
 else
-    echo "Docker not found. Falling back to local development mode."
+    echo "Neither docker nor podman detected. Falling back to local development mode."
     echo ""
-    echo "NOTE: OpenCode sandbox mode requires Docker for the OpenSandbox server."
-    echo "      Without Docker, only langchain ADK provider is available."
+    echo "NOTE: OpenCode sandbox mode requires Docker or podman for the OpenSandbox server."
+    echo "      Without a container runtime, only langchain ADK provider is available."
     echo ""
 
     # Check prerequisites
@@ -68,9 +82,7 @@ else
     echo "All prerequisites found. Starting services..."
     echo ""
 
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-    echo "Starting backend (langchain provider, Docker required for opencode)..."
+    echo "Starting backend (langchain provider, container runtime required for opencode)..."
     ADK_PROVIDER=langchain SKIP_SANDBOX=true bash "$SCRIPT_DIR/start-backend.sh" &
     BACKEND_PID=$!
 
@@ -85,7 +97,7 @@ else
     echo "  Dashboard:  http://localhost:5173"
     echo "  Backend:    http://localhost:8080"
     echo ""
-    echo "To use opencode provider, install Docker and re-run this script."
+    echo "To use opencode provider, install Docker or podman and re-run this script."
     echo ""
     echo "Press Ctrl+C to stop all services."
 

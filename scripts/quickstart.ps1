@@ -6,18 +6,26 @@ Write-Host "  Aria Conductor - Quick Start" -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 
-# Check Docker
-$dockerAvailable = $false
+# Shared container-runtime helpers (Load-DotEnv, Resolve-ContainerRuntime)
+. (Join-Path $PSScriptRoot "lib/container-runtime.ps1")
+Load-DotEnv $ProjectRoot
+
+# Resolve container runtime (docker | podman; strict when CONTAINER_RUNTIME is set)
+$rt = $null
+$rtLabel = ""
 try {
-    $null = Get-Command docker -ErrorAction Stop
-    $null = docker compose version 2>&1
-    $dockerAvailable = $true
-} catch {}
+    $runtimeInfo = Resolve-ContainerRuntime
+    $rt = $runtimeInfo.Runtime
+    $rtLabel = if ($runtimeInfo.Mode -eq "explicit") { "configured via CONTAINER_RUNTIME" } else { "auto-detected" }
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+}
 
-if ($dockerAvailable) {
-    Write-Host "Docker detected. Starting with Docker Compose..." -ForegroundColor Green
+if ($rt) {
+    Write-Host "Container runtime: $rt ($rtLabel). Starting with Compose..." -ForegroundColor Green
     Write-Host ""
 
     Set-Location $ProjectRoot
@@ -36,7 +44,7 @@ if ($dockerAvailable) {
 
     Write-Host "Building and starting services..." -ForegroundColor Yellow
     Write-Host "  (includes OpenSandbox server for opencode agent runtime)" -ForegroundColor DarkGray
-    docker compose up -d --build
+    & $rt compose up -d --build
 
     Write-Host ""
     Write-Host "Services:" -ForegroundColor Green
@@ -49,14 +57,14 @@ if ($dockerAvailable) {
     Write-Host "ADK provider: langchain (default); use opencode with sandbox by setting -AdkProvider opencode" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Commands:" -ForegroundColor Cyan
-    Write-Host "  docker compose ps              # Check status"
-    Write-Host "  docker compose logs -f         # View logs"
-    Write-Host "  docker compose down            # Stop"
+    Write-Host "  $rt compose ps              # Check status"
+    Write-Host "  $rt compose logs -f         # View logs"
+    Write-Host "  $rt compose down            # Stop"
 } else {
-    Write-Host "Docker not found. Falling back to local development mode." -ForegroundColor Yellow
+    Write-Host "Neither docker nor podman detected. Falling back to local development mode." -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "NOTE: OpenCode sandbox mode requires Docker for the OpenSandbox server." -ForegroundColor Red
-    Write-Host "      Without Docker, only langchain ADK provider is available." -ForegroundColor Red
+    Write-Host "NOTE: OpenCode sandbox mode requires Docker or podman for the OpenSandbox server." -ForegroundColor Red
+    Write-Host "      Without a container runtime, only langchain ADK provider is available." -ForegroundColor Red
     Write-Host ""
 
     # Check prerequisites
@@ -75,9 +83,9 @@ if ($dockerAvailable) {
     Write-Host "All prerequisites found. Starting services..." -ForegroundColor Green
     Write-Host ""
 
-    # No-Docker path: default ADK provider is langchain (opencode requires Docker)
+    # No-container-runtime path: default ADK provider is langchain (opencode requires docker/podman)
     $adkProvider = "langchain"
-    Write-Host "Using ADK provider: $adkProvider (Docker required for opencode)" -ForegroundColor Yellow
+    Write-Host "Using ADK provider: $adkProvider (container runtime required for opencode)" -ForegroundColor Yellow
 
     Write-Host "Starting backend..." -ForegroundColor Yellow
     Start-Process pwsh -ArgumentList "-NoProfile", "-File", "$PSScriptRoot\start-backend.ps1", "-AdkProvider", $adkProvider, "-SkipSandbox" -NoNewWindow
@@ -92,5 +100,5 @@ if ($dockerAvailable) {
     Write-Host "  Dashboard:  http://localhost:5173" -ForegroundColor White
     Write-Host "  Backend:    http://localhost:8080" -ForegroundColor White
     Write-Host ""
-    Write-Host "To use opencode provider, install Docker and re-run this script." -ForegroundColor Cyan
+    Write-Host "To use opencode provider, install Docker or podman and re-run this script." -ForegroundColor Cyan
 }

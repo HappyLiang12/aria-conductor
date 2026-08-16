@@ -20,9 +20,9 @@ load_dotenv() {
         name="${line%%=*}"
         value="${line#*=}"
         case "$name" in
-            ''|*[!A-Za-z0-9_]*) continue ;;
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) continue ;;
         esac
-        if [ -z "${!name:-}" ]; then
+        if [ -z "${!name+x}" ]; then
             export "$name=$value"
         fi
     done < "$env_file"

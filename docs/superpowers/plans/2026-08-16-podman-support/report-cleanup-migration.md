@@ -186,3 +186,56 @@ Docker Desktop 29.x（build 229452）将 WSL 数据盘路径**硬编码**于 `%L
 
 - 全部命令按 Phase 顺序执行，破坏性操作均满足门禁条件（tar/vhdx 校验通过后才 unregister；Phase 1 失败按门禁恢复 settings-store.json 备份）
 - Docker 日志关键行：`provisioning the WSL2 engine using a data disk`、`wslmigrate: WSL2 disk exists`、`[W] unknown settings found`（wslDataFolder 被拒）
+
+---
+
+## Docker UI 迁移（重启后）
+
+> 执行时间：2026-08-17（重启后，GUI 迁移）
+
+### 基线状态（重启后）
+
+| 项目 | 值 |
+|---|---|
+| C 盘可用 | 41.99 GB（45,085,593,600 字节） |
+| D 盘可用 | 278.70 GB（299,267,039,232 字节） |
+| 孤立 Ubuntu vhdx（C:\Users\User\AppData\Local\wsl\{46a76d38-...}） | 已删除（Test-Path = False） |
+| podman machine | Stopped（podman machine list --format json: "Running": false，无需 stop） |
+| Docker Desktop | 未运行（AutoStart=false，启动前无 docker 进程） |
+
+### 执行动作
+
+1. **启动 Docker Desktop**：launch_app 启动；约 1 分钟内引擎就绪（docker info 轮询成功）
+2. **打开设置**：主窗口按 Ctrl+,（Electron 快捷键）打开 Settings
+3. **导航**：Settings → 左侧 Resources → Advanced 标签页（URL: app://dd/dashboard/settings/resources/advanced/wsl）
+4. **设置磁盘位置**：点击 Browse → 在 "Select Folder" 对话框输入 D:\Docker\data → 回车导航 → 点击 Select Folder；Docker 将位置规范化为 D:\Docker\data\DockerDesktopWSL（自动追加子目录）
+5. **Apply & restart**：点击 "Apply & restart" → 弹出 "Move disk image?" 确认框 → 点击 "Yes, move it"
+6. **等待迁移**：Engine stopping → 迁移（复制）→ **81 秒**后 docker info 恢复成功
+7. **验证**：见下方迁移结果
+8. **退出 Docker Desktop**：docker desktop stop（等效托盘 Quit，因托盘右键在自动化中不可靠）；验证无 com.docker.backend 进程残留
+
+### 迁移结果
+
+- **Docker 创建了新副本**（**未采用**已有的备份副本）
+  - 新位置：D:\Docker\data\DockerDesktopWSL\disk\docker_data.vhdx = 22,429,040,640 字节（20.89 GB）
+  - 附带：D:\Docker\data\DockerDesktopWSL\main\ext4.vhdx = 109,051,904 字节（WSL 主系统盘）
+  - 旧备份 D:\Docker\data\docker_data.vhdx（20.89 GB）仍在原位、未被 Docker 采用（Docker 期望路径为 DockerDesktopWSL 子目录）
+- **C 盘源文件已移除**：C:\Users\User\AppData\Local\Docker\wsl\disk\docker_data.vhdx 已不存在（Test-Path = SOURCE_GONE，live disk 迁移成功）
+- docker system df 正常：Images 11 / Containers 6 / Local Volumes 6 / Build Cache 182（引擎健康）
+
+### 最终磁盘空间（迁移后）
+
+| 盘 | 迁移前可用 | 迁移后可用 | 变化 |
+|---|---|---|---|
+| C | 41.99 GB | 62.90 GB（67,542,831,104 字节） | +20.9 GB（源 vhdx 移除） |
+| D | 278.70 GB | 257.73 GB（276,728,942,592 字节） | -20.9 GB（新 vhdx） |
+
+### 证据截图
+
+- docs/superpowers/plans/2026-08-16-podman-support/evidence-docker-migration/settings-advanced-disk-location.png — Settings → Resources → Advanced，Disk image location = D:\Docker\data\DockerDesktopWSL
+- docs/superpowers/plans/2026-08-16-podman-support/evidence-docker-migration/terminal-docker-system-df.png — 终端：docker system df + Get-Volume C,D
+
+### 备注
+
+- 旧备份 D:\Docker\data\docker_data.vhdx（20.89 GB）为迁移前手动复制，Docker 迁移未采用它；可考虑删除以释放 D 盘约 20.89 GB 空间。
+- 迁移过程本身很快（同机复制约 81 秒），未出现 15 分钟超时或错误。

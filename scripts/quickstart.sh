@@ -21,7 +21,7 @@ fi
 
 if [ -n "$CONTAINER_RT" ]; then
     if [ "$CONTAINER_RT_MODE" = "explicit" ]; then
-        echo "Container runtime: $CONTAINER_RT (configured via CONTAINER_RUNTIME). Starting with Compose..."
+        echo "Container runtime: $CONTAINER_RT (explicit: CONTAINER_RUNTIME). Starting with Compose..."
     else
         echo "Container runtime: $CONTAINER_RT (auto-detected). Starting with Compose..."
     fi
@@ -75,7 +75,7 @@ else
 
     if [ -n "$MISSING" ]; then
         echo "Missing prerequisites:$MISSING"
-        echo "Install them and try again, or install Docker for the easiest setup."
+        echo "Install them and try again, or install Docker or podman for the easiest setup."
         exit 1
     fi
 

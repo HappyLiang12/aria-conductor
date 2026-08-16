@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.util.Locale;
 
 @Slf4j
 @Service
@@ -23,9 +24,37 @@ public class SandboxRunner {
     }
 
     private void detectRuntime() {
-        if (commandExists("docker")) containerRuntime = "docker";
-        else if (commandExists("podman")) containerRuntime = "podman";
-        else { containerRuntime = null; log.warn("No container runtime detected. Sandbox tools disabled."); }
+        containerRuntime = resolveRuntime(System.getenv("CONTAINER_RUNTIME"),
+                commandExists("docker"), commandExists("podman"));
+        if (containerRuntime == null) {
+            log.warn("No container runtime detected. Sandbox tools disabled.");
+        }
+    }
+
+    /**
+     * Resolves the container runtime, in precedence order:
+     * <ol>
+     * <li>{@code CONTAINER_RUNTIME} env var set to docker|podman AND its CLI exists → that runtime</li>
+     * <li>{@code CONTAINER_RUNTIME} valid but CLI missing → {@code null} (sandbox disabled, no cross-runtime fallback)</li>
+     * <li>{@code CONTAINER_RUNTIME} invalid/blank → ignored (auto-detection applies)</li>
+     * <li>auto-detect: docker first, then podman; neither → {@code null}</li>
+     * </ol>
+     */
+    static String resolveRuntime(String explicitEnv, boolean dockerExists, boolean podmanExists) {
+        if (explicitEnv != null && !explicitEnv.isBlank()) {
+            String rt = explicitEnv.trim().toLowerCase(Locale.ROOT);
+            if ("docker".equals(rt) || "podman".equals(rt)) {
+                if (("docker".equals(rt) && dockerExists) || ("podman".equals(rt) && podmanExists)) {
+                    return rt;
+                }
+                log.warn("CONTAINER_RUNTIME='{}' is set but its CLI is unavailable. Sandbox tools disabled.", rt);
+                return null;
+            }
+            log.warn("CONTAINER_RUNTIME='{}' is invalid (expected docker|podman). Ignoring and auto-detecting.", explicitEnv);
+        }
+        if (dockerExists) return "docker";
+        if (podmanExists) return "podman";
+        return null;
     }
 
     public boolean isSandboxAvailable() { return containerRuntime != null; }

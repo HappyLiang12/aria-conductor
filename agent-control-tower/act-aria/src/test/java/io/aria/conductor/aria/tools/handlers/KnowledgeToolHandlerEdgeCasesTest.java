@@ -185,6 +185,59 @@ class KnowledgeToolHandlerEdgeCasesTest {
     }
 
     @Test
+    void reviewKnowledge_invalidUuidLikeValueResolvedAsName() {
+        // A value that is not parseable as a UUID is treated purely as a name and never
+        // surfaces a UUID parse error (#38).
+        String name = "not-a-uuid-but-not-a-name-either";
+        UUID id = UUID.randomUUID();
+        when(knowledgeItemRepository.findByName(name)).thenReturn(List.of(KnowledgeItem.builder()
+                .id(id).name(name).type(KnowledgeType.SKILL).status(KnowledgeStatus.PENDING).build()));
+        when(knowledgeService.reviewKnowledge(eq(id), any(ReviewDecisionRequest.class)))
+                .thenReturn(KnowledgeItemResponse.builder().id(id).status(KnowledgeStatus.APPROVED).build());
+
+        String result = handler.execute(Map.of(
+                "toolName", "review_knowledge", "id", name, "decision", "APPROVED"));
+
+        assertThat(result).doesNotContain("Invalid UUID").contains("APPROVED");
+        verify(knowledgeService).reviewKnowledge(eq(id), any(ReviewDecisionRequest.class));
+    }
+
+    @Test
+    void retireKnowledge_unknownNameReturnsNotFound() {
+        when(knowledgeItemRepository.findByName("ghost")).thenReturn(List.of());
+
+        String result = handler.execute(Map.of(
+                "toolName", "retire_knowledge", "id", "ghost"));
+
+        assertThat(result).isEqualTo("Error: Knowledge not found: ghost");
+        verifyNoInteractions(knowledgeService);
+    }
+
+    @Test
+    void findKnowledge_blankNameReturnsError() {
+        String result = handler.execute(Map.of(
+                "toolName", "find_knowledge", "name", "  "));
+
+        assertThat(result).isEqualTo("Error: Missing required parameter: name");
+        verifyNoInteractions(knowledgeItemRepository);
+    }
+
+    @Test
+    void findKnowledge_singleMatchReturnsNameIdTypeStatus() {
+        UUID id = UUID.randomUUID();
+        when(knowledgeItemRepository.findByName("project-architecture-basics"))
+                .thenReturn(List.of(KnowledgeItem.builder()
+                        .id(id).name("project-architecture-basics").type(KnowledgeType.SKILL)
+                        .status(KnowledgeStatus.PENDING).build()));
+
+        String result = handler.execute(Map.of(
+                "toolName", "find_knowledge", "name", "project-architecture-basics"));
+
+        assertThat(result).contains("project-architecture-basics")
+                .contains(id.toString()).contains("PENDING").contains("SKILL");
+    }
+
+    @Test
     void serviceExceptionIsMappedToErrorString() {
         UUID id = UUID.randomUUID();
         when(knowledgeService.retireKnowledge(id))

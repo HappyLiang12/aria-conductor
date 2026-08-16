@@ -65,6 +65,32 @@ class KnowledgeItemRepositorySliceIntegrationTest extends DataJpaTestBase {
     }
 
     @Test
+    void findByName_returnsAllMatchesForSharedName() {
+        KnowledgeItem first = persist(TestDataBuilder.aKnowledgeItem()
+                .withName("shared-name").withType(KnowledgeType.SKILL)
+                .withStatus(KnowledgeStatus.PENDING).build());
+        KnowledgeItem second = persist(TestDataBuilder.aKnowledgeItem()
+                .withName("shared-name").withType(KnowledgeType.PROMPT)
+                .withStatus(KnowledgeStatus.APPROVED).build());
+        persist(TestDataBuilder.aKnowledgeItem()
+                .withName("other-name").withStatus(KnowledgeStatus.APPROVED).build());
+        flushAndClear();
+
+        assertThat(repository.findByName("shared-name"))
+                .extracting(KnowledgeItem::getId)
+                .containsExactlyInAnyOrder(first.getId(), second.getId());
+    }
+
+    @Test
+    void findByName_noMatchReturnsEmpty() {
+        persist(TestDataBuilder.aKnowledgeItem()
+                .withName("known-name").withStatus(KnowledgeStatus.PENDING).build());
+        flushAndClear();
+
+        assertThat(repository.findByName("missing-name")).isEmpty();
+    }
+
+    @Test
     void countByStatus_countsOnlyThatStatus() {
         persist(TestDataBuilder.aKnowledgeItem().withStatus(KnowledgeStatus.PENDING).build());
         persist(TestDataBuilder.aKnowledgeItem().withStatus(KnowledgeStatus.PENDING).build());

@@ -40,6 +40,7 @@ public class KnowledgeToolHandler implements ToolHandler {
                 case "query_knowledge" -> searchKnowledge(arguments, KnowledgeStatus.APPROVED);
                 case "review_knowledge" -> reviewKnowledge(arguments);
                 case "retire_knowledge" -> retireKnowledge(arguments);
+                case "find_knowledge" -> findKnowledge(arguments);
                 default -> error("Unknown tool: " + toolName);
             };
         } catch (Exception e) {
@@ -151,7 +152,6 @@ public class KnowledgeToolHandler implements ToolHandler {
         if (id.isEmpty()) return error("Missing required parameter: id");
         if (decision.isEmpty()) return error("Missing required parameter: decision");
 
-        UUID uuid = UUID.fromString(id);
         ReviewDecisionRequest.ReviewDecision dec;
         try {
             dec = ReviewDecisionRequest.ReviewDecision.valueOf(decision.toUpperCase());
@@ -159,20 +159,89 @@ public class KnowledgeToolHandler implements ToolHandler {
             return error("Invalid decision: " + decision + ". Valid: APPROVED, REJECTED");
         }
 
+        Resolution resolution = resolveIdOrName(id);
+        if (resolution.missing()) return error("Missing required parameter: id");
+        if (resolution.error() != null) return error(resolution.error());
+
         ReviewDecisionRequest request = ReviewDecisionRequest.builder()
                 .decision(dec)
                 .reason(Objects.toString(args.get("reason"), ""))
                 .build();
-        KnowledgeItemResponse response = knowledgeService.reviewKnowledge(uuid, request);
+        KnowledgeItemResponse response = knowledgeService.reviewKnowledge(resolution.uuid(), request);
         return "Knowledge " + id + " reviewed. Decision: " + dec.name() + ". Status: " + response.getStatus();
     }
 
     private String retireKnowledge(Map<String, Object> args) {
         String id = Objects.toString(args.get("id"), "");
         if (id.isEmpty()) return error("Missing required parameter: id");
-        UUID uuid = UUID.fromString(id);
-        KnowledgeItemResponse response = knowledgeService.retireKnowledge(uuid);
+        Resolution resolution = resolveIdOrName(id);
+        if (resolution.missing()) return error("Missing required parameter: id");
+        if (resolution.error() != null) return error(resolution.error());
+        KnowledgeItemResponse response = knowledgeService.retireKnowledge(resolution.uuid());
         return "Knowledge " + id + " retired successfully. Status: " + (response.getStatus() != null ? response.getStatus().name() : "UNKNOWN");
+    }
+
+    private String findKnowledge(Map<String, Object> args) {
+        String name = Objects.toString(args.get("name"), "");
+        if (name.isBlank()) return error("Missing required parameter: name");
+        List<KnowledgeItem> matches = knowledgeItemRepository.findByName(name.trim());
+        if (matches.isEmpty()) return error("Knowledge not found: " + name.trim());
+
+        StringBuilder sb = new StringBuilder();
+        for (KnowledgeItem k : matches) {
+            if (sb.length() > 0) sb.append("\n");
+            sb.append(k.getName()).append(" | ")
+                    .append(k.getId()).append(" | ")
+                    .append(k.getType()).append(" | ")
+                    .append(k.getStatus());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Resolve a knowledge id-or-name to a UUID, mirroring {@code AgentToolHandler.resolveAgentId}
+     * (#38). A value that parses as a UUID is used directly; otherwise it is treated as a name and
+     * looked up via {@link KnowledgeItemRepository#findByName}. Names are not unique, so multiple
+     * matches surface the candidates instead of silently acting on an arbitrary row.
+     */
+    private Resolution resolveIdOrName(String idOrName) {
+        if (idOrName == null || idOrName.isBlank()) return Resolution.unresolved();
+        try {
+            return Resolution.of(UUID.fromString(idOrName.trim()));
+        } catch (IllegalArgumentException e) {
+            String name = idOrName.trim();
+            List<KnowledgeItem> matches = knowledgeItemRepository.findByName(name);
+            if (matches.isEmpty()) {
+                return Resolution.failure("Knowledge not found: " + name);
+            }
+            if (matches.size() > 1) {
+                StringBuilder sb = new StringBuilder("Multiple knowledge items found with name '")
+                        .append(name).append("'. Specify the UUID: ");
+                for (int i = 0; i < matches.size(); i++) {
+                    if (i > 0) sb.append(", ");
+                    KnowledgeItem k = matches.get(i);
+                    sb.append(k.getName()).append(" | ").append(k.getId())
+                            .append(" | ").append(k.getType()).append(" | ").append(k.getStatus());
+                }
+                return Resolution.failure(sb.toString());
+            }
+            return Resolution.of(matches.get(0).getId());
+        }
+    }
+
+    /** Result of id-or-name resolution: either a UUID, a missing-parameter marker, or an error message. */
+    private record Resolution(UUID uuid, boolean missing, String error) {
+        static Resolution of(UUID uuid) {
+            return new Resolution(uuid, false, null);
+        }
+
+        static Resolution unresolved() {
+            return new Resolution(null, true, null);
+        }
+
+        static Resolution failure(String error) {
+            return new Resolution(null, false, error);
+        }
     }
 
     private String error(String msg) {

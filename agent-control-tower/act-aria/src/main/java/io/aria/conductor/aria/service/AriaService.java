@@ -222,8 +222,9 @@ public class AriaService {
                 - store_knowledge: Save new knowledge as PENDING (requires name, content, type). Valid types: SKILL, SCRIPT, PROMPT, TOOL, TEMPLATE, GUIDELINE
                 - list_knowledge: List all knowledge items with lifecycle status (operator view)
                 - query_knowledge: Search APPROVED knowledge only (agent-facing, returns only approved non-retired)
-                - review_knowledge: Approve or reject pending knowledge (requires id, decision, optional reason)
-                - retire_knowledge: Retire a knowledge item (requires id)
+                - find_knowledge: Look up a knowledge item's ID and status by exact name (requires name)
+                - review_knowledge: Approve or reject pending knowledge (requires id (UUID or item name) or name, decision, optional reason)
+                - retire_knowledge: Retire a knowledge item (requires id (UUID or item name) or name)
 
                 **Kanban:**
                 - create_kanban_item: Create a task item (requires title, optional priority/assignee/description)

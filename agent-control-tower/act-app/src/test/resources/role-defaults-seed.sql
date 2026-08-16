@@ -14,5 +14,5 @@ WHERE td.name IN ('read_file', 'write_file', 'shell_exec', 'http_request')
 
 INSERT INTO role_tool_templates (role, tool_id, is_default)
 SELECT 'qa', td.id, TRUE FROM tool_definitions td
-WHERE td.name IN ('read_file', 'write_file', 'shell_exec', 'review_knowledge')
+WHERE td.name IN ('read_file', 'write_file', 'shell_exec', 'review_knowledge', 'find_knowledge')
   AND NOT EXISTS (SELECT 1 FROM role_tool_templates rtt WHERE rtt.role = 'qa' AND rtt.tool_id = td.id);

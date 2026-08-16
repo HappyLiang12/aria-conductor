@@ -55,6 +55,6 @@ class RoleDefaultsIntegrationTest extends BaseH2IntegrationTest {
     void qaAgentWithNoAssignment_resolvesRoleDefaultTools() {
         List<ToolDefinition> tools = agentToolResolver.resolveForAgent(agentWithRole("qa"));
         assertThat(tools).extracting(ToolDefinition::getName)
-                .contains("write_file", "review_knowledge");
+                .contains("write_file", "review_knowledge", "find_knowledge");
     }
 }

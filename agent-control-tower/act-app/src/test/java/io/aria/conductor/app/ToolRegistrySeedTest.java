@@ -31,7 +31,7 @@ class ToolRegistrySeedTest extends BaseH2IntegrationTest {
     private static final Set<String> EXPECTED_PLATFORM_TOOLS = Set.of(
         "get_agent", "update_agent", "retire_agent", "delete_agent",
         "list_runs", "get_run_status", "cancel_run", "list_running_runs",
-        "list_knowledge", "review_knowledge",
+        "list_knowledge", "review_knowledge", "find_knowledge",
         "list_agents", "create_agent", "run_agent",
         "create_knowledge", "store_knowledge", "search_knowledge"
     );

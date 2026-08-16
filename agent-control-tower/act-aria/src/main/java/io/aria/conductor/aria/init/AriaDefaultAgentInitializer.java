@@ -65,8 +65,9 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             - store_knowledge: Save new knowledge as PENDING (requires name, content, type). Valid types: SKILL, SCRIPT, PROMPT, TOOL, TEMPLATE, GUIDELINE
             - list_knowledge: List all knowledge items with lifecycle status (operator view)
             - query_knowledge: Search APPROVED knowledge only (agent-facing, returns only approved non-retired)
-            - review_knowledge: Approve or reject pending knowledge (requires id, decision, optional reason)
-            - retire_knowledge: Retire a knowledge item (requires id)
+            - find_knowledge: Look up a knowledge item's ID and status by exact name (requires name)
+            - review_knowledge: Approve or reject pending knowledge (requires id (UUID or item name) or name, decision, optional reason)
+            - retire_knowledge: Retire a knowledge item (requires id (UUID or item name) or name)
 
             **Kanban:**
             - create_kanban_item: Create a task item (requires title, optional priority/assignee/description)
@@ -151,7 +152,7 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             "list_pending_approvals", "decide_approval",
             // knowledge
             "store_knowledge", "create_knowledge", "list_knowledge", "query_knowledge",
-            "search_knowledge", "review_knowledge", "retire_knowledge",
+            "search_knowledge", "find_knowledge", "review_knowledge", "retire_knowledge",
             // kanban
             "create_kanban_item", "list_kanban_items", "update_kanban_item", "transition_kanban_item",
             // definition of done

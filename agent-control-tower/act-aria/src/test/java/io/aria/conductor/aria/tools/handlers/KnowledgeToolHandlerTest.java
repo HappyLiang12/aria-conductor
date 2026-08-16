@@ -239,6 +239,148 @@ class KnowledgeToolHandlerTest {
     }
 
     @Test
+    void reviewKnowledgeByNameShouldResolveAndApprove() {
+        UUID id = UUID.randomUUID();
+        KnowledgeItem item = KnowledgeItem.builder()
+                .id(id).name("project-architecture-basics").type(KnowledgeType.SKILL)
+                .status(KnowledgeStatus.PENDING).build();
+        when(knowledgeItemRepository.findByName("project-architecture-basics")).thenReturn(List.of(item));
+        KnowledgeItemResponse response = KnowledgeItemResponse.builder()
+                .id(id).name("project-architecture-basics").status(KnowledgeStatus.APPROVED).build();
+        when(knowledgeService.reviewKnowledge(eq(id), any(ReviewDecisionRequest.class))).thenReturn(response);
+
+        String result = handler.execute(Map.of(
+                "toolName", "review_knowledge",
+                "id", "project-architecture-basics",
+                "decision", "APPROVED"
+        ));
+
+        verify(knowledgeItemRepository).findByName("project-architecture-basics");
+        verify(knowledgeService).reviewKnowledge(eq(id), any(ReviewDecisionRequest.class));
+        assertTrue(result.contains("APPROVED"));
+        assertFalse(result.contains("Invalid UUID"));
+    }
+
+    @Test
+    void reviewKnowledgeByUnknownNameShouldReturnNotFound() {
+        when(knowledgeItemRepository.findByName("does-not-exist")).thenReturn(List.of());
+
+        String result = handler.execute(Map.of(
+                "toolName", "review_knowledge",
+                "id", "does-not-exist",
+                "decision", "APPROVED"
+        ));
+
+        assertEquals("Error: Knowledge not found: does-not-exist", result);
+        verifyNoInteractions(knowledgeService);
+    }
+
+    @Test
+    void reviewKnowledgeByAmbiguousNameShouldListCandidates() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        KnowledgeItem a = KnowledgeItem.builder()
+                .id(first).name("shared-name").type(KnowledgeType.SKILL)
+                .status(KnowledgeStatus.PENDING).build();
+        KnowledgeItem b = KnowledgeItem.builder()
+                .id(second).name("shared-name").type(KnowledgeType.PROMPT)
+                .status(KnowledgeStatus.APPROVED).build();
+        when(knowledgeItemRepository.findByName("shared-name")).thenReturn(List.of(a, b));
+
+        String result = handler.execute(Map.of(
+                "toolName", "review_knowledge",
+                "id", "shared-name",
+                "decision", "APPROVED"
+        ));
+
+        assertTrue(result.startsWith("Error: Multiple knowledge items found with name 'shared-name'"));
+        assertTrue(result.contains(first.toString()));
+        assertTrue(result.contains(second.toString()));
+        verifyNoInteractions(knowledgeService);
+    }
+
+    @Test
+    void retireKnowledgeByNameShouldResolveAndRetire() {
+        UUID id = UUID.randomUUID();
+        KnowledgeItem item = KnowledgeItem.builder()
+                .id(id).name("old-runbook").type(KnowledgeType.SKILL)
+                .status(KnowledgeStatus.APPROVED).build();
+        when(knowledgeItemRepository.findByName("old-runbook")).thenReturn(List.of(item));
+        KnowledgeItemResponse response = KnowledgeItemResponse.builder()
+                .id(id).status(KnowledgeStatus.RETIRED).build();
+        when(knowledgeService.retireKnowledge(id)).thenReturn(response);
+
+        String result = handler.execute(Map.of(
+                "toolName", "retire_knowledge",
+                "id", "old-runbook"
+        ));
+
+        verify(knowledgeService).retireKnowledge(id);
+        assertTrue(result.contains("retired successfully"));
+        assertTrue(result.contains("Status: RETIRED"));
+    }
+
+    @Test
+    void findKnowledgeShouldReturnItemIdentity() {
+        UUID id = UUID.randomUUID();
+        KnowledgeItem item = KnowledgeItem.builder()
+                .id(id).name("project-architecture-basics").type(KnowledgeType.SKILL)
+                .status(KnowledgeStatus.PENDING).build();
+        when(knowledgeItemRepository.findByName("project-architecture-basics")).thenReturn(List.of(item));
+
+        String result = handler.execute(Map.of(
+                "toolName", "find_knowledge",
+                "name", "project-architecture-basics"
+        ));
+
+        assertTrue(result.contains(id.toString()));
+        assertTrue(result.contains("PENDING"));
+        assertTrue(result.contains("SKILL"));
+    }
+
+    @Test
+    void findKnowledgeMissingNameShouldReturnError() {
+        String result = handler.execute(Map.of("toolName", "find_knowledge"));
+
+        assertEquals("Error: Missing required parameter: name", result);
+        verifyNoInteractions(knowledgeItemRepository);
+    }
+
+    @Test
+    void findKnowledgeNotFoundShouldReturnError() {
+        when(knowledgeItemRepository.findByName("ghost")).thenReturn(List.of());
+
+        String result = handler.execute(Map.of(
+                "toolName", "find_knowledge",
+                "name", "ghost"
+        ));
+
+        assertEquals("Error: Knowledge not found: ghost", result);
+    }
+
+    @Test
+    void findKnowledgeMultipleMatchesShouldListAll() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        KnowledgeItem a = KnowledgeItem.builder()
+                .id(first).name("runbook").type(KnowledgeType.SKILL)
+                .status(KnowledgeStatus.APPROVED).build();
+        KnowledgeItem b = KnowledgeItem.builder()
+                .id(second).name("runbook").type(KnowledgeType.PROMPT)
+                .status(KnowledgeStatus.PENDING).build();
+        when(knowledgeItemRepository.findByName("runbook")).thenReturn(List.of(a, b));
+
+        String result = handler.execute(Map.of(
+                "toolName", "find_knowledge",
+                "name", "runbook"
+        ));
+
+        assertTrue(result.contains(first.toString()));
+        assertTrue(result.contains(second.toString()));
+        assertTrue(result.lines().count() == 2);
+    }
+
+    @Test
     void unknownToolShouldReturnError() {
         String result = handler.execute(Map.of("toolName", "nonexistent_tool"));
 

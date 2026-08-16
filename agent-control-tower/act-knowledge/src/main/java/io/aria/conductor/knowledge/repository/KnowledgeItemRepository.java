@@ -30,6 +30,13 @@ public interface KnowledgeItemRepository extends JpaRepository<KnowledgeItem, UU
     Optional<KnowledgeItem> findByNameAndType(String name, KnowledgeType type);
 
     /**
+     * Name-only lookup (#38). {@code knowledge_items.name} has no unique constraint
+     * (V1 DDL), so multiple items may share a name; callers must handle both the
+     * single-match and multi-match cases.
+     */
+    List<KnowledgeItem> findByName(String name);
+
+    /**
      * Pessimistic-write lookup used by the review state machine. Acquiring a row
      * write-lock serializes concurrent reviews of the same item so two opposing
      * decisions (approve vs reject) cannot both read PENDING and both commit

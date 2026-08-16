@@ -55,9 +55,9 @@ done
 if resolve_container_runtime; then
     if [ -n "$CONTAINER_RT" ]; then
         if [ "$CONTAINER_RT_MODE" = "explicit" ]; then
-            echo "  selected: $CONTAINER_RT (explicit: CONTAINER_RUNTIME)"
+            echo "  Container runtime: $CONTAINER_RT (explicit: CONTAINER_RUNTIME)"
         else
-            echo "  selected: $CONTAINER_RT (auto-detected)"
+            echo "  Container runtime: $CONTAINER_RT (auto-detected)"
         fi
     else
         echo "  WARNING: No container runtime available. Required only for the opencode provider."
@@ -75,7 +75,8 @@ if [ "$ADK_PROVIDER" = "opencode" ] && [ "$SKIP_SANDBOX" != "true" ]; then
         exit 1
     fi
 
-    if ! "$CONTAINER_RT" ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>/dev/null | grep -q "aria-opensandbox"; then
+    sandbox_list="$("$CONTAINER_RT" ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>/dev/null || true)"
+    if ! printf '%s' "$sandbox_list" | grep -q "aria-opensandbox"; then
         echo "Starting OpenSandbox server ($CONTAINER_RT compose)..."
         if ! (cd "$PROJECT_ROOT" && "$CONTAINER_RT" compose up -d opensandbox-server); then
             echo "ERROR: Failed to start OpenSandbox server" >&2

@@ -99,10 +99,10 @@ if ($AdkProvider -eq "opencode" -and -not $SkipSandbox) {
         Push-Location $ProjectRoot
         & $rt compose up -d opensandbox-server
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to start OpenSandbox server"
             if ($rt -eq "podman") {
                 Write-Host "podman hint: verify the socket is enabled (podman machine ssh 'systemctl --user is-active podman.socket') and SANDBOX_SOCKET in .env matches its VM path." -ForegroundColor Yellow
             }
+            Write-Error "Failed to start OpenSandbox server"
             Pop-Location; exit 1
         }
         Pop-Location

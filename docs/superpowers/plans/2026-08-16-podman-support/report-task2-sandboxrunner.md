@@ -162,7 +162,7 @@ git commit -m "docs(podman): task2 report"
 提交 hash：
 
 - 代码提交：`c75d2e9`（feat(sandbox): honor CONTAINER_RUNTIME env in SandboxRunner detection）
-- 报告提交：`e650c11`（docs(podman): task2 report）
+- 报告提交：`f992686`（docs(podman): task2 report）
 
 ## 8. 结论
 
@@ -175,4 +175,4 @@ git commit -m "docs(podman): task2 report"
 | Commit | 说明 |
 |--------|------|
 | `c75d2e9` | feat(sandbox): honor CONTAINER_RUNTIME env in SandboxRunner detection |
-| `e650c11` | docs(podman): task2 report |
+| `f992686` | docs(podman): task2 report |

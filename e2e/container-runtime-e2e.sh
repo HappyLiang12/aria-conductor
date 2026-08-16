@@ -24,6 +24,7 @@ run_scenario() {
     local dir="$STUB_ROOT/$(date +%s)-$RANDOM"
     mkdir -p "$dir"
     for spec in "$@"; do
+        [ -n "$spec" ] || continue
         local name="${spec%:*}" mode="${spec#*:}"
         [ "$spec" = "$name" ] && mode="ok"
         if [ "$mode" = "dead" ]; then
@@ -78,6 +79,7 @@ cat > "$dotenv_dir/.env" <<'EOF'
 CONTAINER_RUNTIME=podman
 SANDBOX_SOCKET=/run/user/1000/podman/podman.sock
 INVALID LINE WITHOUT EQUALS
+1BAD_NAME=should-be-skipped
 EOF
 
 out="$(bash -c "

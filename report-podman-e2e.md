@@ -134,3 +134,11 @@ podman rootless port-forward 的目标是**容器 IP**（非 localhost）：open
 ```text
 docs(podman): spike B evidence - podman full-chain E2E
 ```
+
+## 后续更新（2026-08-17）：eip 方案取代 patch 镜像
+
+§6.1 的 patch 方案已被更优方案取代（详见 `docs/superpowers/plans/2026-08-16-podman-support/report-task9b-eip-experiment.md`）：
+
+- **发现**：`opensandbox/server:latest`（v0.2.2）原生实现 `[server] eip`（最高优先级）与 `[docker] host_ip`（第二优先级）；v0.1.0 无 eip 字段。
+- **结论**：docker-compose.yml 的 opensandbox-config 已加 `eip = "127.0.0.1"`（提交见分支 log），docker/podman 通吃，**无需 patch 镜像**。
+- **清理**：Spike 临时资产（opensandbox-server-src/、sandbox-src/、sandbox-sources.jar、agent-control-tower/opensandbox-config.toml）已删除；`0.1.0-podman` 本地镜像不再需要。

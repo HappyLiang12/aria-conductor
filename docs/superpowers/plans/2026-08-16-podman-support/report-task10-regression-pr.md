@@ -116,7 +116,7 @@ URL：https://github.com/HappyLiang12/aria-conductor/actions/runs/31998629009
 
 `gh pr checks 72` 最终 exit=0，**全部必需 job green，无需重跑**。总耗时约 10 分钟（从创建 PR 到全绿）。
 
-> 报告 commit（11ce327）推送后触发了最终 run **31999242464**（8m23s，含完整 java/e2e/docker 验证），同样全绿；PR checks 现指向该 run。首个 run 31998629009 亦为 success（7m39s）。最终 green run：**31999242464**（https://github.com/HappyLiang12/aria-conductor/actions/runs/31999242464）。
+> 后续 docs 提交触发的完整 run 亦全部 green（3/3 连续成功）：31998629009（7m39s）→ 31999242464（7m53s，报告 commit 后）→ **31999944548**（最终，PR checks 现指向此 run，8m12s）。最终 green run：**31999944548**（https://github.com/HappyLiang12/aria-conductor/actions/runs/31999944548）。
 
 ## 7. 结论
 

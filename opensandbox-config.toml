@@ -1,0 +1,44 @@
+# OpenSandbox server config (Docker runtime mode), generated per official
+# server/docker-compose.example.yaml; equivalent to `uvx opensandbox-server init-config --example docker`
+#
+# Mounted into the opensandbox-server container as a read-only volume
+# (docker-compose.yml, ${SANDBOX_CONFIG_PATH:-/etc/opensandbox/config.toml}).
+# Volume mount is used instead of compose `configs:` so that both Docker Compose
+# and podman-compose (1.0.6+) can run the stack (configs: is unsupported there).
+
+[server]
+host = "0.0.0.0"
+port = 8080
+# eip overrides the public host part of returned sandbox endpoint URLs.
+# Required for the local-dev topology (backend on the host): without it the
+# server returns the sandbox container's bridge IP, unreachable from the host.
+# Supported by the official opensandbox/server image (v0.2.2+) - works with
+# both Docker and podman (no image patch needed).
+eip = "127.0.0.1"
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.21"
+
+[docker]
+network_mode = "bridge"
+# host_ip=127.0.0.1 is only valid when the backend runs ON the container-runtime host
+# (local-dev topology): sandbox endpoints (execd port mappings) must resolve
+# from the backend process, and on the host loopback they do. `host.docker.internal`
+# does NOT resolve from host processes on Windows (only from inside containers).
+# FULL-STACK COMPOSE TOPOLOGY: the backend is a container, so 127.0.0.1 inside it
+# points at the backend container itself — sandbox endpoints are unreachable and the
+# opencode provider is NOT usable in full-stack compose mode (runs fail with
+# SANDBOX_UNAVAILABLE after the SDK timeout). Use the local-dev topology (backend on
+# the host) or the langchain provider for the full-stack compose deployment.
+# (server v0.2.2+ implements [docker].host_ip as the second-priority host override
+# after [server].eip; both are set here.)
+host_ip = "127.0.0.1"
+port_range_min = 40000
+port_range_max = 60000
+
+[ingress]
+mode = "direct"

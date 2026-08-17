@@ -116,6 +116,8 @@ URL：https://github.com/HappyLiang12/aria-conductor/actions/runs/31998629009
 
 `gh pr checks 72` 最终 exit=0，**全部必需 job green，无需重跑**。总耗时约 10 分钟（从创建 PR 到全绿）。
 
+> 报告 commit（11ce327）推送后触发了最终 run **31999242464**（8m23s，含完整 java/e2e/docker 验证），同样全绿；PR checks 现指向该 run。首个 run 31998629009 亦为 success（7m39s）。最终 green run：**31999242464**（https://github.com/HappyLiang12/aria-conductor/actions/runs/31999242464）。
+
 ## 7. 结论
 
 - docker 默认路径零回归：双 harness（ps1 10/10、sh 11/11）与 `podman compose config`（docker-compose.exe 解析）均验证通过。

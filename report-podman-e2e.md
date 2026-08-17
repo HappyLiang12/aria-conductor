@@ -112,8 +112,8 @@ podman rootless port-forward 的目标是**容器 IP**（非 localhost）：open
 
 ### 6.3 podman compose 限制
 
-- `podman compose down` 偶发报 machine connection 错误 → 手动 `podman rm -f`/`network rm`/`volume rm` 兜底（Spike A 已知，再次实证）
-- compose `configs:` 段与 socket 路径解析在 podman-compose 下不可用 → 全栈路径以 `podman run` 直启 opensandbox-server 兜底
+- `podman compose down` 偶发报 machine connection 错误 → 手动 `podman rm -f`/`network rm`/`volume rm` 兜底（Spike A 已知，再次实证）。**本次清理实证根因线索**：podman compose 调用了外部 compose provider `C:\Program Files\Docker\Docker\resources\bin\docker-compose.exe`（Docker Desktop 的 docker-compose，即使 Docker Desktop 已退出仍被 podman 配置为 external provider）——该 exe 连接不到 podman machine 的 socket 即报错。规避：用 `podman compose` 自带 provider 或直接 `podman rm -f` 清理。
+- compose `configs:` 段与 socket 路径解析在 podman-compose 下不可用 → 全栈路径以 `podman run` 直启 opensandbox-server 兜底（B1 期间曾临时把 compose 改为 bind-mount + 硬编码 socket，验证后已回滚，保持 Task 7 的 `SANDBOX_SOCKET` 参数化交付形态不变）
 
 ### 6.4 环境/测试资产限制
 

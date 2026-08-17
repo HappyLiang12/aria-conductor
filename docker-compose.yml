@@ -147,6 +147,12 @@ configs:
       [server]
       host = "0.0.0.0"
       port = 8080
+      # eip overrides the public host part of returned sandbox endpoint URLs.
+      # Required for the local-dev topology (backend on the host): without it the
+      # server returns the sandbox container's bridge IP, unreachable from the host.
+      # Supported by the official opensandbox/server image (v0.2.2+) - works with
+      # both Docker and podman (no image patch needed).
+      eip = "127.0.0.1"
 
       [log]
       level = "INFO"

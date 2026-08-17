@@ -142,3 +142,13 @@ docs(podman): spike B evidence - podman full-chain E2E
 - **发现**：`opensandbox/server:latest`（v0.2.2）原生实现 `[server] eip`（最高优先级）与 `[docker] host_ip`（第二优先级）；v0.1.0 无 eip 字段。
 - **结论**：docker-compose.yml 的 opensandbox-config 已加 `eip = "127.0.0.1"`（提交见分支 log），docker/podman 通吃，**无需 patch 镜像**。
 - **清理**：Spike 临时资产（opensandbox-server-src/、sandbox-src/、sandbox-sources.jar、agent-control-tower/opensandbox-config.toml）已删除；`0.1.0-podman` 本地镜像不再需要。
+
+## 外部机器验证反馈处理（2026-08-17，PR 评审后实测）
+
+另一台 Windows 机器（公司网络 + podman-compose 1.0.6）实测反馈 3 项，逐条结论：
+
+1. **npm registry 阻止 opencode-ai postinstall 下载二进制** → 环境问题，与本 PR 无关（Docker 路径同样受影响；镜像构建未在本 PR 中改变）。
+2. **podman-compose 1.0.6 不支持 compose `configs:` 块** → 有效缺陷（Spike B 已记录 §6.3，用户决策"改 compose 彻底兼容"后补做）。**已修复**：configs 段移除，OpenSandbox 配置改为卷挂载（新增根目录 `opensandbox-config.toml`，compose `./opensandbox-config.toml:/etc/opensandbox/config.toml:ro`）；`podman compose config` 验证通过（exit=0，bind mount 正确解析，SANDBOX_SOCKET 参数化保留）。
+3. **quickstart 无"podman + host backend + opencode"路径** → 部分有效：`start-backend.ps1 -AdkProvider opencode` 已提供该能力（Spike B 实证），README 现补充明确指引（Container Runtime Selection 章节新增说明块）。
+
+提交：见分支 log（configs→volume 修复 + README 补充）。

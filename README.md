@@ -122,6 +122,14 @@ Startup scripts and the OpenSandbox server support **Docker** (default) and **po
 6. Start as usual (`docker compose` commands become `podman compose ...`):
    `podman compose up -d` or `./scripts/quickstart.sh`
 
+> **podman + host backend + opencode**: the full-stack compose topology runs the
+> backend in a container, where the opencode provider is NOT usable (sandbox
+> endpoints are unreachable from inside the backend container; see the topology
+> note in `opensandbox-config.toml`). To run the backend on the host with podman
+> and the opencode provider, use the local-dev path:
+> `pwsh -NoProfile -File scripts/start-backend.ps1 -AdkProvider opencode`
+> (auto-starts the OpenSandbox server via podman) plus `scripts/start-frontend.ps1`.
+
 > Note: OpenSandbox has no native podman runtime; podman is served through its Docker-compatible socket. Sandbox support under podman is validated by the project's E2E suite (see `e2e/container-runtime-e2e.ps1`).
 
 ## Development Setup

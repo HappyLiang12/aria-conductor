@@ -222,3 +222,12 @@ d09b7c2 docs: podman container runtime selection guide
 ```
 
 报告提交：`docs(podman): task8 report`（hash 见 `git log --oneline -2`，本文件提交自身无法自引用）
+
+## Tag 对齐（2026-08-17，Task 8 审查 Minor）
+
+审查发现 README.md 既有 docker 构建命令 tag 为 1.0，与新增 podman 变体 1.1 及 application.yml（`image: aria-conductor/opencode-sandbox:1.1`）不一致。已对齐：
+
+- `README.md` L209：`docker build -t aria-conductor/opencode-sandbox:1.0` → `:1.1`
+- `docker-compose.yml` L85 注释：`docker build -t aria-conductor/opencode-sandbox:1.0` → `:1.1`
+- 历史报告（report-*.md）、旧 plan/spec、OpenCodeProperties.java 默认值（1.0）为历史快照/代码契约，未改动
+- 提交：`32d4c91 docs: align opencode-sandbox image tag to 1.1 (matches application.yml)`

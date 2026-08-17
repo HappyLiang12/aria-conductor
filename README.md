@@ -206,7 +206,7 @@ docker compose up -d opensandbox-server
 OpenSandbox server starts at `http://localhost:8090`. The opencode sandbox image must be built first:
 
 ```bash
-docker build -t aria-conductor/opencode-sandbox:1.0 agent-control-tower/opencode-sandbox
+docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox
 # or: podman build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox
 ```
 

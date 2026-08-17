@@ -82,7 +82,7 @@ services:
     container_name: aria-opensandbox
     # The opencode sandbox image (used by the opencode provider at runtime) must be
     # built before the first run:
-    #   docker build -t aria-conductor/opencode-sandbox:1.0 agent-control-tower/opencode-sandbox
+    #   docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox
     environment:
       SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
       # Required for non-interactive container startup when no server API key is configured;

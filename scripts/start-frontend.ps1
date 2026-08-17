@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 $FrontendDir = Join-Path $ProjectRoot "agent-control-tower\act-dashboard"
 
 function Test-Command($cmd, $hint) {

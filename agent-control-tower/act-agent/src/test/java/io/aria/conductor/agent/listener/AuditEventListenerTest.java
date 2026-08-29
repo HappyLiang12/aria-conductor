@@ -9,6 +9,8 @@ import io.aria.conductor.common.model.AuditEvent;
 import io.aria.conductor.common.model.RunStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -87,6 +89,25 @@ class AuditEventListenerTest {
                 RunStatus.FAILED));
 
         assertThat(captureSaved().getDetails()).contains("FAILED");
+    }
+
+    /**
+     * F2 regression: the audit action must reflect the terminal run status so the
+     * dashboard timeline never shows "COMPLETE — Run completed with status: FAILED".
+     */
+    @ParameterizedTest(name = "status {0} yields action {1}")
+    @CsvSource({
+            "COMPLETED, COMPLETE",
+            "FAILED, FAILED",
+            "CANCELLED, CANCELLED",
+            "ABORTED, ABORTED",
+    })
+    void onRunCompleted_actionMirrorsTerminalStatus(RunStatus status, String expectedAction) {
+        listener.onRunCompleted(new RunCompletedEvent(this, UUID.randomUUID(), UUID.randomUUID(), status));
+
+        AuditEvent saved = captureSaved();
+        assertThat(saved.getAction()).isEqualTo(expectedAction);
+        assertThat(saved.getDetails()).contains(status.name());
     }
 
     @Test

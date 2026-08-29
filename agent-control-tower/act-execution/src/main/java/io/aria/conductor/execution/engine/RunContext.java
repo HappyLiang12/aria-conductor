@@ -35,6 +35,13 @@ public class RunContext {
     private List<String> cachedSkillNames;
     private String workspaceDir;
     private io.aria.conductor.common.model.HarnessProfile harnessProfile;
+    /** S12: monotonic seq for run.progress events (client-side dedupe). */
+    private final java.util.concurrent.atomic.AtomicLong progressSeq =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    public long nextProgressSeq() {
+        return progressSeq.incrementAndGet();
+    }
 
     // Per-iteration latency tracking (#22): iterationStartTime is reset at the start of each
     // iteration; blockedWaitMillis accumulates human approval/pause wait so it is excluded

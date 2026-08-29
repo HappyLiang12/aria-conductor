@@ -92,7 +92,9 @@ public class RunKanbanAutoCreator {
                 case COMPLETED -> KanbanStatus.DONE;
                 case ABORTED -> KanbanStatus.CANCELLED;
                 case CANCELLED -> KanbanStatus.CANCELLED;
-                case FAILED -> KanbanStatus.CANCELLED;
+                // F5: failed work stays visible in the attention column instead of
+                // silently vanishing into CANCELLED (rendered as "Archived").
+                case FAILED -> KanbanStatus.BLOCKED;
                 default -> KanbanStatus.DONE;
             };
             for (KanbanItem item : items) {

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, updateAgent, retireAgent, getTemplates } from '../api/agents';
 import { listAdkProviders } from '../api/adk';
+import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import type { CreateAgentRequest, AgentType, AgentHealthStatus, Agent, AgentTemplate, AdkProviderInfo } from '../types';
@@ -286,7 +287,7 @@ export function AgentsPage() {
                   <td>{agent.role || '—'}</td>
                   <td>{agent.model || '—'}</td>
                   <td><StatusBadge status={agent.healthStatus} /></td>
-                  <td>{new Date(agent.createdAt).toLocaleDateString()}</td>
+                  <td>{formatTimestamp(agent.createdAt)}</td>
                   <td className="action-cell">
                     <button className="btn btn-sm" onClick={() => setDetailDialog({ open: true, agent })}>Details</button>
                     {agent.healthStatus !== 'RETIRED' && (

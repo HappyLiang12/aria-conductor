@@ -59,7 +59,7 @@ class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
         adkProvider = Mockito.mock(AdkProvider.class);
         when(adkProviderRegistry.resolve(any())).thenReturn(adkProvider);
         when(adkProvider.isHealthy(any())).thenReturn(true);
-        when(adkProvider.call(any(), any(), any()))
+        when(adkProvider.call(any(), any(), any(), any()))
                 .thenReturn(new LlmResponse("done", 10, 5, "stop", null));
         when(adkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
     }

@@ -419,7 +419,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         when(mockAdk.isHealthy(any())).thenReturn(true);
         when(mockAdk.parseActionsFromResponse(any())).thenReturn(List.of());
         AtomicInteger qaCall = new AtomicInteger(0);
-        when(mockAdk.call(any(), any(), any())).thenAnswer(inv -> {
+        when(mockAdk.call(any(), any(), any(), any())).thenAnswer(inv -> {
             UUID agentId = inv.getArgument(0);
             String output;
             if (qaAgentId.equals(agentId)) {

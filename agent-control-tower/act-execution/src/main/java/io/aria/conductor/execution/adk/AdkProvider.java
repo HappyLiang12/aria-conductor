@@ -8,6 +8,7 @@ import io.aria.conductor.execution.pipeline.Action;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Strategy interface for ADK (Agent Development Kit) providers.
@@ -31,6 +32,16 @@ public interface AdkProvider {
      * @return the LLM response, potentially containing tool calls
      */
     LlmResponse call(UUID agentId, List<LlmMessage> messages, List<Map<String, Object>> tools);
+
+    /**
+     * S12: turn-level call with an optional sink for intermediate streaming
+     * fragments (thinking / tool_call / tool_result). Default delegates to the
+     * 3-arg {@link #call} so existing providers/tests are unaffected.
+     */
+    default LlmResponse call(UUID agentId, List<LlmMessage> messages, List<Map<String, Object>> tools,
+                             Consumer<AdkStreamEvent> streamSink) {
+        return call(agentId, messages, tools);
+    }
 
     /**
      * Parse tool calls from an LLM response into executable {@link Action}s.

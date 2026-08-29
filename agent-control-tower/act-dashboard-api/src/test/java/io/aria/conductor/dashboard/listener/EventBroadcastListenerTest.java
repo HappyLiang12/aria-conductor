@@ -14,6 +14,7 @@ import io.aria.conductor.common.event.ReportAmendedEvent;
 import io.aria.conductor.common.event.ReportGeneratedEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.ApprovalStatus;
@@ -70,6 +71,25 @@ class EventBroadcastListenerTest {
         assertThat(event.data()).containsEntry("agentId", agentId.toString())
                 .containsEntry("name", "Scout")
                 .containsEntry("type", "WORKER");
+    }
+
+    @Test
+    void onRunProgress_broadcastsRunProgressWithTruncationAndSeq() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.THINKING, "x".repeat(600), "bash", 7));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.progress");
+        assertThat(event.data())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString())
+                .containsEntry("kind", "THINKING")
+                .containsEntry("toolName", "bash")
+                .containsEntry("seq", 7L);
+        // 500-char truncation convention (matches onRunIteration)
+        assertThat((String) event.data().get("content")).hasSize(503);
     }
 
     @Test

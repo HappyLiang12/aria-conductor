@@ -192,6 +192,12 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 }
 .card:hover { border-color: rgba(91,140,255,.45); box-shadow: 0 4px 18px rgba(0,0,0,.35); transform: translateY(-1px); }
 .card.moving { animation: cardMove 1.1s cubic-bezier(.4,.1,.2,1); }
+.card.moving-err { animation: cardMoveErr 1.2s cubic-bezier(.4,.1,.2,1); }
+@keyframes cardMoveErr {
+  0% { transform: translateY(-22px) scale(.98); opacity: 0; box-shadow: 0 0 0 0 rgba(255,107,122,.65); }
+  50% { box-shadow: 0 0 0 6px rgba(255,107,122,.22); }
+  100% { box-shadow: 0 0 0 0 rgba(255,107,122,0); }
+}
 @keyframes cardMove {
   0% { transform: translateY(-22px) scale(.98); opacity: 0; box-shadow: 0 0 0 0 rgba(91,140,255,.55); }
   50% { box-shadow: 0 0 0 6px rgba(91,140,255,.18); }
@@ -493,12 +499,12 @@ body.afterhours .flow-svg path { stroke: rgba(138,107,255,.35); }
   background: #05080f;
   border: 1px solid var(--line);
   border-radius: 10px;
-  height: 200px; overflow: auto;
+  height: 300px; overflow-y: auto; /* S2: fixed-height window, never squashes siblings */
   font: 11.5px/1.55 ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
   padding: 10px 12px;
   color: #c8d3ee;
 }
-.stream .ln { display: flex; gap: 8px; padding: 1px 0; }
+.stream .ln { display: flex; gap: 8px; padding: 1px 0; flex-wrap: wrap; }
 .stream .ln.new { animation: lnIn .4s ease; }
 @keyframes lnIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 .stream .ts { color: #5a6790; flex: 0 0 auto; }
@@ -515,6 +521,28 @@ body.afterhours .flow-svg path { stroke: rgba(138,107,255,.35); }
   content: "▌"; color: var(--brand-2); animation: blink 1s steps(1) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* S2 observability UX: collapse toggle, window badge, pump status, detail block */
+.stream.collapsed { display: none; }
+.tgl {
+  border: 1px solid var(--line); background: transparent; color: var(--text-mute);
+  border-radius: 6px; font-size: 10px; padding: 1px 8px; cursor: pointer;
+}
+.tgl:hover { color: var(--text); border-color: var(--brand-2); }
+.winbadge {
+  font-size: 9.5px; color: var(--text-mute); border: 1px solid var(--line);
+  border-radius: 6px; padding: 1px 8px; letter-spacing: .4px;
+}
+.pump {
+  font: 10.5px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--text-mute);
+  border: 1px dashed var(--line); border-radius: 8px; padding: 4px 10px; margin-bottom: 6px;
+}
+.pump.on { color: #7fe2ee; border-color: rgba(63,208,224,.4); }
+.stream .ln-detail { flex: 1 0 100%; margin: 2px 0 4px 8px; font-size: 10.5px; color: var(--text-mute); }
+.stream .ln-detail .think { color: #b9a4ff; white-space: pre-wrap; word-break: break-word; }
+.stream .ln-detail .tool { color: #7fe2ee; margin-top: 2px; word-break: break-word; }
+.stream .ln-detail .res { color: #6fe2b6; margin: 2px 0 0 12px; word-break: break-word; }
+.stream .ln-detail .skills { color: var(--text-mute); margin-top: 2px; }
 
 /* Resource grid */
 .resgrid {
@@ -1688,6 +1716,9 @@ body.light .chat-list-panel .ch-search { background: #f4f6fb; }
   border-top: 1px solid var(--line);
   padding: 10px 14px;
   background: rgba(0,0,0,.18);
+  /* F1: reserve the fixed Aria FAB corner (56px FAB + 24px inset + gap) so the
+     Send button never sits underneath the FAB and stays clickable. */
+  padding-right: calc(56px + 24px + 16px);
 }
 body.light .chat-compose { background: rgba(0,0,0,.02); }
 .chat-compose .row {

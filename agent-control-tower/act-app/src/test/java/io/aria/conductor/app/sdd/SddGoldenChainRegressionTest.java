@@ -58,7 +58,7 @@ class SddGoldenChainRegressionTest extends BaseH2IntegrationTest {
         when(adkProviderRegistry.resolve(any())).thenReturn(mock);
         when(mock.isHealthy(any())).thenReturn(true);
         when(mock.parseActionsFromResponse(any())).thenReturn(List.of());
-        when(mock.call(any(), any(), any())).thenAnswer(inv ->
+        when(mock.call(any(), any(), any(), any())).thenAnswer(inv ->
                 new LlmResponse("step output", 10, 20, "stop", List.of()));
 
         WorkflowResponse created = workflowService.createAndStart(

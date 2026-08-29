@@ -932,6 +932,28 @@ public class AgentLoopEngine {
     }
 
     /**
+     * S12: forward intermediate ADK stream fragments as {@code RunProgressEvent}s
+     * for live dashboard observability. Never allowed to break the loop.
+     */
+    private void publishProgress(RunContext ctx, int iteration, io.aria.conductor.execution.adk.AdkStreamEvent ev) {
+        try {
+            io.aria.conductor.common.event.RunProgressEvent.Kind kind =
+                    switch (ev.kind() == null ? "" : ev.kind()) {
+                        case "thinking" -> io.aria.conductor.common.event.RunProgressEvent.Kind.THINKING;
+                        case "tool_call" -> io.aria.conductor.common.event.RunProgressEvent.Kind.TOOL_CALL;
+                        case "tool_result" -> io.aria.conductor.common.event.RunProgressEvent.Kind.TOOL_RESULT;
+                        case "error" -> io.aria.conductor.common.event.RunProgressEvent.Kind.ERROR;
+                        default -> io.aria.conductor.common.event.RunProgressEvent.Kind.STATUS;
+                    };
+            eventPublisher.publishEvent(new io.aria.conductor.common.event.RunProgressEvent(
+                    this, ctx.getRunId(), ctx.getAgentId(), iteration, kind,
+                    ev.content(), ev.toolName(), ctx.nextProgressSeq()));
+        } catch (Exception e) {
+            log.debug("run.progress publish failed for run {}: {}", ctx.getRunId(), e.getMessage());
+        }
+    }
+
+    /**
      * Execute a single iteration of the agent loop.
      * @return true if the loop should continue, false if it should stop
      */
@@ -974,7 +996,8 @@ public class AgentLoopEngine {
                         + "If asked to read a file, state that you cannot access files and suggest the operator do it."));
             }
 
-            LlmResponse response = adkProvider.call(ctx.getAgentId(), messages, toolsPayload);
+            LlmResponse response = adkProvider.call(ctx.getAgentId(), messages, toolsPayload,
+                    ev -> publishProgress(ctx, iteration, ev));
 
             // Update token tracking
             ctx.addTokensUsed(response.inputTokens(), response.outputTokens());
@@ -995,7 +1018,8 @@ public class AgentLoopEngine {
                 retryMessages.add(LlmMessage.system(
                         "IMPORTANT: Use the available tools to fulfill this request. "
                                 + "Do not just describe — actually call the tools."));
-                LlmResponse retryResponse = adkProvider.call(ctx.getAgentId(), retryMessages, toolsPayload);
+                LlmResponse retryResponse = adkProvider.call(ctx.getAgentId(), retryMessages, toolsPayload,
+                        ev -> publishProgress(ctx, iteration, ev));
                 ctx.addTokensUsed(retryResponse.inputTokens(), retryResponse.outputTokens());
                 actions = adkProvider.parseActionsFromResponse(retryResponse);
                 if (retryResponse.content() != null && !retryResponse.content().isBlank()) {

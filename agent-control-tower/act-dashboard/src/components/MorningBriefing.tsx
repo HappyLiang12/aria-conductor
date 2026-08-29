@@ -1,7 +1,9 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
 import { listKanbanItems } from '../api/kanban';
+import { useWebSocketContext } from './Layout';
+import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 
 function getTimeGreeting(): string {
   const hour = new Date().getHours();
@@ -20,6 +22,21 @@ function formatNow(): string {
 }
 
 export default function MorningBriefing() {
+  const queryClient = useQueryClient();
+  const { lastMessage } = useWebSocketContext();
+
+  // S5: react instantly to kanban/run lifecycle events (whitelist — run.progress
+  // excluded to avoid invalidation storms).
+  useEffect(() => {
+    if (!lastMessage) return;
+    const t = lastMessage.type;
+    if (isKanbanEvent(t)) {
+      queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+    }
+    if (isRunLifecycleEvent(t)) {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
+    }
+  }, [lastMessage, queryClient]);
   const { data: summary } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: getSummary,

@@ -1,11 +1,19 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ActivityTimeline from '../ActivityTimeline';
 import type { ActivityEvent } from '../../types';
 
 vi.mock('../../api/dashboard', () => ({
   getRecentActivity: vi.fn(),
+}));
+
+let mockCtx: { lastMessage: import('../../types').WsEvent | null; isConnected: boolean } = {
+  lastMessage: null,
+  isConnected: false,
+};
+vi.mock('../../components/Layout', () => ({
+  useWebSocketContext: () => mockCtx,
 }));
 
 import { getRecentActivity } from '../../api/dashboard';
@@ -76,11 +84,11 @@ describe('ActivityTimeline', () => {
     expect(row.textContent).not.toContain('x'.repeat(61));
   });
 
-  it('renders --:-- for unparseable timestamps', async () => {
+  it('renders the shared em-dash placeholder for unparseable timestamps', async () => {
     getActivity.mockResolvedValue([makeEvent({ timestamp: 'not-a-date' })]);
     renderTimeline();
 
-    expect(await screen.findByText('--:--')).toBeInTheDocument();
+    expect(await screen.findByText('—')).toBeInTheDocument();
   });
 
   it('applies variant classes for approval and failed-run events', async () => {
@@ -105,5 +113,24 @@ describe('ActivityTimeline', () => {
 
     await screen.findAllByText(/Run event-0/);
     expect(container.querySelectorAll('.ev')).toHaveLength(10);
+  });
+});
+
+describe('ActivityTimeline WS invalidation (S5)', () => {
+  it('invalidates dashboard-activity when any WS event arrives', async () => {
+    getActivity.mockResolvedValue([]);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    const { rerender } = render(
+      <QueryClientProvider client={qc}><ActivityTimeline /></QueryClientProvider>,
+    );
+    await act(async () => {});
+
+    act(() => {
+      mockCtx = { lastMessage: { type: 'run.completed', payload: { runId: 'r-1', status: 'FAILED' }, timestamp: 't' }, isConnected: true };
+      rerender(<QueryClientProvider client={qc}><ActivityTimeline /></QueryClientProvider>);
+    });
+
+    expect(spy.mock.calls.some((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['dashboard-activity']))).toBe(true);
   });
 });

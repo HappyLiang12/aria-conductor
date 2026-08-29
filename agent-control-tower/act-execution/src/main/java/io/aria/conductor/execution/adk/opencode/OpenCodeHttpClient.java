@@ -14,6 +14,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -30,6 +32,7 @@ import java.util.concurrent.Executors;
  *   <li>{@code POST /session/:id/message} — send a message and wait for the response, returns {@code {info, parts}}</li>
  *   <li>{@code POST /session/:id/abort} — abort a running session, returns {@code boolean}</li>
  *   <li>{@code GET /global/health} — returns {@code {healthy, version}}</li>
+ *   <li>{@code GET /session/:id/message} — list session messages {@code [{info, parts}]} (S7 progress pump)</li>
  * </ul>
  *
  * <p>HTTP errors are mapped to {@link TaskExecutionException} with
@@ -183,6 +186,64 @@ public class OpenCodeHttpClient implements AutoCloseable {
         } catch (TaskExecutionException e) {
             log.debug("OpenCode health probe failed: {}", e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * S7: snapshot of one session message for the progress pump.
+     */
+    public record MessageSnapshot(String id, List<PartSnapshot> parts) { }
+
+    /**
+     * S7: fault-tolerant snapshot of a message part. Missing fields stay null.
+     */
+    public record PartSnapshot(String id, String type, String text, String toolName, String state) { }
+
+    /** Pump polling timeout — deliberately short; never reuse the 5min task timeout. */
+    public static final Duration LIST_MESSAGES_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * S7: list session messages for the progress pump ({@code GET /session/:id/message}).
+     *
+     * <p>Degradation contract: any non-2xx, I/O failure or malformed body yields an
+     * EMPTY list (logged at debug) — the pump must never blow up the task path.
+     */
+    public List<MessageSnapshot> listMessages(String sessionId) {
+        try {
+            HttpResponse<String> resp = sendNoRetry("GET", "/session/" + sessionId + "/message",
+                    null, LIST_MESSAGES_TIMEOUT);
+            if (resp.statusCode() / 100 != 2) {
+                log.debug("OpenCode listMessages {} returned status {}", sessionId, resp.statusCode());
+                return List.of();
+            }
+            JsonNode root = objectMapper.readTree(resp.body());
+            if (!root.isArray()) {
+                return List.of();
+            }
+            List<MessageSnapshot> out = new ArrayList<>();
+            for (JsonNode msg : root) {
+                String id = msg.path("info").path("id").asText(null);
+                List<PartSnapshot> parts = new ArrayList<>();
+                JsonNode partsNode = msg.path("parts");
+                if (partsNode.isArray()) {
+                    for (JsonNode p : partsNode) {
+                        parts.add(new PartSnapshot(
+                                p.path("id").asText(null),
+                                p.path("type").asText(null),
+                                p.has("text") ? p.path("text").asText(null) : null,
+                                p.has("tool") ? p.path("tool").asText(null) : p.path("name").asText(null),
+                                p.path("state").path("status").asText(null)));
+                    }
+                }
+                out.add(new MessageSnapshot(id, parts));
+            }
+            return out;
+        } catch (TaskExecutionException e) {
+            log.debug("OpenCode listMessages failed for {}: {}", sessionId, e.getMessage());
+            return List.of();
+        } catch (Exception e) {
+            log.debug("OpenCode listMessages parse failed for {}: {}", sessionId, e.getMessage());
+            return List.of();
         }
     }
 

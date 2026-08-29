@@ -253,7 +253,7 @@ class AgentLoopEngineTaskPathTest {
     void nonTaskProvider_keepsTurnLoopUntouched() {
         // A turn-level provider must never enter the task path
         when(taskProvider.supportsTaskExecution()).thenReturn(false);
-        when(taskProvider.call(any(), any(), any()))
+        when(taskProvider.call(any(), any(), any(), any()))
                 .thenReturn(new io.aria.conductor.execution.llm.LlmResponse("final answer", 10, 5, "stop", null));
         when(taskProvider.parseActionsFromResponse(any())).thenReturn(List.of());
 
@@ -264,7 +264,7 @@ class AgentLoopEngineTaskPathTest {
 
         verify(taskProvider, never()).executeTask(any(), any(), anyString(), any());
         // turn loop calls the LLM provider
-        verify(taskProvider).call(any(), any(), any());
+        verify(taskProvider).call(any(), any(), any(), any());
     }
 
     // ---- #8 task-level approval gate (default REQUIRES approval) ----

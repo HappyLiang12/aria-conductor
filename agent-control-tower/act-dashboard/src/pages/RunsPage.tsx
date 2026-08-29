@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listRuns, createRun, cancelRun, pauseRun, resumeRun, getRunTrajectory, getRunToolCalls } from '../api/runs';
+import { formatTimestamp } from '../utils/formatTime';
 import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
+import { isRunLifecycleEvent } from '../utils/wsEvents';
 import { StatusBadge } from '../components/StatusBadge';
 import type { CreateRunRequest, RunStatus, SessionTrajectory, ToolCall } from '../types';
 
@@ -53,10 +55,24 @@ export function RunsPage() {
   });
 
   useEffect(() => {
-    if (lastMessage?.type.startsWith('run.')) {
+    // S1 whitelist: only lifecycle events refresh the list; run.progress is
+    // consumed precisely by RunDetailView via runId-matched invalidation.
+    if (isRunLifecycleEvent(lastMessage?.type ?? '')) {
       queryClient.invalidateQueries({ queryKey: ['runs'] });
     }
   }, [lastMessage, queryClient]);
+
+  // S3: precise invalidation — streaming/lifecycle events for the expanded run
+  // refresh its trajectory/tool-calls only (never the whole list).
+  useEffect(() => {
+    const t = lastMessage?.type ?? '';
+    const runId = (lastMessage?.payload?.runId as string | undefined) ?? '';
+    if (!runId || runId !== expandedRun) return;
+    if (t === 'run.iteration' || t === 'run.progress' || t === 'run.completed') {
+      queryClient.invalidateQueries({ queryKey: ['run-trajectory', runId] });
+      queryClient.invalidateQueries({ queryKey: ['run-toolcalls', runId] });
+    }
+  }, [lastMessage, expandedRun, queryClient]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -193,7 +209,7 @@ export function RunsPage() {
                     <td><StatusBadge status={run.status} /></td>
                     <td>{run.iterationCount}/{run.maxIterations}</td>
                     <td>{run.totalTokensUsed.toLocaleString()}</td>
-                    <td>{new Date(run.createdAt).toLocaleDateString()}</td>
+                    <td>{formatTimestamp(run.createdAt)}</td>
                     <td>{getDuration(run)}</td>
                     <td className="action-cell">
                       <button className="btn btn-sm" onClick={() => setExpandedRun(expandedRun === run.id ? null : run.id)}>
@@ -228,16 +244,22 @@ export function RunsPage() {
 }
 
 function RunDetailView({ runId, run, agentName }: { runId: string; run: { status: string; totalTokensUsed: number; errorMessage: string | null }; agentName: string }) {
+  // S3: live while RUNNING (5s), stops at terminal status.
+  const live = run.status === 'RUNNING';
+  const [trajCollapsed, setTrajCollapsed] = useState(false);
+  const [toolsCollapsed, setToolsCollapsed] = useState(false);
   const { data: trajectory, isLoading: trajLoading } = useQuery({
     queryKey: ['run-trajectory', runId],
     queryFn: () => getRunTrajectory(runId),
     enabled: true,
+    refetchInterval: live ? 5000 : false,
   });
 
   const { data: toolCalls, isLoading: toolsLoading } = useQuery({
     queryKey: ['run-toolcalls', runId],
     queryFn: () => getRunToolCalls(runId),
     enabled: true,
+    refetchInterval: live ? 5000 : false,
   });
 
   return (
@@ -258,7 +280,15 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
 
         {/* Trajectory */}
         <div className="detail-col detail-col-wide">
-          <h4>Session Trajectory</h4>
+          <h4 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Session Trajectory
+            {live && <span className="winbadge">live · 5s</span>}
+            <span style={{ flex: 1 }} />
+            <button type="button" className="tgl" onClick={() => setTrajCollapsed((v) => !v)}>
+              {trajCollapsed ? '▸ expand' : '▾ collapse'}
+            </button>
+          </h4>
+          {!trajCollapsed && (<>
           {trajLoading && <div className="mini-spinner">Loading...</div>}
           {!trajLoading && (!trajectory || trajectory.length === 0) && <div className="empty-mini">No trajectory data yet.</div>}
           {trajectory && trajectory.length > 0 && (
@@ -276,11 +306,19 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
               ))}
             </div>
           )}
+          </>)}
         </div>
 
         {/* Tool Calls */}
         <div className="detail-col">
-          <h4>Tool Calls</h4>
+          <h4 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Tool Calls
+            <span style={{ flex: 1 }} />
+            <button type="button" className="tgl" onClick={() => setToolsCollapsed((v) => !v)}>
+              {toolsCollapsed ? '▸ expand' : '▾ collapse'}
+            </button>
+          </h4>
+          {!toolsCollapsed && (<>
           {toolsLoading && <div className="mini-spinner">Loading...</div>}
           {!toolsLoading && (!toolCalls || toolCalls.length === 0) && <div className="empty-mini">No tool calls yet.</div>}
           {toolCalls && toolCalls.length > 0 && (
@@ -296,6 +334,7 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
               ))}
             </div>
           )}
+          </>)}
         </div>
       </div>
     </div>

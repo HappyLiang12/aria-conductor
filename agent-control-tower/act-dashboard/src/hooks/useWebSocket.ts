@@ -75,7 +75,20 @@ export function useWebSocket(url = defaultWsUrl()): UseWebSocketReturn {
             // Subscribe to events topic
             ws.send(stompFrame('SUBSCRIBE', { id: 'sub-0', destination: '/topic/events' }));
           } else if (frame.command === 'MESSAGE') {
-            const parsed: WsEvent = JSON.parse(frame.body);
+            const raw = JSON.parse(frame.body) as {
+              type?: string;
+              payload?: Record<string, unknown>;
+              data?: Record<string, unknown>;
+              timestamp?: string;
+            };
+            // Backend broadcasts serialize the event map as `data`; normalize
+            // onto the frontend `payload` contract so payload-dependent UI
+            // (toast labels, notification titles) receives it.
+            const parsed: WsEvent = {
+              type: raw.type ?? 'event',
+              payload: raw.payload ?? raw.data ?? {},
+              timestamp: raw.timestamp ?? '',
+            };
             setLastMessage(parsed);
           }
         } catch {

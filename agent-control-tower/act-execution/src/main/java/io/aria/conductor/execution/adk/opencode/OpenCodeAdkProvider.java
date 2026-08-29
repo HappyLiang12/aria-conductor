@@ -12,6 +12,7 @@ import io.aria.conductor.execution.llm.LlmResponse;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -69,6 +70,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private final OpenCodeHttpClient fixedHttpClient;
     /** Active DB provider source for opencode.json generation. */
     private final LlmProviderRepository providerRepository;
+    /** S10: optional publisher for run.progress events (null = pump silent). */
+    private final ApplicationEventPublisher eventPublisher;
 
     private final Map<UUID, OpenCodeInstance> instances = new ConcurrentHashMap<>();
     private final Map<UUID, String> runSessions = new ConcurrentHashMap<>();
@@ -90,21 +93,29 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     @Autowired
     public OpenCodeAdkProvider(OpenCodeProperties properties, LlmProviderRepository providerRepository) {
         this(properties, new OpenCodeSandboxManager(
-                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository);
+                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository, null);
     }
 
-    /**
-     * Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager},
-     * a fixed {@link OpenCodeHttpClient} and the provider repository.
-     */
+    /** Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager},
+     * a fixed {@link OpenCodeHttpClient} and the provider repository. */
     OpenCodeAdkProvider(OpenCodeProperties properties,
                         OpenCodeSandboxManager sandboxManager,
                         OpenCodeHttpClient httpClient,
                         LlmProviderRepository providerRepository) {
+        this(properties, sandboxManager, httpClient, providerRepository, null);
+    }
+
+    /** S10: test/production constructor with progress event publisher. */
+    OpenCodeAdkProvider(OpenCodeProperties properties,
+                        OpenCodeSandboxManager sandboxManager,
+                        OpenCodeHttpClient httpClient,
+                        LlmProviderRepository providerRepository,
+                        ApplicationEventPublisher eventPublisher) {
         this.properties = properties;
         this.sandboxManager = sandboxManager;
         this.fixedHttpClient = httpClient;
         this.providerRepository = providerRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     @Override
@@ -152,6 +163,18 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                     "Run " + runId + " cancelled before execution started");
         }
         log.info("OpenCode task {} started for agent {} (session {})", runId, agent.getId(), sessionId);
+        // S10: progress pump streams session parts as run.progress events while the
+        // synchronous task blocks. Pump failures degrade internally; a publisher
+        // failure can never affect the task path.
+        OpenCodeProgressPump pump = new OpenCodeProgressPump(client, sessionId, runId, agent.getId(),
+                ev -> {
+                    if (eventPublisher != null) {
+                        eventPublisher.publishEvent(ev);
+                    }
+                },
+                Duration.ofMillis(properties.getProgressPollMs()),
+                Duration.ofMillis(properties.getProgressCoalesceMs()));
+        pump.start();
         try {
             String systemPrompt = buildSystemPrompt(agent, context);
             Duration deadline = resolveMaxDuration(context);
@@ -176,6 +199,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             }
             throw e;
         } finally {
+            pump.stop();
             runSessions.remove(runId);
             runClients.remove(runId);
             runAborted.remove(runId);

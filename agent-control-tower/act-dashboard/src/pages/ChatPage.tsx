@@ -5,6 +5,9 @@ import { listAgents } from '../api/agents';
 import WorkflowStepper from '../components/WorkflowStepper';
 import DelegationTree from '../components/DelegationTree';
 import ReviewQueue from '../components/ReviewQueue';
+import { useWebSocketContext } from '../components/Layout';
+import { formatTimestamp } from '../utils/formatTime';
+import { isRunLifecycleEvent } from '../utils/wsEvents';
 import type { Run, Agent, SessionTrajectory } from '../types';
 
 // ---------- Types ----------
@@ -69,11 +72,7 @@ function avatarInitials(name: string): string {
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return formatTimestamp(iso);
 }
 
 function nowIso(): string {
@@ -217,10 +216,28 @@ export default function ChatPage() {
   );
   const activeAgent: Agent | undefined = activeRun ? agentMap.get(activeRun.agentId) : undefined;
 
+  // S4: live thread updates — lifecycle events refresh the thread list; events
+  // for the active thread precisely invalidate its trajectory. run.progress is
+  // excluded from list invalidation (S1 whitelist).
+  const { lastMessage } = useWebSocketContext();
+  useEffect(() => {
+    if (!lastMessage) return;
+    const t = lastMessage.type;
+    if (isRunLifecycleEvent(t)) {
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    }
+    const runId = (lastMessage.payload?.runId as string | undefined) ?? '';
+    if (runId && runId === activeThreadId
+        && (t === 'run.iteration' || t === 'run.progress' || t === 'run.completed')) {
+      queryClient.invalidateQueries({ queryKey: ['run-trajectory', runId] });
+    }
+  }, [lastMessage, activeThreadId, queryClient]);
+
   const { data: trajectory, isLoading: trajLoading } = useQuery({
     queryKey: ['run-trajectory', activeThreadId],
     queryFn: () => getRunTrajectory(activeThreadId as string),
     enabled: !!activeThreadId,
+    refetchInterval: activeRun?.status === 'RUNNING' ? 5000 : false,
   });
 
   const baseMessages: ChatMessage[] = useMemo(() => {

@@ -3,6 +3,7 @@ import { streamMessage } from '../api/aria';
 import { cancelRun } from '../api/runs';
 import type { AriaMessage } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
+import { formatTimestamp } from '../utils/formatTime';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
 // PANEL_OPEN_KEY retained for UI toggle only (not data).
@@ -499,10 +500,7 @@ export function AriaPanel() {
                   </div>
                   <div className="ai-msg-meta">
                     {msg.role === 'user' ? 'You' : 'Aria'} ·{' '}
-                    {new Date(msg.timestamp).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+                    {formatTimestamp(msg.timestamp)}
                     {msg.error && lastIsError && (
                       <button
                         type="button"

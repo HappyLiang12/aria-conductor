@@ -107,7 +107,15 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
   return (
     <>
       <div className={`mini-scrim ${open ? 'open' : ''}`} onClick={onClose} aria-hidden={!open} />
-      <div className={`mini-dialog ${open ? 'open' : ''}`} role="dialog" aria-modal="true">
+      {/* F3: closed dialogs must leave the a11y tree (opacity alone kept them
+          focusable/visible to assistive tech). */}
+      <div
+        className={`mini-dialog ${open ? 'open' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-hidden={!open}
+        inert={!open}
+      >
         <h3>Capabilities{agent ? ` · ${agent.name}` : ''}</h3>
         <p>Choose the tools and skills this agent may use. Only APPROVED + enabled items are listed.</p>
         <div style={{ fontSize: 12.5, fontWeight: 600, margin: '4px 0' }}>Tools</div>

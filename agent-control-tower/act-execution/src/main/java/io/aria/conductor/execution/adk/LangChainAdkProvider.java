@@ -114,6 +114,12 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
 
     @Override
     public LlmResponse call(UUID agentId, List<LlmMessage> messages, List<Map<String, Object>> tools) {
+        return call(agentId, messages, tools, null);
+    }
+
+    @Override
+    public LlmResponse call(UUID agentId, List<LlmMessage> messages, List<Map<String, Object>> tools,
+                            java.util.function.Consumer<AdkStreamEvent> streamSink) {
         AdkInstance instance = getOrStartInstance(agentId);
         if (instance.port() == 0) {
             throw new IllegalStateException("ADK subprocess unavailable (port=0) for agent " + agentId);
@@ -134,7 +140,7 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
             }
         }
         log.info("Calling LangChain ADK for agent {} on port {}", agentId, instance.port());
-        return callViaHttp(agentId, instance.port(), messages, tools);
+        return callViaHttp(agentId, instance.port(), messages, tools, streamSink);
     }
 
     /** Block until the ADK server on the given instance responds to GET /health. */
@@ -261,6 +267,11 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
     // ---- HTTP communication ----
 
     private LlmResponse callViaHttp(UUID agentId, int port, List<LlmMessage> messages, List<Map<String, Object>> tools) {
+        return callViaHttp(agentId, port, messages, tools, null);
+    }
+
+    private LlmResponse callViaHttp(UUID agentId, int port, List<LlmMessage> messages, List<Map<String, Object>> tools,
+                                    java.util.function.Consumer<AdkStreamEvent> streamSink) {
         try {
             String requestBody = buildRequestBody(agentId, messages, tools);
             URI uri = URI.create(String.format("http://%s:%d/run", properties.getHost(), port));
@@ -280,10 +291,19 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
                 throw new RuntimeException("LangChain /run returned status " + resp.statusCode() + " for agent " + agentId);
             }
 
-            return parseSseResponse(resp.body());
+            return parseSseResponse(resp.body(), streamSink);
 
         } catch (Exception e) {
-            throw new RuntimeException("LangChain /run failed for agent " + agentId + ": " + e.getMessage(), e);
+            // Review P2-2: the non-2xx exception thrown above is already a clean,
+            // user-safe message — rethrow it instead of double-wrapping.
+            if (e instanceof RuntimeException re
+                    && re.getMessage() != null && re.getMessage().contains("/run returned status")) {
+                throw re;
+            }
+            // F6: raw provider text (credential dumps etc.) stays in the log; the
+            // surfaced message is the user-friendly classification.
+            log.warn("LangChain /run failed for agent {}: {}", agentId, e.getMessage());
+            throw new RuntimeException(AdkErrorMessages.friendly(e.getMessage()), e);
         }
     }
 
@@ -297,6 +317,11 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
      * </pre>
      */
     private LlmResponse parseSseResponse(java.io.InputStream body) throws IOException {
+        return parseSseResponse(body, null);
+    }
+
+    private LlmResponse parseSseResponse(java.io.InputStream body,
+                                         java.util.function.Consumer<AdkStreamEvent> streamSink) throws IOException {
         String content = "";
         List<LlmToolCall> toolCalls = new ArrayList<>();
         String finishReason = "stop";
@@ -340,7 +365,18 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
                             case "error" -> {
                                 errorMessage = node.has("message") ? node.get("message").asText() : "Unknown error";
                             }
-                            default -> { /* log/think events — could be persisted in future */ }
+                            default -> {
+                                // S12: forward intermediate thinking/status/tool events to the
+                                // stream sink so the engine can publish run.progress.
+                                if (streamSink != null) {
+                                    String type = currentEvent != null ? currentEvent : "";
+                                    String text = node.has("content") ? node.get("content").asText()
+                                            : node.has("message") ? node.get("message").asText()
+                                            : node.has("text") ? node.get("text").asText() : "";
+                                    String toolName = node.has("name") ? node.get("name").asText(null) : null;
+                                    streamSink.accept(new AdkStreamEvent(type, text, toolName));
+                                }
+                            }
                         }
                     } catch (Exception jsonEx) {
                         log.debug("Could not parse SSE data as JSON: {}", payload);

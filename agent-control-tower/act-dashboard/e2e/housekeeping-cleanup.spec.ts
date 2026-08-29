@@ -45,6 +45,31 @@ test.describe('Housekeeping cleanup', () => {
     expect(status).toBe(404);
   });
 
+  test('Select Leftovers button shows count, matches sibling style, always gives feedback', async ({ page }) => {
+    await page.goto('/crew');
+    await page.waitForLoadState('networkidle');
+
+    const sel = page.getByRole('button', { name: /select leftovers \(\d+\)/i });
+    const add = page.getByRole('button', { name: /add agent/i });
+    await expect(sel).toBeVisible();
+
+    // Same .btn base as the sibling action button (radius/padding/font).
+    const styleOf = (loc: typeof sel) =>
+      loc.evaluate((el) => {
+        const s = getComputedStyle(el);
+        return [s.borderRadius, s.padding, s.fontSize];
+      });
+    expect(await styleOf(sel)).toEqual(await styleOf(add));
+
+    // Clicking always produces visible feedback: bulk bar or the no-leftovers note.
+    await sel.click();
+    await expect(
+      page
+        .getByRole('button', { name: /retire selected/i })
+        .or(page.getByText(/no leftover agents found/i)),
+    ).toBeVisible({ timeout: 5_000 });
+  });
+
   test('crew bulk-retire retires leftover e2e agents', async ({ page, request }) => {
     const agent = await seedAgent(request, uniqueName('e2e-hk-retire'));
 

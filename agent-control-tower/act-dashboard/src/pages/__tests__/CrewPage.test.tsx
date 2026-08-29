@@ -68,6 +68,21 @@ describe('CrewPage Add Agent dialog (F3 regression)', () => {
 });
 
 describe('CrewPage bulk retire (H3)', () => {
+  it('shows the leftover count on the button and a note when none exist', async () => {
+    const { listAgents } = await import('../../api/agents');
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'a-2', name: 'SDD BA Agent', healthStatus: 'HEALTHY' },
+    ]);
+    ui();
+    await waitFor(() => expect(screen.getAllByTestId('agent-card')).toHaveLength(1));
+
+    // count badge shows 0 when the crew is clean
+    expect(screen.getByRole('button', { name: /select leftovers \(0\)/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /select leftovers/i }));
+    // pressing with nothing to select must give visible feedback
+    expect(await screen.findByText(/no leftover agents found/i)).toBeInTheDocument();
+  });
+
   it('select-leftovers preset picks e2e/unhealthy agents and retires them', async () => {
     const { listAgents, retireAgent } = await import('../../api/agents');
     (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([

@@ -96,6 +96,32 @@ describe('KanbanBoard WS invalidation whitelist (S1)', () => {
   });
 });
 
+describe('KanbanBoard card click opens the TaskDrawer (regression)', () => {
+  it('dispatches act:open-task-drawer with detail.itemId', async () => {
+    kanbanData = [
+      { id: 'k-9', title: 'Click me', priority: 'MEDIUM', status: 'TODO', linkedAgentId: null, assignee: null, labels: null },
+    ];
+    const received: Array<Record<string, unknown>> = [];
+    const listener = (e: Event) => received.push((e as CustomEvent).detail);
+    window.addEventListener('act:open-task-drawer', listener);
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { container } = ui(qc);
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+      const card = container.querySelector('[data-card="k-9"]') as HTMLElement;
+      expect(card).not.toBeNull();
+      act(() => { card.click(); });
+
+      // DrawerContext reads detail.itemId — dispatching { id } left the drawer closed.
+      expect(received).toHaveLength(1);
+      expect(received[0]).toEqual({ itemId: 'k-9' });
+    } finally {
+      window.removeEventListener('act:open-task-drawer', listener);
+    }
+  });
+});
+
 describe('KanbanBoard live move feedback (S6)', () => {
   beforeEach(() => {
     mockCtx = { lastMessage: null, isConnected: false };

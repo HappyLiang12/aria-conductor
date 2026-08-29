@@ -8,6 +8,10 @@ vi.mock('../../api/kanban', () => ({
   listKanbanItems: vi.fn().mockImplementation(() => Promise.resolve(kanbanData)),
   createKanbanItem: vi.fn().mockResolvedValue({ id: 'k-1' }),
 }));
+vi.mock('../../api/housekeeping', () => ({
+  scanHousekeeping: vi.fn(),
+  executeHousekeeping: vi.fn().mockResolvedValue({ categories: [], executedAt: 't' }),
+}));
 vi.mock('../../api/agents', () => ({
   listAgents: vi.fn().mockResolvedValue([
     { id: 'a-1', name: 'DEV Agent', role: 'dev', agentType: 'ADK', healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode', createdAt: '2026-01-01T00:00:00Z' },
@@ -119,6 +123,44 @@ describe('KanbanBoard card click opens the TaskDrawer (regression)', () => {
     } finally {
       window.removeEventListener('act:open-task-drawer', listener);
     }
+  });
+});
+
+describe('KanbanBoard quick-clear (H2)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+  });
+
+  it('hides the clear button when no finished cards exist', async () => {
+    kanbanData = [
+      { id: 'k-1', title: 'active', priority: 'MEDIUM', status: 'IN_PROGRESS', linkedAgentId: null, assignee: null, labels: null },
+    ];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { queryByRole } = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+    expect(queryByRole('button', { name: /clear done & cancelled/i })).toBeNull();
+  });
+
+  it('clear button counts finished cards and gates execute behind confirm', async () => {
+    kanbanData = [
+      { id: 'k-d', title: 'done', priority: 'MEDIUM', status: 'DONE', linkedAgentId: null, assignee: null, labels: null },
+      { id: 'k-c', title: 'cancelled', priority: 'MEDIUM', status: 'CANCELLED', linkedAgentId: null, assignee: null, labels: null },
+    ];
+    const { executeHousekeeping } = await import('../../api/housekeeping');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getByRole } = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+    const btn = getByRole('button', { name: /clear done & cancelled \(2\)/i });
+    act(() => { btn.click(); });
+    // confirm modal gates the destructive call
+    expect(executeHousekeeping).not.toHaveBeenCalled();
+    act(() => { getByRole('button', { name: /approve|confirm/i }).click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(executeHousekeeping).toHaveBeenCalledWith(
+      expect.objectContaining({ categories: ['kanban'], confirm: true }),
+    );
   });
 });
 

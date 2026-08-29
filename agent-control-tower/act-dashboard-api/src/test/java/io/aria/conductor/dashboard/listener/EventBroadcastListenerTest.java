@@ -5,6 +5,7 @@ import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.AuditLogEvent;
+import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.event.KnowledgeApprovedEvent;
@@ -59,6 +60,18 @@ class EventBroadcastListenerTest {
         WsBroadcastEvent event = captor.getValue();
         assertThat(event.timestamp()).isNotBlank();
         return event;
+    }
+
+    @Test
+    void onHousekeepingProgress_broadcastsCategoryCountsAndSeq() {
+        listener.onHousekeepingProgress(new HousekeepingProgressEvent(this, "kanban", 3, 1, 7));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("housekeeping.progress");
+        assertThat(event.data()).containsEntry("category", "kanban")
+                .containsEntry("cleared", 3)
+                .containsEntry("failed", 1)
+                .containsEntry("seq", 7L);
     }
 
     @Test

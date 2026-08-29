@@ -9,6 +9,7 @@ import {
   getOpsActivity,
 } from '../api/ops';
 import { listAgents } from '../api/agents';
+import HousekeepingPanel from '../components/HousekeepingPanel';
 import type { Approval, Run, ActivityEvent, Agent, RunStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -287,6 +288,7 @@ export default function OpsPage() {
       </div>
 
       {/* ---------- 2-column ops grid (wide left, narrow right) ---------- */}
+      <HousekeepingPanel />
       <div
         className="ops-grid-2"
         style={{ gridTemplateColumns: 'minmax(0, 1.55fr) minmax(0, 1fr)' }}

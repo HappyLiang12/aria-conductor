@@ -142,6 +142,25 @@ class AriaDefaultAgentInitializerUpsertTest {
     }
 
     @Test
+    void housekeepingToolsAreInAllowlistAndGrantedToAria() {
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
+        ToolDefinition scan = ToolDefinition.builder()
+                .id("seed-tool-housekeeping_scan").name("housekeeping_scan").enabled(true).build();
+        ToolDefinition exec = ToolDefinition.builder()
+                .id("seed-tool-housekeeping_execute").name("housekeeping_execute").enabled(true).build();
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(List.of(scan, exec));
+
+        initializer.run(args);
+
+        ArgumentCaptor<io.aria.conductor.common.model.AgentTool> captor =
+                ArgumentCaptor.forClass(io.aria.conductor.common.model.AgentTool.class);
+        verify(agentToolRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .extracting(t -> t.getId().getToolId())
+                .containsExactlyInAnyOrder("seed-tool-housekeeping_scan", "seed-tool-housekeeping_execute");
+    }
+
+    @Test
     void langchainProviderAgentsAreResavedByMigration() {
         // Pins the current (odd) behavior: the "legacy" filter matches "langchain"
         // itself, so langchain agents are rewritten langchain -> langchain each boot.

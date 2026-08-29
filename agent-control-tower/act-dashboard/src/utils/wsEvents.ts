@@ -18,3 +18,8 @@ export function isRunLifecycleEvent(type: string): boolean {
 export function isKanbanEvent(type: string): boolean {
   return type.startsWith('kanban.');
 }
+
+/** Housekeeping progress + completion audit events (panel-level consumption only). */
+export function isHousekeepingEvent(type: string): boolean {
+  return type === 'housekeeping.progress' || type === 'audit.HOUSEKEEPING_EXECUTED';
+}

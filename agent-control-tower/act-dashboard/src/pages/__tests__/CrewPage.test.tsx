@@ -1,29 +1,45 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CrewPage from '../CrewPage';
 
-vi.mock('../api/agents', () => ({
+vi.mock('../../api/agents', () => ({
   listAgents: vi.fn().mockResolvedValue([]),
   createAgent: vi.fn().mockResolvedValue({ id: 'x' }),
   getTemplates: vi.fn().mockResolvedValue([]),
   getRoleDefaults: vi.fn().mockResolvedValue({ tools: [], skills: [] }),
   setAgentTools: vi.fn().mockResolvedValue({}),
   setAgentSkills: vi.fn().mockResolvedValue({}),
+  retireAgent: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('../api/dashboard', () => ({
+vi.mock('../../api/dashboard', () => ({
   getAgentTelemetry: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('../api/adk', () => ({
+vi.mock('../../api/adk', () => ({
   listAdkProviders: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('../components/AgentCard', () => ({
-  AgentCard: () => <div data-testid="agent-card" />,
+vi.mock('../../components/AgentCard', () => ({
+  AgentCard: ({ agent, onSelect, selected }: {
+    agent: { id: string; name: string };
+    onSelect?: () => void;
+    selected?: boolean;
+  }) => (
+    <div data-testid="agent-card">
+      {onSelect && (
+        <input
+          aria-label={`select ${agent.name}`}
+          type="checkbox"
+          checked={!!selected}
+          onChange={onSelect}
+        />
+      )}
+    </div>
+  ),
 }));
-vi.mock('../components/AgentCatalog', () => ({
+vi.mock('../../components/AgentCatalog', () => ({
   AgentCatalog: () => <div data-testid="agent-catalog" />,
 }));
-vi.mock('../components/ManageToolsDialog', () => ({
+vi.mock('../../components/ManageToolsDialog', () => ({
   ManageToolsDialog: () => null,
 }));
 
@@ -50,3 +66,26 @@ describe('CrewPage Add Agent dialog (F3 regression)', () => {
     expect(screen.getByRole('dialog', { name: /Add Agent/ })).toBeInTheDocument();
   });
 });
+
+describe('CrewPage bulk retire (H3)', () => {
+  it('select-leftovers preset picks e2e/unhealthy agents and retires them', async () => {
+    const { listAgents, retireAgent } = await import('../../api/agents');
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'a-1', name: 'e2e-agent-1', healthStatus: 'HEALTHY' },
+      { id: 'a-2', name: 'SDD BA Agent', healthStatus: 'HEALTHY' },
+      { id: 'a-3', name: 'sick-agent', healthStatus: 'UNHEALTHY' },
+    ]);
+    ui();
+    await waitFor(() => expect(screen.getAllByTestId('agent-card')).toHaveLength(3));
+
+    fireEvent.click(screen.getByRole('button', { name: /select leftovers/i }));
+    expect(screen.getByText(/2 selected/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /retire selected/i }));
+    await waitFor(() => expect(retireAgent).toHaveBeenCalledTimes(2));
+    expect(retireAgent).toHaveBeenCalledWith('a-1');
+    expect(retireAgent).toHaveBeenCalledWith('a-3');
+    expect(retireAgent).not.toHaveBeenCalledWith('a-2');
+  });
+});
+

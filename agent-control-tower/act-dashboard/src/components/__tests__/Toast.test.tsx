@@ -153,6 +153,14 @@ describe('Toast', () => {
     expect(screen.queryByText('Run Completed')).not.toBeInTheDocument();
   });
 
+  it('toasts the housekeeping completion audit event with a human label', () => {
+    setEvent({ type: 'audit.HOUSEKEEPING_EXECUTED', payload: {}, timestamp: 't1' });
+    render(<Toast />);
+
+    expect(screen.getByText('Housekeeping Executed')).toBeInTheDocument();
+    expect(screen.queryByText('audit.HOUSEKEEPING_EXECUTED')).not.toBeInTheDocument();
+  });
+
   it('keeps at most 5 toasts on screen', () => {
     const { rerender } = render(<Toast />);
     for (let i = 0; i < 7; i++) {

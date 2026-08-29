@@ -24,6 +24,7 @@ const TOAST_WORTHY = new Set([
   'report.generated',
   'report.amended',
   'aria.notification',
+  'audit.HOUSEKEEPING_EXECUTED',
 ]);
 
 // Failures arrive as run.completed with payload.status — derive a truthful label.

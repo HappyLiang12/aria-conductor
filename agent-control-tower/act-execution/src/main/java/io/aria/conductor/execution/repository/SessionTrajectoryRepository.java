@@ -2,6 +2,7 @@ package io.aria.conductor.execution.repository;
 
 import io.aria.conductor.common.model.SessionTrajectory;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -18,4 +19,9 @@ public interface SessionTrajectoryRepository extends JpaRepository<SessionTrajec
 
     List<SessionTrajectory> findByRunIdInOrderByTurnNumberAsc(List<UUID> runIds);
     void deleteByRunIdIn(List<UUID> runIds);
+
+    /** Housekeeping S1: single-statement bulk delete (set-based, no entity load). */
+    @Modifying
+    @Query("DELETE FROM SessionTrajectory t WHERE t.runId IN :ids")
+    int deleteByRunIdInBulk(@Param("ids") List<UUID> ids);
 }

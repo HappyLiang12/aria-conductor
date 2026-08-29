@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.event.KnowledgeApprovedEvent;
@@ -93,6 +94,16 @@ public class EventBroadcastListener {
                 "itemId", event.getItemId().toString(),
                 "type", event.getType(),
                 "name", event.getName()
+        ));
+    }
+
+    @EventListener
+    public void onHousekeepingProgress(HousekeepingProgressEvent event) {
+        broadcast("housekeeping.progress", Map.of(
+                "category", event.getCategory(),
+                "cleared", event.getCleared(),
+                "failed", event.getFailed(),
+                "seq", event.getSeq()
         ));
     }
 

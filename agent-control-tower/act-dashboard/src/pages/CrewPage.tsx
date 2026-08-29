@@ -179,11 +179,18 @@ export default function CrewPage() {
   }, [activeAgents, telemetryByAgent]);
 
   // H3: one-click preset for obvious leftovers (e2e test agents / unhealthy).
+  const leftoverAgents = useMemo(
+    () => activeAgents.filter((a) => a.name.startsWith('e2e-') || a.healthStatus === 'UNHEALTHY'),
+    [activeAgents],
+  );
+
   const selectLeftovers = () => {
-    const ids = activeAgents
-      .filter((a) => a.name.startsWith('e2e-') || a.healthStatus === 'UNHEALTHY')
-      .map((a) => a.id);
-    setSelectedAgents(new Set(ids));
+    if (leftoverAgents.length === 0) {
+      setRetireNote('🧹 No leftover agents found (e2e-* / UNHEALTHY).');
+      return;
+    }
+    setRetireNote(null);
+    setSelectedAgents(new Set(leftoverAgents.map((a) => a.id)));
   };
 
   const retireSelected = async () => {
@@ -252,7 +259,7 @@ export default function CrewPage() {
           </div>
           <div className="actions">
             <button type="button" className="btn" onClick={selectLeftovers}>
-              select leftovers
+              🧹 Select Leftovers ({leftoverAgents.length})
             </button>
             <button type="button" className="btn primary" onClick={openDialog}>
               + Add Agent

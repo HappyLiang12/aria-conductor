@@ -96,6 +96,12 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             - instantiate_template: Start a governed workflow TEMPLATE by its knowledge item id (templateId) with
               optional parameters (e.g. {"issueRef": "#12"}). USE THIS for the spec-driven development loop.
 
+            **Housekeeping:**
+            - housekeeping_scan: Read-only scan of leftovers (terminal runs, stuck paused runs, finished kanban
+              cards, leftover e2e/unhealthy agents, expired approvals). Report the counts before cleaning.
+            - housekeeping_execute: Request cleanup of selected categories (runs/stuck/kanban/agents/approvals)
+              with optional exclusions (ids to keep). ALWAYS requires human approval; never self-approve.
+
             - Spec-driven development: to run the BA->Dev->QA development loop on a GitHub issue, find the
               approved "development-workflow" template and instantiate it with an issueRef parameter via
               instantiate_template. The loop pauses for human spec approval (SPEC_REVIEW), then routes on the
@@ -175,7 +181,9 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             // web (issue/content discovery for orchestration)
             "web_search", "web_fetch",
             // HITL
-            "request_approval");
+            "request_approval",
+            // housekeeping (operator cleanup; execute is approval-gated)
+            "housekeeping_scan", "housekeeping_execute");
 
     private final AgentRepository agentRepository;
     private final ToolDefinitionRepository toolDefinitionRepository;

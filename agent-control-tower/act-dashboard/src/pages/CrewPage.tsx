@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentTools, setAgentSkills } from '../api/agents';
+import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentTools, setAgentSkills, retireAgent } from '../api/agents';
 import { getAgentTelemetry } from '../api/dashboard';
 import { listAdkProviders } from '../api/adk';
 import type { Agent, CreateAgentRequest, AgentTemplate, AgentTelemetry, AdkProviderInfo } from '../types';
@@ -48,6 +48,10 @@ export default function CrewPage() {
   const [form, setForm] = useState<AddAgentForm>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [toolsAgent, setToolsAgent] = useState<Agent | null>(null);
+  // H3 bulk retire selection.
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [retireBusy, setRetireBusy] = useState(false);
+  const [retireNote, setRetireNote] = useState<string | null>(null);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
 
@@ -174,6 +178,33 @@ export default function CrewPage() {
     };
   }, [activeAgents, telemetryByAgent]);
 
+  // H3: one-click preset for obvious leftovers (e2e test agents / unhealthy).
+  const selectLeftovers = () => {
+    const ids = activeAgents
+      .filter((a) => a.name.startsWith('e2e-') || a.healthStatus === 'UNHEALTHY')
+      .map((a) => a.id);
+    setSelectedAgents(new Set(ids));
+  };
+
+  const retireSelected = async () => {
+    setRetireBusy(true);
+    setRetireNote(null);
+    const failures: string[] = [];
+    for (const id of [...selectedAgents]) {
+      try {
+        await retireAgent(id);
+      } catch (e) {
+        failures.push(`${id.slice(0, 8)}: ${(e as Error)?.message ?? 'failed'}`);
+      }
+    }
+    setSelectedAgents(new Set());
+    setRetireBusy(false);
+    setRetireNote(
+      failures.length ? `⚠ Some retires failed — ${failures.join('; ')}` : '🧹 Selected agents retired.',
+    );
+    queryClient.invalidateQueries({ queryKey: ['agents'] });
+  };
+
   const openDialog = () => {
     setForm(EMPTY_FORM);
     setError(null);
@@ -220,6 +251,9 @@ export default function CrewPage() {
             </div>
           </div>
           <div className="actions">
+            <button type="button" className="btn" onClick={selectLeftovers}>
+              select leftovers
+            </button>
             <button type="button" className="btn primary" onClick={openDialog}>
               + Add Agent
             </button>
@@ -280,10 +314,34 @@ export default function CrewPage() {
           {!isLoading && activeAgents.length > 0 && (
             <div className="crew-grid">
               {activeAgents.map((a) => (
-                <AgentCard key={a.id} agent={a} telemetry={telemetryByAgent.get(a.id)} onManageTools={setToolsAgent} />
+                <AgentCard
+                  key={a.id}
+                  agent={a}
+                  telemetry={telemetryByAgent.get(a.id)}
+                  onManageTools={setToolsAgent}
+                  selected={selectedAgents.has(a.id)}
+                  onSelect={() =>
+                    setSelectedAgents((prev) => toggle(prev, a.id, !prev.has(a.id)))
+                  }
+                />
               ))}
             </div>
           )}
+          {selectedAgents.size > 0 && (
+            <div
+              style={{
+                display: 'flex', gap: 10, alignItems: 'center', marginTop: 12,
+                border: '1px dashed rgba(94,234,212,.4)', borderRadius: 10, padding: '8px 12px',
+              }}
+            >
+              <span>{selectedAgents.size} selected</span>
+              <span style={{ flex: 1 }} />
+              <button className="btn danger" disabled={retireBusy} onClick={retireSelected}>
+                Retire selected…
+              </button>
+            </div>
+          )}
+          {retireNote && <div style={{ marginTop: 8, fontSize: 11.5 }}>{retireNote}</div>}
         </section>
 
         {/* Catalog */}

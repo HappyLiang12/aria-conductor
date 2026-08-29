@@ -21,6 +21,8 @@ const LABELS: Record<string, string> = {
   'workflow.completed': 'Workflow Completed',
   'workflow.advanced': 'Workflow Advanced',
   'run.progress': 'Agent Progress',
+  'housekeeping.progress': 'Housekeeping Progress',
+  'audit.HOUSEKEEPING_EXECUTED': 'Housekeeping Executed',
 };
 
 export function eventLabel(type: string): string {

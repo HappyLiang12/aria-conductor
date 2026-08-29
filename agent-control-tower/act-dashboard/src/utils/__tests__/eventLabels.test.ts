@@ -36,6 +36,11 @@ describe('eventLabel', () => {
     expect(eventLabel('some.unknown.event')).toBe('some.unknown.event');
   });
 
+  it('maps housekeeping event types', () => {
+    expect(eventLabel('housekeeping.progress')).toBe('Housekeeping Progress');
+    expect(eventLabel('audit.HOUSEKEEPING_EXECUTED')).toBe('Housekeeping Executed');
+  });
+
   it('is case-sensitive: non-exact keys are returned as-is', () => {
     expect(eventLabel('Run.Started')).toBe('Run.Started');
     expect(eventLabel('RUN.STARTED')).toBe('RUN.STARTED');

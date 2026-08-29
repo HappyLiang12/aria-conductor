@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKanbanItem, listKanbanItems } from '../api/kanban';
+import { executeHousekeeping } from '../api/housekeeping';
 import { listAgents } from '../api/agents';
 import type { CreateKanbanItemRequest, KanbanItem, KanbanPriority } from '../types';
 import { useWebSocketContext } from './Layout';
@@ -164,6 +165,10 @@ export default function KanbanBoard() {
     return map;
   }, [items]);
 
+  // H2: quick-clear finished cards (DONE + CANCELLED) via the housekeeping batch.
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const finishedCount = (grouped['done'] ?? []).length + (grouped['archived'] ?? []).length;
+
   const handleCreate = () => {
     const title = draft.title.trim();
     if (!title) {
@@ -182,9 +187,18 @@ export default function KanbanBoard() {
       <h2>
         <span>Kanban Board</span>
         <span className="accent">· Governed Flow</span>
+        {finishedCount > 0 && (
+          <button
+            className="btn"
+            style={{ marginLeft: 'auto' }}
+            onClick={() => setClearConfirmOpen(true)}
+          >
+            🧹 Clear Done &amp; Cancelled ({finishedCount})
+          </button>
+        )}
         <button
           className="btn primary"
-          style={{ marginLeft: 'auto' }}
+          style={{ marginLeft: finishedCount > 0 ? 0 : 'auto' }}
           onClick={() => {
             setShowCreate(true);
             setError(null);
@@ -306,6 +320,33 @@ export default function KanbanBoard() {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {clearConfirmOpen && (
+        <div className="modal-overlay" onClick={() => setClearConfirmOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>⚠ Clear finished cards — approval required</h3>
+            <p>
+              This permanently deletes {finishedCount} DONE/CANCELLED cards via the
+              housekeeping batch. In-flight columns are never touched.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="btn danger"
+                onClick={async () => {
+                  setClearConfirmOpen(false);
+                  await executeHousekeeping({ categories: ['kanban'], confirm: true });
+                  queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+                }}
+              >
+                Approve &amp; execute
+              </button>
+              <button className="btn" onClick={() => setClearConfirmOpen(false)}>
+                Cancel
+              </button>
             </div>
           </div>
         </div>

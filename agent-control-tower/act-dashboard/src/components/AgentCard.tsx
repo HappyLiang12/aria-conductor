@@ -19,6 +19,9 @@ export interface AgentCardProps {
   agent: Agent;
   telemetry?: AgentTelemetry;
   onManageTools?: (agent: Agent) => void;
+  /** H3 bulk selection: when provided, renders a selection checkbox. */
+  selected?: boolean;
+  onSelect?: () => void;
 }
 
 type LiveStatus = 'online' | 'idle' | 'offline';
@@ -79,7 +82,7 @@ function computeActivityLevel(callCount: number): number {
   return 6;
 }
 
-export function AgentCard({ agent, telemetry, onManageTools }: AgentCardProps) {
+export function AgentCard({ agent, telemetry, onManageTools, selected, onSelect }: AgentCardProps) {
   const status = liveStatusFor(agent);
   const role = agent.role || agent.agentType.toLowerCase();
   const avatarKind = avatarClassFor(role);
@@ -121,6 +124,16 @@ export function AgentCard({ agent, telemetry, onManageTools }: AgentCardProps) {
           <span className="nm" title={agent.name}>{agent.name}</span>
           <span className="role-tag">{role || 'agent'}</span>
         </div>
+        {onSelect && (
+          <input
+            type="checkbox"
+            aria-label={`select ${agent.name}`}
+            checked={!!selected}
+            onClick={(e) => e.stopPropagation()}
+            onChange={onSelect}
+            style={{ marginRight: 6 }}
+          />
+        )}
         <span className={`status ${status === 'online' ? '' : status}`}>
           {statusLabel(status)}
         </span>

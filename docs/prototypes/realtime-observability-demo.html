@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Aria Conductor — Real-time Observability Prototype v2 (opencode sandbox)</title>
+<style>
+  :root{
+    --bg:#070b14; --panel:#0d1526; --panel2:#101a30; --line:rgba(148,163,184,.16);
+    --text:#e6edf7; --mute:#8ea0b8; --accent:#6a93ff; --accent2:#5eead4;
+    --think:#ce93d8; --tool:#ffb74d; --ok:#66bb6a; --err:#ff6b7a; --warn:#f6c453;
+    --mono:'SF Mono','Cascadia Code',Consolas,monospace;
+  }
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);font:13px/1.45 system-ui,'Segoe UI',sans-serif;overflow:hidden}
+  code{font-family:var(--mono);font-size:11px;color:var(--accent2)}
+  button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:8px;padding:6px 11px}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:linear-gradient(180deg,#6a93ff,#355fd6);border:0;font-weight:600}
+  button.danger{background:linear-gradient(180deg,#ff6b7a,#c73e4e);border:0;font-weight:600}
+
+  /* topbar — mirrors real app */
+  .topbar{display:flex;align-items:center;gap:12px;height:54px;padding:0 16px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#0c1424,#0a111f)}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .logo{width:30px;height:30px;border-radius:9px;background:radial-gradient(circle at 30% 30%,#24407a,#0b1224);border:1px solid rgba(94,234,212,.35);display:grid;place-items:center;color:var(--accent2)}
+  .brand .t{font-weight:700}
+  .brand .s{font-size:9px;letter-spacing:1.6px;color:var(--mute)}
+  .hpill{font-size:10.5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--mute)}
+  .hpill.ok{color:#b7f3c6;background:rgba(102,187,106,.12);border-color:rgba(102,187,106,.35)}
+  .hpill.acc{color:#cdd9ff;background:rgba(106,147,255,.12);border-color:rgba(106,147,255,.35)}
+  .counters{margin-left:auto;display:flex;gap:8px}
+  .counter{min-width:104px;padding:5px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  .counter .v{font-size:15px;font-weight:700}
+  .counter .l{font-size:8.5px;letter-spacing:1.2px;color:var(--mute)}
+  .counter .v.warn{color:var(--warn)} .counter .v.ok{color:var(--ok)}
+  .clock{font-family:var(--mono);font-size:12px;color:var(--mute)}
+  .bell{position:relative;font-size:15px;background:none;border:none}
+  .bell .n{position:absolute;top:-4px;right:-6px;background:var(--err);color:#fff;border-radius:999px;font-size:9px;padding:0 5px}
+  .demo{display:flex;gap:6px;align-items:center;border-left:1px dashed var(--line);padding-left:12px}
+  .demo .lbl{font-size:9px;letter-spacing:1px;color:var(--mute)}
+
+  /* shell + rail with labels like real UI */
+  .shell{display:grid;grid-template-columns:84px 1fr;height:calc(100% - 54px)}
+  .rail{border-right:1px solid var(--line);padding:10px 6px;display:flex;flex-direction:column;gap:4px;align-items:center}
+  .ric{width:70px;padding:7px 0;border-radius:10px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--mute);font-size:9.5px;cursor:pointer;border:1px solid transparent}
+  .ric .i{font-size:15px}
+  .ric.on{background:rgba(106,147,255,.12);color:var(--accent);border-color:rgba(106,147,255,.3)}
+  .ric:hover{color:var(--text)}
+  .content{overflow:auto;padding:14px 16px;min-height:0}
+  .view[hidden]{display:none}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;min-height:0;display:flex;flex-direction:column;position:relative}
+  h2.ph{margin:0 0 10px;font-size:11px;letter-spacing:1.4px;color:var(--mute);display:flex;align-items:center;gap:8px}
+  h2.ph .grow{flex:1}
+  .grow{flex:1}
+  .live-pill{display:inline-flex;align-items:center;gap:5px;color:var(--ok);border:1px solid rgba(102,187,106,.4);border-radius:999px;padding:1px 8px;font-size:9px;letter-spacing:1px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  /* inline annotation chip — never overlaps (fixes v1 overlap bug) */
+  .chip{display:inline-flex;align-items:center;font-size:8.5px;letter-spacing:.7px;color:var(--accent2);
+    border:1px dashed rgba(94,234,212,.55);border-radius:6px;padding:2px 7px;background:rgba(94,234,212,.07);white-space:nowrap}
+
+  /* overview */
+  .sumgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:12px}
+  .sum{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--panel);padding:9px 12px}
+  .sum .l{font-size:8.5px;letter-spacing:1.2px;color:var(--mute)}
+  .sum .v{font-size:19px;font-weight:700}
+  .sum .d{font-size:9.5px;color:var(--mute)}
+  .sum.g{border-left-color:var(--ok)} .sum.y{border-left-color:var(--warn)} .sum.p{border-left-color:var(--think)}
+  .board7{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;flex:1;min-height:150px}
+  .kcol{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:7px;display:flex;flex-direction:column;gap:7px}
+  .kcol h3{margin:0;font-size:8.5px;letter-spacing:1.1px;color:var(--mute);display:flex;justify-content:space-between}
+  .kcol h3 span{color:var(--text)}
+  .kcol.qa{border-color:rgba(246,196,83,.35)}
+  .cards{display:flex;flex-direction:column;gap:7px;overflow:auto}
+  .card{border:1px solid var(--line);border-radius:9px;padding:7px 8px;background:linear-gradient(180deg,#152140,#121b33)}
+  .card .t{font-size:10.5px;font-weight:600}
+  .card .m{display:flex;gap:5px;margin-top:5px;align-items:center;flex-wrap:wrap}
+  .prio{font-size:8.5px;border-radius:5px;padding:1px 6px;border:1px solid var(--line);color:var(--mute)}
+  .prio.HIGH{color:var(--warn);border-color:rgba(246,196,83,.4)}
+  .st{font-size:8.5px;border-radius:5px;padding:1px 6px}
+  .st.BLOCKED{color:var(--err);border:1px solid rgba(255,107,122,.5);background:rgba(255,107,122,.08)}
+  .agent-badge{font-size:8.5px;border-radius:5px;padding:1px 6px;background:rgba(106,147,255,.15);color:var(--accent);border:1px solid rgba(106,147,255,.35)}
+  .card.flash{animation:flash 1.2s ease}
+  .card.flash-err{animation:flashErr 1.6s ease;border-color:rgba(255,107,122,.6)}
+  @keyframes flash{0%{box-shadow:0 0 0 2px rgba(94,234,212,.7);transform:scale(1.03)}100%{box-shadow:0 0 0 0 rgba(94,234,212,0)}}
+  @keyframes flashErr{0%{box-shadow:0 0 0 2px rgba(255,107,122,.8)}100%{box-shadow:0 0 0 0 rgba(255,107,122,0)}}
+  .row2{display:grid;grid-template-columns:1.3fr 1fr;gap:12px;margin-top:12px}
+  .tl{list-style:none;margin:0;padding:0;overflow:auto;flex:1;font-size:11px}
+  .tl li{display:flex;gap:8px;padding:4px 2px;border-bottom:1px dashed rgba(148,163,184,.1);animation:fadeIn .3s ease;align-items:flex-start}
+  .tl li>span:last-child{min-width:0;overflow-wrap:anywhere}
+  .tl .ts{color:var(--mute);font-family:var(--mono);font-size:9.5px;min-width:40px}
+  .tl .b{font-family:var(--mono);font-size:9px;border-radius:5px;padding:1px 6px;height:fit-content;border:1px solid var(--line);color:var(--mute)}
+  .tl .b.fail{color:var(--err);border-color:rgba(255,107,122,.4)} .tl .b.ok{color:var(--ok);border-color:rgba(102,187,106,.4)}
+  .tl .b.kanban{color:var(--tool);border-color:rgba(255,183,77,.4)}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1}}
+  .agents{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .ag{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:9px 10px;display:flex;gap:9px;cursor:pointer}
+  .ag:hover{border-color:var(--accent)}
+  .ag .av{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;color:#081018}
+  .ag .nm{font-size:11.5px;font-weight:600}
+  .ag .rl{font-size:9.5px;color:var(--mute)}
+  .ag .on{margin-left:auto;font-size:9px;color:var(--ok);border:1px solid rgba(102,187,106,.4);border-radius:999px;padding:1px 7px;height:fit-content}
+
+  /* runs view */
+  .runs-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .runs-head h2{margin:0;font-size:15px;letter-spacing:1px}
+  select{font:inherit;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:5px 8px}
+  table.rt{width:100%;border-collapse:collapse;font-size:11.5px}
+  .rt th{font-size:9px;letter-spacing:1.1px;color:var(--mute);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .rt td{padding:7px 8px;border-bottom:1px solid rgba(148,163,184,.08)}
+  .rt tr.cur{background:rgba(106,147,255,.07)}
+  .mono{font-family:var(--mono);font-size:10.5px}
+  .pillrun{font-size:9px;border-radius:5px;padding:2px 7px;font-weight:700;letter-spacing:.6px}
+  .pillrun.RUNNING{color:var(--warn);background:rgba(246,196,83,.12);border:1px solid rgba(246,196,83,.4)}
+  .pillrun.COMPLETED{color:var(--ok);background:rgba(102,187,106,.12);border:1px solid rgba(102,187,106,.4)}
+  .pillrun.FAILED{color:var(--err);background:rgba(255,107,122,.12);border:1px solid rgba(255,107,122,.4)}
+  .detail-cols{display:grid;grid-template-columns:.8fr 1.2fr 1fr;gap:10px;margin-top:12px}
+  .dcol{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:9px 10px;height:360px;display:flex;flex-direction:column}
+  .dcol h4{margin:0 0 8px;font-size:9.5px;letter-spacing:1.2px;color:var(--mute);display:flex;gap:8px;align-items:center}
+  .info-i{display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px dashed rgba(148,163,184,.1)}
+  .info-i span{color:var(--mute)}
+  .err-text{color:var(--err);font-family:var(--mono);font-size:10px}
+  .traj{overflow:auto;flex:1;font-family:var(--mono);font-size:10.5px;display:flex;flex-direction:column;gap:8px}
+  .turn{border:1px solid var(--line);border-radius:9px;background:#0a1020;padding:7px 9px;animation:fadeIn .3s ease}
+  .turn .h{color:var(--accent);font-weight:700;font-size:9.5px;letter-spacing:1px;margin-bottom:5px}
+  .turn .think{color:var(--think);white-space:pre-wrap;overflow-wrap:anywhere}
+  .turn .tool{color:var(--tool);margin-top:4px}
+  .turn .res{margin-top:3px;margin-left:12px}
+  .turn .res.ok{color:var(--ok)} .turn .res.err{color:var(--err)}
+  .tcrow{display:flex;gap:8px;align-items:center;font-size:10.5px;padding:5px 2px;border-bottom:1px dashed rgba(148,163,184,.1);animation:fadeIn .3s}
+  .tcrow .nm{font-family:var(--mono);color:var(--tool)}
+  .tcrow .stt{margin-left:auto;font-size:9px;border-radius:5px;padding:1px 7px}
+  .tcrow .stt.ok{color:var(--ok);border:1px solid rgba(102,187,106,.4)}
+  .tcrow .stt.err{color:var(--err);border:1px solid rgba(255,107,122,.5)}
+  .tcrow .stt.run{color:var(--warn);border:1px solid rgba(246,196,83,.4)}
+
+  /* drawer slide-over like real UI */
+  #drawer{position:fixed;top:54px;right:0;bottom:0;width:400px;background:var(--panel);border-left:1px solid var(--line);
+    box-shadow:-20px 0 50px rgba(0,0,0,.5);transform:translateX(105%);transition:transform .3s ease;z-index:30;
+    display:flex;flex-direction:column;padding:14px}
+  #drawer.open{transform:translateX(0)}
+  .dw-h{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+  .dw-h .av{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#4fc3f7,#355fd6);display:grid;place-items:center;font-weight:700;color:#081018}
+  .dw-h .nm{font-weight:700}
+  .dw-h .rl{font-size:10px;color:var(--mute)}
+  .dw-h .x{margin-left:auto;background:none;border:none;font-size:15px;color:var(--mute);cursor:pointer}
+  .pump{font-family:var(--mono);font-size:9.5px;color:var(--mute);border:1px dashed var(--line);border-radius:8px;padding:5px 8px;margin-bottom:8px;display:flex;gap:8px;align-items:center}
+  .pump.on{color:var(--accent2);border-color:rgba(94,234,212,.4)}
+  /* fixed-height stream window: never grows, never squashes siblings; auto-follows tail */
+  .stream{height:300px;overflow:auto;background:#0a1020;border:1px solid var(--line);border-radius:10px;padding:8px;font-family:var(--mono);font-size:10px}
+  .stream.collapsed,.traj.collapsed,#toolcol.collapsed{display:none}
+  .tgl{border:1px solid var(--line);background:var(--panel2);color:var(--mute);border-radius:6px;font-size:9px;padding:1px 7px;cursor:pointer}
+  .tgl:hover{color:var(--text);border-color:var(--accent)}
+  .winbadge{font-size:8.5px;color:var(--mute);border:1px solid var(--line);border-radius:6px;padding:1px 7px}
+  .ln{display:flex;gap:7px;padding:2.5px 4px;border-radius:6px;align-items:flex-start}
+  .ln.new{animation:fadeIn .25s ease;background:rgba(106,147,255,.07)}
+  .ln .ts{color:#5b6b82;min-width:52px;flex:none}
+  .ln .tag{min-width:42px;text-align:center;border-radius:5px;font-size:8.5px;height:fit-content;padding:1px 0;letter-spacing:.6px;flex:none}
+  .tag.think{color:var(--think);background:rgba(206,147,216,.12)}
+  .tag.tool,.tag.run{color:var(--tool);background:rgba(255,183,77,.12)}
+  .tag.ok{color:var(--ok);background:rgba(102,187,106,.12)}
+  .tag.err{color:var(--err);background:rgba(255,107,122,.14)}
+  .tag.warn{color:var(--warn);background:rgba(246,196,83,.12)}
+  .ln .msg{color:#c7d3e4;white-space:pre-wrap;min-width:0;flex:1;overflow-wrap:anywhere}
+  .ln .detail{color:#7d8ea6;margin-left:6px}
+  .resgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+  .res{border:1px solid var(--line);border-radius:10px;padding:6px 9px;background:var(--panel2)}
+  .res .l{font-size:8.5px;letter-spacing:1px;color:var(--mute)}
+  .res .v{font-size:13px;font-weight:700}
+  .bar{height:4px;border-radius:4px;background:#1a2742;margin-top:5px}
+  .bar i{display:block;height:100%;width:0%;border-radius:4px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .4s}
+
+  .ai-fab{position:fixed;right:22px;bottom:22px;width:54px;height:54px;border-radius:50%;z-index:25;
+    background:radial-gradient(circle at 30% 30%,#1c2748,#0b1224 70%);border:1px solid rgba(94,234,212,.35);
+    display:grid;place-items:center;color:var(--accent2);font-size:18px;box-shadow:0 14px 40px rgba(0,0,0,.55)}
+  .ai-fab .fd{position:absolute;top:5px;right:5px;width:9px;height:9px;border-radius:50%;background:var(--ok)}
+
+  #toasts{position:fixed;top:62px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:60;width:310px}
+  .toast{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:12px;
+    box-shadow:0 10px 30px rgba(0,0,0,.5);animation:slideIn .25s ease;position:relative;overflow:hidden}
+  .toast.err{border-color:rgba(255,107,122,.5)} .toast.ok{border-color:rgba(102,187,106,.5)}
+  .toast .life{position:absolute;left:0;bottom:0;height:2px;background:var(--accent);animation:life 5s linear forwards}
+  @keyframes slideIn{from{opacity:0;transform:translateX(12px)}to{opacity:1}}
+  @keyframes life{from{width:100%}to{width:0}}
+  footer{position:fixed;bottom:0;left:0;right:0;background:#0a111f;border-top:1px solid var(--line);padding:5px 16px;
+    font-size:10px;color:var(--mute);display:flex;gap:16px;flex-wrap:wrap;z-index:40}
+  footer b{color:var(--accent2);font-weight:600}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="logo">✦</span><span><span class="t">Aria Conductor</span><br/><span class="s">ARIA CONDUCTOR · LOCAL · PROTOTYPE v2</span></span></div>
+  <span class="hpill acc">4 Agents Online</span><span class="hpill ok">System Healthy</span>
+  <span class="hpill" title="target runtime">ADK <b style="color:var(--accent2)">opencode</b> · OpenSandbox :8090</span>
+  <div class="counters">
+    <div class="counter"><div class="v">4</div><div class="l">ACTIVE AGENTS</div></div>
+    <div class="counter"><div class="v warn" id="cRuns">0</div><div class="l">RUNNING RUNS</div></div>
+    <div class="counter"><div class="v warn">0</div><div class="l">APPROVALS PENDING</div></div>
+    <div class="counter"><div class="v ok" id="cTok">0</div><div class="l">TOKENS TODAY</div></div>
+  </div>
+  <span class="clock" id="clock">--:--:--</span>
+  <button class="bell">🔔<span class="n" id="bellN" hidden>0</span></button>
+  <div class="demo"><span class="lbl">DEMO</span>
+    <button class="primary" id="btnOk">▶ Success</button>
+    <button class="danger" id="btnFail">⚡ Failing</button>
+    <button id="btnSpeed">×1</button><button id="btnReset">reset</button>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="rail">
+    <div class="ric on" data-v="overview"><span class="i">▦</span>Overview</div>
+    <div class="ric" data-v="crew"><span class="i">👥</span>Crew</div>
+    <div class="ric" data-v="providers"><span class="i"></span>Providers</div>
+    <div class="ric" data-v="runs"><span class="i">▶</span>Runs</div>
+    <div class="ric" data-v="knowledge"><span class="i">📚</span>Knowledge</div>
+    <div class="ric" data-v="reports"><span class="i">📈</span>Reports</div>
+    <div class="ric" data-v="chat"><span class="i">💬</span>Chat</div>
+    <div class="ric" data-v="workflows"><span class="i">🔗</span>Workflows</div>
+    <div class="ric" data-v="approvals"><span class="i">✅</span>Approvals</div>
+    <div class="ric" data-v="ops"><span class="i">🛡</span>Ops</div>
+    <div class="ric" data-v="jobs"><span class="i">🗓</span>Jobs</div>
+  </nav>
+
+  <div class="content">
+    <!-- ══ OVERVIEW ══ -->
+    <section class="view" id="view-overview">
+      <div class="sumgrid">
+        <div class="sum g"><div class="l">ACTIVE AGENTS</div><div class="v">4</div><div class="d">Healthy &amp; responsive</div></div>
+        <div class="sum y"><div class="l">PENDING APPROVALS</div><div class="v">0</div><div class="d">Awaiting human review</div></div>
+        <div class="sum"><div class="l">TASKS IN PROGRESS</div><div class="v" id="sumProg">0</div><div class="d">Across kanban board</div></div>
+        <div class="sum p"><div class="l">TOTAL RUNS</div><div class="v" id="sumRuns">0</div><div class="d" id="sumRunSub">0 running now</div></div>
+        <div class="sum"><div class="l">TOKENS USED</div><div class="v" id="sumTok">0</div><div class="d">Cumulative spend</div></div>
+        <div class="sum g"><div class="l">KNOWLEDGE ITEMS</div><div class="v">60</div><div class="d">Indexed assets</div></div>
+      </div>
+
+      <div class="panel" style="height:300px">
+        <h2 class="ph">KANBAN BOARD · GOVERNED FLOW <span class="chip">NEW · S1.5 move flash + agent attribution</span><span class="grow"></span><span class="live-pill"><span class="dot"></span>LIVE</span></h2>
+        <div class="board7">
+          <div class="kcol"><h3>BACKLOG <span id="nBacklog">0</span></h3><div class="cards" id="colBacklog"></div></div>
+          <div class="kcol"><h3>TODO <span id="nTodo">0</span></h3><div class="cards" id="colTodo"></div></div>
+          <div class="kcol"><h3>IN PROGRESS <span id="nProg">0</span></h3><div class="cards" id="colProg"></div></div>
+          <div class="kcol"><h3>REVIEW <span id="nRev">0</span></h3><div class="cards" id="colRev"></div></div>
+          <div class="kcol qa"><h3>QA GATE <span>0</span></h3><div class="cards"></div></div>
+          <div class="kcol"><h3>DONE <span id="nDone">0</span></h3><div class="cards" id="colDone"></div></div>
+          <div class="kcol"><h3>CANCELLED <span id="nCancel">0</span></h3><div class="cards" id="colCancel"></div></div>
+        </div>
+      </div>
+
+      <div class="row2" style="height:260px">
+        <div class="panel">
+          <h2 class="ph">ACTIVITY TIMELINE · RECENT <span class="chip">NEW · S1.4 WS-invalidated</span></h2>
+          <ol class="tl" id="tl"></ol>
+        </div>
+        <div class="panel">
+          <h2 class="ph">AGENT TEAM · 4 ACTIVE <span class="grow"></span><span style="font-size:9px;color:var(--mute)">click an agent → drawer</span></h2>
+          <div class="agents">
+            <div class="ag" data-agent="BA"><span class="av" style="background:linear-gradient(135deg,#b39ddb,#7e57c2)">SB</span><span><span class="nm">SDD BA Agent</span><br/><span class="rl">ba · opencode</span></span><span class="on">Online</span></div>
+            <div class="ag" data-agent="DEV"><span class="av" style="background:linear-gradient(135deg,#4fc3f7,#355fd6)">SD</span><span><span class="nm">SDD DEV Agent</span><br/><span class="rl">dev · opencode</span></span><span class="on">Online</span></div>
+            <div class="ag" data-agent="QA"><span class="av" style="background:linear-gradient(135deg,#4dd0e1,#00897b)">SQ</span><span><span class="nm">SDD QA Agent</span><br/><span class="rl">qa · opencode</span></span><span class="on">Online</span></div>
+            <div class="ag" data-agent="ARIA"><span class="av" style="background:linear-gradient(135deg,#90a4ae,#546e7a)">AR</span><span><span class="nm">Aria</span><br/><span class="rl">assistant · langchain</span></span><span class="on">Online</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ RUNS ══ -->
+    <section class="view" id="view-runs" hidden>
+      <div class="runs-head">
+        <h2>RUNS</h2>
+        <button class="primary" id="btnStart2">+ Start Run</button>
+        <select><option>All Statuses</option></select><select><option>All Agents</option></select>
+        <span class="grow" style="flex:1"></span>
+        <span style="font-size:10px;color:var(--mute)">detail auto-expands &amp; refreshes while RUNNING</span>
+      </div>
+      <table class="rt">
+        <thead><tr><th>ID</th><th>AGENT</th><th>STATUS</th><th>ITERATIONS</th><th>TOKENS</th><th>CREATED</th><th>DURATION</th></tr></thead>
+        <tbody id="runsBody"></tbody>
+      </table>
+      <div id="runDetail" hidden>
+        <div class="detail-cols">
+          <div class="dcol"><h4>STATUS &amp; INFO</h4><div id="infoList"></div></div>
+          <div class="dcol"><h4>TRAJECTORY <span class="chip">NEW · S1.2 live while RUNNING</span><span class="grow"></span><button class="tgl" data-tgl="#traj">▾ collapse</button></h4><div class="traj" id="traj"></div></div>
+          <div class="dcol"><h4>TOOL CALLS <span class="chip">NEW · S2 run.progress</span><span class="grow"></span><button class="tgl" data-tgl="#toolcol">▾ collapse</button></h4><div id="toolcol" style="overflow:auto;flex:1"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- placeholder views -->
+    <section class="view" id="view-other" hidden>
+      <div class="panel" style="height:300px;align-items:center;justify-content:center;color:var(--mute)">
+        This view is not part of the observability prototype — see Overview / Runs.
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- agent drawer slide-over -->
+<aside id="drawer">
+  <div class="dw-h"><span class="av">SD</span><span><span class="nm">SDD DEV Agent</span><br/><span class="rl">dev · opencode · sandbox sb-221</span></span>
+    <span class="live-pill"><span class="dot"></span>LIVE</span><button class="x" id="dwClose">✕</button></div>
+  <h2 class="ph" style="margin-bottom:6px">LIVE ACTIVITY STREAM <span class="chip">NEW · S1.1 + S2 thinking/tool render</span><span class="grow"></span><span class="winbadge" id="winBadge">window · last 60 lines · auto-follow</span><button class="tgl" data-tgl="#stream">▾ collapse</button></h2>
+  <div class="pump" id="pump">progress pump: idle — attaches on run (GET /session/:id/message · Δ2s)</div>
+  <div class="stream" id="stream"></div>
+  <div class="resgrid">
+    <div class="res"><div class="l">TOKENS</div><div class="v" id="rTok">0</div><div class="bar"><i id="rTokBar"></i></div></div>
+    <div class="res"><div class="l">ITERATION</div><div class="v" id="rIter">0 / 15</div></div>
+  </div>
+</aside>
+
+<div class="ai-fab">✦<span class="fd"></span></div>
+<div id="toasts"></div>
+
+<footer>
+  <span><b>S1.1</b> drawer renders thinking/tool details (today parsed-but-never-rendered)</span>
+  <span><b>S1.2</b> run detail refetch while RUNNING + per-runId WS invalidation</span>
+  <span><b>S1.4</b> timeline/briefing WS invalidation</span>
+  <span><b>S1.5</b> kanban flash + agent badge</span>
+  <span><b>S2</b> OpenCode progress pump (session parts diff @2s → run.progress)</span>
+  <span><b>S3</b> langchain SSE fallback</span>
+</footer>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+let speed=1, runToken=0, parts=0, tokens=0, iter=0, bell=0, totalRuns=0;
+setInterval(()=>{$('#clock').textContent=new Date().toTimeString().slice(0,8)},1000);
+
+/* nav */
+document.querySelectorAll('.ric').forEach(r=>r.onclick=()=>{
+  document.querySelectorAll('.ric').forEach(x=>x.classList.remove('on')); r.classList.add('on');
+  const v=r.dataset.v;
+  $('#view-overview').hidden = v!=='overview';
+  $('#view-runs').hidden = v!=='runs';
+  $('#view-other').hidden = (v==='overview'||v==='runs');
+});
+const showView=v=>{ document.querySelector(`.ric[data-v="${v}"]`).click(); };
+
+/* drawer */
+const openDrawer=()=>$('#drawer').classList.add('open');
+$('#dwClose').onclick=()=>$('#drawer').classList.remove('open');
+document.querySelectorAll('.ag').forEach(a=>a.onclick=()=>{ if(a.dataset.agent==='DEV') openDrawer(); });
+
+/* helpers */
+const now=()=>new Date().toTimeString().slice(0,8);
+function stream(tag,msg,detail){
+  const s=$('#stream'); const last=s.querySelector('.ln.new'); if(last)last.classList.remove('new');
+  const d=document.createElement('div'); d.className='ln new';
+  d.innerHTML=`<span class="ts">${now()}</span><span class="tag ${tag}">${tag.toUpperCase()}</span><span class="msg">${msg}${detail?`<span class="detail">· ${detail}</span>`:''}</span>`;
+  s.appendChild(d); while(s.children.length>60)s.removeChild(s.firstChild); s.scrollTop=s.scrollHeight;
+}
+function toast(msg,kind){
+  const t=document.createElement('div'); t.className='toast '+(kind||''); t.innerHTML=`${msg}<i class="life"></i>`;
+  $('#toasts').appendChild(t); setTimeout(()=>t.remove(),5000);
+  bell++; const b=$('#bellN'); b.hidden=false; b.textContent=bell;
+}
+function tl(badge,text,cls){
+  const li=document.createElement('li');
+  li.innerHTML=`<span class="ts">${now().slice(0,5)}</span><span class="b ${cls||''}">${badge}</span><span>${text}</span>`;
+  $('#tl').prepend(li); while($('#tl').children.length>30)$('#tl').removeChild($('#tl').lastChild);
+}
+const COLS={backlog:'#colBacklog',todo:'#colTodo',prog:'#colProg',rev:'#colRev',done:'#colDone',cancel:'#colCancel'};
+function addCard(id,title,prio,col,agent){
+  const c=document.createElement('div'); c.className='card'; c.id=id;
+  c.innerHTML=`<div class="t">${title}</div><div class="m"><span class="prio ${prio}">${prio}</span>${agent?`<span class="agent-badge">${agent}</span>`:''}</div>`;
+  $(COLS[col]).appendChild(c); recount();
+}
+function moveCard(id,col,agent,blocked){
+  const c=document.getElementById(id); if(!c)return;
+  $(COLS[col]).appendChild(c);
+  if(agent&&!c.querySelector('.agent-badge'))c.querySelector('.m').insertAdjacentHTML('beforeend',`<span class="agent-badge">${agent}</span>`);
+  if(blocked&&!c.querySelector('.st'))c.querySelector('.m').insertAdjacentHTML('beforeend',`<span class="st BLOCKED">BLOCKED</span>`);
+  c.classList.remove('flash','flash-err'); void c.offsetWidth; c.classList.add(blocked?'flash-err':'flash');
+  recount();
+}
+function recount(){
+  for(const[k,sel]of Object.entries({Backlog:'#nBacklog',Todo:'#nTodo',Prog:'#nProg',Rev:'#nRev',Done:'#nDone',Cancel:'#nCancel'}))
+    $(sel).textContent=$(COLS[k.toLowerCase()]).children.length;
+  $('#sumProg').textContent=$('#colProg').children.length;
+}
+/* runs table + detail */
+function upsertRun(id,status,it,tok){
+  let tr=document.getElementById('row-'+id);
+  if(!tr){ totalRuns++; $('#sumRuns').textContent=totalRuns;
+    tr=document.createElement('tr'); tr.id='row-'+id; tr.className='cur';
+    tr.innerHTML=`<td class="mono">${id}</td><td>SDD DEV Agent</td><td></td><td class="mono"></td><td class="mono"></td><td class="mono">${now().slice(0,5)}</td><td class="mono">0s</td>`;
+    $('#runsBody').prepend(tr);
+    document.querySelectorAll('#runsBody tr').forEach(r=>r.classList.remove('cur'));
+  }
+  tr.children[2].innerHTML=`<span class="pillrun ${status}">${status}</span>`;
+  tr.children[3].textContent=`${it}/15`; tr.children[4].textContent=tok.toLocaleString();
+  $('#sumRunSub').textContent = status==='RUNNING' ? '1 running now' : '0 running now';
+  $('#runDetail').hidden=false;
+  $('#infoList').innerHTML=
+    `<div class="info-i"><span>Agent</span><strong>SDD DEV Agent</strong></div>`+
+    `<div class="info-i"><span>Status</span><span class="pillrun ${status}">${status}</span></div>`+
+    `<div class="info-i"><span>Iterations</span><strong>${it}/15</strong></div>`+
+    `<div class="info-i"><span>Tokens</span><strong>${tok.toLocaleString()}</strong></div>`+
+    (status==='FAILED'?`<div class="info-i"><span>Error</span><span class="err-text">model 401 · invalid api key</span></div>`:'');
+}
+function turn(n,think){
+  const t=document.createElement('div'); t.className='turn'; t.id='turn'+n;
+  t.innerHTML=`<div class="h">TURN ${n} · THINK</div><div class="think">${think}</div>`;
+  $('#traj').appendChild(t); $('#traj').scrollTop=$('#traj').scrollHeight;
+}
+function tool(n,cmd){ const t=$('#turn'+n); if(t)t.insertAdjacentHTML('beforeend',`<div class="tool">⚙ ${cmd}</div>`);
+  const r=document.createElement('div'); r.className='tcrow'; r.id='tc'+n;
+  r.innerHTML=`<span class="nm">${cmd.split(':')[0]}</span><span style="color:var(--mute)">${cmd.slice(cmd.indexOf(':')+1).trim().slice(0,42)}</span><span class="stt run">RUNNING</span>`;
+  $('#toolcol').prepend(r);
+}
+function result(n,ok,text){
+  const t=$('#turn'+n); if(t)t.insertAdjacentHTML('beforeend',`<div class="res ${ok?'ok':'err'}">${ok?'✔':'✘'} ${text}</div>`);
+  const r=document.getElementById('tc'+n); if(r){const s=r.querySelector('.stt'); s.className='stt '+(ok?'ok':'err'); s.textContent=ok?'COMPLETED':'FAILED';}
+}
+function pump(text,on){ const p=$('#pump'); p.textContent='progress pump: '+text; p.classList.toggle('on',!!on); }
+function addTokens(n){ tokens+=n; $('#cTok').textContent=tokens.toLocaleString(); $('#sumTok').textContent=tokens.toLocaleString();
+  $('#rTok').textContent=tokens.toLocaleString(); $('#rTokBar').style.width=Math.min(100,tokens/500)+'%'; }
+function addParts(n){ parts+=n; }
+function setIter(i){ iter=i; $('#rIter').textContent=i+' / 15'; }
+
+/* engine */
+let evts=[],idx=0,t0=0,tick=null;
+function play(list){ stop(); const my=++runToken; evts=list; idx=0; t0=performance.now();
+  tick=setInterval(()=>{ if(my!==runToken)return stop();
+    const el=(performance.now()-t0)*speed;
+    while(idx<evts.length&&evts[idx][0]<=el){evts[idx][1]();idx++;}
+    if(idx>=evts.length)stop(); },80); }
+function stop(){ if(tick){clearInterval(tick);tick=null;} }
+function resetAll(){
+  stop(); runToken++;
+  ['#stream','#tl','#traj','#toolcol','#toasts','#runsBody'].forEach(s=>$(s).innerHTML='');
+  Object.values(COLS).forEach(s=>$(s).innerHTML='');
+  recount(); parts=0;tokens=0;iter=0;bell=0;$('#bellN').hidden=true;
+  $('#cTok').textContent='0';$('#sumTok').textContent='0';$('#rTok').textContent='0';$('#rTokBar').style.width='0%';
+  setIter(0); $('#cRuns').textContent=0; $('#runDetail').hidden=true; $('#sumRuns').textContent=totalRuns;
+  pump('idle — attaches on run (GET /session/:id/message · Δ2s)',false);
+}
+
+/* scenarios */
+function success(){ resetAll(); showView('runs'); openDrawer(); return [
+ [0,()=>{ $('#cRuns').textContent=1; upsertRun('9f2c','RUNNING',1,0);
+   toast('Run Started · DEV agent (opencode/sandbox)'); tl('run.started','Run 9f2c started · SDD DEV Agent · sandbox sb-221');
+   addCard('c1','Emit run.progress from step scheduler','HIGH','todo','DEV');
+   pump('attached · ses_9f2c · polling 2s · 0 parts',true); }],
+ [900,()=>{ stream('think','sandbox ready · opencode serve healthy · /workspace mounted'); addParts(1); }],
+ [2000,()=>{ turn(1,'Reading WorkflowService.advanceWorkflow to locate the step scheduler.\nI need the exact point where each step run is created so progress events can carry the chain id and step kind. Also checking RunKanbanAutoCreator for the TODO transition.');
+   stream('think','Reading WorkflowService.advanceWorkflow…\nchecking RunKanbanAutoCreator for the TODO transition'); addParts(2); addTokens(900); setIter(1); upsertRun('9f2c','RUNNING',1,tokens);
+   pump('attached · ses_9f2c · 2s · 3 parts (+3 new)',true); }],
+ [3600,()=>{ tool(1,'bash: rg -n "advanceWorkflow" agent-control-tower'); stream('run','tool_call · bash','rg …'); addParts(1); }],
+ [5000,()=>{ result(1,true,'12 matches (0.4s)'); stream('ok','tool_result · 12 matches'); addParts(1); addTokens(400); }],
+ [6400,()=>{ stream('think','Scheduler found — adding emission points at tool_call/tool_result.\nKeeping the callback optional so the OpenCode provider contract stays unchanged for existing callers.'); addParts(1); addTokens(700); setIter(2); upsertRun('9f2c','RUNNING',2,tokens); }],
+ [7800,()=>{ tool(2,'edit: WorkflowService.java +14/−2'); stream('run','tool_call · edit','WorkflowService.java'); addParts(2); }],
+ [9400,()=>{ result(2,true,'file written'); stream('ok','tool_result · written'); addParts(1); }],
+ [10400,()=>{ moveCard('c1','prog','DEV'); tl('kanban.transitioned','card c1 TODO → IN_PROGRESS · by DEV','kanban'); }],
+ [11400,()=>{ turn(3,'Verifying with module tests before committing. If act-agent stays green I will commit on sdd/obs and move the card to REVIEW for the QA gate.'); stream('think','Verifying with module tests before committing…\nif green → commit on sdd/obs and move card to REVIEW'); addTokens(800); setIter(3); upsertRun('9f2c','RUNNING',3,tokens); addParts(1); }],
+ [12600,()=>{ tool(3,'bash: mvn test -pl act-agent -q'); stream('run','tool_call · bash','mvn test …'); addParts(1); }],
+ [15600,()=>{ result(3,true,'Tests run: 234, Failures: 0 (21s)'); stream('ok','tool_result · 234 tests green'); addParts(1); addTokens(1200); }],
+ [16800,()=>{ stream('think','Green — committing and opening review…'); addParts(1); setIter(4); }],
+ [17800,()=>{ tool(4,'bash: git commit -m "feat: emit run.progress"'); stream('run','tool_call · bash','git commit …'); addParts(1); }],
+ [19000,()=>{ result(4,true,'[sdd/obs 41a2c9d]'); stream('ok','tool_result · committed'); addParts(1); }],
+ [19800,()=>{ moveCard('c1','rev','DEV'); tl('kanban.transitioned','card c1 IN_PROGRESS → REVIEW · by DEV','kanban'); }],
+ [20800,()=>{ $('#cRuns').textContent=0; upsertRun('9f2c','COMPLETED',5,tokens); setIter(5);
+   toast('Run Completed · 4.0k tokens','ok'); tl('run.completed','Run 9f2c COMPLETED · 4.0k tokens · 5 iterations','ok');
+   moveCard('c1','done','DEV'); pump('detached · session closed · 14 parts streamed',false); }],
+];}
+function fail(){ resetAll(); showView('runs'); openDrawer(); return [
+ [0,()=>{ $('#cRuns').textContent=1; upsertRun('7b1e','RUNNING',1,0);
+   toast('Run Started · DEV agent (opencode/sandbox)'); tl('run.started','Run 7b1e started · SDD DEV Agent · sandbox sb-221');
+   addCard('c2','Fix RunProgressPump diff cursor','HIGH','todo','DEV');
+   pump('attached · ses_7b1e · polling 2s · 0 parts',true); }],
+ [1000,()=>{ turn(1,'Reproducing the failing pump test…'); stream('think','Reproducing the failing pump test…'); addParts(2); addTokens(800); setIter(1); }],
+ [2600,()=>{ tool(1,'bash: mvn test -pl act-execution -Dtest=PumpTest'); stream('run','tool_call · bash','mvn test …PumpTest'); addParts(1); }],
+ [5600,()=>{ result(1,false,'Tests run: 3, Failures: 2 (9s)'); stream('err','tool_result · 2 failures'); addParts(1); }],
+ [6800,()=>{ stream('think','Two failures — inspecting the diff cursor logic.\nSuspect the pump re-emits parts it already saw when the session message list is paginated.'); addParts(1); setIter(2); addTokens(600); }],
+ [8000,()=>{ moveCard('c2','prog','DEV'); tl('kanban.transitioned','card c2 TODO → IN_PROGRESS · by DEV','kanban'); }],
+ [8800,()=>{ tool(2,'read: OpenCodeProgressPump.java'); stream('run','tool_call · read','OpenCodeProgressPump.java'); addParts(2); }],
+ [10600,()=>{ result(2,true,'214 lines'); stream('ok','tool_result · read'); addParts(1); }],
+ [11800,()=>{ stream('warn','model retry · rate limited (1/2)'); addParts(1); }],
+ [13400,()=>{ stream('err','error part · 401 invalid api key'); addParts(1); }],
+ [14600,()=>{ $('#cRuns').textContent=0; upsertRun('7b1e','FAILED',2,tokens);
+   toast('Run Failed · credentials — see Providers page','err');
+   tl('run.completed','Run 7b1e FAILED — model 401 invalid api key','fail');
+   moveCard('c2','rev','DEV',true); tl('kanban.transitioned','card c2 IN_PROGRESS → REVIEW(BLOCKED) · by DEV','kanban');
+   pump('detached · degraded (task unaffected) · 9 parts',false); }],
+];}
+
+$('#btnOk').onclick=()=>play(success());
+$('#btnFail').onclick=()=>play(fail());
+$('#btnStart2').onclick=()=>play(success());
+$('#btnReset').onclick=resetAll;
+$('#btnSpeed').onclick=e=>{speed=speed===1?4:1;e.target.textContent='×'+speed;};
+/* collapse toggles: fixed window stays, body hides — nothing reflows taller */
+document.querySelectorAll('.tgl').forEach(b=>b.onclick=()=>{
+  const t=document.querySelector(b.dataset.tgl); const on=t.classList.toggle('collapsed');
+  b.textContent=on?'▸ expand':'▾ collapse';
+});
+resetAll();
+</script>
+</body>
+</html>

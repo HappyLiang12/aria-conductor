@@ -55,4 +55,10 @@ public class OpenCodeProperties {
      * (env: {@code SDD_REPO_URL}).
      */
     private String repoUrl = "";
+
+    /** S9/S10: progress pump poll interval in ms (opencode.progress-poll-ms). */
+    private long progressPollMs = 2000;
+
+    /** S9/S10: thinking coalesce window in ms (opencode.progress-coalesce-ms). */
+    private long progressCoalesceMs = 400;
 }

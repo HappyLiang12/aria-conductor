@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKanbanItem, listKanbanItems } from '../api/kanban';
+import { listAgents } from '../api/agents';
 import type { CreateKanbanItemRequest, KanbanItem, KanbanPriority } from '../types';
 import { useWebSocketContext } from './Layout';
+import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 
 interface ColumnDef {
   key: string;
@@ -54,7 +56,9 @@ const COLUMNS: ColumnDef[] = [
   },
   {
     key: 'archived',
-    label: 'Archived',
+    // F5: label must match the status semantics used elsewhere (KanbanPage,
+    // TaskDrawer) — "Archived" made cancelled/failed work look filed away.
+    label: 'Cancelled',
     filter: (it) => it.status === 'CANCELLED',
   },
 ];
@@ -96,7 +100,16 @@ export default function KanbanBoard() {
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' } | null>(null);
   const { lastMessage } = useWebSocketContext();
+
+  // S6: resolve linkedAgentId → agent name for attribution badges.
+  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: () => listAgents() });
+  const agentNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    (agents ?? []).forEach((a) => m.set(a.id, a.name));
+    return m;
+  }, [agents]);
 
   const { data: items, isLoading } = useQuery({
     queryKey: ['kanban-items'],
@@ -104,14 +117,31 @@ export default function KanbanBoard() {
     refetchInterval: 12000,
   });
 
-  // React instantly to kanban or run events from WebSocket.
+  // React instantly to kanban or run lifecycle events from WebSocket.
+  // S1 whitelist: high-frequency streaming events (run.progress) must NOT
+  // invalidate the board list — they are consumed precisely elsewhere.
   useEffect(() => {
     if (!lastMessage) return;
     const t = lastMessage.type;
-    if (t.startsWith('kanban.') || t.startsWith('run.')) {
+    if (isKanbanEvent(t) || isRunLifecycleEvent(t)) {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
     }
+    // S6: flash the moved card so live agent moves are visible.
+    if (t === 'kanban.transitioned') {
+      const payload = lastMessage.payload ?? {};
+      const itemId = payload.itemId as string | undefined;
+      if (itemId) {
+        setFlash({ itemId, kind: payload.toStatus === 'BLOCKED' ? 'err' : 'ok' });
+      }
+    }
   }, [lastMessage, queryClient]);
+
+  // S6: clear the flash after the animation window.
+  useEffect(() => {
+    if (!flash) return;
+    const h = setTimeout(() => setFlash(null), 1200);
+    return () => clearTimeout(h);
+  }, [flash]);
 
   const createMutation = useMutation({
     mutationFn: (request: CreateKanbanItemRequest) => createKanbanItem(request),
@@ -188,7 +218,9 @@ export default function KanbanBoard() {
                       key={item.id}
                       className={`card${col.isGate ? ' gate' : ''}${
                         item.status === 'BLOCKED' ? ' blocked' : ''
-                      }${item.status === 'DONE' ? ' done' : ''}`}
+                      }${item.status === 'DONE' ? ' done' : ''}${
+                        flash?.itemId === item.id ? (flash.kind === 'err' ? ' moving-err' : ' moving') : ''
+                      }`}
                       data-card={item.id}
                       onClick={() => dispatchOpenTaskDrawer(item.id)}
                     >
@@ -199,6 +231,12 @@ export default function KanbanBoard() {
                         <span className={priorityPillClass(item.priority)}>
                           {item.priority}
                         </span>
+                        {item.status === 'BLOCKED' && (
+                          <span className="owner" style={{ color: 'var(--red)' }}>BLOCKED</span>
+                        )}
+                        {item.linkedAgentId && agentNameById.get(item.linkedAgentId) && (
+                          <span className="owner">↪ {agentNameById.get(item.linkedAgentId)}</span>
+                        )}
                         {item.assignee && (
                           <span className="owner">@{item.assignee}</span>
                         )}

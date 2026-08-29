@@ -13,6 +13,7 @@ import io.aria.conductor.common.event.ReportAmendedEvent;
 import io.aria.conductor.common.event.ReportGeneratedEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
@@ -139,6 +140,25 @@ public class EventBroadcastListener {
                 "knowledgeId", event.getKnowledgeId().toString(),
                 "name", event.getName()
         ));
+    }
+
+    @EventListener
+    public void onRunProgress(RunProgressEvent event) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("runId", event.getRunId().toString());
+        payload.put("agentId", event.getAgentId().toString());
+        payload.put("iteration", event.getIteration());
+        payload.put("kind", event.getKind().name());
+        payload.put("seq", event.getSeq());
+        if (event.getToolName() != null) {
+            payload.put("toolName", event.getToolName());
+        }
+        String content = event.getContent();
+        if (content != null && content.length() > 500) {
+            content = content.substring(0, 500) + "...";
+        }
+        payload.put("content", content);
+        broadcast("run.progress", payload);
     }
 
     @EventListener

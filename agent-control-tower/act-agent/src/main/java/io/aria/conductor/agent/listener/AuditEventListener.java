@@ -58,11 +58,22 @@ public class AuditEventListener {
                 .eventType("RUN_COMPLETED")
                 .resourceType("Run")
                 .resourceId(event.getRunId().toString())
-                .action("COMPLETE")
+                // F2: the action must mirror the terminal status so dashboards never
+                // render "COMPLETE" for a failed run.
+                .action(actionFor(event.getStatus()))
                 .details(String.format("Run completed with status: %s", event.getStatus()))
                 .build();
 
         auditEventRepository.save(audit);
+    }
+
+    private String actionFor(io.aria.conductor.common.model.RunStatus status) {
+        return switch (status) {
+            case FAILED -> "FAILED";
+            case CANCELLED -> "CANCELLED";
+            case ABORTED -> "ABORTED";
+            default -> "COMPLETE";
+        };
     }
 
     @EventListener

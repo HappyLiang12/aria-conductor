@@ -109,6 +109,27 @@ describe('useWebSocket', () => {
     expect(result.current.lastMessage).toEqual(event);
   });
 
+  // Regression: the backend WsBroadcastEvent serializes its map as `data`,
+  // while the frontend WsEvent contract reads `payload`. Without mapping,
+  // payload-dependent UI (toast status labels, notification titles) silently
+  // degraded.
+  it('maps backend `data` field onto payload', () => {
+    const { result } = renderHook(() => useWebSocket('ws://t/ws'));
+    const ws = lastSocket();
+    handshake(ws);
+
+    act(() => {
+      ws.onmessage?.({
+        data: frame(
+          'MESSAGE',
+          { destination: '/topic/events' },
+          JSON.stringify({ type: 'run.completed', data: { status: 'FAILED', runId: 'r-9' }, timestamp: 't' }),
+        ),
+      });
+    });
+    expect(result.current.lastMessage?.payload).toEqual({ status: 'FAILED', runId: 'r-9' });
+  });
+
   it('ignores MESSAGE frames with malformed JSON bodies', () => {
     const { result } = renderHook(() => useWebSocket('ws://t/ws'));
     const ws = lastSocket();

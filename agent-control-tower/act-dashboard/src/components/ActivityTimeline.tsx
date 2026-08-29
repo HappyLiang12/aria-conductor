@@ -1,5 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRecentActivity } from '../api/dashboard';
+import { useWebSocketContext } from './Layout';
+import { formatTimestamp } from '../utils/formatTime';
 import type { ActivityEvent } from '../types';
 
 function eventVariant(resourceType: string, action: string): string {
@@ -14,9 +17,7 @@ function eventVariant(resourceType: string, action: string): string {
 }
 
 function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '--:--';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return formatTimestamp(iso);
 }
 
 function describe(ev: ActivityEvent): string {
@@ -30,6 +31,14 @@ function describe(ev: ActivityEvent): string {
 }
 
 export default function ActivityTimeline() {
+  const queryClient = useQueryClient();
+  const { lastMessage } = useWebSocketContext();
+
+  // S5: any WS event refreshes the audit feed instantly (polling stays as fallback).
+  useEffect(() => {
+    if (!lastMessage) return;
+    queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] });
+  }, [lastMessage, queryClient]);
   const { data: events, isLoading, error } = useQuery({
     queryKey: ['dashboard-activity'],
     queryFn: getRecentActivity,

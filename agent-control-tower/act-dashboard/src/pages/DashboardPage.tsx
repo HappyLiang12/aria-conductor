@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { getSummary, getRecentActivity } from '../api/dashboard';
+import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
+import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 import type { ActivityEvent } from '../types';
 
 export function DashboardPage() {
@@ -32,7 +34,10 @@ export function DashboardPage() {
     if (!lastMessage) return;
 
     const eventType = lastMessage.type;
-    if (eventType.startsWith('agent.') || eventType.startsWith('run.') || eventType.startsWith('approval.') || eventType.startsWith('knowledge.')) {
+    // S1 whitelist: kanban events now refresh the summary instantly; the
+    // high-frequency run.progress stream is excluded from list invalidation.
+    if (eventType.startsWith('agent.') || eventType.startsWith('approval.') || eventType.startsWith('knowledge.')
+        || isRunLifecycleEvent(eventType) || isKanbanEvent(eventType)) {
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     }
 
@@ -123,7 +128,7 @@ export function DashboardPage() {
                   </div>
                   <div className="activity-id cell-mono">{event.resourceId?.slice(0, 8) ?? ''}</div>
                 </div>
-                <div className="activity-time">{new Date(event.timestamp).toLocaleTimeString()}</div>
+                <div className="activity-time">{formatTimestamp(event.timestamp)}</div>
               </div>
             ))}
           </div>

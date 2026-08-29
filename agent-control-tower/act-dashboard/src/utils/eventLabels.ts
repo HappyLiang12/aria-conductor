@@ -20,6 +20,7 @@ const LABELS: Record<string, string> = {
   'workflow.started': 'Workflow Started',
   'workflow.completed': 'Workflow Completed',
   'workflow.advanced': 'Workflow Advanced',
+  'run.progress': 'Agent Progress',
 };
 
 export function eventLabel(type: string): string {

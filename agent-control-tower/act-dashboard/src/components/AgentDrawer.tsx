@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAgent } from '../api/agents';
 import { listRuns, pauseRun, resumeRun, cancelRun, injectRunMessage } from '../api/runs';
 import { useDrawerContext } from './DrawerContext';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
+import { isRunLifecycleEvent } from '../utils/wsEvents';
 import type { Agent, AgentHealthStatus, Run } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -71,6 +72,13 @@ export function AgentDrawer() {
 
   const [order, setOrder] = useState('');
   const [stream, setStream] = useState<StreamLine[]>([]);
+  // S2: fixed-height stream window with collapse + auto-follow (UX contract).
+  const [streamCollapsed, setStreamCollapsed] = useState(false);
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  const [pumpMode, setPumpMode] = useState<'idle' | 'attached' | 'detached'>('idle');
+  const [pumpParts, setPumpParts] = useState(0);
+  // S11: client-side dedupe for pump watermark resets.
+  const seenSeqs = useRef(new Set<number>());
 
   const agentQuery = useQuery<Agent>({
     queryKey: ['agents', 'detail', agentId],
@@ -116,9 +124,42 @@ export function AgentDrawer() {
       payload.resourceId === agentId;
     if (!matchAgent && lastMessage.type !== 'agent.heartbeat') return;
 
-    // Invalidate runs query when run events arrive (to pick up finalOutput, status changes)
-    if (lastMessage.type.startsWith('run.')) {
+    if (isRunLifecycleEvent(lastMessage.type)) {
       queryClient.invalidateQueries({ queryKey: ['runs'] });
+    }
+    if (lastMessage.type === 'run.progress') {
+      setPumpMode('attached');
+      setPumpParts(Number(payload.parts ?? pumpParts));
+      // S11: render pump fragments by kind; dedupe by seq.
+      const seq = Number(payload.seq ?? -1);
+      if (seq >= 0) {
+        if (seenSeqs.current.has(seq)) return;
+        seenSeqs.current.add(seq);
+      }
+      const kind = String(payload.kind ?? '');
+      const content = String(payload.content ?? '');
+      const pTag: StreamLine['tag'] =
+        kind === 'THINKING' ? 'think'
+        : kind === 'TOOL_CALL' ? 'run'
+        : kind === 'TOOL_RESULT' ? 'ok'
+        : kind === 'ERROR' ? 'err' : 'warn';
+      const pLn: StreamLine = {
+        id: `prog-${seq}-${lastMessage.timestamp}`,
+        ts: fmtTime(lastMessage.timestamp || new Date()),
+        tag: pTag,
+        msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
+        detail: {
+          thinking: kind === 'THINKING' && content
+            ? (content.length > 200 ? content.slice(0, 200) + '...' : content)
+            : undefined,
+          toolName: (payload.toolName as string) ?? undefined,
+          toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
+        },
+      };
+      setStream((prev) => [...prev.slice(-59), pLn]);
+      return;
+    } else if (lastMessage.type === 'run.completed') {
+      setPumpMode('detached');
     }
 
     const tag: StreamLine['tag'] =
@@ -170,8 +211,17 @@ export function AgentDrawer() {
       msg: `${eventLabel(lastMessage.type)}${detail ? ' · ' + detail : ''}`,
       detail: lineDetail,
     };
-    setStream((prev) => [...prev.slice(-49), ln]);
+    setStream((prev) => [...prev.slice(-59), ln]);
   }, [lastMessage, open, agentId, queryClient]);
+
+  // S2 auto-follow: only chase the tail when the operator is near the bottom,
+  // so scrolling back to read history is never interrupted.
+  useEffect(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [stream]);
 
   // Derived resources.
   const totalTokens = agentRuns.reduce((sum, r) => sum + (r.totalTokensUsed || 0), 0);
@@ -207,7 +257,7 @@ export function AgentDrawer() {
       tag: 'edit',
       msg: `> Sending order: ${instruction}`,
     };
-    setStream((prev) => [...prev.slice(-49), pendingLn]);
+    setStream((prev) => [...prev.slice(-59), pendingLn]);
 
     try {
       const result = await injectRunMessage(activeRun.id, instruction);
@@ -217,7 +267,7 @@ export function AgentDrawer() {
         tag: 'ok',
         msg: `\u2713 Order accepted (id: ${result.id.slice(0, 8)}, turn: ${result.turnNumber})`,
       };
-      setStream((prev) => [...prev.slice(-49), okLn]);
+      setStream((prev) => [...prev.slice(-59), okLn]);
     } catch (err: unknown) {
       const anyErr = err as { message?: string };
       const errLn: StreamLine = {
@@ -226,7 +276,7 @@ export function AgentDrawer() {
         tag: 'err',
         msg: `\u2717 Order failed: ${anyErr?.message ?? 'unknown error'}`,
       };
-      setStream((prev) => [...prev.slice(-49), errLn]);
+      setStream((prev) => [...prev.slice(-59), errLn]);
     }
   };
 
@@ -363,9 +413,27 @@ export function AgentDrawer() {
                 </>
               )}
 
-              {/* Live activity stream */}
-              <div className="section-h">Live Activity Stream</div>
-              <div className="stream">
+              {/* Live activity stream (S2: fixed window + collapse + auto-follow) */}
+              <div className={`pump${pumpMode === 'attached' ? ' on' : ''}`}>
+                {pumpMode === 'attached'
+                  ? `progress pump: attached · Δ2s · ${pumpParts} parts seen`
+                  : pumpMode === 'detached'
+                    ? 'progress pump: detached · session closed'
+                    : 'progress pump: idle — attaches on run (GET /session/:id/message · Δ2s)'}
+              </div>
+              <div className="section-h" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Live Activity Stream
+                <span className="winbadge">window · last 60 lines · auto-follow</span>
+                <span style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  className="tgl"
+                  onClick={() => setStreamCollapsed((v) => !v)}
+                >
+                  {streamCollapsed ? '▸ expand' : '▾ collapse'}
+                </button>
+              </div>
+              <div className={`stream${streamCollapsed ? ' collapsed' : ''}`} ref={streamRef}>
                 {stream.length === 0 ? (
                   <div className="ln">
                     <span className="ts">{fmtTime(new Date())}</span>
@@ -381,6 +449,18 @@ export function AgentDrawer() {
                       <span className="ts">{ln.ts}</span>
                       <span className={`tag ${ln.tag}`}>{ln.tag.toUpperCase()}</span>
                       <span className="msg">{ln.msg}</span>
+                      {ln.detail && (ln.detail.thinking || ln.detail.toolName || ln.detail.toolResult || ln.detail.skills) && (
+                        <div className="ln-detail">
+                          {ln.detail.thinking && <div className="think">{ln.detail.thinking}</div>}
+                          {ln.detail.toolName && (
+                            <div className="tool">⚙ {ln.detail.toolName}{ln.detail.toolArgs ? ` · ${ln.detail.toolArgs}` : ''}</div>
+                          )}
+                          {ln.detail.toolResult && <div className="res">✓ {ln.detail.toolResult}</div>}
+                          {ln.detail.skills && ln.detail.skills.length > 0 && (
+                            <div className="skills">skills: {ln.detail.skills.join(', ')}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))
                 )}

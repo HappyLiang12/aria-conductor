@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml, resubmitApproval } from '../api/workflows';
 import { listAgents } from '../api/agents';
+import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import type { WorkflowChain, WorkflowStepInfo, WorkflowStatus, WorkflowStepStatus } from '../types';
 
@@ -140,8 +141,8 @@ function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRe
 
       {/* Footer */}
       <div style={{ marginTop: 10, fontSize: 11, color: 'var(--muted, #94a3b8)', display: 'flex', gap: 16 }}>
-        <span>Created: {new Date(wf.createdAt).toLocaleTimeString()}</span>
-        {wf.completedAt && <span>Completed: {new Date(wf.completedAt).toLocaleTimeString()}</span>}
+        <span>Created: {formatTimestamp(wf.createdAt)}</span>
+        {wf.completedAt && <span>Completed: {formatTimestamp(wf.completedAt)}</span>}
         {wf.completedAt && (
           <span>
             Duration: {Math.round((new Date(wf.completedAt).getTime() - new Date(wf.createdAt).getTime()) / 1000)}s

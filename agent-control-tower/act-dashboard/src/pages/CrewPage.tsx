@@ -304,6 +304,8 @@ export default function CrewPage() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-agent-title"
+        aria-hidden={!dialogOpen}
+        inert={!dialogOpen}
       >
         <h3 id="add-agent-title">Add Agent</h3>
         <p>Provision a new agent on the crew. You can refine its prompt in the drawer afterwards.</p>

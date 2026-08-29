@@ -746,7 +746,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         when(adkProviderRegistry.resolve(any())).thenReturn(mock);
         when(mock.isHealthy(any())).thenReturn(true);
         when(mock.parseActionsFromResponse(any())).thenReturn(List.of());
-        when(mock.call(any(), any(), any())).thenAnswer(inv -> {
+        when(mock.call(any(), any(), any(), any())).thenAnswer(inv -> {
             // Gate ONLY runs of this test's QA agent: agent UUIDs are unique per test, so
             // leftover virtual threads from earlier tests (same shared mock) never interfere.
             UUID agentId = inv.getArgument(0);
@@ -771,7 +771,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         when(adkProviderRegistry.resolve(any())).thenReturn(mock);
         when(mock.isHealthy(any())).thenReturn(true);
         when(mock.parseActionsFromResponse(any())).thenReturn(List.of());
-        when(mock.call(any(), any(), any())).thenAnswer(inv -> {
+        when(mock.call(any(), any(), any(), any())).thenAnswer(inv -> {
             UUID agentId = inv.getArgument(0);
             String output = qaAgentId.equals(agentId) ? QA_OUTPUT_PASS
                     : devAgentId.equals(agentId) ? DEV_OUTPUT : BA_OUTPUT;

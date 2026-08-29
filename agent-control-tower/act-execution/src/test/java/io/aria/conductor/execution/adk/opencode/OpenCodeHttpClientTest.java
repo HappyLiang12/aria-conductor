@@ -174,4 +174,77 @@ class OpenCodeHttpClientTest {
                 .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR));
     }
+
+    // ---- S7: listMessages (progress pump data source) ----
+
+    @Test
+    void listMessages_parsesMessageAndPartSnapshots() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                [
+                                  {
+                                    "info": { "id": "m1", "role": "assistant" },
+                                    "parts": [
+                                      { "id": "p1", "type": "reasoning", "text": "locating scheduler" },
+                                      { "id": "p2", "type": "tool", "tool": "bash", "state": { "status": "completed", "output": "ok" } }
+                                    ]
+                                  },
+                                  {
+                                    "info": { "id": "m2", "role": "assistant" },
+                                    "parts": [ { "id": "p3", "type": "text", "text": "done" } ]
+                                  }
+                                ]
+                                """)));
+
+        var snaps = client.listMessages("sess-abc");
+
+        assertThat(snaps).hasSize(2);
+        assertThat(snaps.get(0).id()).isEqualTo("m1");
+        assertThat(snaps.get(0).parts()).hasSize(2);
+        assertThat(snaps.get(0).parts().get(0).type()).isEqualTo("reasoning");
+        assertThat(snaps.get(0).parts().get(0).text()).isEqualTo("locating scheduler");
+        assertThat(snaps.get(0).parts().get(1).toolName()).isEqualTo("bash");
+        assertThat(snaps.get(1).parts().get(0).text()).isEqualTo("done");
+    }
+
+    @Test
+    void listMessages_404_returnsEmptyListWithoutThrowing() {
+        // No stub → WireMock 404; the pump must degrade, never blow up the task.
+        assertThat(client.listMessages("sess-missing")).isEmpty();
+    }
+
+    @Test
+    void listMessages_500_returnsEmptyListWithoutThrowing() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(500)));
+
+        assertThat(client.listMessages("sess-abc")).isEmpty();
+    }
+
+    @Test
+    void listMessages_malformedJson_returnsEmptyListWithoutThrowing() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("{not json")));
+
+        assertThat(client.listMessages("sess-abc")).isEmpty();
+    }
+
+    @Test
+    void listMessages_toleratesMissingPartFields() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withBody("""
+                                [ { "info": { "id": "m1" }, "parts": [ { "type": "text" }, { } ] } ]
+                                """)));
+
+        var snaps = client.listMessages("sess-abc");
+
+        assertThat(snaps).hasSize(1);
+        assertThat(snaps.get(0).parts()).hasSize(2);
+        assertThat(snaps.get(0).parts().get(0).text()).isNull();
+    }
 }

@@ -6,6 +6,7 @@ import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.common.model.LlmProviderType;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -68,6 +70,7 @@ class OpenCodeAdkProviderTest {
     @Mock OpenCodeSandboxManager sandboxManager;
     @Mock OpenCodeHttpClient httpClient;
     @Mock LlmProviderRepository providerRepository;
+    @Mock ApplicationEventPublisher publisher;
 
     @TempDir Path tempDir;
 
@@ -224,6 +227,51 @@ class OpenCodeAdkProviderTest {
         assertThat(result.outputTokens()).isEqualTo(45);
         assertThat(result.aborted()).isFalse();
         verify(httpClient).createSession("run-" + runId);
+    }
+
+    @Test
+    void executeTask_publishesRunProgressEventsWhileTaskInFlight() throws Exception {
+        properties.setProgressPollMs(50);
+        OpenCodeAdkProvider pubProvider = new OpenCodeAdkProvider(
+                properties, sandboxManager, httpClient, providerRepository, publisher);
+        pubProvider.setWorkspaceBaseForTest(tempDir);
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        pubProvider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.listMessages("sess-1")).thenReturn(List.of(
+                new OpenCodeHttpClient.MessageSnapshot("m1", List.of(
+                        new OpenCodeHttpClient.PartSnapshot("p1", "reasoning", "thinking hard", null, null)))));
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenAnswer(inv -> { Thread.sleep(400); return new OpenCodeHttpClient.MessageResponse("m9", "done", 1, 1); });
+
+        TaskResult result = pubProvider.executeTask(
+                agent(agentId), runId, "do the task", new TaskContext(0, Duration.ofMinutes(1)));
+
+        assertThat(result.finalOutput()).isEqualTo("done");
+        verify(publisher, atLeastOnce()).publishEvent(any(RunProgressEvent.class));
+    }
+
+    @Test
+    void executeTask_pumpListMessagesThrowing_doesNotAffectTask() throws Exception {
+        // Fast poll window so the pump actually polls while the task is in flight.
+        properties.setProgressPollMs(50);
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        provider.putInstanceForTest(agentId, new OpenCodeInstance("sb-1", true, Instant.now(), 0, httpClient));
+        when(httpClient.isHealthy()).thenReturn(true);
+        when(httpClient.createSession("run-" + runId)).thenReturn("sess-1");
+        when(httpClient.listMessages("sess-1")).thenThrow(new RuntimeException("pump down"));
+        when(httpClient.sendMessage(eq("sess-1"), anyString(), eq("do the task"), any()))
+                .thenAnswer(inv -> { Thread.sleep(300); return new OpenCodeHttpClient.MessageResponse("m9", "done", 1, 1); });
+
+        TaskResult result = provider.executeTask(
+                agent(agentId), runId, "do the task", new TaskContext(0, Duration.ofMinutes(1)));
+
+        assertThat(result.finalOutput()).isEqualTo("done");
+        // The pump did poll (and throw) at least once, yet the task was unaffected.
+        verify(httpClient, atLeastOnce()).listMessages("sess-1");
     }
 
     @Test

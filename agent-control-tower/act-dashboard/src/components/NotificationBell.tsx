@@ -3,6 +3,7 @@ import { useWebSocketContext } from './Layout';
 import { getUnreadCount, listNotifications, markRead, markAllRead } from '../api/ariaNotifications';
 import type { Notification } from '../types';
 import { useNavigate } from 'react-router-dom';
+import { formatTimestamp } from '../utils/formatTime';
 
 export function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -97,7 +98,7 @@ export function NotificationBell() {
     if (diffMin < 60) return `${diffMin}m ago`;
     const diffHr = Math.floor(diffMin / 60);
     if (diffHr < 24) return `${diffHr}h ago`;
-    return d.toLocaleDateString();
+    return formatTimestamp(iso);
   };
 
   // Click-outside close

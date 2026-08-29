@@ -5,6 +5,9 @@ import { listAgents } from '../api/agents';
 import type { CreateKanbanItemRequest, KanbanItem, KanbanPriority } from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
+// Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
+// that sent { id } silently swallowed every card click (TaskDrawer never opened).
+import { dispatchOpenTaskDrawer } from './DrawerContext';
 
 interface ColumnDef {
   key: string;
@@ -75,12 +78,6 @@ function priorityPillClass(priority: KanbanPriority): string {
     default:
       return 'pill ok';
   }
-}
-
-function dispatchOpenTaskDrawer(itemId: string) {
-  window.dispatchEvent(
-    new CustomEvent('act:open-task-drawer', { detail: { id: itemId } })
-  );
 }
 
 interface NewItemDraft {

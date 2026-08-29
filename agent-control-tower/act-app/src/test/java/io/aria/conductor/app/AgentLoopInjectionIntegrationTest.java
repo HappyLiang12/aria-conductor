@@ -105,16 +105,17 @@ class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
         agentLoopEngine.startRun(run.getId());
 
         // --- await the LLM call (loop runs on a virtual thread) ---
+        // S12: the engine invokes the 4-arg call(agentId, messages, tools, streamSink).
         await().atMost(java.time.Duration.ofSeconds(20))
                 .untilAsserted(() -> verify(adkProvider, atLeast(1))
-                        .call(eq(agent.getId()), any(), any()));
+                        .call(eq(agent.getId()), any(), any(), any()));
 
         // --- capture + assert ---
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<LlmMessage>> msgCaptor = ArgumentCaptor.forClass(List.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Map<String, Object>>> toolCaptor = ArgumentCaptor.forClass(List.class);
-        verify(adkProvider).call(eq(agent.getId()), msgCaptor.capture(), toolCaptor.capture());
+        verify(adkProvider).call(eq(agent.getId()), msgCaptor.capture(), toolCaptor.capture(), any());
 
         List<LlmMessage> messages = msgCaptor.getValue();
         Optional<LlmMessage> systemMsg = messages.stream()

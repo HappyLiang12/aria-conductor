@@ -97,10 +97,14 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
     };
   }, [openTaskDrawer, openAgentDrawer]);
 
-  // Close drawers on Escape for accessibility.
+  // Close drawers on Escape for accessibility. Escape events that originate
+  // INSIDE an open drawer (operator typing in the order console etc.) must not
+  // slam it shut — only Escape pressed outside the drawers closes them.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest('.agent-drawer.open, .drawer.open')) return;
       if (state.taskDrawer.open) closeTaskDrawer();
       if (state.agentDrawer.open) closeAgentDrawer();
     };

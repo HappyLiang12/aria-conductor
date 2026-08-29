@@ -23,6 +23,28 @@ import {
  */
 test.describe.configure({ timeout: 300_000 });
 
+/**
+ * Wait until a run leaves PENDING/INITIALIZING/RUNNING. Terminal states are the
+ * normal end; PAUSED is equally valid — with a live LLM the agent performs a
+ * real high-risk tool call and the approval gate parks the run until a human
+ * decides (governance by design). Either state proves the run actually started
+ * and is stable, which is all the UI-shape assertions below need.
+ */
+async function pollRunStable(request: Parameters<typeof pollRunTerminal>[0], runId: string, timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last: any = null;
+  while (Date.now() < deadline) {
+    const { status, data } = await apiCall(request, 'GET', `/runs/${runId}`);
+    last = data;
+    if (status >= 200 && status < 300 && data && data.status !== 'RUNNING'
+        && data.status !== 'PENDING' && data.status !== 'INITIALIZING') {
+      return data;
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error(`pollRunStable timed out for ${runId}; last=${JSON.stringify(last)?.slice(0, 200)}`);
+}
+
 /** Open the agent live drawer from the Overview agent team list. */
 async function openAgentDrawer(page: Page, agentId: string) {
   await page.locator(`[data-agent="${agentId}"]`).first().click();
@@ -54,7 +76,7 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
 
     // Start a run while the drawer is open: lifecycle events fold into the stream.
     const run = await seedRun(request, agent.id, 'e2e observability track A');
-    await pollRunTerminal(request, run.id, 90_000);
+    await pollRunStable(request, run.id);
 
     // Seed line + at least one WS-fed line (run.started / run.completed).
     await expect(page.locator('.agent-drawer .stream .ln')).not.toHaveCount(1, { timeout: 15_000 });
@@ -68,7 +90,7 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
   test('Runs live detail: trajectory panel renders with collapse toggles', async ({ page, request }) => {
     const agent = await seedAgent(request);
     const run = await seedRun(request, agent.id, 'e2e observability runs panel');
-    await pollRunTerminal(request, run.id, 90_000);
+    await pollRunStable(request, run.id);
 
     await page.goto('/runs');
     await page.waitForLoadState('networkidle');

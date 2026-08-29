@@ -22,8 +22,26 @@
   --red: #ff6b7a;
   --shadow: 0 10px 30px rgba(0, 0, 0, .35);
   --radius: 14px;
+  /* Scrollbar theme tokens (dark default; body.light overrides below). */
+  --sb-thumb: rgba(154, 166, 200, .30);
+  --sb-thumb-hover: rgba(154, 166, 200, .52);
+  --sb-track: transparent;
 }
 * { box-sizing: border-box; }
+
+/* ---------- Scrollbars (theme-matched, global) ----------
+   The default UA scrollbars (light track + arrow buttons) clash with the
+   dark design system; style every scrollable region (drawer bodies, stream
+   windows, kanban lanes, tables, code blocks) from the theme tokens. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sb-thumb) var(--sb-track);
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: var(--sb-track); }
+*::-webkit-scrollbar-thumb { background: var(--sb-thumb); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb-hover); }
+*::-webkit-scrollbar-corner { background: transparent; }
 html, body { margin: 0; padding: 0; background: var(--bg-0); color: var(--text); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif; }
 body {
   min-height: 100vh;
@@ -1034,6 +1052,8 @@ body.light {
   --brand: #3a64e6;
   --brand-2: #2552cf;
   --shadow: 0 8px 24px rgba(20, 30, 60, .08);
+  --sb-thumb: rgba(61, 74, 107, .30);
+  --sb-thumb-hover: rgba(61, 74, 107, .52);
 }
 body.light {
   background:

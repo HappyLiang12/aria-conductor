@@ -48,7 +48,11 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
         mockAdkProvider = org.mockito.Mockito.mock(AdkProvider.class);
         when(adkProviderRegistry.resolve(any())).thenReturn(mockAdkProvider);
         when(mockAdkProvider.isHealthy(any())).thenReturn(true);
+        // S12: the engine invokes the 4-arg call (with stream sink); Mockito mocks do
+        // NOT fall through interface default methods, so stub the 4-arg form too.
         when(mockAdkProvider.call(any(), any(), any()))
+                .thenReturn(new LlmResponse("I can help you manage agents.", 10, 20, "stop", List.of()));
+        when(mockAdkProvider.call(any(), any(), any(), any()))
                 .thenReturn(new LlmResponse("I can help you manage agents.", 10, 20, "stop", List.of()));
         when(mockAdkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
 

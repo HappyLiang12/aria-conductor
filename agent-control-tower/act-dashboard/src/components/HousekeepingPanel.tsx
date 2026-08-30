@@ -73,16 +73,20 @@ export default function HousekeepingPanel() {
 
   const runExecute = async () => {
     setConfirmOpen(false);
-    const result = await executeHousekeeping({
-      categories: selected,
-      includeStuck: checked.stuck,
-      confirm: true,
-    });
-    setReceipt(
-      result.categories
-        .map((r) => `${r.key}: cleared=${r.cleared} failed=${r.failed} skipped=${r.skipped}`)
-        .join(' · '),
-    );
+    try {
+      const result = await executeHousekeeping({
+        categories: selected,
+        includeStuck: checked.stuck,
+        confirm: true,
+      });
+      setReceipt(
+        result.categories
+          .map((r) => `${r.key}: cleared=${r.cleared} failed=${r.failed} skipped=${r.skipped}`)
+          .join(' · '),
+      );
+    } catch (e) {
+      setReceipt(`⚠ Cleanup failed: ${(e as Error)?.message ?? 'unknown error'}`);
+    }
   };
 
   return (

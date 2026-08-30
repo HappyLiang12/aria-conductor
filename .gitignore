@@ -51,3 +51,11 @@ debug.log
 
 # Qoder
 .qoder/
+
+# jqwik local property-test state
+.jqwik-database
+
+
+# jqwik local property-test state
+.jqwik-database
+

@@ -77,8 +77,10 @@ export function AgentDrawer() {
   const streamRef = useRef<HTMLDivElement | null>(null);
   const [pumpMode, setPumpMode] = useState<'idle' | 'attached' | 'detached'>('idle');
   const [pumpParts, setPumpParts] = useState(0);
-  // S11: client-side dedupe for pump watermark resets.
-  const seenSeqs = useRef(new Set<number>());
+  // S11: client-side dedupe for pump watermark resets. Seq counters restart per
+  // run, so the key must include the runId; clear when the drawer re-opens or
+  // switches agent to avoid unbounded growth.
+  const seenSeqs = useRef(new Map<string, Set<number>>());
 
   const agentQuery = useQuery<Agent>({
     queryKey: ['agents', 'detail', agentId],
@@ -104,6 +106,9 @@ export function AgentDrawer() {
   // Seed stream when drawer opens / agent changes.
   useEffect(() => {
     if (!open || !agent) return;
+    seenSeqs.current.clear();
+    setPumpParts(0);
+    setPumpMode('idle');
     setStream([
       {
         id: `seed-${agent.id}`,
@@ -129,12 +134,19 @@ export function AgentDrawer() {
     }
     if (lastMessage.type === 'run.progress') {
       setPumpMode('attached');
-      setPumpParts(Number(payload.parts ?? pumpParts));
-      // S11: render pump fragments by kind; dedupe by seq.
+      // The backend payload carries no parts total; count received fragments.
+      setPumpParts((n) => n + 1);
+      // S11: render pump fragments by kind; dedupe by runId+seq.
       const seq = Number(payload.seq ?? -1);
-      if (seq >= 0) {
-        if (seenSeqs.current.has(seq)) return;
-        seenSeqs.current.add(seq);
+      const runKey = String(payload.runId ?? '');
+      if (seq >= 0 && runKey) {
+        let seen = seenSeqs.current.get(runKey);
+        if (!seen) {
+          seen = new Set<number>();
+          seenSeqs.current.set(runKey, seen);
+        }
+        if (seen.has(seq)) return;
+        seen.add(seq);
       }
       const kind = String(payload.kind ?? '');
       const content = String(payload.content ?? '');

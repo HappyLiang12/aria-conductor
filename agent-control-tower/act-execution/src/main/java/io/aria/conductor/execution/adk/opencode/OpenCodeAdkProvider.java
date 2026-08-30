@@ -89,11 +89,15 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     /** Health poll interval while waiting for readiness (overridable in tests). */
     private Duration readyPollInterval = READY_POLL_INTERVAL;
 
-    /** Spring constructor. */
+    /** Spring constructor. The publisher wires the progress pump into the WS
+     * broadcast chain (S10) — a null publisher would silently drop every
+     * run.progress event in production. */
     @Autowired
-    public OpenCodeAdkProvider(OpenCodeProperties properties, LlmProviderRepository providerRepository) {
+    public OpenCodeAdkProvider(OpenCodeProperties properties,
+                               LlmProviderRepository providerRepository,
+                               ApplicationEventPublisher eventPublisher) {
         this(properties, new OpenCodeSandboxManager(
-                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository, null);
+                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository, eventPublisher);
     }
 
     /** Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager},

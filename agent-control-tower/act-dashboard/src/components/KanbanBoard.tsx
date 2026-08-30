@@ -338,8 +338,14 @@ export default function KanbanBoard() {
                 className="btn danger"
                 onClick={async () => {
                   setClearConfirmOpen(false);
-                  await executeHousekeeping({ categories: ['kanban'], confirm: true });
-                  queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+                  try {
+                    await executeHousekeeping({ categories: ['kanban'], confirm: true });
+                  } catch {
+                    // single-flight conflict or bad request: refresh anyway so the
+                    // operator sees the current board state.
+                  } finally {
+                    queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+                  }
                 }}
               >
                 Approve &amp; execute

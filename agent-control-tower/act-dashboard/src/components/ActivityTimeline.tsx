@@ -34,9 +34,13 @@ export default function ActivityTimeline() {
   const queryClient = useQueryClient();
   const { lastMessage } = useWebSocketContext();
 
-  // S5: any WS event refreshes the audit feed instantly (polling stays as fallback).
+  // S5: relevant WS events refresh the audit feed instantly (polling stays as
+  // fallback). High-frequency stream events (run.progress / housekeeping.
+  // progress) are NOT persisted, so refetching on them would be a pure storm.
   useEffect(() => {
     if (!lastMessage) return;
+    const t = lastMessage.type;
+    if (t === 'run.progress' || t === 'housekeeping.progress') return;
     queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] });
   }, [lastMessage, queryClient]);
   const { data: events, isLoading, error } = useQuery({

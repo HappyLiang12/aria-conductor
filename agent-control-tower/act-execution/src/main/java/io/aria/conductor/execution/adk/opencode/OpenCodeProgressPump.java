@@ -108,7 +108,10 @@ public class OpenCodeProgressPump {
      * for newly-seen parts only, with consecutive THINKING coalesced.
      */
     List<RunProgressEvent> diff(List<OpenCodeHttpClient.MessageSnapshot> snaps, List<Integer> watermark) {
-        boolean reset = snaps.size() < watermark.size();
+        // An empty snapshot means the client degraded (transient failure returns
+        // List.of()) — treat it as "no data", never as a shrink, so a hiccup does
+        // not reset the watermark and replay already-emitted parts.
+        boolean reset = !snaps.isEmpty() && snaps.size() < watermark.size();
         if (reset) {
             watermark.clear();
         }

@@ -113,6 +113,35 @@ class OpenCodeProgressPumpTest {
     }
 
     @Test
+    void degradedEmptySnapshotDoesNotResetWatermarkOrReplay() throws Exception {
+        stubFor(get(urlEqualTo("/session/sess-1/message"))
+                .inScenario("degrade")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"p1\", \"type\": \"text\", \"text\": \"one\" }")))
+                .willSetStateTo("fail"));
+        stubFor(get(urlEqualTo("/session/sess-1/message"))
+                .inScenario("degrade")
+                .whenScenarioStateIs("fail")
+                .willReturn(aResponse().withStatus(500))
+                .willSetStateTo("same"));
+        stubFor(get(urlEqualTo("/session/sess-1/message"))
+                .inScenario("degrade")
+                .whenScenarioStateIs("same")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"p1\", \"type\": \"text\", \"text\": \"one\" }"))));
+
+        startPump();
+        await().atMost(java.time.Duration.ofSeconds(3)).until(() -> events.size() >= 1);
+        // let the pump pass through the 500 (degraded empty snapshot) and re-poll
+        Thread.sleep(400);
+        pump.stop();
+
+        // The degraded poll must not reset the watermark: same snapshot => no replay.
+        assertThat(events).hasSize(1);
+    }
+
+    @Test
     void neverCoalescesToolEvents() throws Exception {
         stubFor(get(urlEqualTo("/session/sess-1/message"))
                 .willReturn(aResponse().withStatus(200).withBody(body(

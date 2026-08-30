@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Aria Conductor — Housekeeping / Cleanup UX Prototype</title>
+<style>
+  :root{
+    --bg:#070b14; --panel:#0d1526; --panel2:#101a30; --line:rgba(148,163,184,.16);
+    --text:#e6edf7; --mute:#8ea0b8; --accent:#6a93ff; --accent2:#5eead4;
+    --ok:#66bb6a; --err:#ff6b7a; --warn:#f6c453;
+    --mono:'SF Mono','Cascadia Code',Consolas,monospace;
+  }
+  *{box-sizing:border-box} html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);font:13px/1.45 system-ui,'Segoe UI',sans-serif;overflow:hidden}
+  code{font-family:var(--mono);font-size:11px;color:var(--accent2)}
+  button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:8px;padding:6px 12px}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:linear-gradient(180deg,#2f6fed,#2456c0);border-color:transparent}
+  button.danger{background:linear-gradient(180deg,#c0394b,#9c2b3c);border-color:transparent}
+  button.ghost{background:transparent}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .chip{font-size:9px;letter-spacing:.6px;color:var(--accent2);border:1px solid rgba(94,234,212,.4);border-radius:6px;padding:1px 7px;white-space:nowrap}
+  .chip.warn{color:var(--warn);border-color:rgba(246,196,83,.45)}
+  .chip.err{color:var(--err);border-color:rgba(255,107,122,.45)}
+
+  /* layout */
+  .topbar{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line);background:rgba(13,21,38,.8)}
+  .brand{font-weight:700;letter-spacing:.4px}
+  .brand small{color:var(--mute);font-weight:400;margin-left:8px}
+  .wrap{display:flex;height:calc(100% - 52px)}
+  .rail{width:170px;border-right:1px solid var(--line);padding:12px 8px;display:flex;flex-direction:column;gap:4px}
+  .ric{display:flex;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;color:var(--mute);cursor:pointer;border:1px solid transparent}
+  .ric.on{color:var(--text);background:var(--panel2);border-color:var(--line)}
+  .main{flex:1;overflow:auto;padding:18px 22px}
+  h2.ph{margin:0 0 4px;font-size:16px;display:flex;align-items:center;gap:8px}
+  .sub{color:var(--mute);margin-bottom:16px;max-width:860px}
+
+  .panel{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;margin-bottom:16px}
+  .panel h3{margin:0 0 10px;font-size:12px;letter-spacing:1px;color:var(--mute);text-transform:uppercase;display:flex;align-items:center;gap:8px}
+  .grow{flex:1}
+
+  /* housekeeping categories */
+  .cat{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:10px 12px;margin-bottom:10px}
+  .cat .row{display:flex;align-items:center;gap:10px}
+  .cat .t{font-weight:600}
+  .cat .n{font-family:var(--mono);color:var(--accent2)}
+  .cat .meta{color:var(--mute);font-size:11px}
+  .cat details{margin-top:8px;color:var(--mute);font-size:11.5px}
+  .cat details ul{margin:6px 0 0;padding-left:18px;font-family:var(--mono)}
+  input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+
+  .actionbar{position:sticky;bottom:0;display:flex;gap:10px;align-items:center;padding:12px 4px;background:linear-gradient(180deg,transparent,var(--bg) 30%)}
+  .sum{color:var(--mute)} .sum b{color:var(--text)}
+
+  /* modal */
+  .scrim{position:fixed;inset:0;background:rgba(3,6,15,.55);display:none;align-items:center;justify-content:center;z-index:50}
+  .scrim.open{display:flex}
+  .modal{width:640px;max-height:78vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .modal h3{margin:0 0 8px}
+  .plan{font-family:var(--mono);font-size:11px;background:#0a1020;border:1px solid var(--line);border-radius:10px;padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap}
+  .plan .del{color:var(--err)} .plan .ret{color:var(--warn)} .plan .can{color:var(--mute)}
+  .mfoot{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
+
+  /* toast */
+  .toast{position:fixed;right:18px;bottom:18px;background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:10px;padding:10px 14px;display:none;z-index:60;max-width:420px}
+  .toast.show{display:block;animation:in .25s ease}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+
+  /* kanban mini */
+  .kgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .kcol{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:8px;min-height:180px}
+  .kcol header{font-size:10px;letter-spacing:1px;color:var(--mute);display:flex;justify-content:space-between;margin-bottom:8px}
+  .kcard{border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,#152140,#121b33);padding:7px 8px;font-size:11px;margin-bottom:7px;transition:all .35s ease}
+  .kcard.gone{opacity:0;transform:translateX(24px)}
+  .kcard .id{font-family:var(--mono);color:var(--mute);font-size:9.5px}
+
+  /* crew mini */
+  .arow{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:8px 12px;margin-bottom:8px}
+  .arow .nm{font-weight:600}
+  .arow .st{margin-left:auto}
+  .pill{font-size:9.5px;border-radius:6px;padding:2px 8px;border:1px solid var(--line);color:var(--mute)}
+  .pill.ok{color:var(--ok);border-color:rgba(102,186,106,.4)}
+  .pill.ret{color:var(--err);border-color:rgba(255,107,122,.4)}
+  .bulkbar{display:none;gap:10px;align-items:center;border:1px dashed rgba(94,234,212,.4);border-radius:10px;padding:8px 12px;margin-bottom:12px}
+  .bulkbar.show{display:flex}
+
+  /* chat mini */
+  .chat{max-width:760px}
+  .msg{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:10px;background:var(--panel2)}
+  .msg.user{background:#12234a}
+  .msg .who{font-size:10px;letter-spacing:1px;color:var(--mute);margin-bottom:6px}
+  .plancard{border:1px solid rgba(94,234,212,.35);border-radius:10px;padding:10px 12px;margin-top:8px;background:#0a1020}
+  .plancard li{margin:3px 0}
+  .mrow{display:flex;gap:8px;margin-top:10px}
+  .view{display:none}.view.on{display:block}
+  .note{color:var(--mute);font-size:11px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">ARIA CONDUCTOR <small>Housekeeping / Cleanup UX prototype · v1</small></div>
+  <span class="grow"></span>
+  <span class="chip">destructive ops → approval gate</span>
+  <span class="chip warn">audit-broadcast</span>
+</div>
+<div class="wrap">
+  <nav class="rail">
+    <div class="ric on" data-v="ops">🧹 Housekeeping</div>
+    <div class="ric" data-v="kanban">▦ Kanban quick-clear</div>
+    <div class="ric" data-v="crew">👥 Crew bulk-retire</div>
+    <div class="ric" data-v="chat">💬 Aria-driven cleanup</div>
+  </nav>
+  <main class="main">
+
+  <!-- ══ 1 · OPS HOUSEKEEPING ══ -->
+  <section class="view on" id="v-ops">
+    <h2>Housekeeping <span class="chip">NEW · H1</span></h2>
+    <div class="sub">One place to find and clear leftovers: terminal runs, stuck/paused runs with pending approvals,
+      finished kanban cards, retired/e2e test agents, expired approvals. Scan is read-only; execute is a
+      destructive batch and always goes through the approval gate + audit broadcast.</div>
+
+    <div class="panel">
+      <h3>Leftover inventory <span class="grow"></span>
+        <span class="chip">read-only scan</span>
+        <button id="btnScan" class="primary">⚡ Scan leftovers</button>
+      </h3>
+      <div id="scanEmpty" class="note">No scan yet. Scan aggregates counts from existing REST endpoints
+        (<code>GET /runs</code>, <code>GET /kanban/items</code>, <code>GET /agents</code>, <code>GET /approvals</code>) — no new data model.</div>
+      <div id="cats" style="display:none">
+        <div class="cat"><div class="row">
+          <input type="checkbox" checked data-cat="runs">
+          <span class="t">Terminal runs</span><span class="n">×18</span>
+          <span class="meta">COMPLETED / FAILED / CANCELLED older than 24h · frees trajectory + prompt-call rows</span>
+          <span class="grow"></span><button class="ghost" data-preview="runs">preview</button></div>
+          <details><summary>sample</summary><ul>
+            <li>dfebfcd1 FAILED  “e2e observability runs panel” · 2h ago</li>
+            <li>f9574f37 FAILED  “toast label verification” · 3h ago</li>
+            <li>39d73379 CANCELLED “Summarize system health” · 5h ago</li></ul></details>
+        </div>
+        <div class="cat"><div class="row">
+          <input type="checkbox" checked data-cat="stuck">
+          <span class="t">Stuck / paused runs</span><span class="n">×4</span>
+          <span class="chip warn">opt-in</span>
+          <span class="meta">PAUSED &gt; 30m at approval gate → cancel run + expire its pending approval</span>
+          <span class="grow"></span><button class="ghost" data-preview="stuck">preview</button></div>
+          <details><summary>sample</summary><ul>
+            <li>ebea20ef PAUSED 92m · pending TOOL_CALL approval 48350aca</li>
+            <li>470467ee PAUSED 94m · pending TOOL_CALL approval fcc82b94</li></ul></details>
+        </div>
+        <div class="cat"><div class="row">
+          <input type="checkbox" checked data-cat="kanban">
+          <span class="t">Finished kanban cards</span><span class="n">×15</span>
+          <span class="meta">DONE / CANCELLED → DELETE /kanban/items/{id}</span>
+          <span class="grow"></span><button class="ghost" data-preview="kanban">preview</button></div>
+          <details><summary>sample</summary><ul>
+            <li>9c796372 DONE “Perform a Business Analyst analysis…”</li>
+            <li>3ba488af BLOCKED→CANCELLED “F5 verification run…”</li></ul></details>
+        </div>
+        <div class="cat"><div class="row">
+          <input type="checkbox" checked data-cat="agents">
+          <span class="t">Leftover test agents</span><span class="n">×9</span>
+          <span class="meta">name matches <code>e2e-*</code> or health RETIRED/UNHEALTHY → POST /agents/{id}/retire</span>
+          <span class="grow"></span><button class="ghost" data-preview="agents">preview</button></div>
+          <details><summary>sample</summary><ul>
+            <li>e2e-agent-1787994081897-2945 · NATIVE · HEALTHY (test leftover)</li>
+            <li>e2e-agent-1787994470439-1091 · NATIVE · HEALTHY (test leftover)</li></ul></details>
+        </div>
+        <div class="cat"><div class="row">
+          <input type="checkbox" data-cat="approvals">
+          <span class="t">Expired pending approvals</span><span class="n">×4</span>
+          <span class="meta">PENDING &gt; 24h with no live run → decide rejected(expired)</span>
+          <span class="grow"></span><button class="ghost" data-preview="approvals">preview</button></div>
+        </div>
+      </div>
+
+      <div class="actionbar">
+        <span class="sum" id="sum">—</span>
+        <span class="grow"></span>
+        <button id="btnDry" disabled>Dry-run preview</button>
+        <button id="btnExec" class="danger" disabled> Execute cleanup…</button>
+      </div>
+    </div>
+    <div class="note">Safety: execute opens the approval modal (destructive batch) → on approve runs server-side as one
+      transactional batch per category, streams progress over the existing WS topic, emits
+      <code>housekeeping.executed</code> audit event, and posts a summary toast. “Stuck runs” is OFF by default.</div>
+  </section>
+
+  <!-- ══ 2 · KANBAN QUICK CLEAR ══ -->
+  <section class="view" id="v-kanban">
+    <h2>Kanban — quick clear <span class="chip">NEW · H2</span></h2>
+    <div class="sub">Board header gains one guarded button: clear DONE &amp; CANCELLED cards (confirm popover, same
+      batch endpoint). Mid-flight columns are never touched.</div>
+    <div class="panel">
+      <h3>Kanban Board · Governed Flow <span class="grow"></span>
+        <button id="btnClearBoard">🧹 Clear Done &amp; Cancelled (15)</button></h3>
+      <div class="kgrid">
+        <div class="kcol"><header><span>IN PROGRESS</span><span>2</span></header>
+          <div class="kcard"><div class="id">b24632a5</div>e2e-obs-live-move</div>
+          <div class="kcard"><div class="id">3f83cc4e</div>e2e-kanban-move-…</div></div>
+        <div class="kcol"><header><span>REVIEW</span><span>1</span></header>
+          <div class="kcard"><div class="id">2f03ee59</div>e2e observability runs panel</div></div>
+        <div class="kcol" id="kdone"><header><span>DONE</span><span id="ndone">8</span></header>
+          <div class="kcard done"><div class="id">9c796372</div>BA analysis of #62</div>
+          <div class="kcard done"><div class="id">0fa183f2</div>e2e-obs-live-move</div>
+          <div class="kcard done"><div class="id">86a279af</div>e2e-kanban-move-…</div></div>
+        <div class="kcol" id="kcan"><header><span>CANCELLED</span><span id="ncan">7</span></header>
+          <div class="kcard can"><div class="id">39d73379</div>Summarize system health</div>
+          <div class="kcard can"><div class="id">3ba488af</div>F5 verification run</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 3 · CREW BULK RETIRE ══ -->
+  <section class="view" id="v-crew">
+    <h2>Crew — bulk retire <span class="chip">NEW · H3</span></h2>
+    <div class="sub">Crew list gains row checkboxes + a bulk bar. One-click preset selects obvious leftovers
+      (<code>e2e-*</code> / retired / unhealthy). Retire is soft (history preserved), matching existing
+      <code>POST /agents/{id}/retire</code>.</div>
+    <div class="panel">
+      <h3>Agent Crew <span class="grow"></span>
+        <button id="btnSelLeft">select leftovers (9)</button></h3>
+      <div class="bulkbar" id="bulkbar">
+        <span><b id="selN">0</b> selected</span>
+        <span class="grow"></span>
+        <button id="btnRetire" class="danger">Retire selected…</button>
+      </div>
+      <div id="agents"></div>
+    </div>
+  </section>
+
+  <!-- ══ 4 · ARIA-DRIVEN ══ -->
+  <section class="view" id="v-chat">
+    <h2>Aria-driven cleanup <span class="chip">NEW · H4</span></h2>
+    <div class="sub">Aria gets two governed tools: <code>housekeeping_scan</code> (read-only) and
+      <code>housekeeping_execute</code> (approval-gated). Natural language in, plan card out, human approves,
+      Aria reports the receipt.</div>
+    <div class="chat">
+      <div class="msg user"><div class="who">YOU</div>clean up the leftovers from all my e2e testing, but keep the BA analysis card</div>
+      <div class="msg"><div class="who">ARIA · housekeeping_scan</div>
+        Scanned runs / kanban / agents / approvals. Proposed plan:
+        <div class="plancard"><ul>
+          <li>retire <b>9</b> agents matching <code>e2e-*</code></li>
+          <li>delete <b>14</b> finished kanban cards <i>(excluding 9c796372 “BA analysis” per your note)</i></li>
+          <li>purge <b>18</b> terminal runs older than 24h</li>
+          <li>cancel <b>0</b> stuck runs (opt-in, left OFF)</li>
+        </ul></div>
+        <div class="mrow"><button class="primary" id="btnAriaOk">✓ Approve &amp; run</button><button>Reject</button></div>
+      </div>
+      <div class="msg" id="ariaDone" style="display:none"><div class="who">ARIA · housekeeping_execute</div>
+        Done ✅ retired 9 agents · deleted 14 kanban cards · purged 18 runs. Kept 9c796372 as requested.
+        Audit event <code>housekeeping.executed</code> broadcast; full receipt in Reports.</div>
+    </div>
+  </section>
+  </main>
+</div>
+
+<!-- approval modal -->
+<div class="scrim" id="scrim"><div class="modal">
+  <h3>⚠ Destructive batch — approval required <span class="chip err">approval gate</span></h3>
+  <div class="plan" id="planBody"></div>
+  <div class="mfoot">
+    <button id="btnCancel">Cancel</button>
+    <button id="btnApprove" class="danger">Approve &amp; execute</button>
+  </div>
+</div></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+$$('.ric').forEach(r=>r.onclick=()=>{$$('.ric').forEach(x=>x.classList.remove('on'));r.classList.add('on');
+  $$('.view').forEach(v=>v.classList.remove('on'));$('#v-'+r.dataset.v).classList.add('on');});
+
+/* ── H1 housekeeping ── */
+const COUNTS={runs:18,stuck:4,kanban:15,agents:9,approvals:4};
+const VERB={runs:'PURGE run + trajectory',stuck:'CANCEL run + expire approval',kanban:'DELETE kanban item',agents:'RETIRE agent',approvals:'REJECT approval (expired)'};
+const CLS={runs:'del',stuck:'can',kanban:'del',agents:'ret',approvals:'can'};
+$('#btnScan').onclick=()=>{$('#scanEmpty').style.display='none';$('#cats').style.display='block';
+  $('#btnScan').textContent='↻ Re-scan';updateSum();};
+function selected(){return $$('#cats input:checked').map(c=>c.dataset.cat);}
+function updateSum(){const s=selected();const n=s.reduce((a,k)=>a+COUNTS[k],0);
+  $('#sum').innerHTML=s.length?`<b>${s.length}</b> categories · <b>${n}</b> items selected`:'—';
+  $('#btnDry').disabled=$('#btnExec').disabled=!s.length;}
+$$('#cats input').forEach(c=>c.onchange=updateSum);
+$$('#cats [data-preview]').forEach(b=>b.onclick=()=>openPlan([b.dataset.preview],true));
+$('#btnDry').onclick=()=>openPlan(selected(),true);
+$('#btnExec').onclick=()=>openPlan(selected(),false);
+function planLines(cats){const out=[];cats.forEach(k=>{out.push(`# ${k} — ${COUNTS[k]} item(s)`);
+  for(let i=0;i<Math.min(3,COUNTS[k]);i++)out.push(`  <span class="${CLS[k]}">${VERB[k]}</span>  ${k}-${(1000+i)}`);
+  if(COUNTS[k]>3)out.push(`  … +${COUNTS[k]-3} more`);});return out.join('\n');}
+let dryOnly=false;
+function openPlan(cats,dry){dryOnly=dry;$('#planBody').innerHTML=planLines(cats)+(dry?'\n\n(dry-run: nothing will change)':'');
+  $('#btnApprove').style.display=dry?'none':'';$('#scrim').classList.add('open');}
+$('#btnCancel').onclick=()=>$('#scrim').classList.remove('open');
+$('#btnApprove').onclick=()=>{$('#scrim').classList.remove('open');
+  toast('🧹 Housekeeping executed — 46 items cleared · audit event broadcast');};
+function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),5000);}
+
+/* ── H2 kanban quick clear ── */
+$('#btnClearBoard').onclick=()=>{openPlan(['kanban'],false);};
+/* after approve in modal, if only kanban selected animate cards */
+const obs=new MutationObserver(()=>{ if(!$('#scrim').classList.contains('open') && $('#v-kanban').classList.contains('on')){
+  $$('.kcard.done,.kcard.can').forEach(c=>c.classList.add('gone')); $('#ndone').textContent='0'; $('#ncan').textContent='0';
+  setTimeout(()=>toast('🧹 Board cleared: 15 finished cards removed'),350); obs.disconnect(); }});
+obs.observe($('#scrim'),{attributes:true});
+
+/* ── H3 crew bulk retire ── */
+const AGENTS=[
+ ['SDD BA Agent','ba · mock','ok','Online',false],['SDD DEV Agent','dev · mock','ok','Online',false],
+ ['Aria','assistant','ok','Online',false],
+ ...Array.from({length:6},(_,i)=>[`e2e-agent-17879940${i}…`,'NATIVE','ret','leftover',true])];
+$('#agents').innerHTML=AGENTS.map((a,i)=>`<div class="arow"><input type="checkbox" data-i="${i}" ${a[4]?'':''}>
+  <span class="nm">${a[0]}</span><span class="meta">${a[1]}</span>
+  <span class="st pill ${a[2]==='ok'?'ok':'ret'}">${a[3]}</span></div>`).join('');
+function updBulk(){const n=$$('#agents input:checked').length;$('#selN').textContent=n;
+  $('#bulkbar').classList.toggle('show',n>0);}
+$$('#agents input').forEach(c=>c.onchange=updBulk);
+$('#btnSelLeft').onclick=()=>{$$('#agents input').forEach((c,i)=>c.checked=AGENTS[i][4]);updBulk();};
+$('#btnRetire').onclick=()=>openPlan(['agents'],false);
+
+/* ── H4 aria ── */
+$('#btnAriaOk').onclick=()=>{$('#btnAriaOk').disabled=true;$('#ariaDone').style.display='block';
+  toast('✅ Aria cleanup finished — receipt in Reports');};
+</script>
+</body>
+</html>

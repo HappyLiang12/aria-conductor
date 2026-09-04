@@ -26,5 +26,8 @@ public class CreateKnowledgeRequest {
     @NotBlank(message = "Content is required")
     private String content;
 
+    /** Optional YAML content for WORKFLOW-type templates. Stored in knowledge_versions.yaml_content. */
+    private String yamlContent;
+
     private Sensitivity sensitivity;
 }

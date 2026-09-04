@@ -1,8 +1,11 @@
 import client from './client';
 import type { KnowledgeItem, CreateKnowledgeRequest, KnowledgeVersion, KnowledgeReviewRequest } from '../types';
 
-export async function listKnowledge(): Promise<KnowledgeItem[]> {
-  const { data } = await client.get<KnowledgeItem[]>('/api/v1/knowledge');
+export async function listKnowledge(type?: string, status?: string): Promise<KnowledgeItem[]> {
+  const params: Record<string, string> = {};
+  if (type) params.type = type;
+  if (status) params.status = status;
+  const { data } = await client.get<KnowledgeItem[]>('/api/v1/knowledge', { params });
   return data;
 }
 
@@ -67,4 +70,27 @@ export async function batchReviewKnowledge(
 export async function getKnowledgeYaml(id: string): Promise<string> {
   const { data } = await client.get<string>(`/api/v1/knowledge/${id}/yaml`, { responseType: 'text' });
   return data;
+}
+
+/** Update knowledge item content (description, markdown, yaml). Distinct from the review facade above. */
+export async function updateKnowledgeContent(
+  id: string,
+  req: { description?: string; content?: string; yamlContent?: string },
+): Promise<KnowledgeItem> {
+  const { data } = await client.put<KnowledgeItem>(`/api/v1/knowledge/${id}`, req);
+  return data;
+}
+
+/** Instantiate an APPROVED workflow template with parameters. */
+export async function instantiateWorkflowTemplate(
+  id: string,
+  parameters: Record<string, string>,
+): Promise<any> {
+  const { data } = await client.post(`/api/v1/knowledge/${id}/instantiate-workflow`, { parameters });
+  return data;
+}
+
+/** Approve a PENDING knowledge item (shortcut for review with APPROVED decision). */
+export async function approveKnowledge(id: string): Promise<KnowledgeItem> {
+  return reviewKnowledge(id, { decision: 'APPROVED' });
 }

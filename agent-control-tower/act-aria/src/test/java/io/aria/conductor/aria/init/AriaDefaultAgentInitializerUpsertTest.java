@@ -11,6 +11,7 @@ import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.adk.AdkSystemProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -54,7 +55,8 @@ class AriaDefaultAgentInitializerUpsertTest {
     @BeforeEach
     void setUp() {
         initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment,
+                new AdkSystemProperties());
         // "test" profile skips ADK pre-warm; active provider skips the env-var bootstrap
         when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
         when(llmProviderRepository.findByActiveTrue())
@@ -129,12 +131,20 @@ class AriaDefaultAgentInitializerUpsertTest {
 
     @Test
     void nonLegacyProviderAgentsAreNotTouchedByMigration() {
+        // Under a non-langchain default the migration runs; agents on a custom provider
+        // are NOT legacy and must be left untouched.
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        AriaDefaultAgentInitializer opencodeInitializer = new AriaDefaultAgentInitializer(
+                agentRepository, toolDefinitionRepository, agentToolRepository,
+                llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
         Agent worker = Agent.builder()
                 .id(UUID.randomUUID()).name("Worker").adkProvider("custom").build();
         when(agentRepository.findAll()).thenReturn(List.of(worker));
 
-        initializer.run(args);
+        opencodeInitializer.run(args);
 
         // only the Aria upsert itself is persisted; the custom-provider worker is untouched
         verify(agentRepository, times(1)).save(any(Agent.class));
@@ -161,18 +171,58 @@ class AriaDefaultAgentInitializerUpsertTest {
     }
 
     @Test
-    void langchainProviderAgentsAreResavedByMigration() {
-        // Pins the current (odd) behavior: the "legacy" filter matches "langchain"
-        // itself, so langchain agents are rewritten langchain -> langchain each boot.
+    void langchainAgentsNotResavedWhenDefaultIsLangchain() {
+        // When the configured default IS langchain, the legacy migration is a no-op and is
+        // skipped entirely — langchain agents are not needlessly rewritten each boot.
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
+        Agent worker = Agent.builder()
+                .id(UUID.randomUUID()).name("Worker").adkProvider("LangChain").build();
+        // findAll is never reached because the migration block is skipped when default==langchain
+        lenient().when(agentRepository.findAll()).thenReturn(List.of(worker));
+
+        initializer.run(args);
+
+        // only the Aria upsert itself is persisted; the migration block is skipped
+        verify(agentRepository, times(1)).save(any(Agent.class));
+        assertThat(worker.getAdkProvider()).isEqualTo("LangChain");
+    }
+
+    @Test
+    void langchainAgentsMigratedToDefaultProviderWhenDefaultDiffers() {
+        // When the configured default is opencode, agents still on the legacy langchain
+        // provider are re-pointed to opencode (this is how the seeded BA/Dev/QA agents switch).
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        AriaDefaultAgentInitializer opencodeInitializer = new AriaDefaultAgentInitializer(
+                agentRepository, toolDefinitionRepository, agentToolRepository,
+                llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
         Agent worker = Agent.builder()
                 .id(UUID.randomUUID()).name("Worker").adkProvider("LangChain").build();
         when(agentRepository.findAll()).thenReturn(List.of(worker));
 
-        initializer.run(args);
+        opencodeInitializer.run(args);
 
-        // one save for Aria + one for the case-insensitively matched worker
+        // one save for Aria (created as opencode) + one for the migrated worker
         verify(agentRepository, times(2)).save(any(Agent.class));
-        assertThat(worker.getAdkProvider()).isEqualTo("langchain");
+        assertThat(worker.getAdkProvider()).isEqualTo("opencode");
+    }
+
+    @Test
+    void ariaCreatedWithConfiguredDefaultProvider() {
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        AriaDefaultAgentInitializer opencodeInitializer = new AriaDefaultAgentInitializer(
+                agentRepository, toolDefinitionRepository, agentToolRepository,
+                llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
+
+        opencodeInitializer.run(args);
+
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository).save(captor.capture());
+        assertThat(captor.getValue().getAdkProvider()).isEqualTo("opencode");
     }
 }

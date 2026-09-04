@@ -1054,6 +1054,21 @@ body.light .modal-dialog {
 .ai-action-glyph{font-size:0.95rem;letter-spacing:0}
 .ai-hint{padding:0.35rem 1rem 0.65rem;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.6rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted);text-align:center;position:relative;z-index:1;background:rgba(0,0,0,0.18);border-top:1px dashed var(--ai-edge)}
 
+/* Slash-command autocomplete menu ------------------------------------------ */
+.ai-slash{position:absolute;bottom:calc(100% - 4px);left:0.85rem;right:0.85rem;max-height:280px;overflow-y:auto;background:var(--surface,#0f172a);border:1px solid var(--ai-edge,#334155);border-radius:10px;box-shadow:0 -8px 32px rgba(0,0,0,0.45);z-index:100;padding:4px 0}
+.ai-slash-item{display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer;transition:background 0.1s}
+.ai-slash-item[aria-selected="true"]{background:rgba(129,140,248,0.12)}
+.ai-slash-item:hover{background:rgba(129,140,248,0.08)}
+.ai-slash-cmd{font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.82rem;font-weight:600;color:#818cf8;white-space:nowrap;min-width:90px}
+.ai-slash-desc{font-size:0.78rem;color:var(--text-mute,#94a3b8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.ai-skill-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:8px;background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.72rem;color:#a5b4fc;position:absolute;top:-28px;left:0.85rem;z-index:2}
+.ai-skill-chip button{background:none;border:none;color:#a5b4fc;cursor:pointer;font-size:0.7rem;padding:0 2px;opacity:0.7}
+.ai-skill-chip button:hover{opacity:1}
+body.light .ai-slash{background:#fff;border-color:#e2e8f0;box-shadow:0 -4px 16px rgba(0,0,0,0.08)}
+body.light .ai-slash-item[aria-selected="true"]{background:rgba(99,102,241,0.06)}
+body.light .ai-skill-chip{background:rgba(99,102,241,0.08);border-color:rgba(99,102,241,0.2);color:#4f46e5}
+body.light .ai-skill-chip button{color:#4f46e5}
+
 /* Compact mode for narrow viewports --------------------------------------- */
 @media(max-width:520px){
   .ai-panel{right:12px;left:12px;width:auto;bottom:88px;height:calc(100vh - 110px)}

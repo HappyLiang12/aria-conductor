@@ -4,6 +4,8 @@ import { cancelRun } from '../api/runs';
 import type { AriaMessage } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
 import { formatTimestamp } from '../utils/formatTime';
+import { useSlashCommands } from '../hooks/useSlashCommands';
+import SlashCommandMenu from './SlashCommandMenu';
 
 // ponytail: localStorage removed — conversation ownership now backend-backed.
 // PANEL_OPEN_KEY retained for UI toggle only (not data).
@@ -148,6 +150,7 @@ export function AriaPanel() {
   const [toolElapsed, setToolElapsed] = useState(0); // m3: seconds the current tool has been running
 
   const isEmpty = messages.length === 0;
+  const slash = useSlashCommands(open);
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -244,6 +247,7 @@ export function AriaPanel() {
       setBusy(true);
       setActiveTool(null);
       setLastSentMessage(text);
+      slash.clearSkill();
 
       void streamMessage(
         conversationId,
@@ -294,7 +298,7 @@ export function AriaPanel() {
           },
         },
         ctrl.signal,
-        { isCancelled: () => cancelledRef.current },
+        { isCancelled: () => cancelledRef.current, skillId: slash.pendingSkill?.id },
       );
 
       // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort and show error.
@@ -379,6 +383,13 @@ export function AriaPanel() {
   }, [conversationId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash-command menu keyboard navigation takes priority
+    if (slash.open) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); slash.move(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); slash.move(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); slash.selectCurrent(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); slash.dismiss(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -559,15 +570,34 @@ export function AriaPanel() {
           </div>
 
           <div className="ai-compose">
+            {slash.open && (
+              <SlashCommandMenu
+                items={slash.items}
+                activeIndex={slash.activeIndex}
+                onHover={(i) => slash.move(i - slash.activeIndex)}
+                onSelect={(item) => { slash.choose(item); setInput(''); }}
+              />
+            )}
+            {slash.pendingSkill && !slash.open && (
+              <div className="ai-skill-chip">
+                <span>/{slash.pendingSkill.name}</span>
+                <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
+              </div>
+            )}
             <textarea
               ref={textareaRef}
               className="ai-compose-input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                slash.onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length);
+              }}
               onKeyDown={handleKeyDown}
-              placeholder="Ask Aria anything…  (Enter to send, Shift+Enter for newline)"
+              placeholder="Ask Aria anything…  (type / for skills)"
               rows={2}
               disabled={busy}
+              aria-controls={slash.open ? 'slash-command-listbox' : undefined}
+              aria-activedescendant={slash.open && slash.items[slash.activeIndex] ? `slash-opt-${slash.items[slash.activeIndex].id}` : undefined}
             />
             {busy ? (
               <button

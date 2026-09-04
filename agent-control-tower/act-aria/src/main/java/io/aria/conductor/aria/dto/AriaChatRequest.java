@@ -38,6 +38,13 @@ public class AriaChatRequest {
      */
     private List<ChatMessage> history;
 
+    /**
+     * Optional slash-command skill id (skill_definitions.id). When present, the backend
+     * resolves the skill's template and appends it to Aria's system prompt so the LLM
+     * follows the skill instructions for this turn. Null/blank = no skill activation.
+     */
+    private String skillId;
+
     @Data
     @Builder
     @NoArgsConstructor

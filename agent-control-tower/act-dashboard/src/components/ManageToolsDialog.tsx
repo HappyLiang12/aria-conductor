@@ -40,7 +40,7 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
 
   const { data: allSkills } = useQuery({
     queryKey: ['skills'],
-    queryFn: listSkills,
+    queryFn: () => listSkills(),
     enabled: open,
   });
 

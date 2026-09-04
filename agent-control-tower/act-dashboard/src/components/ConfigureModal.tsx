@@ -72,7 +72,7 @@ export function ConfigureModal() {
   const [skills, setSkills] = useState<SkillRow[]>([]);
 
   // B2: Skills tab is backed by the real skill registry (GET /api/v1/skills), not hardcoded data.
-  const { data: realSkills } = useQuery({ queryKey: ['skills'], queryFn: listSkills, enabled: open });
+  const { data: realSkills } = useQuery({ queryKey: ['skills'], queryFn: () => listSkills(), enabled: open });
   useEffect(() => {
     setSkills((realSkills ?? []).map((s) => ({
       name: s.name,

@@ -9,6 +9,8 @@ import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SkillContext;
+import io.aria.conductor.common.service.SkillContextProvider;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import static io.aria.conductor.execution.engine.AgentLoopEngine.parseMaxIterationsFromConfig;
 import io.aria.conductor.execution.llm.LlmMessage;
@@ -39,18 +41,21 @@ public class AriaStreamService {
     private final RunRepository runRepository;
     private final IntentClassifier intentClassifier;
     private final AriaService ariaService;
+    private final SkillContextProvider skillContextProvider;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AriaStreamService(AgentLoopEngine agentLoopEngine,
                              AgentRepository agentRepository,
                              RunRepository runRepository,
                              IntentClassifier intentClassifier,
-                             AriaService ariaService) {
+                             AriaService ariaService,
+                             SkillContextProvider skillContextProvider) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
         this.intentClassifier = intentClassifier;
         this.ariaService = ariaService;
+        this.skillContextProvider = skillContextProvider;
     }
 
     public void streamChat(AriaChatRequest request, SseEmitter emitter) {
@@ -108,8 +113,10 @@ public class AriaStreamService {
         List<LlmMessage> messages = new ArrayList<>();
 
         String systemPrompt = ariaService.buildSystemPrompt();
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            messages.add(LlmMessage.system(systemPrompt));
+        String directive = resolveSkillDirective(request.getSkillId());
+        String combined = (systemPrompt == null ? "" : systemPrompt) + directive;
+        if (!combined.isBlank()) {
+            messages.add(LlmMessage.system(combined));
         }
 
         List<AriaChatRequest.ChatMessage> clientHistory = request.getHistory();
@@ -127,6 +134,27 @@ public class AriaStreamService {
 
         messages.add(LlmMessage.user(request.getMessage()));
         return messages;
+    }
+
+    /**
+     * Resolve a slash-command skillId into a system-prompt suffix.
+     * Returns "" when absent, unknown, disabled, non-SKILL stage, or template-less.
+     * Governance is delegated to SkillContextProvider — never throws into the stream.
+     */
+    private String resolveSkillDirective(String skillId) {
+        if (skillId == null || skillId.isBlank()) return "";
+        try {
+            return skillContextProvider.getEnabledSkillsByIds(List.of(skillId)).stream()
+                    .findFirst()
+                    .map(s -> "\n\n## Active Skill: " + s.name() + "\n" + s.template())
+                    .orElseGet(() -> {
+                        log.warn("Skill {} not injectable (unknown/disabled/non-SKILL/no template)", skillId);
+                        return "";
+                    });
+        } catch (Exception e) {
+            log.warn("Skill lookup failed for {}: {}", skillId, e.getMessage());
+            return "";
+        }
     }
 
     private void sendErrorSilent(SseEmitter emitter, String message) {

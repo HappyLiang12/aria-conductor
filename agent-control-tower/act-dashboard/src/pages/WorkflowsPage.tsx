@@ -4,6 +4,7 @@ import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWork
 import { listAgents } from '../api/agents';
 import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
+import TemplatesPanel from '../components/TemplatesPanel';
 import type { WorkflowChain, WorkflowStepInfo, WorkflowStatus, WorkflowStepStatus } from '../types';
 
 const statusColor = (s: WorkflowStatus): string => {
@@ -180,6 +181,7 @@ function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRe
 export function WorkflowsPage() {
   const queryClient = useQueryClient();
   const { lastMessage } = useWebSocketContext();
+  const [activeTab, setActiveTab] = useState<'chains' | 'templates'>('chains');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // M2: replace native window.prompt() with accessible modal dialogs.
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
@@ -190,7 +192,8 @@ export function WorkflowsPage() {
   const { data: workflows, isLoading, error } = useQuery({
     queryKey: ['workflows'],
     queryFn: listWorkflows,
-    refetchInterval: 5000,
+    refetchInterval: activeTab === 'chains' ? 5000 : false,
+    enabled: activeTab === 'chains',
   });
 
   const { data: agents } = useQuery({
@@ -273,9 +276,9 @@ export function WorkflowsPage() {
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 960, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Workflows</h1>
-        {runningCount > 0 && (
+        {activeTab === 'chains' && runningCount > 0 && (
           <span style={{
             fontSize: 11,
             fontWeight: 600,
@@ -287,28 +290,45 @@ export function WorkflowsPage() {
             {runningCount} running
           </span>
         )}
-        <span style={{
-          fontSize: 11,
-          fontWeight: 600,
-          padding: '2px 8px',
-          borderRadius: 10,
-          background: 'var(--ok, #22c55e)',
-          color: '#000',
-        }}>
-          {completedCount} completed
-        </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {selectedIds.length >= 2 && (
-            <button className="btn primary" onClick={() => { setMergeName(''); setMergeModalOpen(true); }}>
-              Merge {selectedIds.length} Workflows
+        {activeTab === 'chains' && (
+          <span style={{
+            fontSize: 11,
+            fontWeight: 600,
+            padding: '2px 8px',
+            borderRadius: 10,
+            background: 'var(--ok, #22c55e)',
+            color: '#000',
+          }}>
+            {completedCount} completed
+          </span>
+        )}
+        {activeTab === 'chains' && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            {selectedIds.length >= 2 && (
+              <button className="btn primary" onClick={() => { setMergeName(''); setMergeModalOpen(true); }}>
+                Merge {selectedIds.length} Workflows
+              </button>
+            )}
+            <button className="btn" onClick={() => { setYamlContent(''); setYamlModalOpen(true); }}>
+              Execute YAML
             </button>
-          )}
-          <button className="btn" onClick={() => { setYamlContent(''); setYamlModalOpen(true); }}>
-            Execute YAML
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
+      {/* Tab bar */}
+      <div className="tab-bar" role="tablist" style={{ marginBottom: 16 }}>
+        <button className={`tab-btn ${activeTab === 'chains' ? 'active' : ''}`} role="tab" aria-selected={activeTab === 'chains'} onClick={() => setActiveTab('chains')}>
+          Chains
+        </button>
+        <button className={`tab-btn ${activeTab === 'templates' ? 'active' : ''}`} role="tab" aria-selected={activeTab === 'templates'} onClick={() => setActiveTab('templates')}>
+          Templates
+        </button>
+      </div>
+
+      {activeTab === 'templates' && <TemplatesPanel onInstantiate={() => setActiveTab('chains')} />}
+
+      {activeTab === 'chains' && (<>
       {isLoading && <div style={{ color: 'var(--muted, #94a3b8)' }}>Loading workflows...</div>}
       {error && <div style={{ color: 'var(--err, #ef4444)' }}>Failed to load workflows</div>}
 
@@ -427,6 +447,7 @@ export function WorkflowsPage() {
           </div>
         </>
       )}
+      </>)}
     </div>
   );
 }

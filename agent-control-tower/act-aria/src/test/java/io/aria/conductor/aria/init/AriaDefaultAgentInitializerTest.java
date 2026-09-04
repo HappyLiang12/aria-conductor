@@ -13,6 +13,7 @@ import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.AdkSystemProperties;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,7 +26,7 @@ import org.springframework.core.env.Environment;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -73,19 +74,94 @@ class AriaDefaultAgentInitializerTest {
     }
 
     @Test
-    void failsToStart_whenAdkPreWarmFails() {
+    void survivesPreWarmFailure_whenOpencodeProviderThrowsTaskExecutionException() {
+        // Real failure mode (CI / local dev): OpenSandbox unreachable at pre-warm time makes
+        // OpenCodeAdkProvider.prepareAgent throw TaskExecutionException(SANDBOX_UNAVAILABLE).
+        // A transient pre-warm failure must NOT kill the JVM — the sandbox is created lazily
+        // on first real use (executeTask -> getOrPrepareInstance -> prepareInstance).
         when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
         when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        doThrow(new RuntimeException("ADK down")).when(adkProvider).prepareAgent(any(), any());
+        doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "OpenCode sandbox setup failed for agent: connection refused"))
+                .when(adkProvider).prepareAgent(any(), any());
 
         var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
                 agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
 
-        assertThatThrownBy(() -> initializer.run(args))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("ADK pre-warm failed for Aria");
+        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
+        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
+    }
+
+    @Test
+    void survivesPreWarmFailure_whenLangchainProviderThrowsIllegalState() {
+        // LangChainAdkProvider.prepareAgent throws IllegalStateException when the Python ADK
+        // subprocess never becomes ready — equally transient, must not kill startup.
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+        doThrow(new IllegalStateException("ADK server did not become ready within 60s"))
+                .when(adkProvider).prepareAgent(any(), any());
+
+        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
+
+        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
+        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
+    }
+
+    @Test
+    void marksAriaDegradedNotHealthy_whenPreWarmFails() {
+        // The pre-warm failed, so the agent must not be presented as fully ready:
+        // the persisted health stamp after the failure must be DEGRADED, never HEALTHY.
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+        doThrow(new IllegalStateException("ADK down")).when(adkProvider).prepareAgent(any(), any());
+
+        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
+        initializer.run(args);
+
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository, atLeastOnce()).save(captor.capture());
+        // last persisted state = post-pre-warm health stamp
+        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
+    }
+
+    @Test
+    void stillAppliesConfigAndProvider_whenPreWarmFails() {
+        // Startup must still complete the other initializer duties even when the pre-warm
+        // fails: Aria config (taskApprovalRequired=false, round limit, system prompt) and
+        // the configured default provider are applied, and the failure is reflected as DEGRADED.
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(agentRepository.findAll()).thenReturn(java.util.List.of());
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+        doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "OpenCode sandbox setup failed"))
+                .when(adkProvider).prepareAgent(any(), any());
+
+        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
+        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
+
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository, atLeastOnce()).save(captor.capture());
+        Agent persisted = captor.getValue();
+        assertThat(persisted.getConfig())
+                .contains("\"taskApprovalRequired\":false")
+                .contains("\"maxToolCallRounds\":15")
+                .contains("systemPrompt");
+        assertThat(persisted.getAdkProvider()).isEqualTo("opencode");
+        assertThat(persisted.getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
     }
 
     @Test

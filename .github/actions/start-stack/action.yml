@@ -28,6 +28,9 @@ runs:
     - name: Start backend (H2, from jar)
       # CWD must be agent-control-tower so ../langchain-adk/src/server.py resolves;
       # otherwise Aria's ADK pre-warm fails ~2.5min after boot and the backend exits.
+      # CI has no OpenSandbox, so pre-warm must target the provisioned langchain ADK venv.
+      env:
+        ADK_DEFAULT_PROVIDER: langchain
       shell: bash
       run: |
         cd agent-control-tower

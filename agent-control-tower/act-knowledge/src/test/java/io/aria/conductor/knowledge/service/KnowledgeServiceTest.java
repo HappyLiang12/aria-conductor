@@ -115,4 +115,85 @@ class KnowledgeServiceTest {
         KnowledgeVersion saved = captor.getValue();
         assertThat(saved.getYamlContent()).isEqualTo("name: deploy\nsteps:\n  - build");
     }
+
+    // ---- legacy WORKFLOW items: YAML derived from content (PR #74 review item 5) ----
+
+    @Test
+    void updateKnowledge_legacyWorkflowWithoutYaml_derivesYamlFromStoredContent() {
+        // Legacy WORKFLOW rows predate yaml_content: their YAML lives in `content`.
+        // An edit that passes no yamlContent must not produce another version with
+        // null yaml (which later fails template instantiation with
+        // "Template has no YAML content").
+        currentVersion.setYamlContent(null);
+        currentVersion.setContent("name: deploy\nsteps: []");
+        when(itemRepository.findById(workflowItem.getId())).thenReturn(Optional.of(workflowItem));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(
+                workflowItem.getId(), "v0.1.0")).thenReturn(Optional.of(currentVersion));
+        when(versionRepository.save(any(KnowledgeVersion.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepository.save(any(KnowledgeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateKnowledgeRequest request = UpdateKnowledgeRequest.builder()
+                .description("refreshed description") // no content, no yamlContent
+                .build();
+
+        service.updateKnowledge(workflowItem.getId(), request);
+
+        ArgumentCaptor<KnowledgeVersion> captor = ArgumentCaptor.forClass(KnowledgeVersion.class);
+        org.mockito.Mockito.verify(versionRepository).save(captor.capture());
+        assertThat(captor.getValue().getYamlContent()).isEqualTo("name: deploy\nsteps: []");
+    }
+
+    @Test
+    void updateKnowledge_legacyWorkflowEditedContent_becomesYaml() {
+        // When the edit supplies new content for a legacy WORKFLOW item, that new
+        // content IS the edited YAML and must be carried into yamlContent.
+        currentVersion.setYamlContent(null);
+        currentVersion.setContent("name: deploy\nsteps: []");
+        when(itemRepository.findById(workflowItem.getId())).thenReturn(Optional.of(workflowItem));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(
+                workflowItem.getId(), "v0.1.0")).thenReturn(Optional.of(currentVersion));
+        when(fileService.storeContent(any(), any(), any(), any())).thenReturn("/tmp/new.yml");
+        when(versionRepository.save(any(KnowledgeVersion.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(itemRepository.save(any(KnowledgeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateKnowledgeRequest request = UpdateKnowledgeRequest.builder()
+                .content("name: deploy\nsteps:\n  - build")
+                .build();
+
+        service.updateKnowledge(workflowItem.getId(), request);
+
+        ArgumentCaptor<KnowledgeVersion> captor = ArgumentCaptor.forClass(KnowledgeVersion.class);
+        org.mockito.Mockito.verify(versionRepository).save(captor.capture());
+        KnowledgeVersion saved = captor.getValue();
+        assertThat(saved.getContent()).isEqualTo("name: deploy\nsteps:\n  - build");
+        assertThat(saved.getYamlContent()).isEqualTo("name: deploy\nsteps:\n  - build");
+    }
+
+    @Test
+    void getYamlContent_legacyWorkflow_fallsBackToStoredContent() {
+        // The frontend duplicate flow depends on GET /knowledge/{id}/yaml returning the
+        // template: legacy items without stored yamlContent must serve their YAML
+        // (derived from content) instead of 204 No Content.
+        currentVersion.setYamlContent(null);
+        currentVersion.setContent("name: deploy\nsteps: []");
+        when(itemRepository.findById(workflowItem.getId())).thenReturn(Optional.of(workflowItem));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(workflowItem.getId(), "v0.1.0"))
+                .thenReturn(Optional.of(currentVersion));
+
+        assertThat(service.getYamlContent(workflowItem.getId(), null))
+                .isEqualTo("name: deploy\nsteps: []");
+    }
+
+    @Test
+    void getYamlContent_nonWorkflowItem_keepsNullWithoutFallback() {
+        // The content->yaml fallback is WORKFLOW-only: other item types keep returning
+        // null (HTTP 204) so non-template knowledge is not misinterpreted as YAML.
+        workflowItem.setType(KnowledgeType.PROMPT);
+        currentVersion.setYamlContent(null);
+        when(itemRepository.findById(workflowItem.getId())).thenReturn(Optional.of(workflowItem));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(workflowItem.getId(), "v0.1.0"))
+                .thenReturn(Optional.of(currentVersion));
+
+        assertThat(service.getYamlContent(workflowItem.getId(), null)).isNull();
+    }
 }

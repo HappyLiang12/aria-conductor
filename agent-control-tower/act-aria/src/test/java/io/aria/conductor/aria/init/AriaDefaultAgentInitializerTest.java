@@ -55,9 +55,9 @@ class AriaDefaultAgentInitializerTest {
                 .config("{\"maxToolCallRounds\":15}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
-        // The registry resolves the Aria agent's own provider (defaults to langchain)
-        // lenient: profile-skip tests never reach the pre-warm resolve
-        lenient().when(adkProviderRegistry.resolve(ariaAgent)).thenReturn(adkProvider);
+        // The registry resolves whichever agent instance reaches the pre-warm
+        // lenient: profile-skip and recovery no-op tests never reach the resolve
+        lenient().when(adkProviderRegistry.resolve(any(Agent.class))).thenReturn(adkProvider);
     }
 
     @Test
@@ -133,14 +133,15 @@ class AriaDefaultAgentInitializerTest {
     }
 
     @Test
-    void stillAppliesConfigAndProvider_whenPreWarmFails() {
-        // Startup must still complete the other initializer duties even when the pre-warm
-        // fails: Aria config (taskApprovalRequired=false, round limit, system prompt) and
-        // the configured default provider are applied, and the failure is reflected as DEGRADED.
+    void createdAriaGetsConfigAndDefaultProvider_evenWhenPreWarmFails() {
+        // On CREATE the initializer applies the managed config (taskApprovalRequired=false,
+        // round limit, system prompt) and the configured default provider; a pre-warm
+        // failure still completes startup and stamps DEGRADED. (Existing Aria records are
+        // never rewritten — see the UpsertTest operator-edits-survive coverage.)
         AdkSystemProperties opencodeProps = new AdkSystemProperties();
         opencodeProps.setDefaultProvider("opencode");
         when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
         when(agentRepository.findAll()).thenReturn(java.util.List.of());
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
         when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
@@ -215,10 +216,11 @@ class AriaDefaultAgentInitializerTest {
 
     @Test
     void sddPrompt_containsIssueRepoAndFeedbackGuidanceInSavedConfig() {
+        // Config (incl. the SDD-aware system prompt) is written on CREATE.
         when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
         when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
                 agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
@@ -228,5 +230,58 @@ class AriaDefaultAgentInitializerTest {
         String config = captor.getValue().getConfig();
         assertThat(config).contains("pass issueRepo");
         assertThat(config).contains("answer trivial questions");
+    }
+
+    // ---- DEGRADED recovery reconciler (called directly — test-friendly) ----
+
+    @Test
+    void degradedRecovery_stampsHealthy_whenPreWarmSucceeds() {
+        // DEGRADED must not be a terminal state: the reconciler retries the pre-warm
+        // and, on success, re-stamps HEALTHY (previously nothing ever reset DEGRADED).
+        ariaAgent.setHealthStatus(HealthStatus.DEGRADED);
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+
+        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties())
+                .recoverDegradedAria();
+
+        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository).save(captor.capture());
+        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.HEALTHY);
+    }
+
+    @Test
+    void degradedRecovery_isNoOp_whenAriaHealthy() {
+        // HEALTHY agents are not probed and not re-saved by the reconciler.
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+
+        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties())
+                .recoverDegradedAria();
+
+        verify(adkProvider, never()).prepareAgent(any(), any());
+        verify(agentRepository, never()).save(any(Agent.class));
+    }
+
+    @Test
+    void degradedRecovery_staysDegraded_whenPreWarmStillFails() {
+        // A still-failing pre-warm keeps the agent DEGRADED, never throws out of the
+        // scheduled method, and does not write a bogus HEALTHY stamp.
+        ariaAgent.setHealthStatus(HealthStatus.DEGRADED);
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        doThrow(new IllegalStateException("ADK server still not ready"))
+                .when(adkProvider).prepareAgent(any(), any());
+
+        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
+
+        assertThatCode(() -> initializer.recoverDegradedAria()).doesNotThrowAnyException();
+
+        assertThat(ariaAgent.getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
+        verify(agentRepository, never()).save(any(Agent.class));
     }
 }

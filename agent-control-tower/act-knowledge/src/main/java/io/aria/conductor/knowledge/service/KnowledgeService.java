@@ -99,6 +99,9 @@ public class KnowledgeService implements KnowledgeContextProvider {
 
     /**
      * Returns the YAML content for a knowledge item's current (or specified) version.
+     * Legacy WORKFLOW items (created before {@code yaml_content} existed) stored the
+     * YAML as the version {@code content}; for those the content is served as YAML so
+     * the duplicate flow (GET /yaml) keeps producing usable templates.
      */
     @Transactional(readOnly = true)
     public String getYamlContent(UUID knowledgeItemId, String version) {
@@ -107,9 +110,17 @@ public class KnowledgeService implements KnowledgeContextProvider {
 
         String targetVersion = version != null ? version : item.getCurrentVersion();
 
-        return versionRepository.findByKnowledgeItemIdAndVersion(item.getId(), targetVersion)
-                .map(KnowledgeVersion::getYamlContent)
+        KnowledgeVersion kv = versionRepository
+                .findByKnowledgeItemIdAndVersion(item.getId(), targetVersion)
                 .orElse(null);
+        if (kv == null) {
+            return null;
+        }
+        String yaml = kv.getYamlContent();
+        if ((yaml == null || yaml.isBlank()) && item.getType() == KnowledgeType.WORKFLOW) {
+            yaml = kv.getContent();
+        }
+        return yaml;
     }
 
     @Transactional(readOnly = true)
@@ -156,10 +167,25 @@ public class KnowledgeService implements KnowledgeContextProvider {
 
         String yamlContent = request.getYamlContent();
         if (yamlContent == null) {
-            yamlContent = versionRepository
+            KnowledgeVersion current = versionRepository
                     .findByKnowledgeItemIdAndVersion(item.getId(), item.getCurrentVersion())
-                    .map(KnowledgeVersion::getYamlContent)
                     .orElse(null);
+            if (current != null) {
+                yamlContent = current.getYamlContent();
+            }
+            // Legacy WORKFLOW items have no stored yamlContent — their YAML lives in
+            // `content`. Derive it so the new version does not silently lose the
+            // template (which later fails instantiation with
+            // "Template has no YAML content").
+            if ((yamlContent == null || yamlContent.isBlank())
+                    && item.getType() == KnowledgeType.WORKFLOW) {
+                String contentSource = (content != null && !content.isBlank())
+                        ? content
+                        : (current != null ? current.getContent() : null);
+                if (contentSource != null && !contentSource.isBlank()) {
+                    yamlContent = contentSource;
+                }
+            }
         }
 
         KnowledgeVersion version = KnowledgeVersion.builder()

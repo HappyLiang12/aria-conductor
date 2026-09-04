@@ -14,6 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Deterministic backend channel for the SDD branch handoff, backed purely by
@@ -27,7 +29,9 @@ public class GitBranchService {
 
     static final String DEFAULT_API_BASE_URL = "https://api.github.com";
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
+    private static final int HTTP_UNPROCESSABLE_ENTITY = 422;
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(GitBranchService.class);
 
     private final String ghToken;
     private final String apiBaseUrl;
@@ -57,7 +61,11 @@ public class GitBranchService {
      * Create a new branch off the repository's default branch:
      * GET repo -> default_branch, GET that ref -> object.sha, POST /git/refs.
      *
-     * @throws GitBranchException on API error / 401.
+     * <p>Idempotent on re-approval: when GitHub answers 422 because the ref already
+     * exists (e.g. SDD re-approval of the same chain), the existing branch is verified
+     * via GET and reused — it is never deleted or force-updated.
+     *
+     * @throws GitBranchException on API error / 401 / a 422 whose ref is genuinely absent.
      */
     public void createBranch(String repoUrl, String branchName) {
         String ownerRepo = parseOwnerRepo(repoUrl);
@@ -77,7 +85,18 @@ public class GitBranchService {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("ref", "refs/heads/" + branchName);
         body.put("sha", baseSha);
-        postJson("/repos/" + ownerRepo + "/git/refs", body.toString());
+        HttpResponse<String> response = postJson("/repos/" + ownerRepo + "/git/refs", body.toString());
+        if (response.statusCode() == HTTP_UNPROCESSABLE_ENTITY) {
+            // 422 may be the already-exists race — verify via GET; the existing branch
+            // is authoritative and is reused as-is (no delete / no force-update).
+            if (branchHeadSha(repoUrl, branchName).isPresent()) {
+                log.info("Branch '{}' already exists on {} — reusing the existing branch",
+                        branchName, ownerRepo);
+                return;
+            }
+            throw new GitBranchException(HTTP_UNPROCESSABLE_ENTITY, errorMessage(response));
+        }
+        ensureSuccess(response);
     }
 
     /**
@@ -172,12 +191,12 @@ public class GitBranchService {
         return parse(response.body());
     }
 
-    private void postJson(String path, String body) {
-        HttpResponse<String> response = send(newRequest(path)
+    /** POST JSON and return the raw response; the caller decides error handling. */
+    private HttpResponse<String> postJson(String path, String body) {
+        return send(newRequest(path)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build());
-        ensureSuccess(response);
     }
 
     private void putJson(String path, String body) {

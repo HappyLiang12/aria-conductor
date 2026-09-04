@@ -66,6 +66,7 @@ public class SkillController {
                 .id(skill.getId())
                 .name(skill.getName())
                 .description(skill.getDescription())
+                .template(skill.getTemplate())
                 .stage(skill.getStage())
                 .tier(skill.getTier())
                 .enabled(skill.isEnabled())

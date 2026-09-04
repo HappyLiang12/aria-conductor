@@ -20,6 +20,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.putRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -123,6 +124,61 @@ class GitBranchServiceTest {
         Optional<String> sha = service.branchHeadSha(REPO_URL, "sdd/42");
 
         assertThat(sha).isEmpty();
+    }
+
+    @Test
+    void createBranch_refAlreadyExists_isIdempotentAndReusesExistingBranch() {
+        // Live incident (chain bb543e7d): on SDD re-approval the flow calls create-ref
+        // for sdd/{chainId} which already exists -> GitHub answers 422 "Reference
+        // already exists" and the decide endpoint 500s. The existing branch must be
+        // verified (GET) and reused — never deleted or force-updated.
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"default_branch\":\"main\"}")));
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/git/ref/heads/main"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ref\":\"refs/heads/main\",\"object\":{\"sha\":\"base-sha-123\"}}")));
+        wireMock.stubFor(post(urlEqualTo("/repos/owner/repo/git/refs"))
+                .willReturn(aResponse().withStatus(422)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"message\":\"Reference already exists\"}")));
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/git/ref/heads/sdd/42"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ref\":\"refs/heads/sdd/42\",\"object\":{\"sha\":\"existing-head-sha\"}}")));
+
+        assertThatCode(() -> service.createBranch(REPO_URL, "sdd/42")).doesNotThrowAnyException();
+
+        // the existing ref was verified before treating the 422 as benign
+        wireMock.verify(getRequestedFor(urlEqualTo("/repos/owner/repo/git/ref/heads/sdd/42")));
+    }
+
+    @Test
+    void createBranch_unprocessableWhenRefGenuinelyAbsent_stillThrows() {
+        // A 422 that is NOT an already-exists race (verified via the ref GET returning
+        // 404) is a genuine error and must still surface as GitBranchException.
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"default_branch\":\"main\"}")));
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/git/ref/heads/main"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"ref\":\"refs/heads/main\",\"object\":{\"sha\":\"base-sha-123\"}}")));
+        wireMock.stubFor(post(urlEqualTo("/repos/owner/repo/git/refs"))
+                .willReturn(aResponse().withStatus(422)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"message\":\"Malformed ref name\"}")));
+        wireMock.stubFor(get(urlEqualTo("/repos/owner/repo/git/ref/heads/sdd/42"))
+                .willReturn(aResponse().withStatus(404)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"message\":\"Not Found\"}")));
+
+        assertThatThrownBy(() -> service.createBranch(REPO_URL, "sdd/42"))
+                .isInstanceOf(GitBranchException.class)
+                .satisfies(e -> assertThat(((GitBranchException) e).getStatus()).isEqualTo(422));
     }
 
     @Test

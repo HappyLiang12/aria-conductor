@@ -178,6 +178,32 @@ class SkillControllerTest {
     }
 
     @Test
+    void listSkills_exposesTemplateFieldForFiltering() throws Exception {
+        // PR #74 review item 6: the skills list/detail DTO must carry the `template`
+        // so the dashboard can filter template-less rows.
+        SkillDefinition withTemplate = sampleSkill("s1", "templated-skill", "SKILL", true);
+        withTemplate.setTemplate("You are a meticulous code reviewer.");
+        SkillDefinition noTemplate = sampleSkill("s2", "template-less-skill", "SKILL", true);
+        when(skillRepo.findAll()).thenReturn(List.of(withTemplate, noTemplate));
+
+        mockMvc.perform(get("/api/v1/skills"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].template").value("You are a meticulous code reviewer."))
+                .andExpect(jsonPath("$[1].template").doesNotExist());
+    }
+
+    @Test
+    void getSkill_exposesTemplateField() throws Exception {
+        SkillDefinition skill = sampleSkill("s1", "my-skill", "SKILL", true);
+        skill.setTemplate("Prompt body for the skill");
+        when(skillRepo.findById("s1")).thenReturn(Optional.of(skill));
+
+        mockMvc.perform(get("/api/v1/skills/s1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.template").value("Prompt body for the skill"));
+    }
+
+    @Test
     void getSkill_returns404_whenNotFound() throws Exception {
         when(skillRepo.findById("nonexistent")).thenReturn(Optional.empty());
 

@@ -14,6 +14,14 @@ $BackendDir = Join-Path $ProjectRoot "agent-control-tower"
 . (Join-Path $PSScriptRoot "lib/container-runtime.ps1")
 Load-DotEnv $ProjectRoot
 
+# -SkipSandbox means no sandbox is available for the opencode provider to warm:
+# default the provider to langchain unless -AdkProvider was set explicitly
+# (an explicit provider always wins).
+if ($SkipSandbox -and -not $PSBoundParameters.ContainsKey('AdkProvider')) {
+    $AdkProvider = "langchain"
+    Write-Host "  -SkipSandbox: defaulting ADK provider to langchain (no sandbox to warm)."
+}
+
 # Prerequisites check
 function Test-Command($cmd, $hint) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {

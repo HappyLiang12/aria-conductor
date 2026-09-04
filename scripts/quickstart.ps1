@@ -59,7 +59,7 @@ if ($rt) {
     Write-Host "  OpenSandbox:     http://localhost:8090" -ForegroundColor White
     Write-Host "  Swagger:         http://localhost:8080/swagger-ui.html" -ForegroundColor White
     Write-Host ""
-    Write-Host "ADK provider: langchain (default); use opencode with sandbox by setting -AdkProvider opencode" -ForegroundColor Cyan
+    Write-Host "ADK default: opencode (sandbox; needs the OpenSandbox server started above). Fallback langchain: set ADK_DEFAULT_PROVIDER=langchain in .env where supported (the containerized compose backend cannot reach the sandbox - see README topology note)." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Commands:" -ForegroundColor Cyan
     Write-Host "  $rt compose ps              # Check status"

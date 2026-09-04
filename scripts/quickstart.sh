@@ -53,7 +53,7 @@ if [ -n "$CONTAINER_RT" ]; then
     echo "  OpenSandbox:     http://localhost:8090"
     echo "  Swagger:         http://localhost:8080/swagger-ui.html"
     echo ""
-    echo "ADK provider: langchain (default); use opencode with sandbox by setting ADK_PROVIDER=opencode"
+    echo "ADK default: opencode (sandbox; needs the OpenSandbox server started above). Fallback langchain: set ADK_DEFAULT_PROVIDER=langchain in .env where supported (the containerized compose backend cannot reach the sandbox - see README topology note)."
     echo ""
     echo "Check status: $CONTAINER_RT compose ps"
     echo "View logs:    $CONTAINER_RT compose logs -f"

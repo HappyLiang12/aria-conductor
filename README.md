@@ -10,7 +10,7 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **Governance Workflows** — Built-in approval gates, review cycles, and compliance checkpoints
 - **Aria Assistant** — AI-powered operator assistant for managing your agent fleet
 - **LLM Provider Agnostic** — Works with OpenAI, DeepSeek, or any OpenAI-compatible API
-- **Exchangeable Agent Provider** — Choose between **OpenCode** (sandbox-isolated) or **LangChain ADK** (Python runtime, default) per agent
+- **Exchangeable Agent Provider** — Choose between **OpenCode** (sandbox-isolated, default) or **LangChain ADK** (Python runtime) per agent
 - **OpenCode Sandbox** — Agent code execution in isolated Docker containers via OpenSandbox
 - **MCP Server** — Model Context Protocol server for tool integration
 - **Real-time Dashboard** — React-based dashboard with live agent status, kanban board, and activity timeline
@@ -76,14 +76,14 @@ curl -X POST http://localhost:8080/api/v1/llm-providers \
 
 ### 5. Create an agent
 
-Agents default to the **langchain** provider. To use **opencode** (sandbox-isolated), switch the provider in the Crew page or set the `ADK_PROVIDER` environment variable (`-AdkProvider opencode` on Windows) when starting the backend.
+Agents default to the **opencode** (sandbox-isolated) provider. To use **langchain** (shared process), switch the provider in the Crew page or set the `ADK_PROVIDER=langchain` environment variable (`-AdkProvider langchain` on Windows) when starting the backend. In the Docker Compose stack the containerized backend cannot reach the opencode sandbox, so it runs the **langchain** provider (see the topology note under *Container Runtime Selection*).
 
 ## Agent Providers
 
 | Provider | Description | Isolation |
 |----------|-------------|-----------|
-| **opencode** | OpenCode CLI in Docker sandbox via OpenSandbox | Container per agent |
-| **langchain** (default) | Python LangChain ADK runtime | Shared process |
+| **opencode** (default) | OpenCode CLI in Docker sandbox via OpenSandbox | Container per agent |
+| **langchain** | Python LangChain ADK runtime | Shared process |
 
 > **Approvals**: Task-level runs (opencode provider) require human approval by
 > default: the run starts in approval-pending state and executes after approval
@@ -159,7 +159,7 @@ For local development without Docker:
 ./scripts/start-frontend.sh    # Vite dev server
 ```
 
-The `start-backend` script defaults to the **langchain** ADK provider. Pass `--provider=opencode` (Linux/macOS) or `-AdkProvider opencode` (Windows) to use **opencode**; the script then starts the OpenSandbox server (requires Docker) and passes the provider to the backend. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox startup.
+The `start-backend` script defaults to the **opencode** ADK provider. Pass `--provider=langchain` (Linux/macOS) or `-AdkProvider langchain` (Windows) to use **langchain**; with opencode the script also starts the OpenSandbox server (requires Docker) and passes the provider to the backend. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox startup.
 
 ### Backend
 
@@ -167,11 +167,11 @@ The `start-backend` script defaults to the **langchain** ADK provider. Pass `--p
 cd agent-control-tower
 mvn clean install -DskipTests
 
-# With langchain provider (default):
+# With opencode provider (default; requires Docker for the OpenSandbox server):
 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2
 
-# With OpenCode sandbox (requires Docker):
-mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2 -Dspring-boot.run.arguments=--adk.default-provider=opencode
+# With langchain provider (no sandbox needed):
+mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2 -Dspring-boot.run.arguments=--adk.default-provider=langchain
 
 # Set OpenSandbox URL for local dev:
 # OPENCODE_SANDBOX_SERVER_URL=http://localhost:8090

@@ -12,7 +12,7 @@ load_dotenv "$PROJECT_ROOT"
 
 # Parse arguments
 PROFILE="${SPRING_PROFILES_ACTIVE:-h2}"
-ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
+ADK_PROVIDER="${ADK_PROVIDER:-}"
 SKIP_SANDBOX="${SKIP_SANDBOX:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 
@@ -25,6 +25,15 @@ while [[ $# -gt 0 ]]; do
         *) shift ;;
     esac
 done
+
+# --skip-sandbox means no sandbox is available for the opencode provider to warm:
+# default the provider to langchain unless it was set explicitly (--provider= or
+# the ADK_PROVIDER environment variable); an explicit provider always wins.
+if [ "$SKIP_SANDBOX" = "true" ] && [ -z "$ADK_PROVIDER" ]; then
+    ADK_PROVIDER="langchain"
+    echo "  --skip-sandbox: defaulting ADK provider to langchain (no sandbox to warm)."
+fi
+ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
 
 # Prerequisites check
 check_command() {

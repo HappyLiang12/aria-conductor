@@ -49,7 +49,7 @@ llm:
     max-tokens: 4096
 
 adk:
-  default-provider: langchain
+  default-provider: ${ADK_DEFAULT_PROVIDER:opencode}
   runtime:
     langchain:
       host: 127.0.0.1

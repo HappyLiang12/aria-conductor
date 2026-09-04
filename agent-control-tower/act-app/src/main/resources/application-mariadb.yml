@@ -39,7 +39,7 @@ llm:
     max-tokens: 4096
 
 adk:
-  default-provider: langchain
+  default-provider: ${ADK_DEFAULT_PROVIDER:opencode}
   runtime:
     langchain:
       host: ${ADK_HOST:langchain-adk}

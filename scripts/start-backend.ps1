@@ -2,7 +2,7 @@
 param(
     [string]$Profile = "h2",
     [switch]$SkipBuild,
-    [string]$AdkProvider = "langchain",
+    [string]$AdkProvider = "opencode",
     [switch]$SkipSandbox
 )
 

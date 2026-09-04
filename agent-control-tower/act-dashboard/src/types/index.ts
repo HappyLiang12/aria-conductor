@@ -192,6 +192,7 @@ export interface CreateKnowledgeRequest {
   type: KnowledgeType;
   description: string;
   content?: string;
+  yamlContent?: string;
   sensitivity?: string;
 }
 

@@ -69,7 +69,7 @@ export async function streamMessage(
   history: Array<{ role: string; content: string }>,
   callbacks: StreamCallbacks,
   signal?: AbortSignal,
-  options?: { isCancelled?: () => boolean },
+  options?: { isCancelled?: () => boolean; skillId?: string },
 ): Promise<void> {
   const response = await fetch('/api/v1/aria/chat/stream', {
     method: 'POST',
@@ -77,7 +77,12 @@ export async function streamMessage(
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
     },
-    body: JSON.stringify({ conversationId, message, history }),
+    body: JSON.stringify({
+      conversationId,
+      message,
+      history,
+      ...(options?.skillId ? { skillId: options.skillId } : {}),
+    }),
     signal,
   });
 

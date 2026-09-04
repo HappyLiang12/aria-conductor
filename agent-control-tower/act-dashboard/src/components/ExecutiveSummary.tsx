@@ -50,7 +50,7 @@ export default function ExecutiveSummary() {
 
   const { data: knowledge } = useQuery({
     queryKey: ['knowledge-all'],
-    queryFn: listKnowledge,
+    queryFn: () => listKnowledge(),
     refetchInterval: 60000,
   });
 

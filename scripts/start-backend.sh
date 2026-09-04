@@ -12,7 +12,7 @@ load_dotenv "$PROJECT_ROOT"
 
 # Parse arguments
 PROFILE="${SPRING_PROFILES_ACTIVE:-h2}"
-ADK_PROVIDER="${ADK_PROVIDER:-langchain}"
+ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
 SKIP_SANDBOX="${SKIP_SANDBOX:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
 

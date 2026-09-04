@@ -46,7 +46,7 @@ public class KnowledgeController {
 
     @PostMapping
     public ResponseEntity<KnowledgeItemResponse> submitKnowledge(@Valid @RequestBody CreateKnowledgeRequest request) {
-        KnowledgeItemResponse response = knowledgeService.submitKnowledge(request);
+        KnowledgeItemResponse response = knowledgeService.submitKnowledge(request, request.getYamlContent());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

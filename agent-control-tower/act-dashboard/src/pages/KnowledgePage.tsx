@@ -170,7 +170,7 @@ export function KnowledgePage() {
   // queries
   const { data: itemsRaw, isLoading: loadingItems } = useQuery({
     queryKey: ['knowledge'],
-    queryFn: listKnowledge,
+    queryFn: () => listKnowledge(),
   });
   const { data: agentsRaw } = useQuery({
     queryKey: ['agents'],

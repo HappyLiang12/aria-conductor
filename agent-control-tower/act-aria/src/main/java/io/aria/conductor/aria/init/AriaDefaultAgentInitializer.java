@@ -7,6 +7,7 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.aria.AriaConstants;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.adk.AdkSystemProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -27,7 +28,9 @@ import java.util.stream.Collectors;
 /**
  * Ensures the Aria default agent exists at startup with all approved tools assigned.
  * Idempotent — safe to run on every startup.
- * Also migrates any agents still using the legacy "langchain" provider to "langchain".
+ * Also migrates any agents still on the legacy hardcoded "langchain" provider to the
+ * configured default provider (adk.default-provider), so switching the deployment to
+ * opencode sandbox mode re-points the seeded BA/Dev/QA agents automatically.
  */
 @Slf4j
 @Component
@@ -185,31 +188,42 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             // housekeeping (operator cleanup; execute is approval-gated)
             "housekeeping_scan", "housekeeping_execute");
 
+    /** The legacy hardcoded provider name; agents still on it are migrated to the configured default. */
+    private static final String LEGACY_PROVIDER = "langchain";
+
     private final AgentRepository agentRepository;
     private final ToolDefinitionRepository toolDefinitionRepository;
     private final AgentToolRepository agentToolRepository;
     private final LlmProviderRepository llmProviderRepository;
     private final AdkProviderRegistry adkProviderRegistry;
     private final Environment environment;
+    private final String defaultProvider;
 
     public AriaDefaultAgentInitializer(AgentRepository agentRepository,
                                        ToolDefinitionRepository toolDefinitionRepository,
                                        AgentToolRepository agentToolRepository,
                                        LlmProviderRepository llmProviderRepository,
                                        AdkProviderRegistry adkProviderRegistry,
-                                       Environment environment) {
+                                       Environment environment,
+                                       AdkSystemProperties adkSystemProperties) {
         this.agentRepository = agentRepository;
         this.toolDefinitionRepository = toolDefinitionRepository;
         this.agentToolRepository = agentToolRepository;
         this.llmProviderRepository = llmProviderRepository;
         this.adkProviderRegistry = adkProviderRegistry;
         this.environment = environment;
+        String configured = adkSystemProperties != null ? adkSystemProperties.getDefaultProvider() : null;
+        this.defaultProvider = (configured == null || configured.isBlank()) ? LEGACY_PROVIDER : configured;
     }
 
     private String buildAriaConfig() {
         try {
             Map<String, Object> cfg = new HashMap<>();
             cfg.put("maxToolCallRounds", 15);
+            // Aria is the interactive operator assistant: the human just sent the chat message,
+            // so a separate task-level approval gate before every LLM call is redundant and would
+            // block the SSE stream indefinitely (the operator is already present). Opt out.
+            cfg.put("taskApprovalRequired", false);
             cfg.put("systemPrompt", ARIA_SYSTEM_PROMPT);
             return new ObjectMapper().writeValueAsString(cfg);
         } catch (Exception e) {
@@ -231,7 +245,7 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                     .name("Aria")
                     .role(ARIA_ROLE)
                     .agentType(AgentType.NATIVE)
-                    .adkProvider("langchain")
+                    .adkProvider(defaultProvider)
                     .config(config)
                     .healthStatus(HealthStatus.HEALTHY)
                     .build();
@@ -239,7 +253,7 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
         } else {
             aria.setName("Aria");
             aria.setRole(ARIA_ROLE);
-            aria.setAdkProvider("langchain");
+            aria.setAdkProvider(defaultProvider);
             aria.setConfig(config);
             aria.setHealthStatus(HealthStatus.HEALTHY);
             log.info("Aria agent updated (existing found)");
@@ -247,17 +261,23 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
         aria.setUpdatedAt(Instant.now());
         agentRepository.save(aria);
 
-        // 2. Migrate legacy agents from legacy provider to langchain
-        List<Agent> legacyAgents = agentRepository.findAll().stream()
-                .filter(a -> "langchain".equalsIgnoreCase(a.getAdkProvider()))
-                .toList();
-        if (!legacyAgents.isEmpty()) {
-            log.warn("Migrating {} agent(s) from legacy provider to langchain provider: {}",
-                    legacyAgents.size(),
-                    legacyAgents.stream().map(a -> a.getId().toString().substring(0, 8) + "/" + a.getName()).toList());
-            for (Agent agent : legacyAgents) {
-                agent.setAdkProvider("langchain");
-                agentRepository.save(agent);
+        // 2. Migrate agents still on the legacy hardcoded provider to the configured default.
+        //    When the default IS langchain this is a no-op (preserves historical behaviour);
+        //    when the default is opencode it re-points the seeded BA/Dev/QA agents to the sandbox.
+        if (!LEGACY_PROVIDER.equalsIgnoreCase(defaultProvider)) {
+            List<Agent> legacyAgents = agentRepository.findAll().stream()
+                    .filter(a -> LEGACY_PROVIDER.equalsIgnoreCase(a.getAdkProvider()))
+                    .toList();
+            if (!legacyAgents.isEmpty()) {
+                log.warn("Migrating {} agent(s) from legacy '{}' provider to '{}': {}",
+                        legacyAgents.size(),
+                        LEGACY_PROVIDER,
+                        defaultProvider,
+                        legacyAgents.stream().map(a -> a.getId().toString().substring(0, 8) + "/" + a.getName()).toList());
+                for (Agent agent : legacyAgents) {
+                    agent.setAdkProvider(defaultProvider);
+                    agentRepository.save(agent);
+                }
             }
         }
 

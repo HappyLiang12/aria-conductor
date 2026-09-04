@@ -8,6 +8,8 @@ import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SkillContext;
+import io.aria.conductor.common.service.SkillContextProvider;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import io.aria.conductor.execution.llm.LlmMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +51,7 @@ class AriaStreamServiceTest {
     @Mock RunRepository runRepository;
     @Mock IntentClassifier intentClassifier;
     @Mock AriaService ariaService;
+    @Mock SkillContextProvider skillContextProvider;
 
     @InjectMocks
     private AriaStreamService streamService;
@@ -207,5 +210,65 @@ class AriaStreamServiceTest {
         ArgumentCaptor<List<LlmMessage>> captor = ArgumentCaptor.forClass(List.class);
         verify(agentLoopEngine).startRunStream(eq(RUN_ID), eq(emitter), captor.capture(), anyString());
         return captor.getValue();
+    }
+
+    // ==================== Skill injection tests ====================
+
+    @Test
+    void streamChat_withoutSkillId_keepsSingleUnchangedSystemMessage() {
+        // No skillId set — system prompt should remain exactly as built
+        streamService.streamChat(request("hello"), emitter);
+
+        List<LlmMessage> context = capturedContext();
+        assertThat(context).hasSize(2);
+        assertThat(context.get(0).role()).isEqualTo("system");
+        assertThat(context.get(0).content()).isEqualTo("You are Aria.");
+    }
+
+    @Test
+    void streamChat_withSkillId_appendsTemplateToSystemPrompt() {
+        when(skillContextProvider.getEnabledSkillsByIds(List.of("skill-123")))
+                .thenReturn(List.of(new SkillContext("skill-123", "workflow", "desc", "Use instantiate_template.", "SKILL")));
+
+        AriaChatRequest req = AriaChatRequest.builder()
+                .conversationId("conv-9").message("start SDD on #42").skillId("skill-123").build();
+        streamService.streamChat(req, emitter);
+
+        List<LlmMessage> context = capturedContext();
+        assertThat(context).hasSize(2); // still single system + user
+        assertThat(context.get(0).role()).isEqualTo("system");
+        assertThat(context.get(0).content()).startsWith("You are Aria.");
+        assertThat(context.get(0).content()).contains("## Active Skill: workflow");
+        assertThat(context.get(0).content()).contains("Use instantiate_template.");
+    }
+
+    @Test
+    void streamChat_withUnknownOrDisabledSkillId_injectsNothing() {
+        when(skillContextProvider.getEnabledSkillsByIds(List.of("nonexistent")))
+                .thenReturn(List.of()); // filtered out by governance
+
+        AriaChatRequest req = AriaChatRequest.builder()
+                .conversationId("conv-9").message("hi").skillId("nonexistent").build();
+        streamService.streamChat(req, emitter);
+
+        List<LlmMessage> context = capturedContext();
+        assertThat(context).hasSize(2);
+        assertThat(context.get(0).content()).isEqualTo("You are Aria."); // unchanged
+    }
+
+    @Test
+    void streamChat_whenSkillLookupThrows_degradesGracefully() {
+        when(skillContextProvider.getEnabledSkillsByIds(any()))
+                .thenThrow(new RuntimeException("DB connection lost"));
+
+        AriaChatRequest req = AriaChatRequest.builder()
+                .conversationId("conv-9").message("hi").skillId("skill-bad").build();
+        streamService.streamChat(req, emitter);
+
+        // Should still work — run saved, engine called, system prompt unchanged
+        List<LlmMessage> context = capturedContext();
+        assertThat(context).hasSize(2);
+        assertThat(context.get(0).content()).isEqualTo("You are Aria.");
+        verify(runRepository).save(any(Run.class));
     }
 }

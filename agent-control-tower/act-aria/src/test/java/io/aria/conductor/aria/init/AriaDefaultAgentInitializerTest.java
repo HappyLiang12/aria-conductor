@@ -12,6 +12,7 @@ import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.adk.AdkSystemProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -66,7 +67,7 @@ class AriaDefaultAgentInitializerTest {
         when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
 
         verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
     }
@@ -80,7 +81,7 @@ class AriaDefaultAgentInitializerTest {
         doThrow(new RuntimeException("ADK down")).when(adkProvider).prepareAgent(any(), any());
 
         var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
 
         assertThatThrownBy(() -> initializer.run(args))
                 .isInstanceOf(IllegalStateException.class)
@@ -95,7 +96,7 @@ class AriaDefaultAgentInitializerTest {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
 
         verify(adkProvider, never()).prepareAgent(any(), any());
     }
@@ -108,7 +109,7 @@ class AriaDefaultAgentInitializerTest {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
 
         verify(adkProvider, never()).prepareAgent(any(), any());
     }
@@ -130,7 +131,7 @@ class AriaDefaultAgentInitializerTest {
                 .thenReturn(false);
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
 
         verify(agentToolRepository).save(any()); // run_agent assigned
         verify(agentToolRepository).deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), "tool-git_push"));
@@ -144,7 +145,7 @@ class AriaDefaultAgentInitializerTest {
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment).run(args);
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
 
         ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
         verify(agentRepository).save(captor.capture());

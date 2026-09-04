@@ -85,7 +85,7 @@ class KnowledgeControllerTest extends WebMvcTestBase {
     @Test
     void submitKnowledge_returns201AndMapsRequestFields() throws Exception {
         UUID id = UUID.randomUUID();
-        when(knowledgeService.submitKnowledge(any(CreateKnowledgeRequest.class)))
+        when(knowledgeService.submitKnowledge(any(CreateKnowledgeRequest.class), any()))
                 .thenReturn(itemResponse(id).build());
 
         mvc.perform(post("/api/v1/knowledge")
@@ -102,7 +102,7 @@ class KnowledgeControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.status").value("PENDING"));
 
         ArgumentCaptor<CreateKnowledgeRequest> captor = ArgumentCaptor.forClass(CreateKnowledgeRequest.class);
-        verify(knowledgeService).submitKnowledge(captor.capture());
+        verify(knowledgeService).submitKnowledge(captor.capture(), any());
         assertThat(captor.getValue().getName()).isEqualTo("release-checklist");
         assertThat(captor.getValue().getType()).isEqualTo(KnowledgeType.SKILL);
         assertThat(captor.getValue().getContent()).isEqualTo("step 1: tag the build");
@@ -128,7 +128,7 @@ class KnowledgeControllerTest extends WebMvcTestBase {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.message", containsString(expectedField)));
-        verify(knowledgeService, never()).submitKnowledge(any());
+        verify(knowledgeService, never()).submitKnowledge(any(), any());
     }
 
     @Test
@@ -138,7 +138,7 @@ class KnowledgeControllerTest extends WebMvcTestBase {
                         .content(json(Map.of("name", "n", "type", "NOT_A_TYPE", "content", "c"))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400));
-        verify(knowledgeService, never()).submitKnowledge(any());
+        verify(knowledgeService, never()).submitKnowledge(any(), any());
     }
 
     // -----------------------------------------------------------------

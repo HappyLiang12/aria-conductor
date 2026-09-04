@@ -10,6 +10,8 @@ public interface SkillDefinitionRepository extends JpaRepository<SkillDefinition
 
     List<SkillDefinition> findByKnowledgeItemId(String knowledgeItemId);
 
+    boolean existsByName(String name);
+
     List<SkillDefinition> findByStage(String stage);
 
     List<SkillDefinition> findByEnabledTrue();

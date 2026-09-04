@@ -1,13 +1,17 @@
 package io.aria.conductor.knowledge.controller;
 
 import io.aria.conductor.common.exception.GlobalExceptionHandler;
+import io.aria.conductor.knowledge.dto.SkillCreateRequest;
 import io.aria.conductor.knowledge.selfimprove.SkillDefinition;
 import io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository;
+import io.aria.conductor.knowledge.service.SkillApprovalService;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.core.env.Environment;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean;
 
 import java.time.Instant;
 import java.util.List;
@@ -25,6 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SkillControllerTest {
 
     private SkillDefinitionRepository skillRepo;
+    private SkillApprovalService skillApprovalService;
     private MockMvc mockMvc;
     private final Environment mockEnv = mock(Environment.class);
     {
@@ -34,8 +39,12 @@ class SkillControllerTest {
     @BeforeEach
     void setUp() {
         skillRepo = mock(SkillDefinitionRepository.class);
-        SkillController controller = new SkillController(skillRepo);
+        skillApprovalService = mock(SkillApprovalService.class);
+        LocalValidatorFactoryBean validator = new LocalValidatorFactoryBean();
+        validator.afterPropertiesSet();
+        SkillController controller = new SkillController(skillRepo, skillApprovalService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
+                .setValidator(validator)
                 .setControllerAdvice(new GlobalExceptionHandler(mockEnv))
                 .build();
     }
@@ -205,5 +214,60 @@ class SkillControllerTest {
 
         mockMvc.perform(post("/api/v1/skills/nonexistent/toggle"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void createSkill_returns201_withDisabledSkill() throws Exception {
+        SkillDefinition authored = sampleSkill("s1", "Summarizer", "SKILL", false);
+        authored.setTemplate("Summarize in {{count}} bullets: {{text}}");
+        authored.setDescription("3-bullet summarizer");
+        authored.setTier("TIER_2");
+        when(skillApprovalService.submitSkillForApproval(any(SkillCreateRequest.class)))
+                .thenReturn(authored);
+
+        mockMvc.perform(post("/api/v1/skills")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"Summarizer","template":"Summarize in {{count}} bullets: {{text}}","description":"3-bullet summarizer"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value("s1"))
+                .andExpect(jsonPath("$.name").value("Summarizer"))
+                .andExpect(jsonPath("$.stage").value("SKILL"))
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.template").value("Summarize in {{count}} bullets: {{text}}"))
+                .andExpect(jsonPath("$.description").value("3-bullet summarizer"));
+    }
+
+    @Test
+    void createSkill_blankNameOrTemplate_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/skills")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"  ","template":"   "}
+                                """))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void createSkill_missingBody_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/skills")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void createSkill_duplicateName_returns409() throws Exception {
+        when(skillApprovalService.submitSkillForApproval(any(SkillCreateRequest.class)))
+                .thenThrow(new IllegalStateException("A skill named 'Summarizer' already exists"));
+
+        mockMvc.perform(post("/api/v1/skills")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"Summarizer","template":"Summarize {{text}}"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409));
     }
 }

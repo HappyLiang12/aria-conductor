@@ -1,9 +1,13 @@
 package io.aria.conductor.knowledge.controller;
 
+import io.aria.conductor.knowledge.dto.SkillCreateRequest;
 import io.aria.conductor.knowledge.dto.SkillResponse;
 import io.aria.conductor.knowledge.selfimprove.SkillDefinition;
 import io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository;
+import io.aria.conductor.knowledge.service.SkillApprovalService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,6 +19,7 @@ import java.util.List;
 public class SkillController {
 
     private final SkillDefinitionRepository skillRepo;
+    private final SkillApprovalService skillApprovalService;
 
     @GetMapping
     public ResponseEntity<List<SkillResponse>> listSkills(
@@ -53,6 +58,13 @@ public class SkillController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    /** Author a new skill: creates a PENDING SKILL KnowledgeItem + disabled SkillDefinition. */
+    @PostMapping
+    public ResponseEntity<SkillResponse> createSkill(@Valid @RequestBody SkillCreateRequest request) {
+        SkillDefinition skill = skillApprovalService.submitSkillForApproval(request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(toResponse(skill));
+    }
+
     @PostMapping("/{id}/toggle")
     public ResponseEntity<SkillResponse> toggleSkill(@PathVariable String id) {
         return skillRepo.findById(id).map(skill -> {
@@ -66,6 +78,9 @@ public class SkillController {
                 .id(skill.getId())
                 .name(skill.getName())
                 .description(skill.getDescription())
+                .template(skill.getTemplate())
+                .triggerConditions(skill.getTriggerConditions())
+                .examples(skill.getExamples())
                 .stage(skill.getStage())
                 .tier(skill.getTier())
                 .enabled(skill.isEnabled())

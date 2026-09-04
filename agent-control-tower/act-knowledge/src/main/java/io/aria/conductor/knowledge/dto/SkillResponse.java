@@ -15,6 +15,9 @@ public class SkillResponse {
     private String id;
     private String name;
     private String description;
+    private String template;
+    private String triggerConditions;
+    private String examples;
     private String stage;
     private boolean enabled;
     private String tier;

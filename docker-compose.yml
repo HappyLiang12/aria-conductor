@@ -46,6 +46,8 @@ services:
       # Injected into opencode sandboxes via application.yml opencode.sandbox-env
       # (opencode needs LLM credentials inside the sandbox to call models).
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${LLM_API_KEY:-}}
+      # Compose has no opencode-sandbox image build (langchain-adk only; CI pin d8003a8) — pin langchain to avoid fresh-deploy SANDBOX_UNAVAILABLE.
+      ADK_DEFAULT_PROVIDER: langchain
       ADK_HOST: langchain-adk
       ADK_PORT: 9300
       PROJECT_ROOT: /project

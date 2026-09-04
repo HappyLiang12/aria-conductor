@@ -9,6 +9,10 @@ interface Props {
   onSuccess: () => void;
 }
 
+// repoUrl has a server-side system default (backend substitutes it when absent),
+// so it is the only parameter the operator may leave empty.
+const OPTIONAL_PARAMS = new Set(['repoUrl']);
+
 export default function RunTemplateModal({ item, onClose, onSuccess }: Props) {
   const [yaml, setYaml] = useState('');
   const [loading, setLoading] = useState(true);
@@ -31,7 +35,19 @@ export default function RunTemplateModal({ item, onClose, onSuccess }: Props) {
 
   const paramNames = useMemo(() => Object.keys(params).sort(), [params]);
 
+  // Parameters detected in the template are required — the backend substitutes
+  // only the provided keys, so submitting empties would leave literal
+  // {placeholder} tokens in the prompt.
+  const missingRequired = useMemo(
+    () => paramNames.filter((n) => !OPTIONAL_PARAMS.has(n) && !(params[n] ?? '').trim()),
+    [paramNames, params],
+  );
+
   const handleSubmit = async () => {
+    if (missingRequired.length > 0) {
+      setError(`Required parameters missing: ${missingRequired.join(', ')}`);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
@@ -89,12 +105,21 @@ export default function RunTemplateModal({ item, onClose, onSuccess }: Props) {
               </label>
             ))
           )}
+          {missingRequired.length > 0 && (
+            <div role="alert" style={{ fontSize: 12, color: 'var(--err, #ef4444)' }}>
+              Required parameters missing: {missingRequired.join(', ')}
+            </div>
+          )}
           {error && (
             <div style={{ fontSize: 12, color: 'var(--err, #ef4444)', whiteSpace: 'pre-wrap' }}>{error}</div>
           )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn primary" onClick={handleSubmit} disabled={submitting || loading}>
+            <button
+              className="btn primary"
+              onClick={handleSubmit}
+              disabled={submitting || loading || missingRequired.length > 0}
+            >
               {submitting ? 'Starting...' : 'Run'}
             </button>
           </div>

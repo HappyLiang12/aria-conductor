@@ -77,4 +77,46 @@ steps:
   - prompt_template: "Has {123numeric} and {has space} and {valid_one}"`;
     expect(extractTemplateParams(yaml)).toEqual(['valid_one']);
   });
+
+  it('keeps params after a # inside a double-quoted prompt_template (literal content)', () => {
+    const yaml = `name: demo
+steps:
+  - agent_role: dev
+    prompt_template: "fix {issueRepo} #see {designNote}"`;
+    expect(extractTemplateParams(yaml)).toEqual(['designNote', 'issueRepo']);
+  });
+
+  it('keeps params after a # inside a single-quoted prompt_template', () => {
+    const yaml = `steps:
+  - prompt_template: 'fix {issueRepo} #see {designNote}'`;
+    expect(extractTemplateParams(yaml)).toEqual(['designNote', 'issueRepo']);
+  });
+
+  it('strips inline comments only from plain (unquoted) prompt_template values', () => {
+    const yaml = `steps:
+  - prompt_template: Analyze {issueRef} # verify {ghostParam}`;
+    expect(extractTemplateParams(yaml)).toEqual(['issueRef']);
+  });
+
+  it('keeps quoted content and strips the comment after the closing quote', () => {
+    const yaml = `steps:
+  - prompt_template: "Use {issueRef}" # this {ghostParam} is a comment`;
+    expect(extractTemplateParams(yaml)).toEqual(['issueRef']);
+  });
+
+  it('treats #-leading lines inside a block scalar as literal content, not comments', () => {
+    const yaml = `steps:
+  - prompt_template: |
+      Analyze {issueRef}.
+      # check {designNote} next
+    max_iterations: 5`;
+    expect(extractTemplateParams(yaml)).toEqual(['designNote', 'issueRef']);
+  });
+
+  it('still skips #-leading comment lines between fields', () => {
+    const yaml = `steps:
+  # {ghostParam} lives in a comment
+  - prompt_template: "Real {issueRef}"`;
+    expect(extractTemplateParams(yaml)).toEqual(['issueRef']);
+  });
 });

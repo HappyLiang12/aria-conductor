@@ -16,6 +16,14 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<KnowledgeItem | null>(null);
   const [runTarget, setRunTarget] = useState<KnowledgeItem | null>(null);
+  const [actionError, setActionError] = useState('');
+
+  // Same surface convention as KanbanBoard: extract the server-provided message
+  // when the API client produced an axios error, else fall back to err.message.
+  const describeActionError = (e: unknown): string => {
+    const anyE = e as { response?: { data?: { message?: string } }; message?: string };
+    return anyE?.response?.data?.message || anyE?.message || 'Request failed';
+  };
 
   const { data: templates, isLoading, error } = useQuery({
     queryKey: ['knowledge', 'WORKFLOW'],
@@ -26,12 +34,20 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
 
   const approveMutation = useMutation({
     mutationFn: (id: string) => approveKnowledge(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['knowledge'] }),
+    onSuccess: () => {
+      setActionError('');
+      queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+    },
+    onError: (e) => setActionError(`Approve failed: ${describeActionError(e)}`),
   });
 
   const retireMutation = useMutation({
     mutationFn: (id: string) => retireKnowledge(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['knowledge'] }),
+    onSuccess: () => {
+      setActionError('');
+      queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+    },
+    onError: (e) => setActionError(`Retire failed: ${describeActionError(e)}`),
   });
 
   const duplicateMutation = useMutation({
@@ -45,7 +61,11 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
         yamlContent: yaml,
       } as any);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['knowledge'] }),
+    onSuccess: () => {
+      setActionError('');
+      queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+    },
+    onError: (e) => setActionError(`Duplicate failed: ${describeActionError(e)}`),
   });
 
   const handleCreate = () => { setEditingItem(null); setEditorOpen(true); };
@@ -64,6 +84,11 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
 
       {isLoading && <div style={{ color: 'var(--muted, #94a3b8)' }}>Loading templates...</div>}
       {error && <div style={{ color: 'var(--err, #ef4444)' }}>Failed to load templates</div>}
+      {actionError && (
+        <div role="alert" style={{ color: 'var(--err, #ef4444)', fontSize: 12, margin: '8px 0' }}>
+          {actionError}
+        </div>
+      )}
 
       {visible.length === 0 && !isLoading && (
         <div style={{

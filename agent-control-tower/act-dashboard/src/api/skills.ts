@@ -8,6 +8,8 @@ export interface Skill {
   enabled?: boolean;
   stage?: string;
   tier?: string;
+  /** Present once the backend wave adds it to SkillResponse; the slash menu needs it to mirror the server injection gate. */
+  template?: string;
 }
 
 /** Fetch the real skill registry (backs the Configure → Skills tab and `/` slash menu). */

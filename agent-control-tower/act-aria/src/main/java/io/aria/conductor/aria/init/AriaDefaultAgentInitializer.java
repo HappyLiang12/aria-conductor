@@ -347,8 +347,18 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                     adkProviderRegistry.resolve(ariaAgent).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
                     log.info("ADK instance for Aria is ready (health check passed)");
                 } catch (Exception e) {
-                    log.error("ADK pre-warm failed — Aria cannot start: {}", e.getMessage());
-                    throw new IllegalStateException("ADK pre-warm failed for Aria", e);
+                    // Transient pre-warm failures (e.g. OpenSandbox not reachable yet on CI/local,
+                    // ADK venv still warming up) must NOT kill the whole backend. The provider
+                    // creates the instance lazily on first real use (executeTask/call ->
+                    // getOrPrepare/getOrStartInstance), so Aria just starts degraded here.
+                    log.error("ADK pre-warm failed for Aria (agent id={}, provider={}) — continuing startup in degraded state. "
+                                    + "The instance is created lazily on first use; if runs keep failing check: "
+                                    + "opencode → OpenSandbox server reachable (SANDBOX/OPENCODE sandbox server URL, e.g. localhost:8090); "
+                                    + "langchain → ADK venv present and langchain-adk server reachable. Cause: {}",
+                            AriaConstants.ARIA_AGENT_ID, ariaAgent.getAdkProvider(), e.getMessage(), e);
+                    ariaAgent.setHealthStatus(HealthStatus.DEGRADED);
+                    ariaAgent.setUpdatedAt(Instant.now());
+                    agentRepository.save(ariaAgent);
                 }
             }
         } else {

@@ -13,11 +13,13 @@ vi.mock('../../api/knowledge', () => ({
   instantiateWorkflowTemplate: vi.fn(),
 }));
 
-import { listKnowledge, approveKnowledge, retireKnowledge } from '../../api/knowledge';
+import { listKnowledge, approveKnowledge, retireKnowledge, createKnowledge, getKnowledgeYaml } from '../../api/knowledge';
 
 const mockList = listKnowledge as Mock;
 const mockApprove = approveKnowledge as Mock;
 const mockRetire = retireKnowledge as Mock;
+const mockCreate = createKnowledge as Mock;
+const mockGetYaml = getKnowledgeYaml as Mock;
 
 const TEMPLATES = [
   { id: 't1', name: 'development-workflow', type: 'WORKFLOW', status: 'APPROVED', description: 'SDD loop', currentVersion: 'v1.0.0', createdAt: '2026-01-01T00:00:00Z' },
@@ -94,5 +96,22 @@ describe('TemplatesPanel', () => {
     await waitFor(() => {
       expect(screen.getByText('No workflow templates yet.')).toBeInTheDocument();
     });
+  });
+
+  it('surfaces an approve failure (409) as visible error feedback', async () => {
+    mockApprove.mockRejectedValue({ response: { status: 409, data: { message: 'Invalid review transition' } } });
+    ui();
+    await waitFor(() => expect(screen.getByText('Approve')).toBeInTheDocument());
+    await userEvent.click(screen.getByText('Approve'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Approve failed: Invalid review transition');
+  });
+
+  it('surfaces a duplicate failure with a fallback message for non-axios errors', async () => {
+    mockGetYaml.mockResolvedValue('steps: []');
+    mockCreate.mockRejectedValue(new Error('boom'));
+    ui();
+    await waitFor(() => expect(screen.getAllByText('Duplicate')).toHaveLength(2));
+    await userEvent.click(screen.getAllByText('Duplicate')[0]);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Duplicate failed: boom');
   });
 });

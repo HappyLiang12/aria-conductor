@@ -46,12 +46,17 @@ export function useSlashCommands(panelOpen: boolean): SlashCommandState {
   // Map skills to slash command items
   const allItems: SlashCommandItem[] = useMemo(() => {
     if (!skills) return [];
-    return skills.map((s) => ({
-      id: s.id,
-      command: '/' + skillToCommand(s.name),
-      name: s.name,
-      description: s.description ?? '',
-    }));
+    // Mirror the server-side injection gate (SkillContextProviderImpl):
+    // a SKILL-stage skill without a template cannot be injected, so offering
+    // it in the menu would silently no-op on send.
+    return skills
+      .filter((s) => s.template != null)
+      .map((s) => ({
+        id: s.id,
+        command: '/' + skillToCommand(s.name),
+        name: s.name,
+        description: s.description ?? '',
+      }));
   }, [skills]);
 
   // Filtered items based on current query

@@ -138,6 +138,7 @@ export function AriaPanel() {
   const [busy, setBusy] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [lastSentMessage, setLastSentMessage] = useState<string | null>(null);
+  const lastSentSkillIdRef = useRef<string | undefined>(undefined); // retry must re-attach the skill directive
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -151,6 +152,9 @@ export function AriaPanel() {
 
   const isEmpty = messages.length === 0;
   const slash = useSlashCommands(open);
+  // Hoisted primitive so sendStreamed's closure can depend on the id itself —
+  // the `slash` object is render-scoped and must not be a hook dep (fix 1).
+  const pendingSkillId = slash.pendingSkill?.id;
 
   // Load conversation from backend on mount
   useEffect(() => {
@@ -222,9 +226,11 @@ export function AriaPanel() {
   const closePanel = useCallback(() => setOpen(false), []);
 
   const sendStreamed = useCallback(
-    (rawText: string) => {
+    (rawText: string, skillIdOverride?: string | undefined) => {
       const text = rawText.trim();
       if (!text || busy) return;
+
+      const skillId = skillIdOverride ?? pendingSkillId;
 
       // Abort any prior in-flight stream defensively.
       abortRef.current?.abort();
@@ -247,6 +253,7 @@ export function AriaPanel() {
       setBusy(true);
       setActiveTool(null);
       setLastSentMessage(text);
+      lastSentSkillIdRef.current = skillId;
       slash.clearSkill();
 
       void streamMessage(
@@ -298,7 +305,7 @@ export function AriaPanel() {
           },
         },
         ctrl.signal,
-        { isCancelled: () => cancelledRef.current, skillId: slash.pendingSkill?.id },
+        { isCancelled: () => cancelledRef.current, skillId },
       );
 
       // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort and show error.
@@ -318,7 +325,7 @@ export function AriaPanel() {
         ]);
       }, CLIENT_TIMEOUT_MS);
     },
-    [busy, messages, conversationId],
+    [busy, messages, conversationId, pendingSkillId],
   );
 
   const handleSend = useCallback(() => {
@@ -332,7 +339,7 @@ export function AriaPanel() {
       if (prev.length === 0 || !prev[prev.length - 1].error) return prev;
       return prev.slice(0, -1);
     });
-    sendStreamed(lastSentMessage);
+    sendStreamed(lastSentMessage, lastSentSkillIdRef.current);
   }, [busy, lastSentMessage, sendStreamed]);
 
   const handleCancel = useCallback(() => {
@@ -380,6 +387,8 @@ export function AriaPanel() {
     setBusy(false);
     setActiveTool(null);
     setLastSentMessage(null);
+    lastSentSkillIdRef.current = undefined;
+    slash.clearSkill();
   }, [conversationId]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -387,7 +396,15 @@ export function AriaPanel() {
     if (slash.open) {
       if (e.key === 'ArrowDown') { e.preventDefault(); slash.move(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); slash.move(-1); return; }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); slash.selectCurrent(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        if (slash.items.length > 0) {
+          slash.selectCurrent();
+          setInput(''); // mirror the mouse path — leave no `/xxx` residue (fix 2)
+          return;
+        }
+        // Zero matches: fall through so Enter sends the raw text as a normal message (fix 2).
+      }
       if (e.key === 'Escape') { e.preventDefault(); slash.dismiss(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) {

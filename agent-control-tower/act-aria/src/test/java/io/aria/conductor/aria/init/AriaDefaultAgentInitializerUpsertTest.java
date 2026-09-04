@@ -87,14 +87,17 @@ class AriaDefaultAgentInitializerUpsertTest {
     }
 
     @Test
-    void updatesExistingAriaInPlaceInsteadOfCreatingDuplicate() {
+    void existingAriaIsNotRewritten_operatorEditsSurviveRestart() {
+        // The initializer's managed config write is CREATE-only: an existing Aria record
+        // must be left untouched so operator edits (taskApprovalRequired, name, role,
+        // adkProvider) survive every restart instead of being overwritten at boot.
         Agent existing = Agent.builder()
                 .id(AriaConstants.ARIA_AGENT_ID)
-                .name("Old Aria")
-                .role("outdated role")
+                .name("Aria (operator renamed)")
+                .role("operator-tuned role")
                 .agentType(AgentType.NATIVE)
-                .adkProvider("adk-py")
-                .config("{}")
+                .adkProvider("custom")
+                .config("{\"taskApprovalRequired\":true,\"maxToolCallRounds\":9}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
@@ -102,14 +105,13 @@ class AriaDefaultAgentInitializerUpsertTest {
 
         initializer.run(args);
 
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository, times(1)).save(captor.capture());
-        // same instance is refreshed — no second Aria row is created
-        assertThat(captor.getValue()).isSameAs(existing);
-        assertThat(existing.getName()).isEqualTo("Aria");
-        assertThat(existing.getAdkProvider()).isEqualTo("langchain");
-        assertThat(existing.getConfig()).contains("maxToolCallRounds");
-        assertThat(existing.getRole()).isNotEqualTo("outdated role");
+        // the existing record is not rewritten — not even re-saved
+        verify(agentRepository, never()).save(any(Agent.class));
+        assertThat(existing.getName()).isEqualTo("Aria (operator renamed)");
+        assertThat(existing.getRole()).isEqualTo("operator-tuned role");
+        assertThat(existing.getAdkProvider()).isEqualTo("custom");
+        // operator-enabled task approval gate survives the boot
+        assertThat(existing.getConfig()).contains("\"taskApprovalRequired\":true");
     }
 
     @Test
@@ -188,9 +190,10 @@ class AriaDefaultAgentInitializerUpsertTest {
     }
 
     @Test
-    void langchainAgentsMigratedToDefaultProviderWhenDefaultDiffers() {
-        // When the configured default is opencode, agents still on the legacy langchain
-        // provider are re-pointed to opencode (this is how the seeded BA/Dev/QA agents switch).
+    void seededRoleLangchainAgentsMigratedToDefaultProviderWhenDefaultDiffers() {
+        // When the configured default is opencode, the system-seeded SDD role agents
+        // (V42__seed_sdd_role_agents.sql) still on the legacy langchain provider are
+        // re-pointed to opencode — these are the only agents the migration may touch.
         AdkSystemProperties opencodeProps = new AdkSystemProperties();
         opencodeProps.setDefaultProvider("opencode");
         AriaDefaultAgentInitializer opencodeInitializer = new AriaDefaultAgentInitializer(
@@ -198,15 +201,39 @@ class AriaDefaultAgentInitializerUpsertTest {
                 llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
 
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
-        Agent worker = Agent.builder()
-                .id(UUID.randomUUID()).name("Worker").adkProvider("LangChain").build();
-        when(agentRepository.findAll()).thenReturn(List.of(worker));
+        Agent seededDev = Agent.builder()
+                .id(UUID.fromString("de000000-0000-0000-0000-000000000002"))
+                .name("SDD DEV Agent").adkProvider("LangChain").build();
+        when(agentRepository.findAll()).thenReturn(List.of(seededDev));
 
         opencodeInitializer.run(args);
 
-        // one save for Aria (created as opencode) + one for the migrated worker
+        // one save for Aria (created as opencode) + one for the migrated seeded agent
         verify(agentRepository, times(2)).save(any(Agent.class));
-        assertThat(worker.getAdkProvider()).isEqualTo("opencode");
+        assertThat(seededDev.getAdkProvider()).isEqualTo("opencode");
+    }
+
+    @Test
+    void operatorLangchainAgentNotMigratedWhenDefaultDiffers() {
+        // An operator-created worker explicitly set to langchain (e.g. via
+        // PUT /api/v1/agents {"adkProvider":"langchain"}) must NOT be silently
+        // re-pointed on every boot — only the seeded role agents migrate.
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        AriaDefaultAgentInitializer opencodeInitializer = new AriaDefaultAgentInitializer(
+                agentRepository, toolDefinitionRepository, agentToolRepository,
+                llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
+        Agent operatorWorker = Agent.builder()
+                .id(UUID.randomUUID()).name("Operator Worker").adkProvider("LangChain").build();
+        when(agentRepository.findAll()).thenReturn(List.of(operatorWorker));
+
+        opencodeInitializer.run(args);
+
+        // only the Aria upsert itself is persisted; the operator agent is untouched
+        verify(agentRepository, times(1)).save(any(Agent.class));
+        assertThat(operatorWorker.getAdkProvider()).isEqualTo("LangChain");
     }
 
     @Test

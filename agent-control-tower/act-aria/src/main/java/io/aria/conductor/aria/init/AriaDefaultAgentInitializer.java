@@ -15,6 +15,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -27,10 +28,14 @@ import java.util.stream.Collectors;
 
 /**
  * Ensures the Aria default agent exists at startup with all approved tools assigned.
- * Idempotent — safe to run on every startup.
- * Also migrates any agents still on the legacy hardcoded "langchain" provider to the
- * configured default provider (adk.default-provider), so switching the deployment to
- * opencode sandbox mode re-points the seeded BA/Dev/QA agents automatically.
+ * Idempotent — safe to run on every startup. The managed agent/config write is
+ * CREATE-only: an existing Aria record is left untouched so operator edits
+ * (config, name, role, adkProvider) survive restarts.
+ * Also migrates the system-seeded BA/Dev/QA role agents (V42) still on the legacy
+ * hardcoded "langchain" provider to the configured default provider
+ * (adk.default-provider) — operator-created agents are never re-pointed.
+ * A scheduled reconciler retries the pre-warm while Aria is DEGRADED and re-stamps
+ * HEALTHY on the first success, so a transient boot failure is not terminal.
  */
 @Slf4j
 @Component
@@ -191,6 +196,20 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
     /** The legacy hardcoded provider name; agents still on it are migrated to the configured default. */
     private static final String LEGACY_PROVIDER = "langchain";
 
+    /** Interval of the DEGRADED-recovery reconciler (60s), also used as its initial delay. */
+    private static final long DEGRADED_RECOVERY_INTERVAL_MS = 60_000L;
+
+    /**
+     * Agent ids seeded by V42__seed_sdd_role_agents.sql (SDD BA/DEV/QA). These are the
+     * ONLY agents the legacy-provider migration may re-point: operator-created or
+     * operator-re-pointed agents (e.g. a worker explicitly set to langchain via
+     * PUT /api/v1/agents) keep their provider across restarts.
+     */
+    private static final Set<UUID> SEEDED_SDD_ROLE_AGENT_IDS = Set.of(
+            UUID.fromString("ba000000-0000-0000-0000-000000000001"),
+            UUID.fromString("de000000-0000-0000-0000-000000000002"),
+            UUID.fromString("aa000000-0000-0000-0000-000000000003"));
+
     private final AgentRepository agentRepository;
     private final ToolDefinitionRepository toolDefinitionRepository;
     private final AgentToolRepository agentToolRepository;
@@ -236,9 +255,11 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         log.info("Initializing Aria default agent...");
 
-        // 1. Upsert Aria agent
+        // 1. Ensure the Aria agent exists. The managed write (name/role/provider/config)
+        //    is CREATE-only: an existing record is left untouched so operator edits —
+        //    notably taskApprovalRequired in config and the adkProvider choice — survive
+        //    restarts. Health reconciliation happens below and via recoverDegradedAria().
         Agent aria = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(null);
-        String config = buildAriaConfig();
         if (aria == null) {
             aria = Agent.builder()
                     .id(AriaConstants.ARIA_AGENT_ID)
@@ -246,30 +267,28 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                     .role(ARIA_ROLE)
                     .agentType(AgentType.NATIVE)
                     .adkProvider(defaultProvider)
-                    .config(config)
+                    .config(buildAriaConfig())
                     .healthStatus(HealthStatus.HEALTHY)
                     .build();
+            aria.setUpdatedAt(Instant.now());
+            agentRepository.save(aria);
             log.info("Aria agent created with id={}", AriaConstants.ARIA_AGENT_ID);
         } else {
-            aria.setName("Aria");
-            aria.setRole(ARIA_ROLE);
-            aria.setAdkProvider(defaultProvider);
-            aria.setConfig(config);
-            aria.setHealthStatus(HealthStatus.HEALTHY);
-            log.info("Aria agent updated (existing found)");
+            log.info("Aria agent already exists (id={}) — leaving operator config untouched", AriaConstants.ARIA_AGENT_ID);
         }
-        aria.setUpdatedAt(Instant.now());
-        agentRepository.save(aria);
 
-        // 2. Migrate agents still on the legacy hardcoded provider to the configured default.
-        //    When the default IS langchain this is a no-op (preserves historical behaviour);
-        //    when the default is opencode it re-points the seeded BA/Dev/QA agents to the sandbox.
+        // 2. Migrate the system-seeded SDD role agents still on the legacy hardcoded
+        //    provider to the configured default. When the default IS langchain this is
+        //    a no-op (preserves historical behaviour); when the default is opencode it
+        //    re-points the seeded BA/Dev/QA agents to the sandbox. Operator-created
+        //    agents (any id outside SEEDED_SDD_ROLE_AGENT_IDS) are never touched.
         if (!LEGACY_PROVIDER.equalsIgnoreCase(defaultProvider)) {
             List<Agent> legacyAgents = agentRepository.findAll().stream()
                     .filter(a -> LEGACY_PROVIDER.equalsIgnoreCase(a.getAdkProvider()))
+                    .filter(a -> a.getId() != null && SEEDED_SDD_ROLE_AGENT_IDS.contains(a.getId()))
                     .toList();
             if (!legacyAgents.isEmpty()) {
-                log.warn("Migrating {} agent(s) from legacy '{}' provider to '{}': {}",
+                log.warn("Migrating {} seeded agent(s) from legacy '{}' provider to '{}': {}",
                         legacyAgents.size(),
                         LEGACY_PROVIDER,
                         defaultProvider,
@@ -338,31 +357,60 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
         // 4. Pre-warm ADK instance for Aria to eliminate cold-start timeout on first request
         // Skip pre-warming in test/noop-llm profiles to avoid spawning real subprocess
         if (!isTestProfile()) {
-            Agent ariaAgent = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(null);
-            if (ariaAgent != null) {
+            if (aria != null) {
                 try {
                     log.info("Pre-warming ADK instance for Aria...");
                     // Route through the registry so the Aria agent's own provider is used
-                    // (defaults to langchain, matching the historical behaviour).
-                    adkProviderRegistry.resolve(ariaAgent).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
+                    adkProviderRegistry.resolve(aria).prepareAgent(AriaConstants.ARIA_AGENT_ID, aria);
                     log.info("ADK instance for Aria is ready (health check passed)");
                 } catch (Exception e) {
                     // Transient pre-warm failures (e.g. OpenSandbox not reachable yet on CI/local,
                     // ADK venv still warming up) must NOT kill the whole backend. The provider
                     // creates the instance lazily on first real use (executeTask/call ->
-                    // getOrPrepare/getOrStartInstance), so Aria just starts degraded here.
+                    // getOrPrepare/getOrStartInstance), so Aria just starts degraded here —
+                    // and recoverDegradedAria() retries below until it succeeds.
                     log.error("ADK pre-warm failed for Aria (agent id={}, provider={}) — continuing startup in degraded state. "
                                     + "The instance is created lazily on first use; if runs keep failing check: "
                                     + "opencode → OpenSandbox server reachable (SANDBOX/OPENCODE sandbox server URL, e.g. localhost:8090); "
                                     + "langchain → ADK venv present and langchain-adk server reachable. Cause: {}",
-                            AriaConstants.ARIA_AGENT_ID, ariaAgent.getAdkProvider(), e.getMessage(), e);
-                    ariaAgent.setHealthStatus(HealthStatus.DEGRADED);
-                    ariaAgent.setUpdatedAt(Instant.now());
-                    agentRepository.save(ariaAgent);
+                            AriaConstants.ARIA_AGENT_ID, aria.getAdkProvider(), e.getMessage(), e);
+                    aria.setHealthStatus(HealthStatus.DEGRADED);
+                    aria.setUpdatedAt(Instant.now());
+                    agentRepository.save(aria);
                 }
             }
         } else {
             log.info("Skipping ADK pre-warm (test/noop-llm profile active)");
+        }
+    }
+
+    /**
+     * Recovery reconciler for a DEGRADED Aria (e.g. the OpenSandbox/ADK backend was not
+     * reachable during the boot pre-warm). Every {@link #DEGRADED_RECOVERY_INTERVAL_MS}
+     * it retries the pre-warm; on the first success the agent is re-stamped HEALTHY.
+     * A still-failing pre-warm keeps DEGRADED and never throws out of the scheduled
+     * context. No-op for missing/HEALTHY agents and in test/noop-llm profiles
+     * (mirroring the boot pre-warm skip). Tests invoke the method directly.
+     */
+    @Scheduled(initialDelay = DEGRADED_RECOVERY_INTERVAL_MS, fixedDelay = DEGRADED_RECOVERY_INTERVAL_MS)
+    public void recoverDegradedAria() {
+        if (isTestProfile()) {
+            return;
+        }
+        Agent aria = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(null);
+        if (aria == null || aria.getHealthStatus() != HealthStatus.DEGRADED) {
+            return;
+        }
+        try {
+            log.info("Aria is DEGRADED — retrying ADK pre-warm (provider={})...", aria.getAdkProvider());
+            adkProviderRegistry.resolve(aria).prepareAgent(AriaConstants.ARIA_AGENT_ID, aria);
+            aria.setHealthStatus(HealthStatus.HEALTHY);
+            aria.setUpdatedAt(Instant.now());
+            agentRepository.save(aria);
+            log.info("Aria ADK pre-warm recovered — health re-stamped HEALTHY");
+        } catch (Exception e) {
+            log.warn("Aria recovery pre-warm still failing ({}) — remaining DEGRADED; will retry in {}ms",
+                    e.getMessage(), DEGRADED_RECOVERY_INTERVAL_MS);
         }
     }
 

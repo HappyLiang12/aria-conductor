@@ -124,6 +124,11 @@ public class WorkflowTemplateService {
 
         String yamlContent = version.getYamlContent();
         if (yamlContent == null || yamlContent.isBlank()) {
+            // Legacy WORKFLOW items (created before yaml_content existed) store the YAML
+            // as the version content — derive it instead of failing instantiation.
+            yamlContent = version.getContent();
+        }
+        if (yamlContent == null || yamlContent.isBlank()) {
             throw new IllegalArgumentException("Template has no YAML content");
         }
 

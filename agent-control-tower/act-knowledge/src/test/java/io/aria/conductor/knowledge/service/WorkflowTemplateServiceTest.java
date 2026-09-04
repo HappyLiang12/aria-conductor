@@ -285,6 +285,39 @@ class WorkflowTemplateServiceTest {
         verifyNoInteractions(workflowService);
     }
 
+    @Test
+    void instantiateTemplate_legacyTemplateYamlInContent_derivesYaml() {
+        // Legacy WORKFLOW items (created before yaml_content existed) store the YAML as
+        // the version content — instantiation must derive it instead of failing with
+        // "Template has no YAML content".
+        UUID templateId = UUID.randomUUID();
+        UUID agent1 = UUID.randomUUID();
+        KnowledgeItem item = approvedWorkflowTemplate("legacy-flow", "old");
+        item.setId(templateId);
+        item.setCurrentVersion("v0.1.0");
+        when(itemRepository.findById(templateId)).thenReturn(Optional.of(item));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(templateId, "v0.1.0"))
+                .thenReturn(Optional.of(KnowledgeVersion.builder()
+                        .knowledgeItemId(templateId)
+                        .version("v0.1.0")
+                        .content("steps: [...]")
+                        .build()));
+        WorkflowStep step = aWorkflowStep().withAgentId(agent1)
+                .withPromptTemplate("Build").build();
+        when(templateConverter.yamlToWorkflowSteps("steps: [...]")).thenReturn(List.of(step));
+        when(templateConverter.extractParameterNames(anyList())).thenReturn(Set.of());
+        UUID chainId = UUID.randomUUID();
+        when(workflowService.createAndStart(any(CreateWorkflowRequest.class)))
+                .thenReturn(WorkflowResponse.builder().id(chainId).build());
+        when(chainRepository.findById(chainId)).thenReturn(Optional.empty());
+
+        WorkflowResponse response = service.instantiateTemplate(templateId, Map.of());
+
+        assertThat(response.getId()).isEqualTo(chainId);
+        verify(templateConverter).yamlToWorkflowSteps("steps: [...]");
+        verifyNoInteractions(dodService);
+    }
+
     // ---- helpers -------------------------------------------------------------
 
     private static KnowledgeItem approvedWorkflowTemplate(String name, String description) {

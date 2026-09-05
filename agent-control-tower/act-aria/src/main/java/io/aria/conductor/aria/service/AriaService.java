@@ -3,7 +3,7 @@ package io.aria.conductor.aria.service;
 import io.aria.conductor.aria.dto.AriaAction;
 import io.aria.conductor.aria.dto.AriaChatRequest;
 import io.aria.conductor.aria.dto.AriaChatResponse;
-import io.aria.conductor.aria.AriaConstants;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.aria.intent.IntentClassifier;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.model.*;

@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.5</version>
+        <version>3.4.5</version>
         <relativePath/>
     </parent>
 
@@ -24,6 +24,7 @@
         <module>act-knowledge</module>
         <module>act-aria</module>
         <module>act-dashboard-api</module>
+        <module>act-mcp</module>
         <module>act-app</module>
         <module>act-test-support</module>
     </modules>
@@ -33,7 +34,7 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <springdoc.version>2.6.0</springdoc.version>
+        <springdoc.version>2.7.0</springdoc.version>
         <caffeine.version>3.1.8</caffeine.version>
         <logstash-logback.version>7.4</logstash-logback.version>
         <archunit.version>1.3.0</archunit.version>
@@ -86,6 +87,11 @@
             </dependency>
             <dependency>
                 <groupId>io.aria.conductor</groupId>
+                <artifactId>act-mcp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.aria.conductor</groupId>
                 <artifactId>act-test-support</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -123,6 +129,15 @@
                 <groupId>net.jqwik</groupId>
                 <artifactId>jqwik</artifactId>
                 <version>${jqwik.version}</version>
+            </dependency>
+
+            <!-- Spring AI (MCP server). 1.0.x is the line documented for Boot 3.4.x — do not jump to 1.1.x/2.0.x. -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>1.0.9</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>

@@ -14,7 +14,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -213,21 +215,24 @@ class SkillControllerTest {
 
     @Test
     void toggleSkill_returns200_withToggledState() throws Exception {
-        SkillDefinition skill = sampleSkill("s1", "toggle-me", "SKILL", false);
-        when(skillRepo.findById("s1")).thenReturn(Optional.of(skill));
-        when(skillRepo.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        // Atomic flip contract: the controller must delegate to the repository's
+        // single-statement CASE update and re-fetch, never read-modify-write.
+        SkillDefinition flipped = sampleSkill("s1", "toggle-me", "SKILL", true);
+        when(skillRepo.toggleEnabled(eq("s1"), any(Instant.class))).thenReturn(1);
+        when(skillRepo.findById("s1")).thenReturn(Optional.of(flipped));
 
         mockMvc.perform(post("/api/v1/skills/s1/toggle"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("s1"))
                 .andExpect(jsonPath("$.enabled").value(true));
 
-        verify(skillRepo).save(any());
+        verify(skillRepo).toggleEnabled(eq("s1"), any(Instant.class));
+        verify(skillRepo, never()).save(any());
     }
 
     @Test
     void toggleSkill_returns404_whenNotFound() throws Exception {
-        when(skillRepo.findById("nonexistent")).thenReturn(Optional.empty());
+        when(skillRepo.toggleEnabled(eq("nonexistent"), any(Instant.class))).thenReturn(0);
 
         mockMvc.perform(post("/api/v1/skills/nonexistent/toggle"))
                 .andExpect(status().isNotFound());

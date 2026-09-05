@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.AriaChatRequest;
-import io.aria.conductor.aria.AriaConstants;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Run;

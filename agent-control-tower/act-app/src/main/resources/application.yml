@@ -8,6 +8,11 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+  ai:
+    mcp:
+      server:
+        name: aria-conductor
+        enabled: ${aria.mcp.enabled:true}
 
 server:
   port: 8080
@@ -48,3 +53,13 @@ opencode:
     DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:}
     LLM_API_KEY: ${LLM_API_KEY:${DEEPSEEK_API_KEY:}}
     GH_TOKEN: ${GH_TOKEN:}
+
+# Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
+aria:
+  mcp:
+    enabled: ${ARIA_MCP_ENABLED:true}
+    auth-mode: ${ARIA_MCP_AUTH_MODE:none}
+    debug: ${ARIA_MCP_DEBUG:false}
+    token: ${ARIA_MCP_TOKEN:}
+    sandbox-host-address: ${ARIA_MCP_SANDBOX_HOST_ADDRESS:}
+    port: ${ARIA_MCP_PORT:8080}

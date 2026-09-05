@@ -20,6 +20,10 @@ spring:
     user: ${spring.datasource.username}
     password: ${spring.datasource.password}
     locations: classpath:db/migration
+  ai:
+    mcp:
+      server:
+        enabled: false
 
 llm:
   provider:
@@ -55,6 +59,8 @@ circuit-breaker:
 
 aria:
   system-prompt: "Test Aria prompt"
+  mcp:
+    enabled: false
 
 knowledge:
   storage:

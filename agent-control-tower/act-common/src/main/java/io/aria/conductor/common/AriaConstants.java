@@ -1,9 +1,13 @@
-package io.aria.conductor.aria;
+package io.aria.conductor.common;
 
 import java.util.UUID;
 
 /**
- * Shared constants for the Aria platform assistant.
+ * Shared platform-identity constants for the Aria assistant.
+ *
+ * <p>Lives in act-common so both act-aria (prompt-call attribution) and
+ * act-execution (OpenCode sandbox wiring, e.g. the {@code mcp.aria-conductor}
+ * block) can reference it without creating a circular module dependency.
  */
 public final class AriaConstants {
 

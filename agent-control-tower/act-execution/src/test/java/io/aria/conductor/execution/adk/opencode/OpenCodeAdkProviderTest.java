@@ -12,6 +12,8 @@ import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider.OpenCodeInstance;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.SandboxHostResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -40,7 +42,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
@@ -75,6 +80,7 @@ class OpenCodeAdkProviderTest {
     @TempDir Path tempDir;
 
     OpenCodeProperties properties;
+    McpProperties mcpProperties;
     OpenCodeAdkProvider provider;
 
     @BeforeEach
@@ -85,7 +91,8 @@ class OpenCodeAdkProviderTest {
         properties.setImage(IMAGE);
         properties.setPort(4096);
         properties.setMaxTaskMinutes(30);
-        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient, providerRepository);
+        mcpProperties = new McpProperties();
+        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient, providerRepository, mcpProperties);
         provider.setWorkspaceBaseForTest(tempDir);
     }
 
@@ -233,7 +240,7 @@ class OpenCodeAdkProviderTest {
     void executeTask_publishesRunProgressEventsWhileTaskInFlight() throws Exception {
         properties.setProgressPollMs(50);
         OpenCodeAdkProvider pubProvider = new OpenCodeAdkProvider(
-                properties, sandboxManager, httpClient, providerRepository, publisher);
+                properties, sandboxManager, httpClient, providerRepository, publisher, mcpProperties);
         pubProvider.setWorkspaceBaseForTest(tempDir);
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
@@ -834,5 +841,211 @@ class OpenCodeAdkProviderTest {
                     .as("permission '%s' must not resolve to 'ask' (headless hang risk)", key)
                     .isNotEqualTo("ask");
         }
+    }
+
+    // ---- MCP: mcp.aria-conductor remote block wired into Aria's opencode.json ----
+
+    @Test
+    void prepareInstance_ariaAgent_getsMcpRemoteBlock_withoutHeader_whenAuthNone() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-a");
+        when(sandboxManager.getSandboxUrl("sb-a", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        // sandbox-internal reachability probe (spec §3 fallback): override candidate is probed and answers 200
+        when(sandboxManager.runCommand(eq("sb-a"), anyString())).thenReturn("200");
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("\"mcp\"");
+        assertThat(json).contains("http://172.30.112.1:8080/mcp");
+        assertThat(json).doesNotContain("Authorization");
+        JsonNode root = new ObjectMapper().readTree(json);
+        assertThat(root.path("mcp").path("aria-conductor").path("type").asText()).isEqualTo("remote");
+        assertThat(root.path("mcp").path("aria-conductor").path("url").asText()).isEqualTo("http://172.30.112.1:8080/mcp");
+        assertThat(root.path("mcp").path("aria-conductor").has("headers")).isFalse();
+        // none mode: no token may be injected into the sandbox env
+        verify(sandboxManager).createSandbox(eq(ariaId), eq(IMAGE),
+                argThat(env -> env == null || !env.containsKey("ARIA_MCP_TOKEN")));
+    }
+
+    @Test
+    void prepareInstance_ariaAgent_tokenMode_addsHeaderAndInjectsToken() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-t");
+        when(sandboxManager.getSandboxUrl("sb-t", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        mcpProperties.setAuthMode("token");
+        mcpProperties.setToken("tok-1");
+        // sandbox-internal reachability probe (spec §3 fallback): override candidate is probed and answers 200
+        when(sandboxManager.runCommand(eq("sb-t"), anyString())).thenReturn("200");
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("\"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\"");
+        // Wiring deviation from v1 (token rode the createSandbox container env): the
+        // probe runs AFTER createSandbox, so the mcpBlockWritten outcome is known too
+        // late for container env — the token now rides the serve process env
+        // (OpenSandbox execd per-command env), keeping the fail-closed gate intact.
+        verify(sandboxManager).createSandbox(eq(ariaId), eq(IMAGE),
+                argThat(env -> env == null || !env.containsKey("ARIA_MCP_TOKEN")));
+        verify(sandboxManager).runServeCommand(eq("sb-t"), eq(4096),
+                argThat(env -> env != null && "tok-1".equals(env.get("ARIA_MCP_TOKEN"))));
+    }
+
+    @Test
+    void prepareInstance_workerAgent_neverGetsMcpBlock() throws Exception {
+        UUID workerId = UUID.randomUUID();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(workerId), eq(IMAGE), any())).thenReturn("sb-w");
+        when(sandboxManager.getSandboxUrl("sb-w", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+
+        provider.prepareAgent(workerId, agent(workerId));
+
+        String json = Files.readString(tempDir.resolve(workerId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
+        // Non-Aria agents never run the sandbox-internal reachability probe.
+        verify(sandboxManager, never()).runCommand(anyString(), anyString());
+    }
+
+    @Test
+    void prepareInstance_workerAgent_tokenMode_noTokenInjected() throws Exception {
+        UUID workerId = UUID.randomUUID();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(workerId), eq(IMAGE), any())).thenReturn("sb-wt");
+        when(sandboxManager.getSandboxUrl("sb-wt", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setAuthMode("token");
+        mcpProperties.setToken("tok-2");
+
+        provider.prepareAgent(workerId, agent(workerId));
+
+        verify(sandboxManager).createSandbox(eq(workerId), eq(IMAGE),
+                argThat(env -> env == null || !env.containsKey("ARIA_MCP_TOKEN")));
+        verify(sandboxManager).runServeCommand(eq("sb-wt"), eq(4096));
+    }
+
+    @Test
+    void prepareInstance_mcpDisabled_noMcpBlock() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-d");
+        when(sandboxManager.getSandboxUrl("sb-d", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setEnabled(false);
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
+        // MCP disabled: no reachability probe is executed at all.
+        verify(sandboxManager, never()).runCommand(anyString(), anyString());
+    }
+
+    // ---- spec §3 fallback: sandbox-internal reachability probe (VERIFY-THEN-WRITE) ----
+
+    @Test
+    void prepareInstance_probePicksFirstReachableCandidate() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-p");
+        when(sandboxManager.getSandboxUrl("sb-p", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        provider.setHostResolverFactoryForTest(override -> SandboxHostResolver.over(List.of(
+                new SandboxHostResolver.Candidate("vEthernet (Guess)", "172.20.192.1"),
+                new SandboxHostResolver.Candidate("vEthernet (WSL)", "172.30.112.1"),
+                new SandboxHostResolver.Candidate("Ethernet", "192.168.1.5")), override));
+        // live acceptance scenario: first two candidates unreachable, third answers 200
+        when(sandboxManager.runCommand(eq("sb-p"), anyString())).thenAnswer(inv -> {
+            String cmd = inv.getArgument(1, String.class);
+            if (cmd.contains("172.20.192.1") || cmd.contains("172.30.112.1")) {
+                return "000";
+            }
+            return "200";
+        });
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("http://192.168.1.5:8080/mcp");
+        assertThat(json).doesNotContain("172.20.192.1").doesNotContain("172.30.112.1");
+    }
+
+    @Test
+    void prepareInstance_allCandidatesUnreachable_noMcpBlockAndNoToken() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-n");
+        when(sandboxManager.getSandboxUrl("sb-n", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setAuthMode("token");
+        mcpProperties.setToken("tok-9");
+        provider.setHostResolverFactoryForTest(override -> SandboxHostResolver.over(List.of(
+                new SandboxHostResolver.Candidate("v1", "172.20.192.1"),
+                new SandboxHostResolver.Candidate("v2", "172.30.112.1")), override));
+        when(sandboxManager.runCommand(eq("sb-n"), anyString())).thenReturn("000");
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
+        // fail-closed: serve started WITHOUT a token env (2-arg overload = no per-process env)
+        verify(sandboxManager).runServeCommand(eq("sb-n"), eq(4096));
+        verify(sandboxManager, never()).runServeCommand(anyString(), anyInt(), anyMap());
+    }
+
+    @Test
+    void prepareInstance_overrideIsProbedToo_failClosedWhenUnreachable() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-o");
+        when(sandboxManager.getSandboxUrl("sb-o", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        // DESIGN DECISION: the override is trusted as a CANDIDATE, not as a truth —
+        // it is probed like every other candidate (fail-closed).
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        when(sandboxManager.runCommand(eq("sb-o"), anyString())).thenReturn("000");
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
+        assertThat(json).doesNotContain("172.30.112.1");
+    }
+
+    @Test
+    void prepareInstance_probeRetriesThroughExecdWarmup() throws Exception {
+        // createSandbox skips the SDK health check, so execd may refuse connections
+        // for ~1s after the create call returns (live evidence 2026-09-05: probe at
+        // T failed with "Network connectivity error", serve exec at T+0.5s succeeded).
+        // The probe must retry through that warmup window instead of skipping the block.
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-r");
+        when(sandboxManager.getSandboxUrl("sb-r", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        AtomicInteger execCalls = new AtomicInteger();
+        when(sandboxManager.runCommand(eq("sb-r"), anyString())).thenAnswer(inv -> {
+            if (execCalls.incrementAndGet() <= 2) {
+                throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                        "Network connectivity error: Failed to connect");
+            }
+            String cmd = inv.getArgument(1, String.class);
+            return cmd.contains("172.30.112.1") ? "200" : "000";
+        });
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("http://172.30.112.1:8080/mcp");
+        assertThat(execCalls.get()).isGreaterThanOrEqualTo(3);
     }
 }

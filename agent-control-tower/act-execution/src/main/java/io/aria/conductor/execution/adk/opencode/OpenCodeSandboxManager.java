@@ -6,6 +6,7 @@ import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionLogs;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionResult;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.RunCommandRequest;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.models.sandboxes.SandboxEndpoint;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -216,12 +217,37 @@ public class OpenCodeSandboxManager {
      * virtual thread; readiness is probed separately via the health endpoint.
      */
     public void runServeCommand(String sandboxId, int port) {
+        runServeCommand(sandboxId, port, null);
+    }
+
+    /**
+     * Start {@code opencode serve} with per-process env vars (e.g. the MCP bearer
+     * token {@code ARIA_MCP_TOKEN} the sandbox's opencode.json references via
+     * {@code {env:ARIA_MCP_TOKEN}}).
+     *
+     * <p>OpenSandbox execd supports per-command env natively
+     * ({@code RunCommandRequest.envs}); this is the only way to deliver env vars
+     * AFTER sandbox creation, since container-level env ({@code createSandbox})
+     * is fixed at creation time and the probe-then-write flow (spec §3 fallback)
+     * decides the token only once the sandbox exists.
+     *
+     * <p>The serve process is long-running, so the command is launched on a background
+     * virtual thread; readiness is probed separately via the health endpoint.
+     */
+    public void runServeCommand(String sandboxId, int port, Map<String, String> env) {
         Sandbox sandbox = requireSandbox(sandboxId);
         String command = "opencode serve --hostname 0.0.0.0 --port " + port;
         log.info("Starting opencode serve in sandbox {}: {}", sandboxId, command);
         Thread.ofVirtual().start(() -> {
             try {
-                sandbox.commands().run(command);
+                if (env == null || env.isEmpty()) {
+                    sandbox.commands().run(command);
+                } else {
+                    sandbox.commands().run(RunCommandRequest.builder()
+                            .command(command)
+                            .envs(env)
+                            .build());
+                }
             } catch (Exception e) {
                 log.warn("opencode serve exited in sandbox {}: {}", sandboxId, e.getMessage());
             }

@@ -57,4 +57,40 @@ class SandboxHostResolverTest {
                 c("vEthernet (WSL)", "172.16.5.4")), "");
         assertThat(resolver.resolve()).contains("172.16.5.4");
     }
+
+    // ---- resolveOrdered: ranked candidate list for the sandbox-internal probe ----
+
+    @Test
+    void resolveOrdered_overrideFirstThenRankedCandidates() {
+        SandboxHostResolver resolver = SandboxHostResolver.over(List.of(
+                c("Ethernet", "192.168.0.119"),
+                c("bond0", "10.0.0.5"),
+                c("vEthernet (WSL)", "172.30.112.1")), "203.0.113.7");
+        // override first, then podman/WSL 172.16/12 (rank 0), 10/8 (rank 1), 192.168 (rank 2)
+        assertThat(resolver.resolveOrdered())
+                .containsExactly("203.0.113.7", "172.30.112.1", "10.0.0.5", "192.168.0.119");
+    }
+
+    @Test
+    void resolveOrdered_excludesNonPrivateAddresses() {
+        SandboxHostResolver resolver = SandboxHostResolver.over(List.of(
+                c("lo", "127.0.0.1"),
+                c("bridge", "169.254.1.2"),
+                c("docker0", "172.32.0.1"),
+                c("Ethernet", "192.168.0.119")), "");
+        assertThat(resolver.resolveOrdered()).containsExactly("192.168.0.119");
+    }
+
+    @Test
+    void resolveOrdered_emptyWhenNothingUsable() {
+        assertThat(SandboxHostResolver.over(List.of(c("lo", "127.0.0.1")), "").resolveOrdered()).isEmpty();
+    }
+
+    @Test
+    void resolve_delegatesToFirstOrderedCandidate() {
+        SandboxHostResolver resolver = SandboxHostResolver.over(List.of(
+                c("Ethernet", "192.168.0.119"),
+                c("vEthernet (WSL)", "172.30.112.1")), "");
+        assertThat(resolver.resolve()).contains(resolver.resolveOrdered().get(0));
+    }
 }

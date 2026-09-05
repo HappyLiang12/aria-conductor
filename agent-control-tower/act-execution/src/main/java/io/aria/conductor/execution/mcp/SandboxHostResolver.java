@@ -52,15 +52,30 @@ public final class SandboxHostResolver {
         return new SandboxHostResolver(override, found);
     }
 
+    /**
+     * Sandbox-reachable host candidates in preference order: the override first
+     * (when set), then the private v4 candidates ranked (172.16/12 podman/WSL
+     * adapters, then 10/8, then 192.168/16). Consumers (OpenCodeAdkProvider
+     * reachability probe) probe in order and pick the first candidate the sandbox
+     * actually reaches — ranking alone is only a guess.
+     */
+    public List<String> resolveOrdered() {
+        List<String> ordered = new ArrayList<>();
+        if (override != null && !override.isBlank()) {
+            ordered.add(override.trim());
+        }
+        candidates.stream()
+                .filter(c -> isPrivateV4(c.address()))
+                .sorted(Comparator.comparingInt(c -> rank(c.address())))
+                .map(Candidate::address)
+                .forEach(ordered::add);
+        return ordered;
+    }
+
     /** Sandbox-reachable host address, or empty when none is usable. */
     public Optional<String> resolve() {
-        if (override != null && !override.isBlank()) {
-            return Optional.of(override.trim());
-        }
-        return candidates.stream()
-                .filter(c -> isPrivateV4(c.address()))
-                .min(Comparator.comparingInt(c -> rank(c.address())))
-                .map(Candidate::address);
+        List<String> ordered = resolveOrdered();
+        return ordered.isEmpty() ? Optional.empty() : Optional.of(ordered.get(0));
     }
 
     private static boolean isPrivateV4(String address) {

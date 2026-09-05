@@ -24,7 +24,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -36,6 +35,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /**
  * OpenCode agent provider — one {@code opencode serve} instance per agent,
@@ -95,6 +95,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private Duration readyTimeout = READY_TIMEOUT;
     /** Health poll interval while waiting for readiness (overridable in tests). */
     private Duration readyPollInterval = READY_POLL_INTERVAL;
+    /** Host-candidate source for the MCP reachability probe (seam for tests). */
+    private Function<String, SandboxHostResolver> hostResolverFactory = SandboxHostResolver::fromSystemInterfaces;
 
     /** Spring constructor. The publisher wires the progress pump into the WS
      * broadcast chain (S10) — a null publisher would silently drop every
@@ -452,14 +454,23 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Cannot create workspace dir " + workspace + ": " + e.getMessage(), e);
         }
-        boolean mcpBlockWritten = writeOpenCodeConfig(workspace, agent);
 
-        Map<String, String> env = effectiveSandboxEnv(agent, mcpBlockWritten);
-        String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), env);
+        String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), properties.getSandboxEnv());
         OpenCodeHttpClient client = null;
         try {
+            // Spec §3 fallback: VERIFY-THEN-WRITE. The sandbox-internal reachability
+            // probe runs between createSandbox and uploadWorkspace — execd (the
+            // sandbox's own exec service, used by runServeCommand itself) is
+            // independent of opencode serve, so probing pre-upload/pre-serve works.
+            Optional<String> provenHost = mcpEnabledFor(agent) ? probeMcpHost(sandboxId) : Optional.empty();
+            boolean mcpBlockWritten = writeOpenCodeConfig(workspace, agent, provenHost);
             sandboxManager.uploadWorkspace(agentId, workspace);
-            sandboxManager.runServeCommand(sandboxId, properties.getPort());
+            Map<String, String> serveEnv = serveProcessEnv(agent, mcpBlockWritten);
+            if (serveEnv.isEmpty()) {
+                sandboxManager.runServeCommand(sandboxId, properties.getPort());
+            } else {
+                sandboxManager.runServeCommand(sandboxId, properties.getPort(), serveEnv);
+            }
             String serveUrl = sandboxManager.getSandboxUrl(sandboxId, properties.getPort());
             client = clientForUrl(serveUrl);
             waitForHealth(client, agentId);
@@ -495,21 +506,27 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
      *
      * <p>For the Aria assistant agent only (and only when {@code aria.mcp.enabled}),
      * a {@code mcp.aria-conductor} remote block is inserted between the permission
-     * and model members, pointing opencode at the backend MCP endpoint via a
-     * sandbox-reachable host address (SandboxHostResolver). When no reachable
-     * host can be resolved the mcp block is skipped with a WARN — we never emit
-     * the spike-refused {@code host.docker.internal} alias. In token auth mode the
+     * and model members, pointing opencode at the backend MCP endpoint via the
+     * PROVEN sandbox-reachable host ({@code provenHost} — verified from inside
+     * the sandbox by {@link #probeMcpHost}, replacing the former address-guessing
+     * that live acceptance showed picks unreachable candidates). When no proven
+     * host exists the mcp block is skipped with a WARN — we never emit the
+     * spike-refused {@code host.docker.internal} alias. In token auth mode the
      * block carries an {@code Authorization: Bearer {env:ARIA_MCP_TOKEN}} header
-     * whose token is injected into the sandbox env (see {@link #effectiveSandboxEnv}).
+     * whose token is injected into the serve process env (see
+     * {@link #serveProcessEnv}).
      *
      * <p>Best-effort: a write failure is logged and the sandbox still comes up.
      *
+     * @param provenHost sandbox-verified reachable host for the MCP endpoint;
+     *                   empty when MCP is disabled, the agent is not Aria, or no
+     *                   candidate proved reachable
      * @return {@code true} iff the {@code mcp.aria-conductor} block was actually
      *         written (false when MCP is disabled, the agent is not Aria, no
-     *         sandbox-reachable host resolved, or the config write failed) — the
-     *         sandbox env may only carry {@code ARIA_MCP_TOKEN} when this is true.
+     *         proven host, or the config write failed) — the serve process env may
+     *         only carry {@code ARIA_MCP_TOKEN} when this is true.
      */
-    private boolean writeOpenCodeConfig(Path workspace, Agent agent) {
+    private boolean writeOpenCodeConfig(Path workspace, Agent agent, Optional<String> provenHost) {
         boolean mcpBlockWritten = false;
         try {
             LlmProvider active = providerRepository.findByActiveTrue().orElse(null);
@@ -525,10 +542,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             String mcpBlock = "";
             String mcpStatus = "off";
             if (mcpEnabledFor(agent)) {
-                Optional<String> host = SandboxHostResolver
-                        .fromSystemInterfaces(mcpProperties.getSandboxHostAddress())
-                        .resolve();
-                if (host.isEmpty()) {
+                if (provenHost.isEmpty()) {
                     // Amended per Task 9 review (19ce045): skip the block entirely —
                     // NEVER fall back to host.docker.internal (spike-refused 2026-09-05).
                     log.warn("no sandbox-reachable host address; skipping mcp block for workspace {}", workspace);
@@ -536,7 +550,9 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                     String headerLine = mcpProperties.isTokenMode()
                             ? ",\n          \"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\""
                             : "";
-                    // url path resolution: 1.0.9 serves SSE (/sse handshake, /mcp/message); opencode's remote transport (streamable vs SSE) is verified live in Task 13 acceptance — spec §3 fallback (in-house streamable controller) if opencode cannot connect
+                    // url path resolution (spec §3 fallback): opencode speaks streamable
+                    // HTTP only; the streamable transport at /mcp is wired in
+                    // act-mcp McpServerConfig alongside the SSE autoconfiguration.
                     mcpBlock = """
                             ,
                               "mcp": {
@@ -545,8 +561,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                                   "url": "http://%s:%d/mcp"%s
                                 }
                               }
-                            """.formatted(host.get(), mcpProperties.getPort(), headerLine);
-                    mcpStatus = "on (" + host.get() + ")";
+                            """.formatted(provenHost.get(), mcpProperties.getPort(), headerLine);
+                    mcpStatus = "on (" + provenHost.get() + ")";
                     mcpBlockWritten = true;
                 }
             }
@@ -592,27 +608,81 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     }
 
     /**
-     * Base sandbox-env plus the MCP token for the Aria agent in token mode —
-     * the only agent whose opencode.json references {env:ARIA_MCP_TOKEN}.
+     * Spec §3 fallback: replace host-address GUESSING with a sandbox-internal
+     * reachability PROBE (VERIFY-THEN-WRITE). Executes a health check from INSIDE
+     * the sandbox against each ranked candidate
+     * ({@link SandboxHostResolver#resolveOrdered()}); the first candidate whose
+     * {@code /actuator/health} answers 200 is the proven sandbox-reachable host.
+     * Every probe result is logged at INFO.
      *
-     * <p>The token is injected only when the mcp block was actually written
-     * ({@code mcpBlockWritten} — see {@link #writeOpenCodeConfig}): injecting a
-     * token without the referencing block would leak a secret into a sandbox
-     * that can never use it.
+     * <p>The override ({@code aria.mcp.sandbox-host-address}) is probed TOO —
+     * fail-closed by design: a hand-set address the sandbox cannot reach must NOT
+     * produce an mcp block pointing at it (live acceptance picked the unreachable
+     * 172.20.192.1 over the working 172.30.112.1 when guessing).
+     *
+     * <p>Exec-service failures count as "not reachable" and probing continues —
+     * sandbox preparation never fails because of the probe.
+     *
+     * @param sandboxId sandbox to probe from
+     * @return the first proven-reachable host, or empty (callers skip the mcp block)
      */
-    private Map<String, String> effectiveSandboxEnv(Agent agent, boolean mcpBlockWritten) {
-        Map<String, String> env = properties.getSandboxEnv();
+    private Optional<String> probeMcpHost(String sandboxId) {
+        List<String> candidates = hostResolverFactory
+                .apply(mcpProperties.getSandboxHostAddress())
+                .resolveOrdered();
+        for (String candidate : candidates) {
+            String outcome = execProbe(sandboxId, candidate);
+            log.info("MCP host probe from sandbox {} -> http://{}:{} : {}",
+                    sandboxId, candidate, mcpProperties.getPort(), outcome);
+            if ("200".equals(outcome)) {
+                log.info("Proven sandbox-reachable MCP host: {}", candidate);
+                return Optional.of(candidate);
+            }
+        }
+        log.warn("no sandbox-reachable host address ({} candidate(s) probed); mcp block will be skipped",
+                candidates.size());
+        return Optional.empty();
+    }
+
+    /** One in-sandbox probe: HTTP status of the backend health endpoint, as seen from the sandbox. */
+    private String execProbe(String sandboxId, String candidate) {
+        try {
+            String out = sandboxManager.runCommand(sandboxId, String.format(
+                    "curl -s -o /dev/null -w \"%%{http_code}\" --max-time 3 http://%s:%d/actuator/health",
+                    candidate, mcpProperties.getPort()));
+            return out == null ? "" : out.trim();
+        } catch (Exception e) {
+            log.info("MCP host probe {} could not execute: {}", candidate, e.getMessage());
+            return "exec-error";
+        }
+    }
+
+    /**
+     * Process env for the {@code opencode serve} command: the MCP bearer token for
+     * the Aria agent in token mode, ONLY when the mcp block was actually written
+     * ({@code mcpBlockWritten} — see {@link #writeOpenCodeConfig}): injecting a
+     * token without the referencing block would leak a secret into a sandbox that
+     * can never use it.
+     *
+     * <p>Wiring deviation from v1 (token rode the createSandbox container env):
+     * the reachability probe must run BETWEEN createSandbox and uploadWorkspace
+     * (spec §3 fallback), so the block outcome is known only after the sandbox
+     * exists and the token can no longer ride the container env (fixed at
+     * creation). OpenSandbox execd's per-command env
+     * ({@code RunCommandRequest.envs}, see {@code OpenCodeSandboxManager#runServeCommand(String, int, Map)})
+     * injects it into the serve process — the process whose env opencode resolves
+     * {@code {env:ARIA_MCP_TOKEN}} from.
+     */
+    private Map<String, String> serveProcessEnv(Agent agent, boolean mcpBlockWritten) {
         boolean ariaWithToken = mcpProperties.isEnabled()
                 && mcpProperties.isTokenMode()
                 && agent != null
                 && AriaConstants.ARIA_AGENT_ID.equals(agent.getId())
                 && mcpBlockWritten;
         if (!ariaWithToken) {
-            return env;
+            return Map.of();
         }
-        Map<String, String> withToken = new LinkedHashMap<>(env == null ? Map.of() : env);
-        withToken.put("ARIA_MCP_TOKEN", mcpProperties.getToken());
-        return withToken;
+        return Map.of("ARIA_MCP_TOKEN", mcpProperties.getToken());
     }
 
     /**
@@ -760,6 +830,11 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     /** Test-only: shrink the ready poll interval. */
     void setReadyPollIntervalForTest(Duration interval) {
         this.readyPollInterval = interval;
+    }
+
+    /** Test-only: replace the host-candidate source for the reachability probe. */
+    void setHostResolverFactoryForTest(java.util.function.Function<String, SandboxHostResolver> factory) {
+        this.hostResolverFactory = factory;
     }
 
     /**

@@ -7,6 +7,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -18,6 +19,10 @@ class McpEndpointIntegrationTest {
 
     @LocalServerPort
     int port;
+
+    @MockitoBean io.aria.conductor.knowledge.service.WorkflowTemplateService workflowTemplateService;
+    @MockitoBean io.aria.conductor.agent.service.WorkflowService workflowService;
+    @MockitoBean io.aria.conductor.execution.mcp.McpProperties mcpProperties;
 
     @Test
     void handshake_listsCuratedPhase2Tools() {

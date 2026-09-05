@@ -452,9 +452,9 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Cannot create workspace dir " + workspace + ": " + e.getMessage(), e);
         }
-        writeOpenCodeConfig(workspace, agent);
+        boolean mcpBlockWritten = writeOpenCodeConfig(workspace, agent);
 
-        Map<String, String> env = effectiveSandboxEnv(agent);
+        Map<String, String> env = effectiveSandboxEnv(agent, mcpBlockWritten);
         String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), env);
         OpenCodeHttpClient client = null;
         try {
@@ -503,8 +503,14 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
      * whose token is injected into the sandbox env (see {@link #effectiveSandboxEnv}).
      *
      * <p>Best-effort: a write failure is logged and the sandbox still comes up.
+     *
+     * @return {@code true} iff the {@code mcp.aria-conductor} block was actually
+     *         written (false when MCP is disabled, the agent is not Aria, no
+     *         sandbox-reachable host resolved, or the config write failed) — the
+     *         sandbox env may only carry {@code ARIA_MCP_TOKEN} when this is true.
      */
-    private void writeOpenCodeConfig(Path workspace, Agent agent) {
+    private boolean writeOpenCodeConfig(Path workspace, Agent agent) {
+        boolean mcpBlockWritten = false;
         try {
             LlmProvider active = providerRepository.findByActiveTrue().orElse(null);
             String providerId = active != null && active.getName() != null && !active.getName().isBlank()
@@ -541,6 +547,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                               }
                             """.formatted(host.get(), mcpProperties.getPort(), headerLine);
                     mcpStatus = "on (" + host.get() + ")";
+                    mcpBlockWritten = true;
                 }
             }
             // %s slot: mcpBlock owns its leading comma and is empty-ok — keep %s directly after the permission object's closing brace.
@@ -572,7 +579,9 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                     workspace, providerId, model, mcpStatus);
         } catch (IOException e) {
             log.warn("Could not write opencode.json to {}: {}", workspace, e.getMessage());
+            return false;
         }
+        return mcpBlockWritten;
     }
 
     /** The {@code mcp.aria-conductor} block is wired only for the Aria assistant agent, when enabled. */
@@ -585,13 +594,19 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     /**
      * Base sandbox-env plus the MCP token for the Aria agent in token mode —
      * the only agent whose opencode.json references {env:ARIA_MCP_TOKEN}.
+     *
+     * <p>The token is injected only when the mcp block was actually written
+     * ({@code mcpBlockWritten} — see {@link #writeOpenCodeConfig}): injecting a
+     * token without the referencing block would leak a secret into a sandbox
+     * that can never use it.
      */
-    private Map<String, String> effectiveSandboxEnv(Agent agent) {
+    private Map<String, String> effectiveSandboxEnv(Agent agent, boolean mcpBlockWritten) {
         Map<String, String> env = properties.getSandboxEnv();
         boolean ariaWithToken = mcpProperties.isEnabled()
                 && mcpProperties.isTokenMode()
                 && agent != null
-                && AriaConstants.ARIA_AGENT_ID.equals(agent.getId());
+                && AriaConstants.ARIA_AGENT_ID.equals(agent.getId())
+                && mcpBlockWritten;
         if (!ariaWithToken) {
             return env;
         }

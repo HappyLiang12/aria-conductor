@@ -8,8 +8,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = McpTestBootstrap.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
@@ -23,21 +21,22 @@ class McpEndpointIntegrationTest {
 
     @Test
     void handshake_listsCuratedPhase2Tools() {
-        McpSyncClient client = McpClient.sync(HttpClientSseClientTransport.builder("http://localhost:" + port).build())
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port).build())
                 .requestTimeout(java.time.Duration.ofSeconds(10))
-                .build();
-        client.initialize();
-        McpSchema.ListToolsResult tools = client.listTools();
+                .build()) {
+            client.initialize();
+            McpSchema.ListToolsResult tools = client.listTools();
 
-        assertThat(tools.tools())
-                .extracting(McpSchema.Tool::name)
-                .containsExactlyInAnyOrder(
-                        "list_workflow_templates",
-                        "instantiate_workflow_template",
-                        "get_workflow",
-                        "list_knowledge",
-                        "list_approvals",
-                        "decide_approval");
-        client.close();
+            assertThat(tools.tools())
+                    .extracting(McpSchema.Tool::name)
+                    .containsExactlyInAnyOrder(
+                            "list_workflow_templates",
+                            "instantiate_workflow_template",
+                            "get_workflow",
+                            "list_knowledge",
+                            "list_approvals",
+                            "decide_approval");
+        }
     }
 }

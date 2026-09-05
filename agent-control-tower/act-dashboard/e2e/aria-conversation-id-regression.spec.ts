@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { uniqueName } from './fixtures';
 
 /**
  * E2E Regression: conversationId semantic fix (Issue #141).
@@ -16,15 +17,16 @@ import { test, expect } from '@playwright/test';
  */
 test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
-// Unique per-run conversation ids: conversations persist server-side across
-// runs and the Aria panel resumes GET /aria/conversations/latest, so fixed
-// literals leak into other specs' panels (a later spec asserting a fresh UUID
-// would observe this spec's stale id) and collide across consecutive runs.
+// Unique per-run conversation ids (via the shared uniqueName helper: prefix +
+// timestamp + random suffix): conversations persist server-side across runs
+// and the Aria panel resumes GET /aria/conversations/latest, so fixed literals
+// leak into other specs' panels (a later spec asserting a fresh UUID would
+// observe this spec's stale id) and collide across consecutive runs.
 // Uniqueness keeps the echo/reuse assertions testing REUSE semantics, not
 // fixed literals.
-const CONV_ECHO = `test-conv-${Date.now()}`;
-const CONV_STREAM = `test-conv-stream-${Date.now()}`;
-const CONV_REUSE = `reuse-conv-${Date.now()}`;
+const CONV_ECHO = uniqueName('test-conv');
+const CONV_STREAM = uniqueName('test-conv-stream');
+const CONV_REUSE = uniqueName('reuse-conv');
 
 // A successful LLM reply is needed for the 'message' SSE event; without a key the
 // stream ends thinking → error → done.

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { uniqueName } from './fixtures';
 
 /**
  * E2E: Git Pack Lifecycle — verifies the governed plugin system's git integration.
@@ -45,12 +46,13 @@ test.describe('Git Pack Governance Lifecycle', () => {
   });
 
   test('pack management endpoints work (register, approve, reject)', async ({ request }) => {
-    // Unique per-run pack name: pack names are unique server-side and a leftover
-    // 'test-pack-e2e' from an earlier run on a shared/dirty DB turns the register
-    // POST into a 500 — the same fixed-literal class as the conversation ids.
+    // Unique per-run pack name (via the shared uniqueName helper): pack names
+    // are unique server-side and a leftover 'test-pack-e2e' from an earlier
+    // run on a shared/dirty DB turns the register POST into a 500 — the same
+    // fixed-literal class as the conversation ids.
     const registerResp = await request.post(`${API_URL}/api/v1/packs`, {
       data: {
-        name: `test-pack-e2e-${Date.now()}`,
+        name: uniqueName('test-pack-e2e'),
         kind: 'HANDLER',
         sandboxMode: 'NONE',
         enabled: false,

@@ -2,7 +2,7 @@ package io.aria.conductor.aria.init;
 
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
-import io.aria.conductor.aria.AriaConstants;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentToolId;
 import io.aria.conductor.common.model.AgentType;

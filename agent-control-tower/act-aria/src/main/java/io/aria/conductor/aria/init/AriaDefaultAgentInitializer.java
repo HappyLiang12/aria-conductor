@@ -5,7 +5,7 @@ import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
-import io.aria.conductor.aria.AriaConstants;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.AdkSystemProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;

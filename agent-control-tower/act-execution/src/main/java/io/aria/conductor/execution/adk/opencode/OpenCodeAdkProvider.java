@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.adk.opencode;
 
 import io.aria.conductor.agent.repository.LlmProviderRepository;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.execution.adk.AbstractAdkProvider;
@@ -9,6 +10,8 @@ import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmResponse;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.SandboxHostResolver;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,8 +24,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -70,6 +75,8 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private final OpenCodeHttpClient fixedHttpClient;
     /** Active DB provider source for opencode.json generation. */
     private final LlmProviderRepository providerRepository;
+    /** MCP endpoint config — wires the {@code mcp.aria-conductor} remote block into Aria's opencode.json. */
+    private final McpProperties mcpProperties;
     /** S10: optional publisher for run.progress events (null = pump silent). */
     private final ApplicationEventPublisher eventPublisher;
 
@@ -95,9 +102,11 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     @Autowired
     public OpenCodeAdkProvider(OpenCodeProperties properties,
                                LlmProviderRepository providerRepository,
-                               ApplicationEventPublisher eventPublisher) {
+                               ApplicationEventPublisher eventPublisher,
+                               McpProperties mcpProperties) {
         this(properties, new OpenCodeSandboxManager(
-                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository, eventPublisher);
+                properties.getSandboxServerUrl(), properties.getSandboxApiKey()), null, providerRepository,
+                eventPublisher, mcpProperties);
     }
 
     /** Test constructor — allows injecting a mocked {@link OpenCodeSandboxManager},
@@ -105,8 +114,9 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     OpenCodeAdkProvider(OpenCodeProperties properties,
                         OpenCodeSandboxManager sandboxManager,
                         OpenCodeHttpClient httpClient,
-                        LlmProviderRepository providerRepository) {
-        this(properties, sandboxManager, httpClient, providerRepository, null);
+                        LlmProviderRepository providerRepository,
+                        McpProperties mcpProperties) {
+        this(properties, sandboxManager, httpClient, providerRepository, null, mcpProperties);
     }
 
     /** S10: test/production constructor with progress event publisher. */
@@ -114,11 +124,13 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                         OpenCodeSandboxManager sandboxManager,
                         OpenCodeHttpClient httpClient,
                         LlmProviderRepository providerRepository,
-                        ApplicationEventPublisher eventPublisher) {
+                        ApplicationEventPublisher eventPublisher,
+                        McpProperties mcpProperties) {
         this.properties = properties;
         this.sandboxManager = sandboxManager;
         this.fixedHttpClient = httpClient;
         this.providerRepository = providerRepository;
+        this.mcpProperties = mcpProperties;
         this.eventPublisher = eventPublisher;
     }
 
@@ -440,9 +452,10 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                     "Cannot create workspace dir " + workspace + ": " + e.getMessage(), e);
         }
-        writeOpenCodeConfig(workspace);
+        writeOpenCodeConfig(workspace, agent);
 
-        String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), properties.getSandboxEnv());
+        Map<String, String> env = effectiveSandboxEnv(agent);
+        String sandboxId = sandboxManager.createSandbox(agentId, properties.getImage(), env);
         OpenCodeHttpClient client = null;
         try {
             sandboxManager.uploadWorkspace(agentId, workspace);
@@ -480,9 +493,18 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
      * {@link LlmProvider} model, falling back to deepseek defaults when no
      * provider is active (first-run keeps working without DB setup).
      *
+     * <p>For the Aria assistant agent only (and only when {@code aria.mcp.enabled}),
+     * a {@code mcp.aria-conductor} remote block is inserted between the permission
+     * and model members, pointing opencode at the backend MCP endpoint via a
+     * sandbox-reachable host address (SandboxHostResolver). When no reachable
+     * host can be resolved the mcp block is skipped with a WARN — we never emit
+     * the spike-refused {@code host.docker.internal} alias. In token auth mode the
+     * block carries an {@code Authorization: Bearer {env:ARIA_MCP_TOKEN}} header
+     * whose token is injected into the sandbox env (see {@link #effectiveSandboxEnv}).
+     *
      * <p>Best-effort: a write failure is logged and the sandbox still comes up.
      */
-    private void writeOpenCodeConfig(Path workspace) {
+    private void writeOpenCodeConfig(Path workspace, Agent agent) {
         try {
             LlmProvider active = providerRepository.findByActiveTrue().orElse(null);
             String providerId = active != null && active.getName() != null && !active.getName().isBlank()
@@ -494,6 +516,32 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
             String baseUrl = active != null && active.getBaseUrl() != null && !active.getBaseUrl().isBlank()
                     ? active.getBaseUrl()
                     : "https://api.deepseek.com/v1";
+            String mcpBlock = "";
+            String mcpStatus = "off";
+            if (mcpEnabledFor(agent)) {
+                Optional<String> host = SandboxHostResolver
+                        .fromSystemInterfaces(mcpProperties.getSandboxHostAddress())
+                        .resolve();
+                if (host.isEmpty()) {
+                    // Amended per Task 9 review (19ce045): skip the block entirely —
+                    // NEVER fall back to host.docker.internal (spike-refused 2026-09-05).
+                    log.warn("no sandbox-reachable host address; skipping mcp block for workspace {}", workspace);
+                } else {
+                    String headerLine = mcpProperties.isTokenMode()
+                            ? ",\n          \"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\""
+                            : "";
+                    mcpBlock = """
+                            ,
+                              "mcp": {
+                                "aria-conductor": {
+                                  "type": "remote",
+                                  "url": "http://%s:%d/mcp"%s
+                                }
+                              }
+                            """.formatted(host.get(), mcpProperties.getPort(), headerLine);
+                    mcpStatus = "on (" + host.get() + ")";
+                }
+            }
             String json = """
                     {
                       "$schema": "https://opencode.ai/config.json",
@@ -501,7 +549,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                         "*": "allow",
                         "question": "deny",
                         "external_directory": "deny"
-                      },
+                      }%s,
                       "model": "%s/%s",
                       "provider": {
                         "%s": {
@@ -516,12 +564,38 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                         }
                       }
                     }
-                    """.formatted(providerId, model, providerId, baseUrl, model);
+                    """.formatted(mcpBlock, providerId, model, providerId, baseUrl, model);
             Files.writeString(workspace.resolve("opencode.json"), json);
-            log.info("Wrote opencode.json for workspace {} (provider={}, model={})", workspace, providerId, model);
+            log.info("Wrote opencode.json for workspace {} (provider={}, model={}, mcp={})",
+                    workspace, providerId, model, mcpStatus);
         } catch (IOException e) {
             log.warn("Could not write opencode.json to {}: {}", workspace, e.getMessage());
         }
+    }
+
+    /** The {@code mcp.aria-conductor} block is wired only for the Aria assistant agent, when enabled. */
+    private boolean mcpEnabledFor(Agent agent) {
+        return mcpProperties.isEnabled()
+                && agent != null
+                && AriaConstants.ARIA_AGENT_ID.equals(agent.getId());
+    }
+
+    /**
+     * Base sandbox-env plus the MCP token for the Aria agent in token mode —
+     * the only agent whose opencode.json references {env:ARIA_MCP_TOKEN}.
+     */
+    private Map<String, String> effectiveSandboxEnv(Agent agent) {
+        Map<String, String> env = properties.getSandboxEnv();
+        boolean ariaWithToken = mcpProperties.isEnabled()
+                && mcpProperties.isTokenMode()
+                && agent != null
+                && AriaConstants.ARIA_AGENT_ID.equals(agent.getId());
+        if (!ariaWithToken) {
+            return env;
+        }
+        Map<String, String> withToken = new LinkedHashMap<>(env == null ? Map.of() : env);
+        withToken.put("ARIA_MCP_TOKEN", mcpProperties.getToken());
+        return withToken;
     }
 
     /**

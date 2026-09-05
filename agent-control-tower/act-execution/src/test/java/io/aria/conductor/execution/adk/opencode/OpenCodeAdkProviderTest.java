@@ -12,6 +12,7 @@ import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider.OpenCodeInstance;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.mcp.McpProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
@@ -75,6 +77,7 @@ class OpenCodeAdkProviderTest {
     @TempDir Path tempDir;
 
     OpenCodeProperties properties;
+    McpProperties mcpProperties;
     OpenCodeAdkProvider provider;
 
     @BeforeEach
@@ -85,7 +88,8 @@ class OpenCodeAdkProviderTest {
         properties.setImage(IMAGE);
         properties.setPort(4096);
         properties.setMaxTaskMinutes(30);
-        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient, providerRepository);
+        mcpProperties = new McpProperties();
+        provider = new OpenCodeAdkProvider(properties, sandboxManager, httpClient, providerRepository, mcpProperties);
         provider.setWorkspaceBaseForTest(tempDir);
     }
 
@@ -233,7 +237,7 @@ class OpenCodeAdkProviderTest {
     void executeTask_publishesRunProgressEventsWhileTaskInFlight() throws Exception {
         properties.setProgressPollMs(50);
         OpenCodeAdkProvider pubProvider = new OpenCodeAdkProvider(
-                properties, sandboxManager, httpClient, providerRepository, publisher);
+                properties, sandboxManager, httpClient, providerRepository, publisher, mcpProperties);
         pubProvider.setWorkspaceBaseForTest(tempDir);
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
@@ -834,5 +838,77 @@ class OpenCodeAdkProviderTest {
                     .as("permission '%s' must not resolve to 'ask' (headless hang risk)", key)
                     .isNotEqualTo("ask");
         }
+    }
+
+    // ---- MCP: mcp.aria-conductor remote block wired into Aria's opencode.json ----
+
+    @Test
+    void prepareInstance_ariaAgent_getsMcpRemoteBlock_withoutHeader_whenAuthNone() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-a");
+        when(sandboxManager.getSandboxUrl("sb-a", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        mcpProperties.setAuthMode("none");
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("\"mcp\"");
+        assertThat(json).contains("http://172.30.112.1:8080/mcp");
+        assertThat(json).doesNotContain("Authorization");
+        // none mode: no token may be injected into the sandbox env
+        verify(sandboxManager).createSandbox(eq(ariaId), eq(IMAGE),
+                argThat(env -> env == null || !env.containsKey("ARIA_MCP_TOKEN")));
+    }
+
+    @Test
+    void prepareInstance_ariaAgent_tokenMode_addsHeaderAndInjectsToken() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-t");
+        when(sandboxManager.getSandboxUrl("sb-t", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        mcpProperties.setAuthMode("token");
+        mcpProperties.setToken("tok-1");
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("\"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\"");
+        verify(sandboxManager).createSandbox(eq(ariaId), eq(IMAGE),
+                argThat(env -> env != null && "tok-1".equals(env.get("ARIA_MCP_TOKEN"))));
+    }
+
+    @Test
+    void prepareInstance_workerAgent_neverGetsMcpBlock() throws Exception {
+        UUID workerId = UUID.randomUUID();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(workerId), eq(IMAGE), any())).thenReturn("sb-w");
+        when(sandboxManager.getSandboxUrl("sb-w", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+
+        provider.prepareAgent(workerId, agent(workerId));
+
+        String json = Files.readString(tempDir.resolve(workerId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
+    }
+
+    @Test
+    void prepareInstance_mcpDisabled_noMcpBlock() throws Exception {
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-d");
+        when(sandboxManager.getSandboxUrl("sb-d", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setEnabled(false);
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
     }
 }

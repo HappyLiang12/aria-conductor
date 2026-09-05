@@ -1,6 +1,7 @@
 package io.aria.conductor.mcp.tools;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.PrintWriter;
@@ -16,7 +17,9 @@ import java.util.Map;
 @Slf4j
 public final class ToolResponses {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .findAndRegisterModules()
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     private ToolResponses() {
     }

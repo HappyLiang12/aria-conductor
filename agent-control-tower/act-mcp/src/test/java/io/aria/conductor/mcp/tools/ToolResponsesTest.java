@@ -43,4 +43,14 @@ class ToolResponsesTest {
         String json = ToolResponses.error("VALIDATION", "field \"name\" blank", null, false);
         assertThat(mapper.readTree(json).get("message").asText()).isEqualTo("field \"name\" blank");
     }
+
+    @Test
+    void ok_serializesInstantFields_viaRegisteredJavaTimeModule() throws Exception {
+        // Regression: a bare ObjectMapper throws InvalidDefinitionException on
+        // java.time.Instant — every real DTO (WorkflowResponse etc.) is Instant-bearing
+        // and would silently degrade to the SERIALIZATION fallback envelope.
+        String json = ToolResponses.ok(java.util.Map.of("createdAt", java.time.Instant.parse("2026-09-05T00:00:00Z")));
+        JsonNode node = mapper.readTree(json);
+        assertThat(node.get("data").get("createdAt").asText()).isEqualTo("2026-09-05T00:00:00Z");
+    }
 }

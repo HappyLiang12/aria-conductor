@@ -64,19 +64,39 @@ public final class SandboxHostResolver {
     }
 
     private static boolean isPrivateV4(String address) {
+        int first = firstOctet(address);
         if (address.startsWith("127.") || address.startsWith("169.254.") || address.startsWith("0.")) {
             return false;
         }
-        return address.startsWith("172.") || address.startsWith("10.") || address.startsWith("192.168.");
+        return first == 10 || (first == 172 && secondOctet(address) >= 16 && secondOctet(address) <= 31)
+                || first == 192 && address.startsWith("192.168.");
     }
 
     private static int rank(String address) {
-        if (address.startsWith("172.")) {
+        int first = firstOctet(address);
+        if (first == 172 && secondOctet(address) >= 16 && secondOctet(address) <= 31) {
             return 0; // podman/WSL host-side adapter range (spike-proven)
         }
-        if (address.startsWith("10.")) {
+        if (first == 10) {
             return 1;
         }
         return 2; // 192.168.x
+    }
+
+    private static int firstOctet(String address) {
+        try {
+            return Integer.parseInt(address.substring(0, address.indexOf('.')));
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    private static int secondOctet(String address) {
+        try {
+            int firstDot = address.indexOf('.');
+            return Integer.parseInt(address.substring(firstDot + 1, address.indexOf('.', firstDot + 1)));
+        } catch (Exception e) {
+            return -1;
+        }
     }
 }

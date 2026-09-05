@@ -41,4 +41,20 @@ class SandboxHostResolverTest {
     void emptyWhenNothingUsable() {
         assertThat(SandboxHostResolver.over(List.of(c("lo", "127.0.0.1")), "").resolve()).isEmpty();
     }
+
+    @Test
+    void excludesPublic172_32_andAbove() {
+        SandboxHostResolver resolver = SandboxHostResolver.over(List.of(
+                c("docker0", "172.32.0.1"),
+                c("Ethernet", "192.168.0.119")), "");
+        assertThat(resolver.resolve()).contains("192.168.0.119");
+    }
+
+    @Test
+    void includesFull172_16_to_172_31_range() {
+        SandboxHostResolver resolver = SandboxHostResolver.over(List.of(
+                c("Ethernet", "192.168.0.119"),
+                c("vEthernet (WSL)", "172.16.5.4")), "");
+        assertThat(resolver.resolve()).contains("172.16.5.4");
+    }
 }

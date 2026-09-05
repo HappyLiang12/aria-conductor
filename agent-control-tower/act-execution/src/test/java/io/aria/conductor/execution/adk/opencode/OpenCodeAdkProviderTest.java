@@ -858,6 +858,10 @@ class OpenCodeAdkProviderTest {
         assertThat(json).contains("\"mcp\"");
         assertThat(json).contains("http://172.30.112.1:8080/mcp");
         assertThat(json).doesNotContain("Authorization");
+        JsonNode root = new ObjectMapper().readTree(json);
+        assertThat(root.path("mcp").path("aria-conductor").path("type").asText()).isEqualTo("remote");
+        assertThat(root.path("mcp").path("aria-conductor").path("url").asText()).isEqualTo("http://172.30.112.1:8080/mcp");
+        assertThat(root.path("mcp").path("aria-conductor").has("headers")).isFalse();
         // none mode: no token may be injected into the sandbox env
         verify(sandboxManager).createSandbox(eq(ariaId), eq(IMAGE),
                 argThat(env -> env == null || !env.containsKey("ARIA_MCP_TOKEN")));
@@ -895,6 +899,22 @@ class OpenCodeAdkProviderTest {
 
         String json = Files.readString(tempDir.resolve(workerId.toString()).resolve("opencode.json"));
         assertThat(json).doesNotContain("\"mcp\"");
+    }
+
+    @Test
+    void prepareInstance_workerAgent_tokenMode_noTokenInjected() throws Exception {
+        UUID workerId = UUID.randomUUID();
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(workerId), eq(IMAGE), any())).thenReturn("sb-wt");
+        when(sandboxManager.getSandboxUrl("sb-wt", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setAuthMode("token");
+        mcpProperties.setToken("tok-2");
+
+        provider.prepareAgent(workerId, agent(workerId));
+
+        verify(sandboxManager).createSandbox(eq(workerId), eq(IMAGE),
+                argThat(env -> env == null || !env.containsKey("ARIA_MCP_TOKEN")));
     }
 
     @Test

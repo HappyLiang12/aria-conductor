@@ -23,6 +23,9 @@ class McpEndpointIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.service.WorkflowTemplateService workflowTemplateService;
     @MockitoBean io.aria.conductor.agent.service.WorkflowService workflowService;
     @MockitoBean io.aria.conductor.execution.mcp.McpProperties mcpProperties;
+    @MockitoBean io.aria.conductor.knowledge.service.KnowledgeService knowledgeService;
+    @MockitoBean io.aria.conductor.execution.approval.ApprovalQueryService approvalQueryService;
+    @MockitoBean io.aria.conductor.execution.approval.ApprovalGate approvalGate;
 
     @Test
     void handshake_listsCuratedPhase2Tools() {

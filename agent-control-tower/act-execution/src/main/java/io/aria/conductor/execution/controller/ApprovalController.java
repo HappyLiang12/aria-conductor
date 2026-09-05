@@ -4,22 +4,19 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.execution.approval.ApprovalGate;
+import io.aria.conductor.execution.approval.ApprovalQueryService;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -30,15 +27,28 @@ public class ApprovalController {
     private final ApprovalGate approvalGate;
     private final ToolCallRepository toolCallRepository;
     private final ToolRiskResolver toolRiskResolver;
+    private final ApprovalQueryService approvalQueryService;
 
+    /** Convenience constructor building its own query service (direct-instantiation tests). */
     public ApprovalController(ApprovalRepository approvalRepository,
                               ApprovalGate approvalGate,
                               ToolCallRepository toolCallRepository,
                               ToolRiskResolver toolRiskResolver) {
+        this(approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
+                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver));
+    }
+
+    @Autowired
+    public ApprovalController(ApprovalRepository approvalRepository,
+                              ApprovalGate approvalGate,
+                              ToolCallRepository toolCallRepository,
+                              ToolRiskResolver toolRiskResolver,
+                              ApprovalQueryService approvalQueryService) {
         this.approvalRepository = approvalRepository;
         this.approvalGate = approvalGate;
         this.toolCallRepository = toolCallRepository;
         this.toolRiskResolver = toolRiskResolver;
+        this.approvalQueryService = approvalQueryService;
     }
 
     /**
@@ -66,27 +76,14 @@ public class ApprovalController {
     /**
      * List approvals, optionally filtered by {@link ApprovalStatus}. With no status the endpoint
      * returns a bounded, most-recent-first page (F21) instead of an unbounded {@code findAll()},
-     * so the approvals/history UI keeps working against a large table.
+     * so the approvals/history UI keeps working against a large table. Assembly (entity ->
+     * {@link ApprovalDetail} enrichment) is shared with the MCP ApprovalTools via
+     * {@link ApprovalQueryService}.
      */
     @GetMapping
     public ResponseEntity<List<ApprovalDetail>> listApprovals(
             @RequestParam(required = false) ApprovalStatus status) {
-        List<Approval> approvals = status != null
-                ? approvalRepository.findByStatus(status)
-                : approvalRepository.findAll(
-                        PageRequest.of(0, 200, Sort.by("requestedAt").descending())).getContent();
-        // Batch-load tool calls to avoid N+1; risk tier comes from the cached ToolRiskResolver.
-        List<UUID> toolCallIds = approvals.stream()
-                .map(Approval::getToolCallId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        Map<UUID, ToolCall> toolCalls = toolCallRepository.findAllById(toolCallIds).stream()
-                .collect(Collectors.toMap(ToolCall::getId, Function.identity(), (a, b) -> a));
-        List<ApprovalDetail> details = approvals.stream()
-                .map(a -> toDetail(a, toolCalls.get(a.getToolCallId())))
-                .toList();
-        return ResponseEntity.ok(details);
+        return ResponseEntity.ok(approvalQueryService.list(status));
     }
 
     @GetMapping("/{id}")

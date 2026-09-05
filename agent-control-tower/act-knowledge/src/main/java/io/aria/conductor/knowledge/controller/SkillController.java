@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.List;
 
 @RestController
@@ -55,10 +56,18 @@ public class SkillController {
 
     @PostMapping("/{id}/toggle")
     public ResponseEntity<SkillResponse> toggleSkill(@PathVariable String id) {
-        return skillRepo.findById(id).map(skill -> {
-            skill.setEnabled(!skill.isEnabled());
-            return ResponseEntity.ok(toResponse(skillRepo.save(skill)));
-        }).orElse(ResponseEntity.notFound().build());
+        // Atomic flip: a single UPDATE serializes concurrent togglers, so every
+        // request flips exactly once (the old findById→save RMW lost updates).
+        int updated = skillRepo.toggleEnabled(id, Instant.now());
+        if (updated == 0) {
+            return ResponseEntity.notFound().build();
+        }
+        // toggleEnabled clears the persistence context, so this re-reads the
+        // flipped row; the response shape is unchanged from the RMW era.
+        return skillRepo.findById(id)
+                .map(this::toResponse)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     private SkillResponse toResponse(SkillDefinition skill) {

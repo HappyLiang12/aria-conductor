@@ -1,11 +1,13 @@
 package io.aria.conductor.mcp;
 
-import io.aria.conductor.mcp.tools.WorkflowTools;
+import io.aria.conductor.mcp.tools.McpTool;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * Backend-embedded MCP endpoint. The starter's own auto-configuration serves the
@@ -18,14 +20,21 @@ import org.springframework.context.annotation.Configuration;
 @ConditionalOnProperty(prefix = "aria.mcp", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class McpServerConfig {
 
+    private final List<McpTool> mcpTools;
+
+    public McpServerConfig(List<McpTool> mcpTools) {
+        this.mcpTools = mcpTools;
+    }
+
     /**
      * spring-ai 1.0.9's MCP server auto-configuration consumes ToolCallback /
      * ToolCallbackProvider beans only — @Tool-annotated tool beans are NOT
-     * auto-discovered. This provider bridges the platform tool beans; extend
-     * toolObjects as new tool modules land (Task 7: knowledge + approval tools).
+     * auto-discovered. Every {@link McpTool} bean is bridged into one provider,
+     * so new tool modules register by implementing the marker (Task 7: knowledge
+     * + approval tools) without touching this configuration.
      */
     @Bean
-    public ToolCallbackProvider ariaToolCallbackProvider(WorkflowTools workflowTools) {
-        return MethodToolCallbackProvider.builder().toolObjects(workflowTools).build();
+    public MethodToolCallbackProvider ariaToolCallbackProvider() {
+        return MethodToolCallbackProvider.builder().toolObjects(mcpTools.toArray()).build();
     }
 }

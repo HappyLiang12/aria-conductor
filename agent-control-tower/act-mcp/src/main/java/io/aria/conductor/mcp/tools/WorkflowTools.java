@@ -2,6 +2,7 @@ package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.knowledge.service.WorkflowTemplateService;
@@ -16,10 +17,12 @@ import java.util.UUID;
 /**
  * Workflow template tools (Phase 2 core loop). Thin wrappers over the same
  * services the REST controllers call — REST/dashboard and MCP stay at parity.
+ * Error types mirror GlobalExceptionHandler's REST status mapping (409 CONFLICT
+ * for InvalidStateTransitionException/IllegalStateException).
  */
 @Component
 @RequiredArgsConstructor
-public class WorkflowTools {
+public class WorkflowTools implements McpTool {
 
     private final WorkflowTemplateService workflowTemplateService;
     private final WorkflowService workflowService;
@@ -50,6 +53,9 @@ public class WorkflowTools {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
+        } catch (InvalidStateTransitionException | IllegalStateException e) {
+            // Parity with GlobalExceptionHandler: both map to 409 CONFLICT over REST.
+            return ToolResponses.error("CONFLICT", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("INSTANTIATION_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }

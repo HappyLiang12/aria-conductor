@@ -24,6 +24,7 @@
         <module>act-knowledge</module>
         <module>act-aria</module>
         <module>act-dashboard-api</module>
+        <module>act-mcp</module>
         <module>act-app</module>
         <module>act-test-support</module>
     </modules>
@@ -86,6 +87,11 @@
             </dependency>
             <dependency>
                 <groupId>io.aria.conductor</groupId>
+                <artifactId>act-mcp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.aria.conductor</groupId>
                 <artifactId>act-test-support</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -123,6 +129,15 @@
                 <groupId>net.jqwik</groupId>
                 <artifactId>jqwik</artifactId>
                 <version>${jqwik.version}</version>
+            </dependency>
+
+            <!-- Spring AI (MCP server). 1.0.x is the line documented for Boot 3.4.x — do not jump to 1.1.x/2.0.x. -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>1.0.9</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>

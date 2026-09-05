@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.mcp;
 
 import lombok.Data;
+import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +23,8 @@ public class McpProperties {
     private boolean debug = false;
 
     /** Bearer token; only used when auth-mode=token. */
+    // never appear in logs via toString (Task 11 filter logs)
+    @ToString.Exclude
     private String token = "";
 
     /** Override for the sandbox-reachable host; blank = auto-resolve (SandboxHostResolver). */

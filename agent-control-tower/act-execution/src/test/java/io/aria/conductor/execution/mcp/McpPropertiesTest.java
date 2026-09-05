@@ -15,6 +15,7 @@ class McpPropertiesTest {
         assertThat(props.getToken()).isEmpty();
         assertThat(props.getSandboxHostAddress()).isEmpty();
         assertThat(props.getPort()).isEqualTo(8080);
+        assertThat(props.isTokenMode()).isFalse();
     }
 
     @Test
@@ -23,5 +24,18 @@ class McpPropertiesTest {
         props.setAuthMode("token");
         props.setToken("secret-1");
         assertThat(props.getAuthMode()).isEqualTo("token");
+        assertThat(props.isTokenMode()).isTrue();
+    }
+
+    @Test
+    void tokenMode_isCaseInsensitive_andMalformedFailsOpenToNone() {
+        McpProperties props = new McpProperties();
+        props.setAuthMode("TOKEN");
+        assertThat(props.isTokenMode()).isTrue();
+
+        McpProperties malformed = new McpProperties();
+        malformed.setAuthMode("tokn");
+        // Documented fail-open semantic (spec §6): anything not "token" behaves as none.
+        assertThat(malformed.isTokenMode()).isFalse();
     }
 }

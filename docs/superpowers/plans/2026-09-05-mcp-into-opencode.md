@@ -1397,7 +1397,7 @@ Run: `cd agent-control-tower && mvn -q test -pl act-execution -Dtest=OpenCodeAdk
     }
 ```
 
-  3. `writeOpenCodeConfig(Path workspace, Agent agent)` — the mcp JSON fragment is appended to the existing text block. Because the current config is a single `String.formatted` text block, build the fragment conditionally and insert it via a `%s` slot placed after the `permission` object:
+  3. `writeOpenCodeConfig(Path workspace, Agent agent)` — the mcp JSON fragment is appended to the existing text block. Because the current config is a single `String.formatted` text block, build the fragment conditionally and insert it via a `%s` slot placed after the `permission` object; an empty `resolve()` logs WARN and emits NO mcp block (never fall back to the broken `host.docker.internal` alias):
 
 ```java
             boolean mcpForThisAgent = mcpProperties.isEnabled()
@@ -1405,24 +1405,29 @@ Run: `cd agent-control-tower && mvn -q test -pl act-execution -Dtest=OpenCodeAdk
                     && AriaConstants.ARIA_AGENT_ID.equals(agent.getId());
             String mcpBlock = "";
             if (mcpForThisAgent) {
-                String host = io.aria.conductor.execution.mcp.SandboxHostResolver
+                Optional<String> host = io.aria.conductor.execution.mcp.SandboxHostResolver
                         .fromSystemInterfaces(mcpProperties.getSandboxHostAddress())
-                        .resolve()
-                        .orElse("host.docker.internal");
-                String headerLine = mcpProperties.isTokenMode()
-                        ? ",\n          \"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\""
-                        : "";
-                mcpBlock = """
-                        ,
-                          "mcp": {
-                            "aria-conductor": {
-                              "type": "remote",
-                              "url": "http://%s:%d/mcp"%s
-                            }
-                          }
-                        """.formatted(host, mcpProperties.getPort(), headerLine);
+                        .resolve();
+                if (host.isEmpty()) {
+                    log.warn("no sandbox-reachable host address; skipping mcp block");
+                } else {
+                    String headerLine = mcpProperties.isTokenMode()
+                            ? ",\n          \"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\""
+                            : "";
+                    mcpBlock = """
+                            ,
+                              "mcp": {
+                                "aria-conductor": {
+                                  "type": "remote",
+                                  "url": "http://%s:%d/mcp"%s
+                                }
+                              }
+                            """.formatted(host.get(), mcpProperties.getPort(), headerLine);
+                }
             }
 ```
+
+     (amended per Task 9 review: host.docker.internal spike-refused 2026-09-05)
 
      …then the main text block gains the `%s` slot: `"permission": { ... }%s,` becomes `"permission": { ... }%s` with the trailing comma handled inside `mcpBlock` (the fragment above starts with `,\n` so the base block places `%s` immediately after the permission closing brace and BEFORE the `"model"` key — final emitted JSON must keep `"model"` after the mcp object; the parseable-JSON test enforces validity). Implementation note: because the fragment starts with `,`, the slot in the base block is `...external_directory": "deny"\n  }%s,` — i.e. `%s` directly after the permission object's closing brace. The four JSON-parseable assertions in the existing test are the validity gate; run them.
 

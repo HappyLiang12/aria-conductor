@@ -21,8 +21,11 @@ import { test, expect, type Page } from '@playwright/test';
 // Override the wait budget with E2E_RUN_TIMEOUT_MS if the runtime is slower.
 const RUN_TIMEOUT_MS = Number(process.env.E2E_RUN_TIMEOUT_MS ?? 180_000);
 
-// Test timeout must cover the terminal-state wait plus page interactions.
-test.describe.configure({ mode: 'serial', timeout: Math.max(240_000, RUN_TIMEOUT_MS + 60_000) });
+// Test timeout must cover the worst case of TWO sequential terminal-state
+// waits (tests 8/9 poll two chains back-to-back: 2*RUN_TIMEOUT_MS) plus page
+// interactions, so Playwright's timeout cannot kill the test before
+// waitTerminal's informative throw fires.
+test.describe.configure({ mode: 'serial', timeout: Math.max(240_000, 2 * RUN_TIMEOUT_MS + 120_000) });
 
 const BACKEND = `${process.env.API_URL || 'http://127.0.0.1:8080'}/api/v1`;
 
@@ -64,23 +67,36 @@ async function createWorkflow(page: Page, agentId: string, name: string, steps =
   return data;
 }
 
+/** Terminal states accepted by waitTerminal when the caller does not narrow them. */
+const TERMINAL_STATES = ['FAILED', 'COMPLETED', 'CANCELLED'];
+
 /**
- * Wait for the chain to reach a TERMINAL state (FAILED / COMPLETED / CANCELLED).
+ * Wait for the chain to reach a terminal state (FAILED / COMPLETED / CANCELLED
+ * by default). Pass `expectedStates` to narrow the accepted set — e.g.
+ * ['FAILED'] when the test asserts FAILED-only UI like the Retry button,
+ * which does not render for COMPLETED chains.
  * A chain must never be deleted (or merged / retried against) while still
  * RUNNING — on a real-LLM stack RUNNING can persist for minutes, so the wait
  * budget is runtime-tolerant (E2E_RUN_TIMEOUT_MS) and a timeout THROWS instead
  * of silently continuing into a guaranteed 400.
  */
-async function waitTerminal(page: Page, wfId: string, maxMs = RUN_TIMEOUT_MS) {
+async function waitTerminal(
+  page: Page,
+  wfId: string,
+  maxMs = RUN_TIMEOUT_MS,
+  expectedStates: string[] = TERMINAL_STATES,
+) {
   const start = Date.now();
   let last = '';
   while (Date.now() - start < maxMs) {
     const { data } = await apiCall(page, 'GET', `/workflows/${wfId}`);
     last = data?.status ?? '';
-    if (['FAILED', 'COMPLETED', 'CANCELLED'].includes(last)) return last;
+    if (expectedStates.includes(last)) return last;
     await new Promise(r => setTimeout(r, 1_000));
   }
-  throw new Error(`workflow ${wfId} did not reach a terminal state within ${maxMs}ms (last=${last})`);
+  throw new Error(
+    `workflow ${wfId} did not reach one of [${expectedStates.join(', ')}] within ${maxMs}ms (last=${last})`,
+  );
 }
 
 let agentId: string;
@@ -149,7 +165,11 @@ test('4. card shows "N/M steps" text', async ({ page }) => {
 test('5. FAILED workflow → Retry button visible with step number', async ({ page }) => {
   const wfName = `UI Retry WF ${Date.now()}`;
   const wf = await createWorkflow(page, agentId, wfName);
-  await waitTerminal(page, wf.id);
+  // Retry renders only for status === 'FAILED' (WorkflowsPage.tsx); on a
+  // healthy stack the chain can legitimately COMPLETED, so restrict the wait
+  // to FAILED — a COMPLETED terminal state must fail here with an informative
+  // error instead of a misleading "Retry button not visible" assertion.
+  await waitTerminal(page, wf.id, RUN_TIMEOUT_MS, ['FAILED']);
 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');

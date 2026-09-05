@@ -16,7 +16,13 @@ import { test, expect, type Page } from '@playwright/test';
  * - Step card expand/collapse
  */
 
-test.describe.configure({ mode: 'serial', timeout: 120_000 });
+// Real-LLM (opencode) chains execute against a live sandbox on local stacks and
+// can take minutes to reach a terminal state; CI's langchain path fails fast.
+// Override the wait budget with E2E_RUN_TIMEOUT_MS if the runtime is slower.
+const RUN_TIMEOUT_MS = Number(process.env.E2E_RUN_TIMEOUT_MS ?? 180_000);
+
+// Test timeout must cover the terminal-state wait plus page interactions.
+test.describe.configure({ mode: 'serial', timeout: Math.max(240_000, RUN_TIMEOUT_MS + 60_000) });
 
 const BACKEND = `${process.env.API_URL || 'http://127.0.0.1:8080'}/api/v1`;
 
@@ -58,14 +64,23 @@ async function createWorkflow(page: Page, agentId: string, name: string, steps =
   return data;
 }
 
-/** Wait for workflow to reach FAILED status (no LLM in test env). */
-async function waitFailed(page: Page, wfId: string, maxMs = 15_000) {
+/**
+ * Wait for the chain to reach a TERMINAL state (FAILED / COMPLETED / CANCELLED).
+ * A chain must never be deleted (or merged / retried against) while still
+ * RUNNING — on a real-LLM stack RUNNING can persist for minutes, so the wait
+ * budget is runtime-tolerant (E2E_RUN_TIMEOUT_MS) and a timeout THROWS instead
+ * of silently continuing into a guaranteed 400.
+ */
+async function waitTerminal(page: Page, wfId: string, maxMs = RUN_TIMEOUT_MS) {
   const start = Date.now();
+  let last = '';
   while (Date.now() - start < maxMs) {
     const { data } = await apiCall(page, 'GET', `/workflows/${wfId}`);
-    if (data.status === 'FAILED') return;
-    await new Promise(r => setTimeout(r, 500));
+    last = data?.status ?? '';
+    if (['FAILED', 'COMPLETED', 'CANCELLED'].includes(last)) return last;
+    await new Promise(r => setTimeout(r, 1_000));
   }
+  throw new Error(`workflow ${wfId} did not reach a terminal state within ${maxMs}ms (last=${last})`);
 }
 
 let agentId: string;
@@ -134,7 +149,7 @@ test('4. card shows "N/M steps" text', async ({ page }) => {
 test('5. FAILED workflow → Retry button visible with step number', async ({ page }) => {
   const wfName = `UI Retry WF ${Date.now()}`;
   const wf = await createWorkflow(page, agentId, wfName);
-  await waitFailed(page, wf.id);
+  await waitTerminal(page, wf.id);
 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
@@ -152,7 +167,7 @@ test('5. FAILED workflow → Retry button visible with step number', async ({ pa
 test('6. non-RUNNING workflow → Delete button visible', async ({ page }) => {
   const wfName = `UI Delete WF ${Date.now()}`;
   const wf = await createWorkflow(page, agentId, wfName);
-  await waitFailed(page, wf.id);
+  await waitTerminal(page, wf.id);
 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
@@ -168,7 +183,7 @@ test('6. non-RUNNING workflow → Delete button visible', async ({ page }) => {
 test('7. click Delete → confirm → card removed from list', async ({ page }) => {
   const wfName = `UI Del Confirm ${Date.now()}`;
   const wf = await createWorkflow(page, agentId, wfName);
-  await waitFailed(page, wf.id);
+  await waitTerminal(page, wf.id);
 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
@@ -193,8 +208,8 @@ test('8. select 2 workflows → "Merge N Workflows" button appears', async ({ pa
   // Create 2 FAILED workflows
   const wf1 = await createWorkflow(page, agentId, `UI Merge A ${Date.now()}`);
   const wf2 = await createWorkflow(page, agentId, `UI Merge B ${Date.now()}`);
-  await waitFailed(page, wf1.id);
-  await waitFailed(page, wf2.id);
+  await waitTerminal(page, wf1.id);
+  await waitTerminal(page, wf2.id);
 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');
@@ -215,8 +230,8 @@ test('9. click Merge → prompt for name → merged workflow appears', async ({ 
   // Create 2 FAILED workflows
   const wf1 = await createWorkflow(page, agentId, `UI MergeSrc C ${Date.now()}`);
   const wf2 = await createWorkflow(page, agentId, `UI MergeSrc D ${Date.now()}`);
-  await waitFailed(page, wf1.id);
-  await waitFailed(page, wf2.id);
+  await waitTerminal(page, wf1.id);
+  await waitTerminal(page, wf2.id);
 
   await page.goto('/workflows');
   await page.waitForLoadState('networkidle');

@@ -19,14 +19,29 @@ test.describe('Ops monitoring surface', () => {
   test('approvals panel mirrors the live queue (empty state when clear)', async ({ page, request }) => {
     const { status, data } = await apiCall(request, 'GET', '/approvals');
     expect(status).toBe(200);
+    expect(Array.isArray(data)).toBe(true);
 
     await page.goto('/ops');
     await page.waitForLoadState('networkidle');
-    if ((data ?? []).length === 0) {
-      await expect(page.getByText('Inbox zero. All requests resolved.')).toBeVisible();
-    } else {
-      await expect(page.locator('.qitem').first()).toBeVisible();
-    }
+
+    const inboxZero = page.getByText('Inbox zero. All requests resolved.');
+    const queueItems = page.locator('.qitem');
+
+    // Count-agnostic mirror check: the approvals queue is SHARED (live chains
+    // decide gates concurrently), so no fixed total can be asserted and the
+    // panel may legitimately drift between the API snapshot above and its own
+    // 8s refetch. Poll until the rendered panel state agrees with the live
+    // PENDING count read at the same moment.
+    await expect
+      .poll(async () => {
+        const { data: now } = await apiCall(request, 'GET', '/approvals');
+        const apiPending = (Array.isArray(now) ? now : []).filter((a) => a?.status === 'PENDING').length;
+        if (apiPending === 0) {
+          return inboxZero.isVisible().catch(() => false);
+        }
+        return (await queueItems.count()) > 0;
+      }, { timeout: 25_000 })
+      .toBe(true);
   });
 
   test('API-seeded run appears in Recent Runs with agent and prompt', async ({ page, request }) => {

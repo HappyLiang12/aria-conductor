@@ -47,4 +47,19 @@ class McpEndpointIntegrationTest {
                             "decide_approval");
         }
     }
+
+    @Test
+    void callTool_invocationIsAudited() {
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port).build())
+                .requestTimeout(java.time.Duration.ofSeconds(10))
+                .build()) {
+            client.initialize();
+            McpSchema.CallToolResult result = client.callTool(
+                    new McpSchema.CallToolRequest("list_knowledge", java.util.Map.of()));
+
+            assertThat(result.isError()).isFalse();
+            assertThat(((McpSchema.TextContent) result.content().get(0)).text()).contains("\"ok\":true");
+        }
+    }
 }

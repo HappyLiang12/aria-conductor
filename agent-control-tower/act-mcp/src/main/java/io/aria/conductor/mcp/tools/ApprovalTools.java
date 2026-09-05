@@ -24,7 +24,7 @@ public class ApprovalTools implements McpTool {
     public String listApprovals(
             @ToolParam(description = "ApprovalStatus name or blank for recent (max 200)", required = false) String status) {
         try {
-            ApprovalStatus s = status == null || status.isBlank() ? null : ApprovalStatus.valueOf(status.trim().toUpperCase());
+            ApprovalStatus s = status == null || status.isBlank() ? null : parseStatus(status);
             return ToolResponses.ok(approvalQueryService.list(s));
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
@@ -46,6 +46,15 @@ public class ApprovalTools implements McpTool {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("DECISION_FAILED", e.getMessage(), e, mcpProperties.isDebug());
+        }
+    }
+
+    private static ApprovalStatus parseStatus(String raw) {
+        try {
+            return ApprovalStatus.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid status '" + raw
+                    + "'. Valid: PENDING, APPROVED, DENIED, EXPIRED");
         }
     }
 }

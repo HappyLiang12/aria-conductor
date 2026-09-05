@@ -22,13 +22,31 @@ public class KnowledgeTools implements McpTool {
             @ToolParam(description = "KnowledgeType name or blank", required = false) String type,
             @ToolParam(description = "KnowledgeStatus name or blank", required = false) String status) {
         try {
-            KnowledgeType t = type == null || type.isBlank() ? null : KnowledgeType.valueOf(type.trim().toUpperCase());
-            KnowledgeStatus s = status == null || status.isBlank() ? null : KnowledgeStatus.valueOf(status.trim().toUpperCase());
+            KnowledgeType t = type == null || type.isBlank() ? null : parseType(type);
+            KnowledgeStatus s = status == null || status.isBlank() ? null : parseStatus(status);
             return ToolResponses.ok(knowledgeService.listKnowledge(t, s));
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("KNOWLEDGE_LIST_FAILED", e.getMessage(), e, mcpProperties.isDebug());
+        }
+    }
+
+    private static KnowledgeType parseType(String raw) {
+        try {
+            return KnowledgeType.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid type '" + raw
+                    + "'. Valid: SKILL, SCRIPT, PROMPT, TOOL, TEMPLATE, GUIDELINE, WORKFLOW, SPEC");
+        }
+    }
+
+    private static KnowledgeStatus parseStatus(String raw) {
+        try {
+            return KnowledgeStatus.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid status '" + raw
+                    + "'. Valid: DRAFT, PENDING, APPROVED, REJECTED, RETIRED");
         }
     }
 }

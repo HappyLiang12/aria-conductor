@@ -19,6 +19,7 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "@playwright/test": "^1.61.0",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",

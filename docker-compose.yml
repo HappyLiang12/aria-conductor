@@ -59,6 +59,12 @@ services:
       # OpenSandbox server API key (optional; insecure server mode in this compose file).
       # Env var name MUST carry the `opencode` prefix to bind opencode.sandbox-api-key.
       OPENCODE_SANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
+      # Built-in API-key auth for /api/v1/** (issue #1). The mariadb profile enables auth by
+      # default and fails fast when no key is configured, so a non-local deployment cannot come up
+      # with an open API. Set a strong AUTH_API_KEYS in .env (quickstart generates one for you) or
+      # explicitly opt out with APP_SECURITY_ENABLED=false for trusted localhost-only use.
+      APP_SECURITY_ENABLED: ${APP_SECURITY_ENABLED:-true}
+      AUTH_API_KEYS: ${AUTH_API_KEYS:-}
       # Overrides opencode.sandbox-server-url in Docker network (Spring relaxed binding);
       # default http://localhost:8080 in application.yml is for local dev outside Docker.
       # NOTE: env var name MUST carry the `opencode` prefix (OPENCODE_SANDBOX_SERVER_URL);

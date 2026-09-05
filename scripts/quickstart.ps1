@@ -43,6 +43,15 @@ if ($rt) {
         }
     }
 
+    # Built-in API-key auth is enabled by default for the mariadb profile (issue #1): generate a
+    # local AUTH_API_KEYS when the user has not configured one so the stack still boots.
+    $envText = Get-Content ".env" -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $envText -or $envText -notmatch '(?m)^AUTH_API_KEYS=.+') {
+        $generatedKey = ([guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N"))
+        Add-Content ".env" ("AUTH_API_KEYS=" + $generatedKey)
+        Write-Host "Generated a local AUTH_API_KEYS in .env (replace it before any non-local deployment)." -ForegroundColor Yellow
+    }
+
     Write-Host "Building and starting services..." -ForegroundColor Yellow
     Write-Host "  (includes OpenSandbox server for opencode agent runtime)" -ForegroundColor DarkGray
     & $rt compose up -d --build

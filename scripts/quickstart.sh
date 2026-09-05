@@ -41,6 +41,20 @@ if [ -n "$CONTAINER_RT" ]; then
         fi
     fi
 
+    # Built-in API-key auth is enabled by default for the mariadb profile (issue #1): generate a
+    # local AUTH_API_KEYS when the user has not configured one so the stack still boots.
+    if ! grep -q '^AUTH_API_KEYS=.\+' .env 2>/dev/null; then
+        if command -v openssl > /dev/null 2>&1; then
+            generated_key="$(openssl rand -hex 24)"
+        elif [ -r /proc/sys/kernel/random/uuid ]; then
+            generated_key="$(tr -d '-' < /proc/sys/kernel/random/uuid)"
+        else
+            generated_key="local-dev-key-$(date +%s)"
+        fi
+        printf '\nAUTH_API_KEYS=%s\n' "$generated_key" >> .env
+        echo "Generated a local AUTH_API_KEYS in .env (replace it before any non-local deployment)."
+    fi
+
     echo "Building and starting services..."
     echo "  (includes OpenSandbox server for opencode agent runtime)"
     "$CONTAINER_RT" compose up -d --build

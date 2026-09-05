@@ -161,6 +161,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [build]
+    # Run the stack with built-in auth enabled so the smoke test exercises the real gate
+    # (issue #1): authenticated curls must succeed and an unauthenticated request must get 401.
+    env:
+      APP_SECURITY_ENABLED: 'true'
+      AUTH_API_KEYS: smoke-test-api-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -173,20 +178,32 @@ jobs:
           frontend-mode: none
       - name: Smoke test endpoints
         run: |
-          echo "Testing /actuator/health..."
+          AUTH="Authorization: Bearer ${AUTH_API_KEYS}"
+          echo "Testing /actuator/health (anonymous, must be reachable)..."
           curl -sf http://localhost:8080/actuator/health
           echo ""
-          echo "Testing /api/v1/agents..."
-          curl -sf http://localhost:8080/api/v1/agents
+          echo "Testing /actuator/info (anonymous, must be reachable)..."
+          curl -sf http://localhost:8080/actuator/info
           echo ""
-          echo "Testing /api/v1/dashboard/summary..."
-          curl -sf http://localhost:8080/api/v1/dashboard/summary
+          echo "Testing that /api/v1/agents WITHOUT credentials is rejected (401)..."
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/agents)
+          echo "status=$status"
+          test "$status" = "401"
+          echo "Testing that /api/v1/agents WITH a wrong key is rejected (401)..."
+          status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer wrong-key" http://localhost:8080/api/v1/agents)
+          echo "status=$status"
+          test "$status" = "401"
+          echo "Testing /api/v1/agents (authenticated)..."
+          curl -sf -H "$AUTH" http://localhost:8080/api/v1/agents
           echo ""
-          echo "Testing /api/v1/workflows..."
-          curl -sf http://localhost:8080/api/v1/workflows
+          echo "Testing /api/v1/dashboard/summary (authenticated)..."
+          curl -sf -H "$AUTH" http://localhost:8080/api/v1/dashboard/summary
           echo ""
-          echo "Testing /api/v1/knowledge?type=WORKFLOW..."
-          curl -sf "http://localhost:8080/api/v1/knowledge?type=WORKFLOW"
+          echo "Testing /api/v1/workflows (authenticated)..."
+          curl -sf -H "$AUTH" http://localhost:8080/api/v1/workflows
+          echo ""
+          echo "Testing /api/v1/knowledge?type=WORKFLOW (authenticated via X-API-Key)..."
+          curl -sf -H "X-API-Key: ${AUTH_API_KEYS}" "http://localhost:8080/api/v1/knowledge?type=WORKFLOW"
           echo ""
           echo "All smoke tests passed."
 

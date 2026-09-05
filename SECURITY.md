@@ -12,10 +12,26 @@ Aria Conductor is an early-stage (v0.1.x) project. The current release makes sev
 **security trade-offs for ease of local evaluation**. Do **not** expose a default
 deployment to untrusted networks or the public internet.
 
-- **No built-in authentication/authorization.** All `/api/v1/**` endpoints are
-  currently unauthenticated. Place the service behind your own gateway/reverse proxy
-  with authentication, or keep it on a trusted local network. By default the Docker
-  services bind to `127.0.0.1` only.
+- **Built-in authentication for the REST API (opt-in in dev, on by default for the
+  `mariadb` profile).** All `/api/v1/**` endpoints are protected by a shared-secret API key when
+  `app.security.enabled=true`. Local development (default/`h2` profile) keeps the API open for
+  zero-friction evaluation unless you explicitly enable auth. The `mariadb` (production) profile
+  enables auth by default and **fails to start** unless a key is configured, so a non-local
+  deployment cannot come up with an open API.
+  - Enable/disable: `app.security.enabled` (env `APP_SECURITY_ENABLED`).
+  - Configure keys: `app.security.api-keys` (env `AUTH_API_KEYS`) — a comma/space separated list
+    of shared secrets, or of hex SHA-256 hashes prefixed `sha256:` (hash-at-rest is preferred).
+  - Authenticate requests with `Authorization: Bearer <key>` or `X-API-Key: <key>`. Requests
+    without a valid key get `401`; `/actuator/health` and `/actuator/info` stay reachable without
+    credentials.
+  - Keys are never logged and never exposed through any endpoint. Key **rotation**: accept two
+    keys (old + new) in `AUTH_API_KEYS`, deploy, then remove the old one. Sandboxed agents receive
+    the first configured plaintext key as `ARIA_API_KEY` in `opencode.sandbox-env` so they can call
+    the API authenticated (only when auth is enabled and a plaintext key is configured).
+  - **Still front non-local deployments with a gateway/reverse proxy.** Built-in auth authenticates
+    callers; it does not add transport-layer protections, rate limiting, or fine-grained
+    authorization (any valid key is fully authorized today). Keep the service on a trusted network
+    and terminate TLS at your gateway.
 - **Shell execution tool is disabled by default.** The `shell_exec` tool is gated
   behind `tools.shell.enabled` (default `false`). Enabling it lets agent/LLM output
   run shell commands inside the container — enable only in trusted, sandboxed setups.

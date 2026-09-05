@@ -73,3 +73,10 @@ knowledge:
 sandbox:
   health:
     enabled: false
+
+# Production profile: auth on by default so a non-local deployment cannot come up with an open
+# API. Startup fails fast unless AUTH_API_KEYS is set (AC5). Opt out only for trusted networks.
+app:
+  security:
+    enabled: ${APP_SECURITY_ENABLED:true}
+    api-keys: ${AUTH_API_KEYS:}

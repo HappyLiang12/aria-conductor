@@ -12,6 +12,15 @@ spring:
 server:
   port: 8080
 
+# Built-in API-key authentication for /api/v1/** (issue #1 security hardening).
+# Local dev (default/h2) stays unauthenticated unless APP_SECURITY_ENABLED=true is set.
+# The mariadb (production) profile flips the default to enabled and fails fast without a key.
+app:
+  security:
+    enabled: ${APP_SECURITY_ENABLED:false}
+    # Comma/space separated list of accepted API keys, or hex SHA-256 hashes prefixed `sha256:`.
+    api-keys: ${AUTH_API_KEYS:}
+
 management:
   endpoints:
     web:

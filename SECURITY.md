@@ -36,5 +36,8 @@ deployment to untrusted networks or the public internet.
   not allow credentials. Configure it for your deployment.
 - **H2 console and dev SQL endpoints** are restricted to the `h2` dev profile and are
   not loaded in the production (`mariadb`) profile.
+- **MCP endpoint ships open by default** (`aria.mcp.auth-mode=none`), mirroring the
+  unauthenticated REST API posture; every tool call is audit-logged, and Bearer-token
+  mode (`ARIA_MCP_AUTH_MODE=token`) is available — see README "MCP endpoint (aria.mcp.*)".
 
 See the issues labelled `security` for hardening work in progress.

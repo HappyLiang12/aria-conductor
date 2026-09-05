@@ -17,13 +17,14 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
  * Prerequisites: backend running with aria.mcp.enabled (h2 profile).
  */
 
-test.describe.configure({ mode: 'serial', timeout: 600_000 });
-
 const API_URL = process.env.API_URL || 'http://127.0.0.1:8080';
 const GATE_TIMEOUT = Number(process.env.E2E_GATE_TIMEOUT_MS || 60_000);
 const RUN_TIMEOUT = Number(process.env.E2E_RUN_TIMEOUT_MS || 180_000);
 
+test.describe.configure({ mode: 'serial', timeout: Math.max(600_000, GATE_TIMEOUT + RUN_TIMEOUT + 30_000) });
+
 async function connectMcp(): Promise<Client> {
+  // token mode (aria.mcp.auth-mode=token) will need Authorization headers on BOTH transports — see Task 11 filter paths
   const client = new Client({ name: 'mcp-e2e', version: '0.1.0' });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL(`${API_URL}/mcp`)));
@@ -42,6 +43,7 @@ async function callJson(client: Client, name: string, args: Json): Promise<Json>
     .filter((c) => c.type === 'text')
     .map((c) => c.text)
     .join('');
+  if (!text) throw new Error(`${name} returned no content`);
   const parsed = JSON.parse(text) as Json;
   expect(parsed.ok, `${name} -> ${text.slice(0, 300)}`).toBe(true);
   return parsed;
@@ -81,17 +83,16 @@ test('mcp: external client instantiates development-workflow, approves the gate,
     expect(chain.id).toBeTruthy();
 
     // 3. Poll the chain via get_workflow until the SPEC_REVIEW gate is up.
-    //    Escape hatch mirrors the REST twin: a real BA run needs a working ADK
-    //    runtime (opencode locally is slow; langchain in CI is fast) — if the
-    //    gate does not appear in time and the chain is already FAILED, skip
-    //    rather than flake. A RUNNING chain just needs a longer GATE_TIMEOUT.
+    //    Scope to THIS chain's runs: a dirty DB can hold another chain's PENDING
+    //    SPEC_REVIEW, and approving it would resume a foreign chain (PR #75 hardening).
     let approval: Json | null = null;
     try {
       approval = await pollMcp(client, async () => {
         const wf = await callJson(client, 'get_workflow', { chainId: chain.id });
         if (wf.data.status !== 'WAITING_APPROVAL') return null;
+        const runIds = new Set<string>((wf.data.steps as Json[]).map((s) => s.runId).filter(Boolean));
         const approvals = await callJson(client, 'list_approvals', { status: 'PENDING' });
-        return (approvals.data as Json[]).find((a) => a.approvalType === 'SPEC_REVIEW') ?? null;
+        return (approvals.data as Json[]).find((a) => a.approvalType === 'SPEC_REVIEW' && runIds.has(a.runId)) ?? null;
       }, GATE_TIMEOUT);
     } catch (e) {
       const wf = await callJson(client, 'get_workflow', { chainId: chain.id });

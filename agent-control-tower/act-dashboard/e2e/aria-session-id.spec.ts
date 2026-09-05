@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 test.describe('Issue #13: Conversation ID Display in Aria UI', () => {
   test.beforeEach(async ({ page }) => {
@@ -6,25 +6,36 @@ test.describe('Issue #13: Conversation ID Display in Aria UI', () => {
     await page.waitForSelector('.ai-fab', { state: 'visible' });
   });
 
+  /**
+   * The header id renders as "..." until the backend resume resolves (GET
+   * /aria/conversations/latest + timeline — slow on a loaded/dirty stack), so
+   * every read must wait for the id to populate first. Returns the full id.
+   */
+  async function waitForConversationId(page: Page): Promise<string> {
+    const el = page.locator('.ai-conversation-id');
+    await expect(el).not.toHaveText('...', { timeout: 15_000 });
+    const id = await el.getAttribute('title');
+    expect(id, 'conversation id must populate once the panel leaves its placeholder').toBeTruthy();
+    return id as string;
+  }
+
   test('should display truncated conversation ID in Aria panel header', async ({ page }) => {
     await page.click('.ai-fab');
     await page.waitForSelector('.ai-panel', { state: 'visible' });
 
-    const conversationIdElement = page.locator('.ai-conversation-id');
-    await expect(conversationIdElement).toBeVisible();
+    const conversationId = await waitForConversationId(page);
 
-    const conversationIdText = await conversationIdElement.textContent();
-    expect(conversationIdText).toMatch(/^\w{8}\.\.\.$/);
+    // Truncation contract: the header shows the first 8 chars of the CURRENT
+    // id + ellipsis (id shape varies on a shared backend — UUID or not).
+    await expect(page.locator('.ai-conversation-id')).toHaveText(`${conversationId.slice(0, 8)}...`);
   });
 
   test('should copy full conversation ID to clipboard when copy button clicked', async ({ page }) => {
     await page.click('.ai-fab');
     await page.waitForSelector('.ai-panel', { state: 'visible' });
 
-    const conversationIdElement = page.locator('.ai-conversation-id');
-    const fullConversationId = await conversationIdElement.getAttribute('title');
-    expect(fullConversationId).toBeTruthy();
-    expect(fullConversationId?.length).toBeGreaterThan(8);
+    const fullConversationId = await waitForConversationId(page);
+    expect(fullConversationId.length).toBeGreaterThan(8);
 
     await page.click('.ai-copy-btn');
 
@@ -42,8 +53,7 @@ test.describe('Issue #13: Conversation ID Display in Aria UI', () => {
     await page.click('.ai-fab');
     await page.waitForSelector('.ai-panel', { state: 'visible' });
 
-    const initialConversationId = await page.locator('.ai-conversation-id').getAttribute('title');
-    expect(initialConversationId).toBeTruthy();
+    const initialConversationId = await waitForConversationId(page);
 
     await page.fill('.ai-compose-input', 'Test message');
     await page.click('.ai-clear-btn');
@@ -64,11 +74,14 @@ test.describe('Issue #13: Conversation ID Display in Aria UI', () => {
     await page.click('.ai-fab');
     await page.waitForSelector('.ai-panel', { state: 'visible' });
 
-    const conversationId = await page.locator('.ai-conversation-id').getAttribute('title');
-    expect(conversationId).toBeTruthy();
-
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    expect(conversationId).toMatch(uuidRegex);
+    // Conversation ownership is backend-backed (no localStorage): the panel
+    // resumes GET /aria/conversations/latest, which on a shared/dirty DB may
+    // carry a non-UUID id minted by an API client (e.g. another spec's unique
+    // conversation). The error-reporting contract is that a usable id is
+    // displayed and embedded in error bubbles — not that it is freshly minted.
+    // Fresh-mint UUID format is asserted deterministically after Clear below.
+    const conversationId = await waitForConversationId(page);
+    expect(conversationId.trim().length).toBeGreaterThan(0);
   });
 
   test('should generate new conversation ID on first open (no localStorage)', async ({ page }) => {
@@ -78,13 +91,18 @@ test.describe('Issue #13: Conversation ID Display in Aria UI', () => {
     await page.click('.ai-fab');
     await page.waitForSelector('.ai-panel', { state: 'visible' });
 
-    // Note: the '[Aria] New conversation:' console log only fires when the backend
-    // has no prior conversation — on a shared CI backend earlier specs may have
-    // created one, so assert the observable outcome (a valid ID in the header)
-    // instead of the log line.
-    const conversationIdElement = page.locator('.ai-conversation-id');
-    await expect(conversationIdElement).toBeVisible();
-    const title = await conversationIdElement.getAttribute('title');
-    expect(title).toMatch(/^[0-9a-f-]{36}$/i);
+    // Backend-backed resume: on open the panel resumes the latest server-side
+    // conversation (any id shape on a shared DB). A NEW conversation must get
+    // a fresh UUID — deterministic via the Clear (new conversation) action.
+    const resumedId = await waitForConversationId(page);
+
+    await page.click('.ai-clear-btn');
+    await page.waitForTimeout(100);
+
+    const freshConversationId = await page.locator('.ai-conversation-id').getAttribute('title');
+    expect(freshConversationId).toBeTruthy();
+    expect(freshConversationId).not.toBe(resumedId);
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    expect(freshConversationId).toMatch(uuidRegex);
   });
 });

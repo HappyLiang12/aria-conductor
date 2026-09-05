@@ -21,6 +21,11 @@ import {
  */
 const BOGUS_AGENT = '00000000-0000-0000-0000-0000000abcde';
 
+// Real-LLM (opencode) chains execute against a live sandbox on local stacks and
+// can take minutes to reach a terminal state; CI's langchain path fails fast.
+// Override the wait budget with E2E_RUN_TIMEOUT_MS if the runtime is slower.
+const RUN_TIMEOUT_MS = Number(process.env.E2E_RUN_TIMEOUT_MS ?? 180_000);
+
 /** Create a chain with a real agent and wait until it reaches a terminal state. */
 async function createTerminalChain(request: any, agentId: string, label: string): Promise<any> {
   const created = await apiCall(request, 'POST', '/workflows', {
@@ -32,7 +37,7 @@ async function createTerminalChain(request: any, agentId: string, label: string)
     request,
     `/workflows/${created.data.id}`,
     (w: any) => ['FAILED', 'COMPLETED', 'CANCELLED'].includes(w.status),
-    60_000,
+    RUN_TIMEOUT_MS,
     1_000,
   );
 }

@@ -29,11 +29,23 @@ test.describe('Approvals decision flow', () => {
 
     await page.goto('/approvals');
     await page.waitForLoadState('networkidle');
-    if (data.length === 0) {
-      await expect(page.locator('.empty-state').filter({ hasText: 'No pending approvals' })).toBeVisible();
-    } else {
-      await expect(page.locator('.tab-btn').filter({ hasText: `Pending (${data.length})` })).toBeVisible();
-    }
+
+    const pendingTab = page.locator('.tab-btn').filter({ hasText: 'Pending' });
+    await expect(pendingTab).toBeVisible({ timeout: 15_000 });
+
+    // Count-agnostic mirror check: the approvals queue is SHARED (live chains
+    // and other specs decide gates concurrently, and /approvals returns every
+    // status on a dirty DB), so no fixed total can be asserted. Re-read the
+    // API and the rendered tab count together until they agree — the tab must
+    // reflect the live PENDING queue at some moment within the window.
+    await expect
+      .poll(async () => {
+        const { data: now } = await apiCall(request, 'GET', '/approvals');
+        const apiPending = (Array.isArray(now) ? now : []).filter((a) => a?.status === 'PENDING').length;
+        const shown = Number(((await pendingTab.textContent()) ?? '').match(/Pending \((\d+)\)/)?.[1] ?? -1);
+        return shown === apiPending;
+      }, { timeout: 20_000 })
+      .toBe(true);
   });
 
   test('history tab switches and shows resolved list or empty state', async ({ page }) => {

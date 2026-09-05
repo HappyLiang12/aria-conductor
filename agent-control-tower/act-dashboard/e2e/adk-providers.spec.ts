@@ -28,19 +28,31 @@ test('ADK providers: Providers page renders provider table + Per-Agent Backends'
 
   await navigateTo(page, 'providers');
 
-  // Provider inventory table
+  // Provider inventory table — assert structure + the Default-marker semantics,
+  // not exact table contents: a shared/dirty DB can surface extra rows and the
+  // health column varies with what is running locally.
   const providerTable = page.locator('.data-table').first();
   await expect(providerTable).toBeVisible({ timeout: 15_000 });
 
-  // langchain row: display name 'LangChain ADK' + default badge
-  const langchainRow = providerTable.locator('tr', { hasText: 'langchain' }).first();
-  await expect(langchainRow).toContainText('LangChain ADK');
-  await expect(langchainRow).toContainText('Default');
+  // Known backends render with their display names when registered.
+  const opencodeRow = providerTable.locator('tbody tr').filter({ hasText: 'OpenCode' }).first();
+  await expect(opencodeRow).toBeVisible({ timeout: 15_000 });
+  await expect(opencodeRow).toContainText('opencode');
 
-  // opencode row: display name 'OpenCode', no default badge
-  const opencodeRow = providerTable.locator('tr', { hasText: 'opencode' }).first();
-  await expect(opencodeRow).toContainText('OpenCode');
-  await expect(opencodeRow).not.toContainText('Default');
+  const langchainRow = providerTable.locator('tbody tr').filter({ hasText: 'LangChain ADK' }).first();
+  await expect(langchainRow).toBeVisible();
+  await expect(langchainRow).toContainText('langchain');
+
+  // Exactly ONE row carries the Default badge and it is one of the two known
+  // backends. WHICH one is a stack-config decision (CI pins langchain for ADK
+  // pre-warm; opencode-first local stacks pin opencode), so assert the marker
+  // semantics rather than a specific provider — extra/absent non-default rows
+  // are tolerated.
+  const defaultRow = providerTable.locator('tbody tr').filter({
+    has: page.locator('span.type-badge', { hasText: /^Default$/ }),
+  });
+  await expect(defaultRow).toHaveCount(1);
+  await expect(defaultRow.first()).toContainText(/OpenCode|LangChain ADK/);
 
   // Per-Agent Backends block exists (agent list may be empty on fresh db)
   await expect(page.locator('.card', { hasText: 'Per-Agent Backends' })).toBeVisible();
@@ -75,7 +87,9 @@ test('ADK providers: Crew create form renders langchain + opencode options', asy
 
   await page.screenshot({ path: 'e2e/screenshots/ap-02-crew-adk-dropdown.png' });
 
-  // Do not submit — close the dialog via Cancel
-  await page.getByRole('button', { name: 'Cancel' }).click();
+  // Do not submit — close the dialog via Cancel (exact match: on a dirty DB the
+  // crew grid holds cards like "Open details for e2e-wf-cancel-agent-…" whose
+  // accessible name substring-matches a non-exact 'Cancel' lookup).
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.locator('.mini-dialog.open')).toHaveCount(0, { timeout: 5_000 });
 });

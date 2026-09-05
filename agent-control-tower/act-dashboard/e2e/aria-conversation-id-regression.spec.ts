@@ -16,6 +16,16 @@ import { test, expect } from '@playwright/test';
  */
 test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
+// Unique per-run conversation ids: conversations persist server-side across
+// runs and the Aria panel resumes GET /aria/conversations/latest, so fixed
+// literals leak into other specs' panels (a later spec asserting a fresh UUID
+// would observe this spec's stale id) and collide across consecutive runs.
+// Uniqueness keeps the echo/reuse assertions testing REUSE semantics, not
+// fixed literals.
+const CONV_ECHO = `test-conv-${Date.now()}`;
+const CONV_STREAM = `test-conv-stream-${Date.now()}`;
+const CONV_REUSE = `reuse-conv-${Date.now()}`;
+
 // A successful LLM reply is needed for the 'message' SSE event; without a key the
 // stream ends thinking → error → done.
 const HAS_LLM_KEY = !!(
@@ -26,19 +36,19 @@ test('non-streaming chat returns runId + conversationId', async ({ page }) => {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async (convId) => {
     const res = await fetch('/api/v1/aria/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'hello', history: [], conversationId: 'test-conv-001' }),
+      body: JSON.stringify({ message: 'hello', history: [], conversationId: convId }),
     });
     return { status: res.status, body: await res.json() };
-  });
+  }, CONV_ECHO);
 
   expect(result.status).toBe(200);
   expect(result.body.runId).toBeTruthy();
   expect(result.body.runId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(result.body.conversationId).toBe('test-conv-001');
+  expect(result.body.conversationId).toBe(CONV_ECHO);
   expect(result.body.message).toBeTruthy();
   expect(result.body.intent).toBeTruthy();
 });
@@ -72,12 +82,12 @@ test('streaming SSE emits expected events with runId + conversationId', async ({
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
-  const events = await page.evaluate(async () => {
+  const events = await page.evaluate(async (convId) => {
     const collected: Array<{ event: string; data: unknown }> = [];
     const res = await fetch('/api/v1/aria/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify({ message: 'list all agents', history: [], conversationId: 'test-conv-stream' }),
+      body: JSON.stringify({ message: 'list all agents', history: [], conversationId: convId }),
     });
     if (!res.ok || !res.body) return collected;
 
@@ -108,7 +118,7 @@ test('streaming SSE emits expected events with runId + conversationId', async ({
       if (collected.some((e) => e.event === 'done')) break;
     }
     return collected;
-  });
+  }, CONV_STREAM);
 
   expect(events.length).toBeGreaterThan(0);
 
@@ -124,14 +134,14 @@ test('streaming SSE emits expected events with runId + conversationId', async ({
   const doneData = doneEvent!.data as Record<string, unknown>;
   expect(doneData.runId).toBeTruthy();
   expect(doneData.runId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(doneData.conversationId).toBe('test-conv-stream');
+  expect(doneData.conversationId).toBe(CONV_STREAM);
 });
 
 test('conversationId is reused across two turns (#36)', async ({ page }) => {
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(async (convId) => {
     const post = (body: unknown) =>
       fetch('/api/v1/aria/chat', {
         method: 'POST',
@@ -139,13 +149,13 @@ test('conversationId is reused across two turns (#36)', async ({ page }) => {
         body: JSON.stringify(body),
       }).then((r) => r.json());
 
-    const turn1 = await post({ message: 'remember 1', history: [], conversationId: 'reuse-conv-001' });
+    const turn1 = await post({ message: 'remember 1', history: [], conversationId: convId });
     // Turn 2 echoes back the id the server returned on turn 1.
     const turn2 = await post({ message: 'remember 2', history: [], conversationId: turn1.conversationId });
     return { c1: turn1.conversationId, c2: turn2.conversationId };
-  });
+  }, CONV_REUSE);
 
-  expect(result.c1).toBe('reuse-conv-001');
+  expect(result.c1).toBe(CONV_REUSE);
   // Turn 2 must reuse turn 1's conversationId (no new id minted per turn).
   expect(result.c2).toBe(result.c1);
 });

@@ -45,10 +45,12 @@ test.describe('Git Pack Governance Lifecycle', () => {
   });
 
   test('pack management endpoints work (register, approve, reject)', async ({ request }) => {
-    // Register a test pack
+    // Unique per-run pack name: pack names are unique server-side and a leftover
+    // 'test-pack-e2e' from an earlier run on a shared/dirty DB turns the register
+    // POST into a 500 — the same fixed-literal class as the conversation ids.
     const registerResp = await request.post(`${API_URL}/api/v1/packs`, {
       data: {
-        name: 'test-pack-e2e',
+        name: `test-pack-e2e-${Date.now()}`,
         kind: 'HANDLER',
         sandboxMode: 'NONE',
         enabled: false,

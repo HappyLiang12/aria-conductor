@@ -536,7 +536,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                     String headerLine = mcpProperties.isTokenMode()
                             ? ",\n          \"Authorization\": \"Bearer {env:ARIA_MCP_TOKEN}\""
                             : "";
-                    // url path /mcp is the SSE message endpoint on the 1.0.9 server — real opencode handshake verified live in Task 13 acceptance (spec §3 fallback if it fails)
+                    // url path resolution: 1.0.9 serves SSE (/sse handshake, /mcp/message); opencode's remote transport (streamable vs SSE) is verified live in Task 13 acceptance — spec §3 fallback (in-house streamable controller) if opencode cannot connect
                     mcpBlock = """
                             ,
                               "mcp": {

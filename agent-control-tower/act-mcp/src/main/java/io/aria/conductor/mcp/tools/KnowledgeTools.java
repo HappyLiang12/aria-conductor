@@ -17,7 +17,7 @@ public class KnowledgeTools implements McpTool {
     private final McpProperties mcpProperties;
 
     @Tool(name = "list_knowledge",
-            description = "List knowledge items. Optional type (WORKFLOW/SKILL/DOCUMENT/TOOL/PROMPT) and status (PENDING/APPROVED/REJECTED/RETIRED).")
+            description = "List knowledge items. Optional type (SKILL/SCRIPT/PROMPT/TOOL/TEMPLATE/GUIDELINE/WORKFLOW/SPEC) and status (DRAFT/PENDING/APPROVED/REJECTED/RETIRED).")
     public String listKnowledge(
             @ToolParam(description = "KnowledgeType name or blank", required = false) String type,
             @ToolParam(description = "KnowledgeStatus name or blank", required = false) String status) {

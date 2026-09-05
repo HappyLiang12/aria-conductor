@@ -68,6 +68,10 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private static final Duration RENEW_EXTENSION = Duration.ofMinutes(30);
     /** Relative workspace base dir (resolved against the agent-control-tower working dir). */
     private static final String WORKSPACE_BASE = "act-app/data/workspaces";
+    /** Attempts to wait for the sandbox exec service before the first probe. */
+    private static final int EXEC_READY_ATTEMPTS = 10;
+    /** Delay between execd-readiness attempts (ms); total budget ~5s. */
+    private static final long EXEC_READY_RETRY_DELAY_MS = 500L;
 
     private final OpenCodeProperties properties;
     private final OpenCodeSandboxManager sandboxManager;
@@ -615,6 +619,12 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
      * {@code /actuator/health} answers 200 is the proven sandbox-reachable host.
      * Every probe result is logged at INFO.
      *
+     * <p>Before probing, {@link #awaitExecdReady} waits out the sandbox execd
+     * warmup window (createSandbox skips the SDK health check, so execd may refuse
+     * connections for ~1s after the create call returns — live evidence
+     * 2026-09-05: probe at T failed with a connectivity error, the serve exec at
+     * T+0.5s succeeded).
+     *
      * <p>The override ({@code aria.mcp.sandbox-host-address}) is probed TOO —
      * fail-closed by design: a hand-set address the sandbox cannot reach must NOT
      * produce an mcp block pointing at it (live acceptance picked the unreachable
@@ -627,6 +637,10 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
      * @return the first proven-reachable host, or empty (callers skip the mcp block)
      */
     private Optional<String> probeMcpHost(String sandboxId) {
+        if (!awaitExecdReady(sandboxId)) {
+            log.warn("sandbox execd never became ready; skipping mcp block (sandbox {})", sandboxId);
+            return Optional.empty();
+        }
         List<String> candidates = hostResolverFactory
                 .apply(mcpProperties.getSandboxHostAddress())
                 .resolveOrdered();
@@ -642,6 +656,32 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         log.warn("no sandbox-reachable host address ({} candidate(s) probed); mcp block will be skipped",
                 candidates.size());
         return Optional.empty();
+    }
+
+    /**
+     * Wait until the sandbox exec service accepts commands (max ~
+     * {@value #EXEC_READY_ATTEMPTS} x {@value #EXEC_READY_RETRY_DELAY_MS} ms).
+     * A trivial {@code true} exec exercises the same execd channel the probes
+     * use; createSandbox skips the SDK health check, so this gate is required
+     * before the first probe. Never throws.
+     */
+    private boolean awaitExecdReady(String sandboxId) {
+        for (int attempt = 1; attempt <= EXEC_READY_ATTEMPTS; attempt++) {
+            try {
+                sandboxManager.runCommand(sandboxId, "true");
+                return true;
+            } catch (Exception e) {
+                log.info("Sandbox execd not ready yet (attempt {}/{}): {}",
+                        attempt, EXEC_READY_ATTEMPTS, e.getMessage());
+                try {
+                    Thread.sleep(EXEC_READY_RETRY_DELAY_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return false;
     }
 
     /** One in-sandbox probe: HTTP status of the backend health endpoint, as seen from the sandbox. */

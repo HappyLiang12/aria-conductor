@@ -1019,4 +1019,33 @@ class OpenCodeAdkProviderTest {
         assertThat(json).doesNotContain("\"mcp\"");
         assertThat(json).doesNotContain("172.30.112.1");
     }
+
+    @Test
+    void prepareInstance_probeRetriesThroughExecdWarmup() throws Exception {
+        // createSandbox skips the SDK health check, so execd may refuse connections
+        // for ~1s after the create call returns (live evidence 2026-09-05: probe at
+        // T failed with "Network connectivity error", serve exec at T+0.5s succeeded).
+        // The probe must retry through that warmup window instead of skipping the block.
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-r");
+        when(sandboxManager.getSandboxUrl("sb-r", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setSandboxHostAddress("172.30.112.1");
+        AtomicInteger execCalls = new AtomicInteger();
+        when(sandboxManager.runCommand(eq("sb-r"), anyString())).thenAnswer(inv -> {
+            if (execCalls.incrementAndGet() <= 2) {
+                throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                        "Network connectivity error: Failed to connect");
+            }
+            String cmd = inv.getArgument(1, String.class);
+            return cmd.contains("172.30.112.1") ? "200" : "000";
+        });
+
+        provider.prepareAgent(ariaId, agent(ariaId));
+
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).contains("http://172.30.112.1:8080/mcp");
+        assertThat(execCalls.get()).isGreaterThanOrEqualTo(3);
+    }
 }

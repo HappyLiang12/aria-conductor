@@ -8,6 +8,7 @@ import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.common.model.VersionStatus;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.execution.git.IssueReferenceException;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
 import io.aria.conductor.knowledge.dto.KnowledgeStatsResponse;
@@ -579,6 +580,20 @@ class KnowledgeControllerTest extends WebMvcTestBase {
                         .contentType("application/json")
                         .content("{\"parameters\":{}}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void instantiateWorkflow_unresolvableIssueKey_returns422WithoutDispatching() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(workflowTemplateService.instantiateTemplate(eq(id), anyMap()))
+                .thenThrow(IssueReferenceException.notFound("#qoder-regression", "acme/repo"));
+        mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
+                        .contentType("application/json")
+                        .content("{\"parameters\":{\"issueRef\":\"#qoder-regression\","
+                                + "\"issueRepo\":\"acme/repo\"}}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(content().string(containsString("#qoder-regression")))
+                .andExpect(content().string(containsString("acme/repo")));
     }
 
     @Test

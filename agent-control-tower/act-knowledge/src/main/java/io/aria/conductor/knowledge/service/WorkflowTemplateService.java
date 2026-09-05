@@ -14,6 +14,8 @@ import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
+import io.aria.conductor.execution.git.GitHubIssue;
+import io.aria.conductor.execution.git.GitHubIssueClient;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
@@ -30,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * Service for discovering and instantiating APPROVED workflow templates
@@ -49,6 +52,7 @@ public class WorkflowTemplateService {
     private final DoDService dodService;
     private final KanbanService kanbanService;
     private final OpenCodeProperties openCodeProperties;
+    private final GitHubIssueClient gitHubIssueClient;
 
     public WorkflowTemplateService(KnowledgeItemRepository itemRepository,
                                    KnowledgeVersionRepository versionRepository,
@@ -58,7 +62,8 @@ public class WorkflowTemplateService {
                                    KnowledgeService knowledgeService,
                                    DoDService dodService,
                                    KanbanService kanbanService,
-                                   OpenCodeProperties openCodeProperties) {
+                                   OpenCodeProperties openCodeProperties,
+                                   GitHubIssueClient gitHubIssueClient) {
         this.itemRepository = itemRepository;
         this.versionRepository = versionRepository;
         this.templateConverter = templateConverter;
@@ -68,6 +73,7 @@ public class WorkflowTemplateService {
         this.dodService = dodService;
         this.kanbanService = kanbanService;
         this.openCodeProperties = openCodeProperties;
+        this.gitHubIssueClient = gitHubIssueClient;
     }
 
     /**
@@ -170,6 +176,17 @@ public class WorkflowTemplateService {
             }
         }
 
+        // R9-F2: ground the issue reference of a spec-authoring (BA) sub-task before
+        // dispatch. When the template's BA step declares {issueRepo}/{issueRef} (or an
+        // explicit `gh issue view` instruction), the orchestrator resolves the reference
+        // to a real issue in the authoritative repository and inlines the full title/body/
+        // labels into the task message. Dispatch aborts (fail-fast) when {issueRepo} is
+        // un-substituted or the issue reference cannot be resolved, so a BA agent is never
+        // told to fetch an issue the orchestrator did not ground.
+        if (isSddSpecTask(steps)) {
+            resolvedParams = groundSpecTaskIssue(templateItemId, steps, resolvedParams);
+        }
+
         // Substitute parameters
         if (resolvedParams != null && !resolvedParams.isEmpty()) {
             for (WorkflowStep step : steps) {
@@ -236,9 +253,132 @@ public class WorkflowTemplateService {
                 newChain.setStepsJson(workflowService.serializeSteps(instantiatedSteps));
             }
             chainRepository.save(newChain);
+
+            // R9-F2 observability: emit a structured audit record (task ID, resolved
+            // issueRepo, resolved issue number, body hash) so a downstream QA/audit step
+            // can verify every spec task carried a grounded issue reference.
+            if (resolvedParams != null && resolvedParams.containsKey(GitHandoffMetadata.KEY_ISSUE_NUMBER)) {
+                log.info("SDD spec task dispatch grounded: taskId={} issueRepo={} issueNumber={} issueBodySha={}",
+                        newChain.getId(),
+                        resolvedParams.get(GitHandoffMetadata.KEY_ISSUE_REPO),
+                        resolvedParams.get(GitHandoffMetadata.KEY_ISSUE_NUMBER),
+                        resolvedParams.get(GitHandoffMetadata.KEY_ISSUE_BODY_SHA));
+            }
         }
 
         log.info("Instantiated workflow template {} as chain {}", templateItemId, response.getId());
         return response;
+    }
+
+    // ---- SDD spec-task issue grounding helpers (R9-F2) ----------------------
+
+    /** Clause a seeded spec-authoring prompt uses to tell the BA to fetch the issue itself. */
+    private static final Pattern GH_FETCH_GUARDED_CLAUSE = Pattern.compile(
+            "(?i)\\s*If the issue body is not already in your prompt, fetch it first with: "
+                    + "gh issue view\\s*\\{[^}]*\\}\\s*-R\\s*\\{[^}]*\\}[^.]*\\.");
+    /** Bare fallback for templates that instruct a fetch without the "not already in your prompt" guard. */
+    private static final Pattern GH_FETCH_BARE_CLAUSE = Pattern.compile(
+            "(?i)\\s*fetch it first with: gh issue view\\s*\\{[^}]*\\}\\s*-R\\s*\\{[^}]*\\}[^.]*\\.");
+
+    /**
+     * True when the workflow carries a spec-authoring (BA) step that instructs the agent
+     * to fetch an issue ({@code gh issue view}) or names the {@code {issueRepo}} parameter.
+     */
+    private static boolean isSddSpecTask(List<WorkflowStep> steps) {
+        for (WorkflowStep step : steps) {
+            if (step.getKind() == WorkflowStep.StepKind.BA && referencesIssueRepo(step.getPromptTemplate())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean referencesIssueRepo(String promptTemplate) {
+        if (promptTemplate == null || promptTemplate.isBlank()) {
+            return false;
+        }
+        return promptTemplate.contains("gh issue view")
+                || promptTemplate.contains("{" + GitHandoffMetadata.KEY_ISSUE_REPO + "}");
+    }
+
+    /**
+     * Resolve the issue reference and inline the authoritative issue into every BA step.
+     * Fails fast (before any task is emitted) when {@code issueRepo} is un-substituted,
+     * {@code issueRef} is missing, or the key cannot be resolved in the repository.
+     */
+    private Map<String, String> groundSpecTaskIssue(UUID templateItemId, List<WorkflowStep> steps,
+                                                    Map<String, String> resolvedParams) {
+        Map<String, String> params = resolvedParams == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(resolvedParams);
+
+        String issueRepo = params.get(GitHandoffMetadata.KEY_ISSUE_REPO);
+        if (issueRepo == null || issueRepo.isBlank()) {
+            throw new IllegalArgumentException(
+                    "SDD spec task template " + templateItemId + " references {issueRepo} but no "
+                            + "issueRepo was supplied; pass issueRepo=<owner/repo> so the BA task message "
+                            + "can name its authoritative repository");
+        }
+        String issueRef = params.get(GitHandoffMetadata.KEY_ISSUE_REF);
+        if (issueRef == null || issueRef.isBlank()) {
+            throw new IllegalArgumentException(
+                    "SDD spec task template " + templateItemId + " references {issueRef} but no "
+                            + "issueRef was supplied; pass issueRef=<number | #number | issue URL | slug>");
+        }
+
+        // Normalize/validate issueRepo (owner/repo or github URL) before any lookup.
+        String repo = GitHubIssueClient.parseRepository(issueRepo);
+
+        // Resolve + fetch. IssueReferenceException propagates to the caller boundary as a
+        // 4xx/5xx structured failure; the chain is never created with an ungrounded issue.
+        GitHubIssue issue = gitHubIssueClient.resolveIssue(repo, issueRef);
+
+        for (WorkflowStep step : steps) {
+            if (step.getKind() == WorkflowStep.StepKind.BA
+                    && referencesIssueRepo(step.getPromptTemplate())) {
+                String prompt = neutralizeGhFetchClause(step.getPromptTemplate());
+                step.setPromptTemplate(prompt + issueContextBlock(issue));
+            }
+        }
+
+        // Canonicalize the reference and record the grounding audit trail on the chain.
+        params.put(GitHandoffMetadata.KEY_ISSUE_REF, "#" + issue.number());
+        params.put(GitHandoffMetadata.KEY_ISSUE_REPO, issue.ownerRepo());
+        params.put(GitHandoffMetadata.KEY_ISSUE_NUMBER, String.valueOf(issue.number()));
+        params.put(GitHandoffMetadata.KEY_ISSUE_BODY_SHA, issue.bodySha256());
+        return params;
+    }
+
+    /** Strip any {@code gh issue view} fetch instruction so the BA relies on the inlined context. */
+    private static String neutralizeGhFetchClause(String promptTemplate) {
+        if (promptTemplate == null || promptTemplate.isBlank()) {
+            return promptTemplate;
+        }
+        String cleaned = GH_FETCH_GUARDED_CLAUSE.matcher(promptTemplate).replaceAll(" ");
+        cleaned = GH_FETCH_BARE_CLAUSE.matcher(cleaned).replaceAll(" ");
+        return cleaned.replaceAll("[ ]{2,}", " ").trim();
+    }
+
+    /** Render the inline, authoritative issue context appended to the BA task message. */
+    private static String issueContextBlock(GitHubIssue issue) {
+        String body = issue.body() == null ? "" : issue.body().strip();
+        String labels = issue.labels() == null || issue.labels().isEmpty()
+                ? "(none)" : String.join(", ", issue.labels());
+        StringBuilder block = new StringBuilder();
+        block.append("\n\n--- Issue Context (inlined by the orchestrator; authoritative — ")
+                .append("do not fetch the issue yourself) ---\n")
+                .append("Repository: ").append(issue.ownerRepo()).append('\n')
+                .append("Issue: #").append(issue.number()).append('\n')
+                .append("Title: ").append(issue.title() == null ? "" : issue.title()).append('\n')
+                .append("Labels: ").append(labels).append('\n')
+                .append("Body:\n");
+        if (body.isEmpty()) {
+            block.append("(empty)").append('\n')
+                    .append("The issue body is empty: record every missing fact in the spec's ")
+                    .append("## Questions section and do not invent product behavior.\n");
+        } else {
+            block.append(body).append('\n');
+        }
+        return block.append("---").toString();
     }
 }

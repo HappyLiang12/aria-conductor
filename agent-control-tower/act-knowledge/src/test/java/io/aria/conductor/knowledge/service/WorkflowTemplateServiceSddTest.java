@@ -12,7 +12,10 @@ import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
-import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
+import io.aria.conductor.execution.git.GitHandoffMetadata;
+import io.aria.conductor.execution.git.GitHubIssue;
+import io.aria.conductor.execution.git.GitHubIssueClient;
+import io.aria.conductor.execution.git.IssueReferenceException;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -36,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -59,6 +63,7 @@ class WorkflowTemplateServiceSddTest {
     @Mock DoDService dodService;
     @Mock KanbanService kanbanService;
     @Mock OpenCodeProperties openCodeProperties;
+    @Mock GitHubIssueClient gitHubIssueClient;
 
     WorkflowTemplateService service;
 
@@ -66,7 +71,7 @@ class WorkflowTemplateServiceSddTest {
     void setUp() {
         service = new WorkflowTemplateService(itemRepository, versionRepository,
                 templateConverter, workflowService, chainRepository, knowledgeService,
-                dodService, kanbanService, openCodeProperties);
+                dodService, kanbanService, openCodeProperties, gitHubIssueClient);
     }
 
     @Test
@@ -162,7 +167,129 @@ class WorkflowTemplateServiceSddTest {
         verify(kanbanService, never()).create(any());
     }
 
+    // ---- R9-F2: SDD spec-task issue grounding (regression) -------------------
+
+    /** Seeded BA prompt shape (V44/V48) that tells the BA agent to fetch the issue via gh. */
+    private static final String V44_BA_PROMPT =
+            "Analyze issue {issueRef} and write a spec with sections: Problem Statement, "
+                    + "Proposed Solution, Acceptance Criteria, Error Handling. If the issue body is "
+                    + "not already in your prompt, fetch it first with: gh issue view {issueRef} -R "
+                    + "{issueRepo} --json title,body,labels (GH_TOKEN is already configured). "
+                    + "End your output with SPEC_ID=<uuid> after approval.";
+
+    @Test
+    void instantiateSpecTask_unresolvableIssueKey_failsFastWithoutDispatching() {
+        // (a) regression: a non-numeric slug (#qoder-regression) with no matching issue must
+        //     abort dispatch with an explicit error naming the key and the repository.
+        UUID templateId = specTaskTemplate(V44_BA_PROMPT);
+        when(gitHubIssueClient.resolveIssue("acme/repo", "#qoder-regression"))
+                .thenThrow(IssueReferenceException.notFound("#qoder-regression", "acme/repo"));
+
+        assertThatThrownBy(() -> service.instantiateTemplate(templateId,
+                Map.of("issueRef", "#qoder-regression", "issueRepo", "acme/repo")))
+                .isInstanceOf(IssueReferenceException.class)
+                .hasMessageContaining("#qoder-regression")
+                .hasMessageContaining("acme/repo");
+        verify(workflowService, never()).createAndStart(any());
+    }
+
+    @Test
+    void instantiateSpecTask_emptyIssueRepo_failsFastWithoutDispatching() {
+        // (b) regression: un-substituted {issueRepo} must abort dispatch with an explicit error.
+        UUID templateId = specTaskTemplate(V44_BA_PROMPT);
+
+        assertThatThrownBy(() -> service.instantiateTemplate(templateId,
+                Map.of("issueRef", "#38")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("issueRepo");
+        verify(gitHubIssueClient, never()).resolveIssue(anyString(), anyString());
+        verify(workflowService, never()).createAndStart(any());
+    }
+
+    @Test
+    void instantiateSpecTask_happyPath_inlinesIssueBodyIntoBaMessage() {
+        // (c) regression: on the happy path the full issue title/body/labels are inlined into
+        //     the BA task message and the gh-fetch instruction is removed (no gh dependency).
+        UUID templateId = specTaskTemplate(V44_BA_PROMPT);
+        GitHubIssue issue = new GitHubIssue("acme/repo", 38,
+                "qoder regression", "Search crashes when a handle is non-numeric.",
+                List.of("bug", "regression"));
+        when(gitHubIssueClient.resolveIssue("acme/repo", "#qoder-regression")).thenReturn(issue);
+        when(templateConverter.substituteParameters(anyString(), anyMap()))
+                .thenAnswer(inv -> substitute(inv.getArgument(0), inv.getArgument(1)));
+
+        UUID chainId = UUID.randomUUID();
+        WorkflowResponse response = WorkflowResponse.builder()
+                .id(chainId)
+                .name("development-workflow-instance")
+                .build();
+        when(workflowService.createAndStart(any(CreateWorkflowRequest.class))).thenReturn(response);
+        WorkflowChain chain = aWorkflowChain().withId(chainId).build();
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(chainRepository.save(any(WorkflowChain.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.instantiateTemplate(templateId,
+                Map.of("issueRef", "#qoder-regression", "issueRepo", "acme/repo"));
+
+        ArgumentCaptor<CreateWorkflowRequest> requestCaptor =
+                ArgumentCaptor.forClass(CreateWorkflowRequest.class);
+        verify(workflowService).createAndStart(requestCaptor.capture());
+        String baPrompt = requestCaptor.getValue().getSteps().get(0).getPromptTemplate();
+        assertThat(baPrompt)
+                .contains("Issue Context")
+                .contains("Repository: acme/repo")
+                .contains("Issue: #38")
+                .contains("Title: qoder regression")
+                .contains("Search crashes when a handle is non-numeric.")
+                .contains("bug, regression")
+                .contains("Analyze issue #38")
+                .doesNotContain("gh issue view")
+                .doesNotContain("{issueRepo}");
+
+        // Observability: the chain carries the resolved repo, issue number and body hash.
+        ArgumentCaptor<WorkflowChain> chainCaptor = ArgumentCaptor.forClass(WorkflowChain.class);
+        verify(chainRepository).save(chainCaptor.capture());
+        Map<String, String> params = GitHandoffMetadata.parse(chainCaptor.getValue().getTemplateParams());
+        assertThat(params.get(GitHandoffMetadata.KEY_ISSUE_REPO)).isEqualTo("acme/repo");
+        assertThat(params.get(GitHandoffMetadata.KEY_ISSUE_NUMBER)).isEqualTo("38");
+        assertThat(params.get(GitHandoffMetadata.KEY_ISSUE_BODY_SHA))
+                .matches("[0-9a-f]{64}");
+        assertThat(params.get(GitHandoffMetadata.KEY_ISSUE_REF)).isEqualTo("#38");
+    }
+
     // ---- helpers -------------------------------------------------------------
+
+    /** Seed an APPROVED spec-driven template whose BA step instructs a gh-based issue fetch. */
+    private UUID specTaskTemplate(String baPrompt) {
+        UUID templateId = UUID.randomUUID();
+        KnowledgeItem item = approvedWorkflowTemplate("development-workflow", "SDD loop");
+        item.setId(templateId);
+        item.setCurrentVersion("v1.0.0");
+        when(itemRepository.findById(templateId)).thenReturn(Optional.of(item));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(templateId, "v1.0.0"))
+                .thenReturn(Optional.of(KnowledgeVersion.builder()
+                        .knowledgeItemId(templateId)
+                        .version("v1.0.0")
+                        .yamlContent("steps: [ba, dev, qa]")
+                        .build()));
+        WorkflowStep ba = step(WorkflowStep.StepKind.BA, baPrompt);
+        WorkflowStep dev = step(WorkflowStep.StepKind.DEV, "Implement {specRef}");
+        WorkflowStep qa = step(WorkflowStep.StepKind.QA, "Verify {specRef}");
+        when(templateConverter.yamlToWorkflowSteps("steps: [ba, dev, qa]"))
+                .thenReturn(List.of(ba, dev, qa));
+        when(templateConverter.extractParameterNames(anyList()))
+                .thenReturn(Set.of("issueRef", "issueRepo"));
+        return templateId;
+    }
+
+    /** Deterministic {@code {param}} substitution matching the production converter contract. */
+    private static String substitute(String prompt, Map<String, String> params) {
+        String out = prompt;
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            out = out.replace("{" + entry.getKey() + "}", entry.getValue());
+        }
+        return out;
+    }
 
     private static WorkflowStep step(WorkflowStep.StepKind kind, String promptTemplate) {
         return WorkflowStep.builder()

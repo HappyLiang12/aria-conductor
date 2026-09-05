@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitHubIssueClient;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
 import io.aria.conductor.knowledge.dto.KnowledgeItemResponse;
@@ -60,6 +61,7 @@ class WorkflowTemplateServiceTest {
     @Mock DoDService dodService;
     @Mock KanbanService kanbanService;
     @Mock OpenCodeProperties openCodeProperties;
+    @Mock GitHubIssueClient gitHubIssueClient;
 
     WorkflowTemplateService service;
 
@@ -67,7 +69,7 @@ class WorkflowTemplateServiceTest {
     void setUp() {
         service = new WorkflowTemplateService(itemRepository, versionRepository,
                 templateConverter, workflowService, chainRepository, knowledgeService,
-                dodService, kanbanService, openCodeProperties);
+                dodService, kanbanService, openCodeProperties, gitHubIssueClient);
     }
 
     // ---- findMatchingTemplates -------------------------------------------

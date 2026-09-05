@@ -15,6 +15,8 @@ import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.git.GitBranchService;
+import io.aria.conductor.execution.git.GitHubIssue;
+import io.aria.conductor.execution.git.GitHubIssueClient;
 import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -95,6 +97,8 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     @MockBean
     private GitBranchService gitBranchService;
     @MockBean
+    private GitHubIssueClient gitHubIssueClient;
+    @MockBean
     private OpenCodeAdkProvider openCodeAdkProvider;
 
     private UUID baAgentId;
@@ -126,6 +130,12 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         // returned after Dev completes -> branch did NOT advance -> backend-push fallback runs.
         when(gitBranchService.branchHeadSha(anyString(), anyString()))
                 .thenReturn(Optional.of("spec-sha-abc"));
+
+        // R9-F2: the SDD spec task grounds its issue reference at instantiation; the mock
+        // GitHub channel resolves the fixture issue (issue #42) so the BA message is inlined.
+        when(gitHubIssueClient.resolveIssue(ISSUE_REPO, ISSUE_REF))
+                .thenReturn(new GitHubIssue(ISSUE_REPO, 42, "ISSUE-42",
+                        "Ground the issue reference before dispatch.", List.of("sdd", "fixture")));
     }
 
     // ================================================================

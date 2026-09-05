@@ -22,6 +22,16 @@ public final class GitHandoffMetadata {
     /** System key recording the branch HEAD sha right after the spec commit (Task 5). */
     public static final String KEY_SPEC_COMMIT_SHA = "specCommitSha";
 
+    // ---- SDD spec-task issue grounding keys (R9-F2) -------------------------
+    /** Instantiation parameter key carrying the issue reference ({@code #<number>}, number or URL). */
+    public static final String KEY_ISSUE_REF = "issueRef";
+    /** Instantiation parameter key carrying the authoritative {@code owner/repo} of the issue. */
+    public static final String KEY_ISSUE_REPO = "issueRepo";
+    /** System key recording the resolved numeric issue number (observability/audit). */
+    public static final String KEY_ISSUE_NUMBER = "issueNumber";
+    /** System key recording the sha-256 of the inlined issue title/body/labels (observability/audit). */
+    public static final String KEY_ISSUE_BODY_SHA = "issueBodySha";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private GitHandoffMetadata() {

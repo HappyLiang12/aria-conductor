@@ -3,6 +3,7 @@ package io.aria.conductor.knowledge.controller;
 import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
+import io.aria.conductor.execution.git.IssueReferenceException;
 import io.aria.conductor.knowledge.dto.*;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import io.aria.conductor.knowledge.service.WorkflowTemplateService;
@@ -133,6 +134,16 @@ public class KnowledgeController {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<String> handleIllegalArgument(IllegalArgumentException e) {
         return ResponseEntity.badRequest().body(e.getMessage());
+    }
+
+    /**
+     * An SDD spec-task issue reference that could not be grounded (unresolvable key /
+     * repository not reachable) is an unprocessable dispatch request -> 422 with an
+     * explicit message; no task is emitted for the BA agent.
+     */
+    @ExceptionHandler(IssueReferenceException.class)
+    public ResponseEntity<String> handleIssueReference(IssueReferenceException e) {
+        return ResponseEntity.status(e.getHttpStatus()).body(e.getMessage());
     }
 
     /** State errors from template instantiation (e.g. template/version state mismatch). */

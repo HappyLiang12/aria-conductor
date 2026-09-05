@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
+import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 
@@ -30,7 +31,13 @@ class OpenCodePropertiesBindingTest {
 
     private OpenCodeProperties bind(Map<String, Object> envVars) {
         StandardEnvironment environment = new StandardEnvironment();
-        environment.getPropertySources().addFirst(
+        // Hermetic: the synthetic source must be the ONLY source — the real OS
+        // systemEnvironment/systemProperties sources otherwise leak exported
+        // OPENCODE_* vars into the binding (repro: export both vars, run un-fixed).
+        MutablePropertySources sources = environment.getPropertySources();
+        sources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+        sources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
+        sources.addFirst(
                 new SystemEnvironmentPropertySource("test-env", envVars));
         ConfigurationPropertySources.attach(environment);
         Binder binder = new Binder(ConfigurationPropertySources.get(environment));

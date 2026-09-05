@@ -61,10 +61,16 @@ Navigate to [http://localhost:3000](http://localhost:3000)
 
 ### 4. Configure LLM provider
 
+> **Optional REST API auth**: set `ARIA_API_KEY` in `.env` to require a Bearer token
+> on every `/api/v1/**` request. When enabled, append
+> `-H "Authorization: Bearer $ARIA_API_KEY"` to the curl examples below (the dashboard
+> prompts for the token automatically). Leave it blank for the permissive local default.
+
 Use the dashboard Settings page or the API:
 ```bash
 curl -X POST http://localhost:8080/api/v1/llm-providers \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARIA_API_KEY" \
   -d '{
     "name": "openai",
     "type": "OPENAI",
@@ -94,6 +100,7 @@ To switch an agent's provider, use the Crew page or the API:
 ```bash
 curl -X PUT http://localhost:8080/api/v1/agents/{id} \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ARIA_API_KEY" \
   -d '{"adkProvider": "langchain"}'
 ```
 

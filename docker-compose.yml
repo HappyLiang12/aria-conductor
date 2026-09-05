@@ -32,6 +32,9 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: mariadb
+      # Optional built-in HTTP auth: set ARIA_API_KEY to require `Authorization: Bearer <key>`
+      # on every /api/v1/** (and non-health /actuator/**) request.
+      ARIA_API_KEY: ${ARIA_API_KEY:-}
       DB_HOST: mariadb
       DB_PORT: 3306
       DB_NAME: ${DB_NAME:-aria_conductor}

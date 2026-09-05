@@ -161,6 +161,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [build]
+    env:
+      # Exercise built-in auth end-to-end: start the backend with ARIA_API_KEY set and
+      # send the Bearer header on every /api/v1 check (health probe stays unauthenticated).
+      ARIA_API_KEY: e2e-smoke-throwaway-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -173,20 +177,28 @@ jobs:
           frontend-mode: none
       - name: Smoke test endpoints
         run: |
-          echo "Testing /actuator/health..."
+          AUTH="Authorization: Bearer ${ARIA_API_KEY}"
+          echo "Testing /actuator/health (no credentials)..."
           curl -sf http://localhost:8080/actuator/health
           echo ""
+          echo "Testing unauthenticated /api/v1/agents returns 401..."
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/agents)
+          if [ "$status" != "401" ]; then
+            echo "expected 401 for unauthenticated /api/v1/agents, got $status"
+            exit 1
+          fi
+          echo ""
           echo "Testing /api/v1/agents..."
-          curl -sf http://localhost:8080/api/v1/agents
+          curl -sf -H "$AUTH" http://localhost:8080/api/v1/agents
           echo ""
           echo "Testing /api/v1/dashboard/summary..."
-          curl -sf http://localhost:8080/api/v1/dashboard/summary
+          curl -sf -H "$AUTH" http://localhost:8080/api/v1/dashboard/summary
           echo ""
           echo "Testing /api/v1/workflows..."
-          curl -sf http://localhost:8080/api/v1/workflows
+          curl -sf -H "$AUTH" http://localhost:8080/api/v1/workflows
           echo ""
           echo "Testing /api/v1/knowledge?type=WORKFLOW..."
-          curl -sf "http://localhost:8080/api/v1/knowledge?type=WORKFLOW"
+          curl -sf -H "$AUTH" "http://localhost:8080/api/v1/knowledge?type=WORKFLOW"
           echo ""
           echo "All smoke tests passed."
 

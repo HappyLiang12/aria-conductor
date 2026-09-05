@@ -12,10 +12,19 @@ Aria Conductor is an early-stage (v0.1.x) project. The current release makes sev
 **security trade-offs for ease of local evaluation**. Do **not** expose a default
 deployment to untrusted networks or the public internet.
 
-- **No built-in authentication/authorization.** All `/api/v1/**` endpoints are
-  currently unauthenticated. Place the service behind your own gateway/reverse proxy
-  with authentication, or keep it on a trusted local network. By default the Docker
-  services bind to `127.0.0.1` only.
+- **Built-in HTTP authentication (opt-in).** All `/api/v1/**` endpoints (and every
+  `/actuator/**` endpoint except `/actuator/health`) can be protected with a single
+  shared operator API key by setting the `ARIA_API_KEY` environment variable. When
+  set, clients must present `Authorization: Bearer <key>` on every protected request;
+  unauthenticated requests are rejected with `401`. When unset the API is
+  **open/unauthenticated** (the documented permissive local/dev default) and the app
+  logs a prominent startup warning — do **not** expose such a deployment to untrusted
+  networks. The dashboard prompts for the token on `401` and keeps it in
+  `sessionStorage`. The `/ws/events` WebSocket handshake is **not** authenticated by
+  the filter; front non-local deployments with your own gateway/TLS and treat `/ws` as
+  an unauthenticated channel. Rate limiting / brute-force throttling on the auth path
+  is a future item. Always front non-local deployments with a gateway/reverse proxy
+  that terminates TLS, and consider forwarding the Bearer credential at the gateway.
 - **Shell execution tool is disabled by default.** The `shell_exec` tool is gated
   behind `tools.shell.enabled` (default `false`). Enabling it lets agent/LLM output
   run shell commands inside the container — enable only in trusted, sandboxed setups.
@@ -35,6 +44,7 @@ deployment to untrusted networks or the public internet.
 - **CORS** defaults to a localhost allow-list (`app.cors.allowed-origins`) and does
   not allow credentials. Configure it for your deployment.
 - **H2 console and dev SQL endpoints** are restricted to the `h2` dev profile and are
-  not loaded in the production (`mariadb`) profile.
+  not loaded in the production (`mariadb`) profile. When `ARIA_API_KEY` is set, the
+  `/api/v1/dev/sql/**` runner is additionally protected by the Bearer check.
 
 See the issues labelled `security` for hardening work in progress.

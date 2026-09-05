@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { withAuthHeaders } from '../api/auth';
 
 interface ToolDef {
   id: string; name: string; displayName: string; description: string;
@@ -10,11 +11,11 @@ export default function ToolManager() {
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
-    fetch('/api/v1/tools').then(r => r.json()).then(setTools);
+    fetch('/api/v1/tools', { headers: withAuthHeaders() }).then(r => r.json()).then(setTools);
   }, []);
 
   const toggleTool = async (id: string) => {
-    await fetch(`/api/v1/tools/${id}/toggle`, { method: 'POST' });
+    await fetch(`/api/v1/tools/${id}/toggle`, { method: 'POST', headers: withAuthHeaders() });
     setTools(prev => prev.map(t => t.id === id ? { ...t, enabled: !t.enabled } : t));
   };
 

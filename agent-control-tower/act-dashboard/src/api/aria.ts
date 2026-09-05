@@ -1,5 +1,6 @@
 import client from './client';
 import type { AriaMessage } from '../types';
+import { withAuthHeaders } from './auth';
 
 export interface AriaChatResponse {
   message: string;
@@ -73,10 +74,10 @@ export async function streamMessage(
 ): Promise<void> {
   const response = await fetch('/api/v1/aria/chat/stream', {
     method: 'POST',
-    headers: {
+    headers: withAuthHeaders({
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
-    },
+    }),
     body: JSON.stringify({
       conversationId,
       message,

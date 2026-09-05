@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import client from '../client';
+import { setTokenPrompt, setApiToken } from '../auth';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -23,14 +24,41 @@ function installAdapter(status = 200, data: unknown = { ok: true }) {
   return seen;
 }
 
+/** Adapter that returns a fixed sequence of statuses (last one repeats). */
+function sequenceAdapter(statuses: number[]) {
+  const seen: InternalAxiosRequestConfig[] = [];
+  const authHeaders: Array<string | undefined> = [];
+  let calls = 0;
+  client.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
+    seen.push(config);
+    authHeaders.push(config.headers['Authorization'] as string | undefined);
+    const status = statuses[Math.min(calls, statuses.length - 1)];
+    calls += 1;
+    if (status >= 400) {
+      const response = { data: { message: 'nope' }, status, statusText: `HTTP ${status}`, headers: {}, config };
+      throw Object.assign(new Error(`Request failed with status code ${status}`), {
+        config,
+        response,
+        request: {},
+        isAxiosError: true,
+      });
+    }
+    return { data: { ok: true }, status, statusText: 'OK', headers: {}, config };
+  };
+  return { seen, authHeaders };
+}
+
 describe('api client', () => {
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    sessionStorage.clear();
+    setTokenPrompt(() => null);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    sessionStorage.clear();
   });
 
   it('attaches a UUID X-Correlation-ID header to every request', async () => {
@@ -60,11 +88,48 @@ describe('api client', () => {
     expect(String(seen[0].headers['Content-Type'])).toContain('application/json');
   });
 
-  it('rejects and logs a warning on 401 responses', async () => {
+  it('does not attach an Authorization header when no token is stored', async () => {
+    const seen = installAdapter();
+    await client.get('/api/v1/agents');
+
+    expect(seen[0].headers['Authorization']).toBeUndefined();
+  });
+
+  it('attaches the stored token as a Bearer Authorization header', async () => {
+    setApiToken('operator-token-123');
+    const seen = installAdapter();
+    await client.get('/api/v1/agents');
+
+    expect(seen[0].headers['Authorization']).toBe('Bearer operator-token-123');
+  });
+
+  it('rejects and logs a warning on 401 responses when the operator dismisses the prompt', async () => {
     installAdapter(401, { error: 'unauthorized' });
 
     await expect(client.get('/api/v1/secure')).rejects.toThrow('401');
-    expect(console.warn).toHaveBeenCalledWith('[API] Unauthorized — redirect to login');
+    expect(console.warn).toHaveBeenCalledWith('[API] Unauthorized');
+  });
+
+  it('prompts for a token on 401, stores it, and transparently retries the request', async () => {
+    const { seen, authHeaders } = sequenceAdapter([401, 200]);
+    setTokenPrompt(() => 'operator-token-456');
+
+    const res = await client.get('/api/v1/agents');
+
+    expect(res.data).toEqual({ ok: true });
+    expect(seen).toHaveLength(2);
+    expect(authHeaders[0]).toBeUndefined();
+    expect(authHeaders[1]).toBe('Bearer operator-token-456');
+    expect(sessionStorage.getItem('aria-api-token')).toBe('operator-token-456');
+  });
+
+  it('clears a wrong token when the retried request still 401s, without re-prompting', async () => {
+    sequenceAdapter([401, 401]);
+    setTokenPrompt(() => 'wrong-token');
+
+    await expect(client.get('/api/v1/agents')).rejects.toThrow('401');
+    expect(console.warn).toHaveBeenCalledWith('[API] Unauthorized');
+    expect(sessionStorage.getItem('aria-api-token')).toBeNull();
   });
 
   it('rejects and logs the server payload on 5xx responses', async () => {

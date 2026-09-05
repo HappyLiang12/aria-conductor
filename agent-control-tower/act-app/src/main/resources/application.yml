@@ -12,6 +12,12 @@ spring:
 server:
   port: 8080
 
+app:
+  auth:
+    # Deployment-level operator API key. When set, every /api/v1/** and non-health
+    # /actuator/** request must present `Authorization: Bearer <key>`. Blank = permissive.
+    api-key: ${ARIA_API_KEY:}
+
 management:
   endpoints:
     web:

@@ -1,4 +1,5 @@
 import client from './client';
+import { withAuthHeaders } from './auth';
 
 export interface ConversationSummary {
   conversationId: string;
@@ -14,14 +15,16 @@ export interface TimelineEntry {
 }
 
 export async function getLatestConversation(): Promise<ConversationSummary | null> {
-  const res = await fetch('/api/v1/aria/conversations/latest');
+  const res = await fetch('/api/v1/aria/conversations/latest', { headers: withAuthHeaders() });
   if (res.status === 204) return null;
   if (!res.ok) throw new Error(`Failed to fetch latest conversation: ${res.statusText}`);
   return res.json();
 }
 
 export async function getConversationTimeline(conversationId: string): Promise<TimelineEntry[]> {
-  const res = await fetch(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`);
+  const res = await fetch(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) throw new Error(`Failed to fetch conversation timeline: ${res.statusText}`);
   return res.json();
 }
@@ -29,6 +32,7 @@ export async function getConversationTimeline(conversationId: string): Promise<T
 export async function deleteConversation(conversationId: string): Promise<void> {
   const res = await fetch(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}`, {
     method: 'DELETE',
+    headers: withAuthHeaders(),
   });
   if (!res.ok && res.status !== 404) {
     throw new Error(`Failed to delete conversation: ${res.statusText}`);

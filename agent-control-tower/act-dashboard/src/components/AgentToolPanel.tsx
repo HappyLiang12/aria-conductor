@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { withAuthHeaders } from '../api/auth';
 
 interface Props { agentId: string; role: string; }
 interface ToolDef { id: string; name: string; tier: string; enabled: boolean; }
@@ -11,9 +12,9 @@ export default function AgentToolPanel({ agentId, role }: Props) {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/v1/tools').then(r => r.json()),
-      fetch(`/api/v1/agents/${agentId}/tools`).then(r => r.json()),
-      fetch(`/api/v1/roles/${role}/tools`).then(r => r.json()),
+      fetch('/api/v1/tools', { headers: withAuthHeaders() }).then(r => r.json()),
+      fetch(`/api/v1/agents/${agentId}/tools`, { headers: withAuthHeaders() }).then(r => r.json()),
+      fetch(`/api/v1/roles/${role}/tools`, { headers: withAuthHeaders() }).then(r => r.json()),
     ]).then(([t, a, d]) => {
       setTools(t);
       setAssigned(new Set(a.map((x: ToolDef) => x.id)));
@@ -24,12 +25,12 @@ export default function AgentToolPanel({ agentId, role }: Props) {
 
   const toggle = async (id: string) => {
     const m = assigned.has(id) ? 'DELETE' : 'POST';
-    await fetch(`/api/v1/agents/${agentId}/tools/${id}`, { method: m });
+    await fetch(`/api/v1/agents/${agentId}/tools/${id}`, { method: m, headers: withAuthHeaders() });
     setAssigned(p => { const n = new Set(p); assigned.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
   const reset = async () => {
-    await fetch(`/api/v1/agents/${agentId}/tools`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ toolIds: [...defaults] }) });
+    await fetch(`/api/v1/agents/${agentId}/tools`, { method: 'PUT', headers: withAuthHeaders({'Content-Type':'application/json'}), body: JSON.stringify({ toolIds: [...defaults] }) });
     setAssigned(defaults);
   };
 

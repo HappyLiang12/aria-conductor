@@ -175,10 +175,6 @@ export default function OpsPage() {
     onError: () => setToast({ kind: 'err', msg: 'Deny failed. Retry.' }),
   });
 
-  const onEscalate = (a: Approval) => {
-    setToast({ kind: 'info', msg: `Escalated ${a.id.slice(0, 8)} — paged on-call (mock).` });
-  };
-
   /* ---------- Derived: Activity Timeline ---------- */
   const timeline = useMemo(() => {
     const native = (activityQ.data ?? []).map((ev) => ({
@@ -399,15 +395,6 @@ export default function OpsPage() {
                           onClick={() => rejectM.mutate(a.id)}
                         >
                           ✕ Deny
-                        </button>
-                        <button
-                          className="btn warn"
-                          style={{ flex: '0 0 auto' }}
-                          disabled={busy}
-                          onClick={() => onEscalate(a)}
-                          title="Escalate to on-call"
-                        >
-                          ⤴ Escalate
                         </button>
                       </div>
                     </div>

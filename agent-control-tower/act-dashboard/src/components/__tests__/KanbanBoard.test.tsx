@@ -42,8 +42,8 @@ describe('KanbanBoard column labels (F5 regression)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     ui(qc);
 
-    // The same status is labelled "Cancelled" everywhere else (KanbanPage,
-    // TaskDrawer); the overview board calling it "Archived" hid failed work.
+    // The same status is labelled "Cancelled" everywhere else (TaskDrawer);
+    // the overview board calling it "Archived" hid failed work.
     expect(screen.queryByText(/Archived/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Cancelled/i)).toBeInTheDocument();
   });

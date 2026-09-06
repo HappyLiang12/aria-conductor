@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listJobs, createJob, updateJob, deleteJob, pauseJob, resumeJob,
@@ -78,6 +78,15 @@ export function ScheduledJobsPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatus | ''>('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null);
+  // Operation feedback — the page has no global toast, so keep a local notice
+  // (replaces the previous blocking alert() calls).
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = setTimeout(() => setToastMsg(null), 2800);
+    return () => clearTimeout(t);
+  }, [toastMsg]);
 
   const categoryParam = categoryFilter === 'ALL' ? undefined : categoryFilter;
   const statusParam = statusFilter || undefined;
@@ -87,9 +96,9 @@ export function ScheduledJobsPage() {
     queryFn: () => listJobs({ category: categoryParam, status: statusParam }),
   });
 
-  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { alert(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
-  const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { alert(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
-  const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { alert(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
+  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
+  const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
+  const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
 
   const categoryEmoji: Record<string, string> = { REMINDER: '🔔', MONITOR: '📊', BRIEF: '📋' };
 
@@ -148,12 +157,12 @@ export function ScheduledJobsPage() {
   const createMut = useMutation({
     mutationFn: createJob,
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setModalOpen(false); },
-    onError: (err: unknown) => { alert(`Create failed: ${(err as Error)?.message || 'Unknown error'}`); },
+    onError: (err: unknown) => { setToastMsg(`Create failed: ${(err as Error)?.message || 'Unknown error'}`); },
   });
   const updateMut = useMutation({
     mutationFn: (req: { id: string; data: CreateScheduledJobRequest }) => updateJob(req.id, req.data),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setModalOpen(false); },
-    onError: (err: unknown) => { alert(`Update failed: ${(err as Error)?.message || 'Unknown error'}`); },
+    onError: (err: unknown) => { setToastMsg(`Update failed: ${(err as Error)?.message || 'Unknown error'}`); },
   });
 
   const handleSubmit = () => {
@@ -307,6 +316,29 @@ export function ScheduledJobsPage() {
             </div>
           </form>
           </div>
+        </div>
+      )}
+
+      {/* ---------- Toast ---------- */}
+      {toastMsg && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed',
+            bottom: 24,
+            right: 24,
+            zIndex: 200,
+            padding: '10px 14px',
+            border: '1px solid rgba(91,140,255,.4)',
+            background: 'rgba(91,140,255,.14)',
+            color: 'var(--text)',
+            borderRadius: 10,
+            fontSize: 12,
+            backdropFilter: 'blur(8px)',
+            boxShadow: '0 12px 32px rgba(0,0,0,.45)',
+          }}
+        >
+          {toastMsg}
         </div>
       )}
     </div>

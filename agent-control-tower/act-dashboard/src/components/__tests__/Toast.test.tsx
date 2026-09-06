@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { WsEvent } from '../../types';
 import { Toast } from '../Toast';
 
@@ -18,6 +19,18 @@ function setEvent(event: WsEvent | null) {
   mockCtx = { lastMessage: event, isConnected: true };
 }
 
+// Toast calls useNavigate (it mounts inside the app's BrowserRouter via
+// Layout), so every render must supply a Router context.
+function inRouter(ui: React.ReactElement) {
+  return <MemoryRouter initialEntries={['/']}>{ui}</MemoryRouter>;
+}
+
+function LocationTracker({ paths }: { paths: string[] }) {
+  const location = useLocation();
+  paths.push(location.pathname);
+  return null;
+}
+
 describe('Toast', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -29,13 +42,13 @@ describe('Toast', () => {
   });
 
   it('renders nothing when no event has arrived', () => {
-    const { container } = render(<Toast />);
+    const { container } = render(inRouter(<Toast />));
     expect(container).toBeEmptyDOMElement();
   });
 
   it('shows a human-readable label without the raw event type for noteworthy events', () => {
     setEvent({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });
-    render(<Toast />);
+    render(inRouter(<Toast />));
 
     expect(screen.getByText('Run Failed')).toBeInTheDocument();
     // The machine-oriented event type must never be surfaced to users.
@@ -46,14 +59,14 @@ describe('Toast', () => {
     'does not toast internal lifecycle event %s',
     (type) => {
       setEvent({ type, payload: {}, timestamp: 't1' });
-      const { container } = render(<Toast />);
+      const { container } = render(inRouter(<Toast />));
       expect(container).toBeEmptyDOMElement();
     },
   );
 
   it('does not toast unknown event types', () => {
     setEvent({ type: 'custom.event', payload: {}, timestamp: 't1' });
-    const { container } = render(<Toast />);
+    const { container } = render(inRouter(<Toast />));
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -63,7 +76,7 @@ describe('Toast', () => {
       payload: { id: 'n-1', title: 'Build finished' },
       timestamp: 't1',
     });
-    render(<Toast />);
+    render(inRouter(<Toast />));
 
     expect(screen.getByText('Build finished')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
@@ -71,7 +84,7 @@ describe('Toast', () => {
 
   it('uses a default title when the notification payload has none', () => {
     setEvent({ type: 'aria.notification', payload: { id: 'n-2' }, timestamp: 't1' });
-    render(<Toast />);
+    render(inRouter(<Toast />));
 
     expect(screen.getByText('Notification')).toBeInTheDocument();
   });
@@ -82,7 +95,7 @@ describe('Toast', () => {
       payload: { id: 'dup-1', title: 'Once only' },
       timestamp: 't1',
     });
-    const { rerender } = render(<Toast />);
+    const { rerender } = render(inRouter(<Toast />));
     expect(screen.getAllByText('Once only')).toHaveLength(1);
 
     // same notification id arrives again as a new event object
@@ -91,13 +104,13 @@ describe('Toast', () => {
       payload: { id: 'dup-1', title: 'Once only' },
       timestamp: 't2',
     });
-    rerender(<Toast />);
+    rerender(inRouter(<Toast />));
     expect(screen.getAllByText('Once only')).toHaveLength(1);
   });
 
   it('dismisses a toast automatically after 5 seconds', () => {
     setEvent({ type: 'run.completed', payload: {}, timestamp: 't1' });
-    render(<Toast />);
+    render(inRouter(<Toast />));
     expect(screen.getByText('Run Completed')).toBeInTheDocument();
 
     act(() => {
@@ -115,10 +128,10 @@ describe('Toast', () => {
   // of newer events (previously the effect cleanup cancelled it, freezing the
   // whole toast stack on screen).
   it('dismisses each toast on its own schedule even when newer events arrive', () => {
-    const { rerender } = render(<Toast />);
+    const { rerender } = render(inRouter(<Toast />));
 
     setEvent({ type: 'run.completed', payload: { status: 'FAILED', n: 1 }, timestamp: 't1' });
-    rerender(<Toast />);
+    rerender(inRouter(<Toast />));
     expect(screen.getByText('Run Failed')).toBeInTheDocument();
 
     act(() => {
@@ -128,7 +141,7 @@ describe('Toast', () => {
     // A second noteworthy event arrives at t+3s; the first toast must still
     // expire at t+5s.
     setEvent({ type: 'approval.requested', payload: { n: 2 }, timestamp: 't2' });
-    rerender(<Toast />);
+    rerender(inRouter(<Toast />));
     expect(screen.getByText('Approval Needed')).toBeInTheDocument();
 
     act(() => {
@@ -147,7 +160,7 @@ describe('Toast', () => {
   // label must reflect the terminal status instead of always saying Completed.
   it('labels run.completed with FAILED status as Run Failed', () => {
     setEvent({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });
-    render(<Toast />);
+    render(inRouter(<Toast />));
 
     expect(screen.getByText('Run Failed')).toBeInTheDocument();
     expect(screen.queryByText('Run Completed')).not.toBeInTheDocument();
@@ -155,18 +168,60 @@ describe('Toast', () => {
 
   it('toasts the housekeeping completion audit event with a human label', () => {
     setEvent({ type: 'audit.HOUSEKEEPING_EXECUTED', payload: {}, timestamp: 't1' });
-    render(<Toast />);
+    render(inRouter(<Toast />));
 
     expect(screen.getByText('Housekeeping Executed')).toBeInTheDocument();
     expect(screen.queryByText('audit.HOUSEKEEPING_EXECUTED')).not.toBeInTheDocument();
   });
 
   it('keeps at most 5 toasts on screen', () => {
-    const { rerender } = render(<Toast />);
+    const { rerender } = render(inRouter(<Toast />));
     for (let i = 0; i < 7; i++) {
       setEvent({ type: 'run.completed', payload: { i }, timestamp: `t${i}` });
-      rerender(<Toast />);
+      rerender(inRouter(<Toast />));
     }
     expect(screen.getAllByText('Run Completed')).toHaveLength(5);
+  });
+
+  // The View button on aria.notification toasts must actually navigate to the
+  // resource route (previously it only console.logged).
+  it('navigates to the resource route when View is clicked on an aria.notification', () => {
+    const paths: string[] = [];
+    setEvent({
+      type: 'aria.notification',
+      payload: { id: 'n-nav-1', title: 'Report ready', resourceType: 'report.generated' },
+      timestamp: 't1',
+    });
+    render(
+      inRouter(
+        <>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </>,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(paths).toContain('/reports');
+  });
+
+  it('does not navigate when the notification resourceType has no mapped route', () => {
+    const paths: string[] = [];
+    setEvent({
+      type: 'aria.notification',
+      payload: { id: 'n-nav-2', title: 'Daily brief', resourceType: '' },
+      timestamp: 't1',
+    });
+    render(
+      inRouter(
+        <>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </>,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(paths).toEqual(['/']);
   });
 });

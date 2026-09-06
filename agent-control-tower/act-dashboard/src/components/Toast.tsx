@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
+import { routeForNotificationResource } from '../utils/notificationRoutes';
 
 interface ToastItem {
   id: number;
@@ -41,6 +43,7 @@ export function Toast() {
   const wsEvent = useWebSocketContext();
   const shownIds = useRef(new Set<string>());
   const timersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const navigate = useNavigate();
 
   const eventToUse = wsEvent.lastMessage;
 
@@ -68,11 +71,18 @@ export function Toast() {
         if (notifId) shownIds.current.add(notifId);
 
         const title = (eventToUse.payload?.title as string) || 'Notification';
+        const resourceType = eventToUse.payload?.resourceType as string | undefined;
         const notifToast: ToastItem = {
           id,
           message: title,
           type: 'aria.notification',
-          action: { label: 'View', onClick: () => console.log('View notification', notifId) },
+          action: {
+            label: 'View',
+            onClick: () => {
+              const route = routeForNotificationResource(resourceType);
+              if (route) navigate(route);
+            },
+          },
         };
         setToasts((prev) => [...prev.slice(-4), notifToast]);
       } else {

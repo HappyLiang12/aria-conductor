@@ -12,7 +12,13 @@ interface Props {
  * Rendered inside `.ai-compose` (position:relative parent).
  */
 export default function SlashCommandMenu({ items, activeIndex, onHover, onSelect }: Props) {
-  if (items.length === 0) return null;
+  if (items.length === 0) {
+    return (
+      <div className="ai-slash ai-slash-empty">
+        No skills yet — author one in Knowledge (type=SKILL), then it appears here.
+      </div>
+    );
+  }
 
   return (
     <div className="ai-slash" role="listbox" id="slash-command-listbox" aria-label="Available skills">

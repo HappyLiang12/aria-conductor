@@ -3,6 +3,7 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AgentDrawer } from '../AgentDrawer';
 import { listRuns, getRunProgress } from '../../api/runs';
+import type { RunProgressEntry } from '../../api/runs';
 import type { Run, WsEvent } from '../../types';
 
 vi.mock('../../api/agents', () => ({
@@ -246,5 +247,58 @@ describe('AgentDrawer backlog replay + stub removal (Task 6)', () => {
     expect(screen.queryByText('Context')).not.toBeInTheDocument();
     expect(screen.queryByText(/^cap /)).not.toBeInTheDocument();
     expect(screen.queryByText(/\/ 200k/)).not.toBeInTheDocument();
+  });
+
+  // Review fix: the backlog fetch resolution must MERGE with the stream, not
+  // replace it — a live frame folded mid-fetch used to be wiped and never return.
+  it('drawer_liveFrame_duringBacklogFetch_notDropped', async () => {
+    // Deferred promise: the backlog fetch stays pending so we can land a live
+    // WS frame inside the race window deterministically.
+    let resolveBacklog!: (v: RunProgressEntry[]) => void;
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockImplementation(
+      () => new Promise<RunProgressEntry[]>((res) => { resolveBacklog = res; }),
+    );
+    const { container } = ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+
+    // Live frame (seq above the backlog max) folds while the fetch is pending.
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: 'live during fetch', seq: 5 }, timestamp: '2026-09-06T06:00:05Z' });
+    });
+    expect(await screen.findByText(/live during fetch/)).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(1);
+
+    // Backlog resolves late: it must be PREPENDED onto the live line, not
+    // replace it.
+    await act(async () => {
+      resolveBacklog(backlog);
+    });
+    expect(await screen.findByText(/thinking fragment/)).toBeInTheDocument();
+    expect(screen.getByText(/shell_exec/)).toBeInTheDocument();
+    expect(screen.getByText(/live during fetch/)).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(3);
+  });
+
+  // Review fix: when a run completes, query invalidation makes activeRun
+  // undefined — the replay id (lastRunIdRef) must keep the history on screen.
+  it('drawer_completion_keepsHistory', async () => {
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(backlog);
+    ui();
+
+    expect(await screen.findByText(/thinking fragment/)).toBeInTheDocument();
+
+    // Run completes: lifecycle event invalidates the runs query; the refetched
+    // list no longer holds an active run, but the stream must survive.
+    vi.mocked(listRuns).mockResolvedValue([
+      { ...runningRun, status: 'COMPLETED', finalOutput: 'done', completedAt: '2026-09-06T06:01:00Z' },
+    ]);
+    act(() => {
+      push({ type: 'run.completed', payload: { runId: 'r-1', agentId: 'a-1', status: 'COMPLETED' }, timestamp: '2026-09-06T06:01:00Z' });
+    });
+    await waitFor(() => expect(screen.getByText(/Idle — awaiting work/)).toBeInTheDocument());
+    expect(screen.getByText(/thinking fragment/)).toBeInTheDocument();
+    expect(screen.getByText(/shell_exec/)).toBeInTheDocument();
   });
 });

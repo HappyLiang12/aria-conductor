@@ -17,6 +17,9 @@ interface StreamLine {
   ts: string;
   tag: 'read' | 'edit' | 'run' | 'ok' | 'warn' | 'err' | 'think' | 'tool_call' | 'tool_result';
   msg: string;
+  // run.progress watermark (REST backlog rows and live WS frames alike) used to
+  // dedupe backlog replay against lines already folded into the stream.
+  seq?: number;
   detail?: {
     toolName?: string;
     toolArgs?: string;
@@ -70,6 +73,7 @@ function progressToEntry(
     ts: fmtTime(p.createdAt || new Date()),
     tag,
     msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
+    seq: p.seq,
     detail: {
       thinking: kind === 'THINKING' && content
         ? (content.length > 200 ? content.slice(0, 200) + '...' : content)
@@ -135,37 +139,91 @@ export function AgentDrawer() {
   // Task 6: replay the persisted progress backlog for the active run instead of
   // seeding a fake demo connect line. Also re-arms the runId+seq dedupe so
   // backlog rows and live frames dedupe against the same watermark.
+  // Review fix: remember the last non-null run id so the query invalidation at
+  // run completion (activeRun → undefined) cannot wipe the stream; replay keys
+  // on the remembered id, scoped to the agent it belonged to.
+  const lastRunIdRef = useRef<string | null>(null);
+  const lastRunAgentRef = useRef<string | null>(null);
+  if (activeRun?.id) {
+    lastRunIdRef.current = activeRun.id;
+    lastRunAgentRef.current = agentId;
+  }
+  const replayRunId =
+    activeRun?.id ?? (lastRunAgentRef.current === agentId ? lastRunIdRef.current : null);
+  const lastFetchedRunRef = useRef<string | null>(null);
+  const lastStreamAgentRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!open || !agent) {
+      // Drawer closed or agent unknown (e.g. mid-switch): clear + re-arm. This
+      // is the ONLY place the stream is cleared besides an agent switch below.
       setStream([]);
+      lastFetchedRunRef.current = null;
+      seenSeqs.current.clear();
       return;
     }
+    if (lastStreamAgentRef.current !== agent.id) {
+      // Agent switch: wipe the previous agent's history + re-arm dedupe.
+      lastStreamAgentRef.current = agent.id;
+      lastRunIdRef.current = null;
+      lastFetchedRunRef.current = null;
+      seenSeqs.current.clear();
+      setStream([]);
+    }
+    const runId = replayRunId;
+    if (!runId || lastFetchedRunRef.current === runId) return;
+    lastFetchedRunRef.current = runId;
     seenSeqs.current.clear();
-    const runId = activeRun?.id;
-    if (!runId) {
-      setStream([]);
-      return;
-    }
     let cancelled = false;
+    const rk = String(runId);
+    const markSeqSeen = (runKey: string, seq: number | null | undefined) => {
+      if (seq == null) return;
+      let seen = seenSeqs.current.get(runKey);
+      if (!seen) {
+        seen = new Set<number>();
+        seenSeqs.current.set(runKey, seen);
+      }
+      seen.add(seq);
+    };
     getRunProgress(runId)
       .then((backlog) => {
         if (cancelled) return;
-        setStream(backlog.map((p) => progressToEntry(p)));
-        const rk = String(runId);
-        backlog.forEach((p) => {
-          let seen = seenSeqs.current.get(rk);
-          if (!seen) {
-            seen = new Set<number>();
-            seenSeqs.current.set(rk, seen);
-          }
-          seen.add(p.seq);
+        // Review fix: MERGE, never replace — live frames folded while the fetch
+        // was in flight must survive backlog resolution. Prepend backlog entries
+        // whose seq is not already on screen; backlog order preserved first.
+        setStream((prev) => {
+          const have = new Set(
+            prev.map((l) => l.seq).filter((s): s is number => s != null)
+          );
+          const fresh = backlog
+            .map((p) => progressToEntry(p))
+            .filter((b) => b.seq == null || !have.has(b.seq));
+          // Review fix: merged result obeys the same 60-line window as the live fold.
+          return [...fresh, ...prev].slice(-60);
         });
+        // Re-arm the runId+seq watermark so subsequent live frames dedupe
+        // against the replayed backlog rows too (existing S11 pattern).
+        backlog.forEach((p) => markSeqSeen(rk, p.seq));
       })
-      .catch(() => console.warn('[drawer] progress backlog fetch failed'));
+      .catch(() => {
+        if (cancelled) return;
+        console.warn('[drawer] progress backlog fetch failed');
+        // Review fix: surface the failure in the stream itself — a silent
+        // console.warn leaves the operator staring at an unexplained gap.
+        setStream((prev) => [
+          ...prev.slice(-59),
+          {
+            id: `err-${Date.now()}`,
+            ts: fmtTime(new Date()),
+            tag: 'think',
+            msg: 'History unavailable (fetch failed)',
+          },
+        ]);
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, agent?.id, activeRun?.id]);
+  }, [open, agent?.id, replayRunId]);
 
   // Task 6: fold WS events via subscribe — every frame is delivered to the
   // handler (no polling drops) + invalidate queries for real-time updates.

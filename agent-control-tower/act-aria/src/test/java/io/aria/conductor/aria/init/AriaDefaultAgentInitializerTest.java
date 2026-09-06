@@ -340,6 +340,25 @@ class AriaDefaultAgentInitializerTest {
         assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
     }
 
+    @Test
+    void stepFailureDuringInitialization_degradesAndBootsInsteadOfAborting() {
+        // Boot hardening: steps 1-3 run in the HIGHEST_PRECEDENCE ApplicationRunner —
+        // any exception there used to abort the JVM before every other runner (latent
+        // fresh-install crash; the DEGRADED reconciler could never retry because the
+        // app was dead). A failure must be caught (ERROR logged) and startup continues;
+        // every step is idempotent and retried on the next boot.
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
+        // step 2 (legacy-provider migration under the opencode default) hits a DB hiccup
+        when(agentRepository.findAll()).thenThrow(new RuntimeException("db hiccup"));
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
+        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
+    }
+
     // ---- DEGRADED recovery reconciler (called directly — test-friendly) ----
 
     @Test

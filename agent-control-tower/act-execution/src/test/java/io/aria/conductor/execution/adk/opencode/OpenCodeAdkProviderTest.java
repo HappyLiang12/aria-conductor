@@ -1048,4 +1048,38 @@ class OpenCodeAdkProviderTest {
         assertThat(json).contains("http://172.30.112.1:8080/mcp");
         assertThat(execCalls.get()).isGreaterThanOrEqualTo(3);
     }
+
+    @Test
+    void awaitExecdReady_budgetComesFromMcpProperties_whenExecdNeverReady() throws Exception {
+        // Startup-fragility fix: the execd-readiness window was hardcoded 10 x 500ms
+        // (~5s) — routinely exceeded on cold first boots, silently skipping the mcp
+        // block. The budget must come from aria.mcp.execd-ready-timeout-ms: a small
+        // configured budget cuts the wait short instead of burning the fixed attempts.
+        UUID ariaId = io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID;
+        when(providerRepository.findByActiveTrue()).thenReturn(Optional.empty());
+        when(sandboxManager.createSandbox(eq(ariaId), eq(IMAGE), any())).thenReturn("sb-t");
+        when(sandboxManager.getSandboxUrl("sb-t", 4096)).thenReturn("http://127.0.0.1:4096");
+        when(httpClient.isHealthy()).thenReturn(true);
+        mcpProperties.setExecdReadyTimeoutMs(100);
+        AtomicInteger execTrueProbes = new AtomicInteger();
+        when(sandboxManager.runCommand(eq("sb-t"), anyString())).thenAnswer(inv -> {
+            if ("true".equals(inv.getArgument(1, String.class))) {
+                execTrueProbes.incrementAndGet();
+            }
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Network connectivity error: Failed to connect");
+        });
+
+        long start = System.currentTimeMillis();
+        provider.prepareAgent(ariaId, agent(ariaId));
+        long elapsed = System.currentTimeMillis() - start;
+
+        // degraded outcome preserved: no mcp block while execd never became ready
+        String json = Files.readString(tempDir.resolve(ariaId.toString()).resolve("opencode.json"));
+        assertThat(json).doesNotContain("\"mcp\"");
+        // the configured budget governs the wait (the old hardcoded loop always
+        // burned 10 attempts x 500ms = ~5s regardless of any configuration)
+        assertThat(execTrueProbes.get()).isLessThanOrEqualTo(4);
+        assertThat(elapsed).isLessThan(3000);
+    }
 }

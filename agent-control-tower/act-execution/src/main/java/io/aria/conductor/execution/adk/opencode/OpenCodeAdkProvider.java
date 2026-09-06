@@ -68,9 +68,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     private static final Duration RENEW_EXTENSION = Duration.ofMinutes(30);
     /** Relative workspace base dir (resolved against the agent-control-tower working dir). */
     private static final String WORKSPACE_BASE = "act-app/data/workspaces";
-    /** Attempts to wait for the sandbox exec service before the first probe. */
-    private static final int EXEC_READY_ATTEMPTS = 10;
-    /** Delay between execd-readiness attempts (ms); total budget ~5s. */
+    /** Delay between execd-readiness attempts (ms); total budget is {@code aria.mcp.execd-ready-timeout-ms}. */
     private static final long EXEC_READY_RETRY_DELAY_MS = 500L;
 
     private final OpenCodeProperties properties;
@@ -659,20 +657,30 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     }
 
     /**
-     * Wait until the sandbox exec service accepts commands (max ~
-     * {@value #EXEC_READY_ATTEMPTS} x {@value #EXEC_READY_RETRY_DELAY_MS} ms).
-     * A trivial {@code true} exec exercises the same execd channel the probes
-     * use; createSandbox skips the SDK health check, so this gate is required
-     * before the first probe. Never throws.
+     * Wait until the sandbox exec service accepts commands (budget:
+     * {@code aria.mcp.execd-ready-timeout-ms}, default 15s — the former hardcoded
+     * 10 x 500ms window was routinely exceeded on cold first boots, silently
+     * skipping the mcp block; probed every {@value #EXEC_READY_RETRY_DELAY_MS}ms,
+     * at least one attempt is always made). A trivial {@code true} exec exercises
+     * the same execd channel the probes use; createSandbox skips the SDK health
+     * check, so this gate is required before the first probe. Never throws.
      */
     private boolean awaitExecdReady(String sandboxId) {
-        for (int attempt = 1; attempt <= EXEC_READY_ATTEMPTS; attempt++) {
+        long timeoutMs = Math.max(EXEC_READY_RETRY_DELAY_MS, mcpProperties.getExecdReadyTimeoutMs());
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        int attempt = 0;
+        while (true) {
+            attempt++;
             try {
                 sandboxManager.runCommand(sandboxId, "true");
                 return true;
             } catch (Exception e) {
-                log.info("Sandbox execd not ready yet (attempt {}/{}): {}",
-                        attempt, EXEC_READY_ATTEMPTS, e.getMessage());
+                if (System.currentTimeMillis() >= deadline) {
+                    log.info("Sandbox execd not ready after {} attempt(s) within {}ms budget (last error: {})",
+                            attempt, timeoutMs, e.getMessage());
+                    return false;
+                }
+                log.info("Sandbox execd not ready yet (attempt {}): {}", attempt, e.getMessage());
                 try {
                     Thread.sleep(EXEC_READY_RETRY_DELAY_MS);
                 } catch (InterruptedException ie) {
@@ -681,7 +689,6 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                 }
             }
         }
-        return false;
     }
 
     /** One in-sandbox probe: HTTP status of the backend health endpoint, as seen from the sandbox. */

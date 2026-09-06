@@ -34,8 +34,10 @@ test.describe('Configure modal closed-state visibility (F1)', () => {
     await expect(page.locator('.modal-scrim.open')).toBeVisible();
     await expect(page.locator('.modal.open')).toBeVisible();
 
-    // Close via the Done button in the modal footer.
-    await page.getByRole('button', { name: 'Done' }).click();
+    // Close via the Done button in the modal footer. Scope to the open modal:
+    // an unscoped 'Done' name match also hits the kanban
+    // 'Clear Done & Cancelled' button (substring) when it is rendered.
+    await page.locator('.modal.open').getByRole('button', { name: 'Done' }).click();
 
     // The `.open` class is removed, so both layers collapse to the closed state.
     await expect(page.locator('.modal.open')).toHaveCount(0, { timeout: 5_000 });
@@ -67,7 +69,7 @@ test.describe('Configure modal closed-state visibility (F1)', () => {
   test('reopening the modal restores visibility', async ({ page }) => {
     await openConfigure(page);
 
-    await page.getByRole('button', { name: 'Done' }).click();
+    await page.locator('.modal.open').getByRole('button', { name: 'Done' }).click();
     await expect(page.locator('.modal.open')).toHaveCount(0, { timeout: 5_000 });
     await expect(page.locator('.modal-scrim')).toBeHidden();
 

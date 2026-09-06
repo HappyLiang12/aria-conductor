@@ -33,6 +33,25 @@ export async function getRunTrajectory(runId: string): Promise<SessionTrajectory
   return data;
 }
 
+export interface RunProgressEntry {
+  id: string;
+  runId: string;
+  agentId: string;
+  iteration: number;
+  kind: string;
+  seq: number;
+  content: string;
+  toolName: string | null;
+  createdAt: string;
+}
+
+export async function getRunProgress(runId: string, afterSeq = 0): Promise<RunProgressEntry[]> {
+  const { data } = await client.get<RunProgressEntry[]>(
+    `/api/v1/runs/${runId}/progress?afterSeq=${afterSeq}`,
+  );
+  return data;
+}
+
 export async function getRunToolCalls(runId: string): Promise<ToolCall[]> {
   const { data } = await client.get<ToolCall[]>(`/api/v1/runs/${runId}/tool-calls`);
   return data;

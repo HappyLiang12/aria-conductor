@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAgent } from '../api/agents';
-import { listRuns, pauseRun, resumeRun, cancelRun, injectRunMessage } from '../api/runs';
+import { listRuns, getRunProgress, pauseRun, resumeRun, cancelRun, injectRunMessage } from '../api/runs';
 import { useDrawerContext } from './DrawerContext';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
@@ -51,6 +51,35 @@ function fmtTime(d: string | Date): string {
   return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+// Task 6: single mapping used by BOTH the REST backlog replay and the live
+// run.progress fold, so replayed history and live frames render identically.
+// TOLERANT: WS frames omit null toolName and carry no id/createdAt; REST rows
+// carry both.
+function progressToEntry(
+  p: { kind: string; content: string; toolName?: string | null; createdAt?: string; seq?: number },
+): StreamLine {
+  const kind = String(p.kind ?? '');
+  const content = String(p.content ?? '');
+  const tag: StreamLine['tag'] =
+    kind === 'THINKING' ? 'think'
+    : kind === 'TOOL_CALL' ? 'run'
+    : kind === 'TOOL_RESULT' ? 'ok'
+    : kind === 'ERROR' ? 'err' : 'warn';
+  return {
+    id: `prog-${p.seq ?? 'na'}-${p.createdAt ?? Math.random().toString(36).slice(2, 8)}`,
+    ts: fmtTime(p.createdAt || new Date()),
+    tag,
+    msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
+    detail: {
+      thinking: kind === 'THINKING' && content
+        ? (content.length > 200 ? content.slice(0, 200) + '...' : content)
+        : undefined,
+      toolName: p.toolName ?? undefined,
+      toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
+    },
+  };
+}
+
 function pickAgentRuns(runs: Run[] | undefined, agentId: string | null): Run[] {
   if (!runs || !agentId) return [];
   return runs.filter((r) => r.agentId === agentId).slice(0, 5);
@@ -67,7 +96,7 @@ function clampPercent(n: number): number {
 export function AgentDrawer() {
   const { state, closeAgentDrawer } = useDrawerContext();
   const { open, agentId } = state.agentDrawer;
-  const { lastMessage } = useWebSocketContext();
+  const { subscribe, isConnected } = useWebSocketContext();
   const queryClient = useQueryClient();
 
   const [order, setOrder] = useState('');
@@ -75,8 +104,6 @@ export function AgentDrawer() {
   // S2: fixed-height stream window with collapse + auto-follow (UX contract).
   const [streamCollapsed, setStreamCollapsed] = useState(false);
   const streamRef = useRef<HTMLDivElement | null>(null);
-  const [pumpMode, setPumpMode] = useState<'idle' | 'attached' | 'detached'>('idle');
-  const [pumpParts, setPumpParts] = useState(0);
   // S11: client-side dedupe for pump watermark resets. Seq counters restart per
   // run, so the key must include the runId; clear when the drawer re-opens or
   // switches agent to avoid unbounded growth.
@@ -101,130 +128,138 @@ export function AgentDrawer() {
     () => pickAgentRuns(runsQuery.data, agentId),
     [runsQuery.data, agentId]
   );
-  const activeRun = agentRuns.find((r) => r.status === 'RUNNING') ?? agentRuns[0];
+  const activeRun = agentRuns.find(
+    (r) => r.status === 'RUNNING' || r.status === 'INITIALIZING' || r.status === 'PAUSED'
+  );
 
-  // Seed stream when drawer opens / agent changes.
+  // Task 6: replay the persisted progress backlog for the active run instead of
+  // seeding a fake demo connect line. Also re-arms the runId+seq dedupe so
+  // backlog rows and live frames dedupe against the same watermark.
   useEffect(() => {
-    if (!open || !agent) return;
-    seenSeqs.current.clear();
-    setPumpParts(0);
-    setPumpMode('idle');
-    setStream([
-      {
-        id: `seed-${agent.id}`,
-        ts: fmtTime(new Date()),
-        tag: 'think',
-        msg: `Connected to ${agent.name} · ${agent.role || agent.agentType}`,
-      },
-    ]);
-  }, [open, agent?.id, agent?.name, agent?.role, agent?.agentType, agent]);
-
-  // Fold WS events into the live stream + invalidate queries for real-time updates.
-  useEffect(() => {
-    if (!open || !agentId || !lastMessage) return;
-    const payload = lastMessage.payload ?? {};
-    const matchAgent =
-      payload.agentId === agentId ||
-      payload['agent_id'] === agentId ||
-      payload.resourceId === agentId;
-    if (!matchAgent && lastMessage.type !== 'agent.heartbeat') return;
-
-    if (isRunLifecycleEvent(lastMessage.type)) {
-      queryClient.invalidateQueries({ queryKey: ['runs'] });
-    }
-    if (lastMessage.type === 'run.progress') {
-      setPumpMode('attached');
-      // The backend payload carries no parts total; count received fragments.
-      setPumpParts((n) => n + 1);
-      // S11: render pump fragments by kind; dedupe by runId+seq.
-      const seq = Number(payload.seq ?? -1);
-      const runKey = String(payload.runId ?? '');
-      if (seq >= 0 && runKey) {
-        let seen = seenSeqs.current.get(runKey);
-        if (!seen) {
-          seen = new Set<number>();
-          seenSeqs.current.set(runKey, seen);
-        }
-        if (seen.has(seq)) return;
-        seen.add(seq);
-      }
-      const kind = String(payload.kind ?? '');
-      const content = String(payload.content ?? '');
-      const pTag: StreamLine['tag'] =
-        kind === 'THINKING' ? 'think'
-        : kind === 'TOOL_CALL' ? 'run'
-        : kind === 'TOOL_RESULT' ? 'ok'
-        : kind === 'ERROR' ? 'err' : 'warn';
-      const pLn: StreamLine = {
-        id: `prog-${seq}-${lastMessage.timestamp}`,
-        ts: fmtTime(lastMessage.timestamp || new Date()),
-        tag: pTag,
-        msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
-        detail: {
-          thinking: kind === 'THINKING' && content
-            ? (content.length > 200 ? content.slice(0, 200) + '...' : content)
-            : undefined,
-          toolName: (payload.toolName as string) ?? undefined,
-          toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
-        },
-      };
-      setStream((prev) => [...prev.slice(-59), pLn]);
+    if (!open || !agent) {
+      setStream([]);
       return;
-    } else if (lastMessage.type === 'run.completed') {
-      setPumpMode('detached');
     }
-
-    const tag: StreamLine['tag'] =
-      lastMessage.type.includes('error') || lastMessage.type.includes('fail')
-        ? 'err'
-        : lastMessage.type.includes('warn')
-        ? 'warn'
-        : lastMessage.type.includes('tool')
-        ? 'run'
-        : lastMessage.type.includes('complete')
-        ? 'ok'
-        : lastMessage.type.includes('iteration')
-        ? 'run'
-        : 'think';
-
-    // Build a more descriptive message with enhanced observability
-    let detail = '';
-    const lineDetail: StreamLine['detail'] = {};
-    if (lastMessage.type === 'run.iteration') {
-      const thinking = payload.thinking as string | undefined;
-      const toolCalls = payload.toolCalls as Array<{name:string;arguments:string;result:string}> | undefined;
-      const skills = payload.skills as string[] | undefined;
-      detail = `iter ${payload.iteration}/${payload.maxIterations}`;
-      if (thinking) lineDetail.thinking = thinking.length > 200 ? thinking.slice(0,200)+'...' : thinking;
-      if (toolCalls?.length) {
-        const tc = toolCalls[0];
-        lineDetail.toolName = tc.name;
-        lineDetail.toolArgs = tc.arguments?.length > 100 ? tc.arguments.slice(0,100)+'...' : tc.arguments;
-        lineDetail.toolResult = tc.result?.length > 200 ? tc.result.slice(0,200)+'...' : tc.result;
-        detail += ` · ${tc.name}`;
-      }
-      if (skills?.length) lineDetail.skills = skills;
-    } else if (lastMessage.type === 'run.completed') {
-      detail = `status: ${payload.status}`;
-      if (payload.finalOutput) {
-        const out = String(payload.finalOutput);
-        detail += ` — ${out.length > 80 ? out.slice(0, 80) + '...' : out}`;
-      }
-    } else if (lastMessage.type === 'run.started') {
-      detail = 'run started';
-    } else if (typeof payload.action === 'string') {
-      detail = payload.action;
+    seenSeqs.current.clear();
+    const runId = activeRun?.id;
+    if (!runId) {
+      setStream([]);
+      return;
     }
-
-    const ln: StreamLine = {
-      id: `${lastMessage.timestamp}-${Math.random().toString(36).slice(2, 6)}`,
-      ts: fmtTime(lastMessage.timestamp || new Date()),
-      tag,
-      msg: `${eventLabel(lastMessage.type)}${detail ? ' · ' + detail : ''}`,
-      detail: lineDetail,
+    let cancelled = false;
+    getRunProgress(runId)
+      .then((backlog) => {
+        if (cancelled) return;
+        setStream(backlog.map((p) => progressToEntry(p)));
+        const rk = String(runId);
+        backlog.forEach((p) => {
+          let seen = seenSeqs.current.get(rk);
+          if (!seen) {
+            seen = new Set<number>();
+            seenSeqs.current.set(rk, seen);
+          }
+          seen.add(p.seq);
+        });
+      })
+      .catch(() => console.warn('[drawer] progress backlog fetch failed'));
+    return () => {
+      cancelled = true;
     };
-    setStream((prev) => [...prev.slice(-59), ln]);
-  }, [lastMessage, open, agentId, queryClient]);
+  }, [open, agent?.id, activeRun?.id]);
+
+  // Task 6: fold WS events via subscribe — every frame is delivered to the
+  // handler (no polling drops) + invalidate queries for real-time updates.
+  // Cleanup is the returned unsubscribe.
+  useEffect(() => {
+    if (!open || !agentId) return;
+    const sub = subscribe((event) => {
+      const payload = event.payload ?? {};
+      const matchAgent =
+        payload.agentId === agentId ||
+        payload['agent_id'] === agentId ||
+        payload.resourceId === agentId;
+      if (!matchAgent) return;
+
+      if (isRunLifecycleEvent(event.type)) {
+        queryClient.invalidateQueries({ queryKey: ['runs'] });
+      }
+      if (event.type === 'run.progress') {
+        // S11: render pump fragments by kind; dedupe by runId+seq.
+        const seq = Number(payload.seq ?? -1);
+        const runKey = String(payload.runId ?? '');
+        if (seq >= 0 && runKey) {
+          let seen = seenSeqs.current.get(runKey);
+          if (!seen) {
+            seen = new Set<number>();
+            seenSeqs.current.set(runKey, seen);
+          }
+          if (seen.has(seq)) return;
+          seen.add(seq);
+        }
+        const pLn = progressToEntry({
+          kind: String(payload.kind ?? ''),
+          content: String(payload.content ?? ''),
+          toolName: (payload.toolName as string) ?? undefined,
+          seq,
+          createdAt: event.timestamp,
+        });
+        setStream((prev) => [...prev.slice(-59), pLn]);
+        return;
+      }
+
+      const tag: StreamLine['tag'] =
+        event.type.includes('error') || event.type.includes('fail')
+          ? 'err'
+          : event.type.includes('warn')
+          ? 'warn'
+          : event.type.includes('tool')
+          ? 'run'
+          : event.type.includes('complete')
+          ? 'ok'
+          : event.type.includes('iteration')
+          ? 'run'
+          : 'think';
+
+      // Build a more descriptive message with enhanced observability
+      let detail = '';
+      const lineDetail: StreamLine['detail'] = {};
+      if (event.type === 'run.iteration') {
+        const thinking = payload.thinking as string | undefined;
+        const toolCalls = payload.toolCalls as Array<{name:string;arguments:string;result:string}> | undefined;
+        const skills = payload.skills as string[] | undefined;
+        detail = `iter ${payload.iteration}/${payload.maxIterations}`;
+        if (thinking) lineDetail.thinking = thinking.length > 200 ? thinking.slice(0,200)+'...' : thinking;
+        if (toolCalls?.length) {
+          const tc = toolCalls[0];
+          lineDetail.toolName = tc.name;
+          lineDetail.toolArgs = tc.arguments?.length > 100 ? tc.arguments.slice(0,100)+'...' : tc.arguments;
+          lineDetail.toolResult = tc.result?.length > 200 ? tc.result.slice(0,200)+'...' : tc.result;
+          detail += ` · ${tc.name}`;
+        }
+        if (skills?.length) lineDetail.skills = skills;
+      } else if (event.type === 'run.completed') {
+        detail = `status: ${payload.status}`;
+        if (payload.finalOutput) {
+          const out = String(payload.finalOutput);
+          detail += ` — ${out.length > 80 ? out.slice(0, 80) + '...' : out}`;
+        }
+      } else if (event.type === 'run.started') {
+        detail = 'run started';
+      } else if (typeof payload.action === 'string') {
+        detail = payload.action;
+      }
+
+      const ln: StreamLine = {
+        id: `${event.timestamp}-${Math.random().toString(36).slice(2, 6)}`,
+        ts: fmtTime(event.timestamp || new Date()),
+        tag,
+        msg: `${eventLabel(event.type)}${detail ? ' · ' + detail : ''}`,
+        detail: lineDetail,
+      };
+      setStream((prev) => [...prev.slice(-59), ln]);
+    });
+    return () => sub.unsubscribe();
+  }, [subscribe, open, agentId, agent?.id, activeRun?.id, queryClient]);
 
   // S2 auto-follow: only chase the tail when the operator is near the bottom,
   // so scrolling back to read history is never interrupted.
@@ -236,11 +271,6 @@ export function AgentDrawer() {
   }, [stream]);
 
   // Derived resources.
-  const totalTokens = agentRuns.reduce((sum, r) => sum + (r.totalTokensUsed || 0), 0);
-  const tokenCap = 500_000;
-  const tokenPct = clampPercent((totalTokens / tokenCap) * 100);
-  const ctxUsed = activeRun ? Math.min(activeRun.iterationCount * 2_500, 200_000) : 0;
-  const ctxPct = clampPercent((ctxUsed / 200_000) * 100);
   const runtimeMin = activeRun
     ? Math.max(
         0,
@@ -426,13 +456,6 @@ export function AgentDrawer() {
               )}
 
               {/* Live activity stream (S2: fixed window + collapse + auto-follow) */}
-              <div className={`pump${pumpMode === 'attached' ? ' on' : ''}`}>
-                {pumpMode === 'attached'
-                  ? `progress pump: attached · Δ2s · ${pumpParts} parts seen`
-                  : pumpMode === 'detached'
-                    ? 'progress pump: detached · session closed'
-                    : 'progress pump: idle — attaches on run (GET /session/:id/message · Δ2s)'}
-              </div>
               <div className="section-h" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 Live Activity Stream
                 <span className="winbadge">window · last 60 lines · auto-follow</span>
@@ -481,22 +504,6 @@ export function AgentDrawer() {
               {/* Resource grid */}
               <div className="section-h">Resources</div>
               <div className="resgrid">
-                <div className={`res${tokenPct > 85 ? ' red' : tokenPct > 60 ? ' amber' : ''}`}>
-                  <div className="l">Tokens</div>
-                  <div className="v">{totalTokens.toLocaleString()}</div>
-                  <div className="sub">cap {tokenCap.toLocaleString()}</div>
-                  <div className="bar">
-                    <i style={{ width: `${tokenPct}%` }} />
-                  </div>
-                </div>
-                <div className="res">
-                  <div className="l">Context</div>
-                  <div className="v">{Math.round(ctxUsed / 1000)}k / 200k</div>
-                  <div className="sub">{ctxPct}% used</div>
-                  <div className="bar">
-                    <i style={{ width: `${ctxPct}%` }} />
-                  </div>
-                </div>
                 <div className="res green">
                   <div className="l">Active runs</div>
                   <div className="v">{agentRuns.filter((r) => r.status === 'RUNNING').length}</div>
@@ -607,7 +614,6 @@ export function AgentDrawer() {
                     onChange={(e) => setOrder(e.target.value)}
                     onKeyDown={onOrderKeyDown}
                   />
-                  <span className="hint">~{Math.max(8, order.length / 4) | 0} tok</span>
                   <button className="send" onClick={submitOrder} disabled={!order.trim() || !activeRun}>
                     Send ▶
                   </button>

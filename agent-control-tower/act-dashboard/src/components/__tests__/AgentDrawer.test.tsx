@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AgentDrawer } from '../AgentDrawer';
-import type { WsEvent } from '../../types';
+import { listRuns, getRunProgress } from '../../api/runs';
+import type { Run, WsEvent } from '../../types';
 
 vi.mock('../../api/agents', () => ({
   getAgent: vi.fn().mockResolvedValue({
@@ -13,15 +14,29 @@ vi.mock('../../api/agents', () => ({
 }));
 vi.mock('../../api/runs', () => ({
   listRuns: vi.fn().mockResolvedValue([]),
+  getRunProgress: vi.fn().mockResolvedValue([]),
   pauseRun: vi.fn().mockResolvedValue({}),
   resumeRun: vi.fn().mockResolvedValue({}),
   cancelRun: vi.fn().mockResolvedValue({}),
   injectRunMessage: vi.fn().mockResolvedValue({}),
 }));
 
-let mockCtx: { lastMessage: WsEvent | null; isConnected: boolean } = {
-  lastMessage: null,
+// Task 5 model: the context exposes subscribe(handler) => { unsubscribe }.
+// `push` records lastMessage (legacy fold) AND dispatches to every subscribed
+// handler, mirroring the real useWebSocket broadcast semantics.
+type WsHandler = (e: WsEvent) => void;
+let wsHandlers: WsHandler[] = [];
+const mockCtx = {
+  lastMessage: null as WsEvent | null,
   isConnected: false,
+  subscribe: (handler: WsHandler) => {
+    wsHandlers.push(handler);
+    return {
+      unsubscribe: () => {
+        wsHandlers = wsHandlers.filter((h) => h !== handler);
+      },
+    };
+  },
 };
 vi.mock('../Layout', () => ({
   useWebSocketContext: () => mockCtx,
@@ -49,12 +64,16 @@ function ui() {
 }
 
 function push(event: WsEvent) {
-  mockCtx = { lastMessage: event, isConnected: true };
+  mockCtx.lastMessage = event;
+  mockCtx.isConnected = true;
+  for (const handler of [...wsHandlers]) handler(event);
 }
 
 describe('AgentDrawer live stream (S2)', () => {
   beforeEach(() => {
-    mockCtx = { lastMessage: null, isConnected: false };
+    mockCtx.lastMessage = null;
+    mockCtx.isConnected = false;
+    wsHandlers = [];
   });
 
   it('renders parsed thinking detail from run.iteration events', async () => {
@@ -142,5 +161,90 @@ describe('AgentDrawer live stream (S2)', () => {
     expect(stream!.classList.contains('collapsed')).toBe(true);
     // header stays visible for re-expansion
     expect(screen.getByRole('button', { name: /expand/i })).toBeInTheDocument();
+  });
+});
+
+describe('AgentDrawer backlog replay + stub removal (Task 6)', () => {
+  const runningRun: Run = {
+    id: 'r-1', agentId: 'a-1', status: 'RUNNING', promptSeed: 'Do the thing',
+    maxIterations: 15, totalTokensUsed: 0, iterationCount: 3,
+    errorMessage: null, finalOutput: null,
+    createdAt: '2026-09-06T06:00:00Z', completedAt: null,
+  };
+  const failedRun: Run = {
+    id: 'r-2', agentId: 'a-1', status: 'FAILED', promptSeed: 'Broken run',
+    maxIterations: 15, totalTokensUsed: 0, iterationCount: 2,
+    errorMessage: 'boom', finalOutput: null,
+    createdAt: '2026-09-06T06:00:00Z', completedAt: null,
+  };
+  const backlog = [
+    { id: 'p-1', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'THINKING', seq: 1, content: 'thinking fragment', toolName: null, createdAt: '2026-09-06T06:00:01Z' },
+    { id: 'p-2', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'TOOL_CALL', seq: 2, content: 'shell output', toolName: 'shell_exec', createdAt: '2026-09-06T06:00:02Z' },
+  ];
+
+  beforeEach(() => {
+    mockCtx.lastMessage = null;
+    mockCtx.isConnected = false;
+    wsHandlers = [];
+    vi.mocked(listRuns).mockResolvedValue([]);
+    vi.mocked(getRunProgress).mockResolvedValue([]);
+  });
+
+  it('drawer_showsBacklogHistory_onOpen', async () => {
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(backlog);
+    const { container } = ui();
+
+    expect(await screen.findByText(/thinking fragment/)).toBeInTheDocument();
+    expect(screen.getByText(/shell_exec/)).toBeInTheDocument();
+    // seeded demo line must be gone
+    expect(screen.queryByText(/Connected to /)).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(2);
+  });
+
+  it('drawer_liveFrames_append_afterBacklog', async () => {
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(backlog);
+    const { container } = ui();
+
+    expect(await screen.findByText(/thinking fragment/)).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(2);
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: 'live output', seq: 3 }, timestamp: '2026-09-06T06:00:03Z' });
+    });
+    expect(await screen.findByText(/live output/)).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(3);
+
+    // duplicate seq must be deduped, not re-rendered
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: 'live output', seq: 3 }, timestamp: '2026-09-06T06:00:04Z' });
+    });
+    expect(container.querySelectorAll('.stream .ln').length).toBe(3);
+  });
+
+  it('drawer_failedRun_isNotActiveRun', async () => {
+    vi.mocked(listRuns).mockResolvedValue([failedRun]);
+    ui();
+
+    await waitFor(() => expect(screen.getByText(/Idle — awaiting work/)).toBeInTheDocument());
+    expect(screen.queryByText('Active Run')).not.toBeInTheDocument();
+  });
+
+  it('drawer_noPumpStubLine', async () => {
+    ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+    expect(screen.queryByText(/GET \/session\/:id\/message/)).not.toBeInTheDocument();
+  });
+
+  it('drawer_tokenBarsRemoved', async () => {
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    ui();
+
+    await waitFor(() => expect(screen.getByText(/Iter 3 \/ 15/)).toBeInTheDocument());
+    expect(screen.queryByText('Tokens')).not.toBeInTheDocument();
+    expect(screen.queryByText('Context')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^cap /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\/ 200k/)).not.toBeInTheDocument();
   });
 });

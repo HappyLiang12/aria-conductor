@@ -19,8 +19,10 @@ import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.RunProgressEventEntity;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.common.repository.RunProgressEventRepository;
 import io.aria.conductor.dashboard.dto.WsBroadcastEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,10 +34,12 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Verifies that {@link EventBroadcastListener} maps each domain event to a {@link WsBroadcastEvent}
@@ -46,12 +50,14 @@ import static org.mockito.Mockito.verify;
 class EventBroadcastListenerTest {
 
     private SimpMessagingTemplate messagingTemplate;
+    private RunProgressEventRepository progressRepository;
     private EventBroadcastListener listener;
 
     @BeforeEach
     void setUp() {
         messagingTemplate = mock(SimpMessagingTemplate.class);
-        listener = new EventBroadcastListener(messagingTemplate, new ObjectMapper());
+        progressRepository = mock(RunProgressEventRepository.class);
+        listener = new EventBroadcastListener(messagingTemplate, progressRepository, new ObjectMapper());
     }
 
     private WsBroadcastEvent captureBroadcast() {
@@ -103,6 +109,37 @@ class EventBroadcastListenerTest {
                 .containsEntry("seq", 7L);
         // 500-char truncation convention (matches onRunIteration)
         assertThat((String) event.data().get("content")).hasSize(503);
+    }
+
+    @Test
+    void onRunProgress_persistsFragment_thenBroadcasts() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        RunProgressEvent event = new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.THINKING, "thinking fragment", null, 7);
+
+        listener.onRunProgress(event);
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        RunProgressEventEntity saved = captor.getValue();
+        assertThat(saved.getRunId()).isEqualTo(runId);
+        assertThat(saved.getSeq()).isEqualTo(7L);
+        assertThat(saved.getKind()).isEqualTo("THINKING");
+        assertThat(saved.getContent()).isEqualTo("thinking fragment");
+        verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
+    }
+
+    @Test
+    void onRunProgress_persistFailure_doesNotBreakBroadcast() {
+        UUID runId = UUID.randomUUID();
+        RunProgressEvent event = new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
+                RunProgressEvent.Kind.THINKING, "frag", null, 3);
+        when(progressRepository.save(any())).thenThrow(new RuntimeException("db down"));
+
+        listener.onRunProgress(event);
+
+        verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
     }
 
     @Test

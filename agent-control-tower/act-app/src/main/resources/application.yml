@@ -63,3 +63,6 @@ aria:
     token: ${ARIA_MCP_TOKEN:}
     sandbox-host-address: ${ARIA_MCP_SANDBOX_HOST_ADDRESS:}
     port: ${ARIA_MCP_PORT:8080}
+  progress:
+    retention-days: ${ARIA_PROGRESS_RETENTION_DAYS:7}
+    cleanup-cron: ${ARIA_PROGRESS_CLEANUP_CRON:0 30 3 * * *}

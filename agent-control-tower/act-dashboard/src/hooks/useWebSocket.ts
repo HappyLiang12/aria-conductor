@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { WsEvent } from '../types';
 
+export interface WsSubscription {
+  unsubscribe: () => void;
+}
+
 interface UseWebSocketReturn {
   lastMessage: WsEvent | null;
   isConnected: boolean;
   send: (data: string) => void;
+  subscribe: (handler: (e: WsEvent) => void) => WsSubscription;
 }
 
 // Minimal STOMP frame helpers
@@ -53,6 +58,12 @@ export function useWebSocket(url = defaultWsUrl()): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlersRef = useRef(new Set<(e: WsEvent) => void>());
+
+  const subscribe = useCallback((handler: (e: WsEvent) => void): WsSubscription => {
+    handlersRef.current.add(handler);
+    return { unsubscribe: () => handlersRef.current.delete(handler) };
+  }, []);
 
   const connect = useCallback(() => {
     try {
@@ -90,6 +101,9 @@ export function useWebSocket(url = defaultWsUrl()): UseWebSocketReturn {
               timestamp: raw.timestamp ?? '',
             };
             setLastMessage(parsed);
+            handlersRef.current.forEach((h) => {
+              try { h(parsed); } catch { console.warn('[WS] handler failed'); }
+            });
           }
         } catch {
           console.warn('[WS] Failed to parse STOMP frame');
@@ -135,5 +149,5 @@ export function useWebSocket(url = defaultWsUrl()): UseWebSocketReturn {
     };
   }, [connect]);
 
-  return { lastMessage, isConnected, send };
+  return { lastMessage, isConnected, send, subscribe };
 }

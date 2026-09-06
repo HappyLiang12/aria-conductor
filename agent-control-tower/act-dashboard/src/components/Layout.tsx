@@ -8,23 +8,26 @@ import { Toast } from './Toast';
 import { DrawerProvider } from './DrawerContext';
 import { TaskDrawer } from './TaskDrawer';
 import { AgentDrawer } from './AgentDrawer';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocket, type WsSubscription } from '../hooks/useWebSocket';
+import type { WsEvent } from '../types';
 
 interface WebSocketContextType {
-  lastMessage: { type: string; payload: Record<string, unknown>; timestamp: string } | null;
+  lastMessage: WsEvent | null;
   isConnected: boolean;
+  subscribe: (handler: (e: WsEvent) => void) => WsSubscription;
 }
 
 const WebSocketContext = createContext<WebSocketContextType>({
   lastMessage: null,
   isConnected: false,
+  subscribe: () => ({ unsubscribe: () => {} }),
 });
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
-  const { lastMessage, isConnected } = useWebSocket();
+  const value = useWebSocket();
 
   return (
-    <WebSocketContext.Provider value={{ lastMessage, isConnected }}>
+    <WebSocketContext.Provider value={value}>
       {children}
     </WebSocketContext.Provider>
   );

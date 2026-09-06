@@ -227,4 +227,57 @@ describe('useWebSocket', () => {
     });
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
+
+  // Subscription model: burst-critical consumers subscribe per-frame instead of
+  // reading `lastMessage`, whose overwrite drops frames between renders.
+  describe('subscription model', () => {
+    it('delivers every message to ALL handlers (no lastMessage overwrite drops)', () => {
+      const seen: string[][] = [];
+      const { result } = renderHook(() => useWebSocket('ws://t/ws'));
+      const ws = lastSocket();
+      handshake(ws);
+
+      for (let i = 0; i < 3; i++) {
+        const idx = i;
+        result.current.subscribe((e) => seen[idx]?.push(e.type));
+        seen.push([]);
+      }
+
+      act(() => {
+        ws.onmessage?.({ data: frame('MESSAGE', {}, JSON.stringify({ type: 'run.progress', payload: { seq: 1 } })) });
+        ws.onmessage?.({ data: frame('MESSAGE', {}, JSON.stringify({ type: 'run.progress', payload: { seq: 2 } })) });
+      });
+      expect(seen.map((s) => s.length)).toEqual([2, 2, 2]);
+    });
+
+    it('subscribe returns an unsubscribe function that stops delivery', () => {
+      const events: string[] = [];
+      const { result } = renderHook(() => useWebSocket('ws://t/ws'));
+      const ws = lastSocket();
+      handshake(ws);
+
+      const sub = result.current.subscribe((e) => events.push(e.type));
+
+      act(() => {
+        ws.onmessage?.({ data: frame('MESSAGE', {}, JSON.stringify({ type: 'run.progress', payload: {} })) });
+      });
+      sub.unsubscribe();
+      act(() => {
+        ws.onmessage?.({ data: frame('MESSAGE', {}, JSON.stringify({ type: 'run.completed', payload: {} })) });
+      });
+      expect(events).toEqual(['run.progress']);
+    });
+
+    it('lastMessage still reflects the latest event (backward compat)', () => {
+      const { result } = renderHook(() => useWebSocket('ws://t/ws'));
+      const ws = lastSocket();
+      handshake(ws);
+
+      act(() => {
+        ws.onmessage?.({ data: frame('MESSAGE', {}, JSON.stringify({ type: 'run.progress', payload: { seq: 1 } })) });
+        ws.onmessage?.({ data: frame('MESSAGE', {}, JSON.stringify({ type: 'run.completed', payload: {} })) });
+      });
+      expect(result.current.lastMessage?.type).toBe('run.completed');
+    });
+  });
 });

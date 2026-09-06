@@ -66,6 +66,12 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- H2 for in-memory @DataJpaTest repository slices (mirrors act-knowledge) -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- jqwik property-based tests (version managed in parent) -->
         <dependency>
             <groupId>net.jqwik</groupId>

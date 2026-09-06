@@ -14,6 +14,8 @@
 -- 2. TIMESTAMP instead of TIMESTAMPTZ: neither MariaDB (docker prod profile)
 --    nor H2 MODE=MySQL (h2 profile / CI) accepts TIMESTAMPTZ; the rest of the
 --    schema standardizes on TIMESTAMP (see V1).
+-- 3. seq BIGINT (spec draft said INT): safe widening for a monotonic counter —
+--    avoids a future migration if a long-lived run exceeds INT range.
 CREATE TABLE run_progress_events (
     id         UUID         NOT NULL PRIMARY KEY,
     run_id     UUID         NOT NULL,

@@ -50,4 +50,21 @@ class RunProgressEventRepositoryTest {
         assertThat(removed).isEqualTo(1);
         assertThat(repository.findAll()).extracting(RunProgressEventEntity::getId).containsOnly(fresh.getId());
     }
+
+    @Test
+    void deleteByCreatedAtBefore_emptyTable_returnsZero() {
+        assertThat(repository.deleteByCreatedAtBefore(Instant.now())).isZero();
+    }
+
+    @Test
+    void crossRun_isolation_deleteAndQuery() {
+        UUID runA = UUID.randomUUID();
+        UUID runB = UUID.randomUUID();
+        repository.saveAll(List.of(entry(runA, 1, "THINKING"), entry(runB, 1, "THINKING")));
+
+        assertThat(repository.findByRunIdAndSeqAfterOrderBySeqAsc(runA, 0L))
+                .allSatisfy(e -> assertThat(e.getRunId()).isEqualTo(runA));
+        assertThat(repository.deleteByCreatedAtBefore(Instant.now().plusSeconds(60))).isEqualTo(2);
+        assertThat(repository.findByRunIdOrderBySeqAsc(runB)).isEmpty();
+    }
 }

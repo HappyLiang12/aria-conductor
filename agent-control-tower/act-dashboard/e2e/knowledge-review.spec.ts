@@ -34,6 +34,9 @@ test('2. approving via UI moves it into the unified space', async ({ page }) => 
   const queuePanel = page.locator('section.panel').filter({ hasText: 'Submitted For Review' });
   const queued = queuePanel.locator('.kitem').filter({ hasText: itemName });
   await queued.locator('button[title="Approve"]').click();
+  // Review actions open a confirm dialog; the mutation only fires after its
+  // confirm button is clicked.
+  await page.getByRole('button', { name: 'Confirm Approve' }).click();
 
   // Leaves the review queue…
   await expect(queued).toHaveCount(0, { timeout: 15_000 });

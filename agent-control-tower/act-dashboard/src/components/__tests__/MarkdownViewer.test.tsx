@@ -48,6 +48,12 @@ describe('MarkdownViewer', () => {
     expect(container.querySelectorAll('li').length).toBe(500);
   });
 
+  it('renders headings from CRLF input', () => {
+    const { container } = render(<MarkdownViewer content={'## Title\r\n\r\nbody'} />);
+    expect(container.querySelector('h2')?.textContent).toBe('Title');
+    expect(container.textContent).toContain('body');
+  });
+
   it('handles empty content gracefully', () => {
     const { container } = render(<MarkdownViewer content={undefined} />);
     expect(container.firstElementChild?.textContent).toBe('');

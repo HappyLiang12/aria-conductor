@@ -181,6 +181,23 @@ describe('ApprovalsPage stuck chains (#UI audit)', () => {
     await waitFor(() => expect(resubmitApproval).toHaveBeenCalledWith('wf-stuck'));
   });
 
+  it('resubmit_error_showsFeedback: rejected resubmitApproval surfaces the failure in the stuck panel', async () => {
+    vi.mocked(listWorkflows).mockResolvedValue([
+      mkChain({
+        id: 'wf-stuck',
+        name: 'Stuck Chain Alpha',
+        steps: [mkStep({ status: 'PENDING', runId: 'run-orphan' })],
+      }),
+    ]);
+    vi.mocked(resubmitApproval).mockRejectedValue(new Error('gate expired'));
+    ui();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Resubmit approval/i }));
+    expect(await screen.findByText('Resubmit failed: gate expired')).toBeInTheDocument();
+    // The chain stays listed (still stuck) after a failed resubmit.
+    expect(screen.getByText('Stuck Chain Alpha')).toBeInTheDocument();
+  });
+
   it('renders no stuck panel when every WAITING_APPROVAL chain has a pending approval', async () => {
     vi.mocked(listApprovals).mockResolvedValue([
       mkApproval({ id: 'ap-live', runId: 'run-live' }),

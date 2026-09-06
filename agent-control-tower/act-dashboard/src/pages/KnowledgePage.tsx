@@ -210,7 +210,10 @@ export function KnowledgePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['knowledge'] });
       setReviewReason('');
+      setConfirmReview(null);
     },
+    onError: (err) =>
+      setToast(`Review failed: ${(err as Error)?.message || 'Unknown error'}`),
   });
 
   const batchMut = useMutation({
@@ -221,7 +224,10 @@ export function KnowledgePage() {
       setToast(`${vars.approved ? 'Approved' : 'Rejected'} ${fulfilled}/${vars.ids.length} item(s)`);
       setCheckedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+      setConfirmReview(null);
     },
+    onError: (err) =>
+      setToast(`Review failed: ${(err as Error)?.message || 'Unknown error'}`),
   });
 
   const createMut = useMutation({
@@ -336,7 +342,8 @@ export function KnowledgePage() {
     } else {
       reviewMut.mutate({ id: ids[0], approved: false, reason: reviewReason || 'Rejected' });
     }
-    setConfirmReview(null);
+    // Dialog closes in onSuccess only — on failure it stays open so the user
+    // can retry or cancel, and the error surfaces via toast.
   };
 
   return (

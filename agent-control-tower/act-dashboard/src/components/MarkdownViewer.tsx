@@ -69,7 +69,10 @@ function renderTable(lines: string[], startIndex: number): { html: string; next:
 }
 
 function toHtml(md: string): string {
-  const lines = md.split('\n');
+  // Normalize CRLF/CR to LF first: a trailing \r would otherwise ride along on
+  // every line and break the heading/list/table regex matches below.
+  const normalized = md.replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
   const blocks: string[] = [];
   let i = 0;
   while (i < lines.length) {

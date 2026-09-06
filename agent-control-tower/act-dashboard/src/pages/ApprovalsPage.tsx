@@ -37,6 +37,8 @@ export function ApprovalsPage() {
   const [confirmApprove, setConfirmApprove] = useState<ApprovalWithReason | null>(null);
   const [confirmDeny, setConfirmDeny] = useState<ApprovalWithReason | null>(null);
   const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
+  // Feedback for stuck-chain resubmit attempts (page has no global toast).
+  const [stuckMsg, setStuckMsg] = useState<string | null>(null);
 
   const { data: approvals, isLoading, error } = useQuery({
     queryKey: ['approvals'],
@@ -69,7 +71,10 @@ export function ApprovalsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      setStuckMsg(null);
     },
+    onError: (err) =>
+      setStuckMsg(`Resubmit failed: ${(err as Error)?.message || 'Unknown error'}`),
   });
 
   useEffect(() => {
@@ -135,6 +140,11 @@ export function ApprovalsPage() {
             These chains are waiting for an approval that no longer exists (expired or missing).
             Resubmit to re-open the approval gate.
           </div>
+          {stuckMsg && (
+            <div className="error-state" role="alert">
+              {stuckMsg}
+            </div>
+          )}
           {stuckChains.map((w) => (
             <div key={w.id} className="stuck-chain-row">
               <span className="cell-mono">{w.id.slice(0, 8)}</span>

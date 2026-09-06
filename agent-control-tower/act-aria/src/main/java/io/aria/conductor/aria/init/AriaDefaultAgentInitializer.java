@@ -271,7 +271,13 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                     .healthStatus(HealthStatus.HEALTHY)
                     .build();
             aria.setUpdatedAt(Instant.now());
-            agentRepository.save(aria);
+            // Capture the managed instance: with an assigned UUID (and no @Version) this
+            // save() runs as em.merge — @PrePersist fills createdAt on the managed COPY
+            // Spring Data returns, NOT on the builder-created original. Discarding the
+            // return used to leave this local holding createdAt=null, and the pre-warm
+            // catch path then merged that stale snapshot into "update ... created_at=NULL"
+            // (NOT NULL violation) which killed the whole boot on fresh installs.
+            aria = agentRepository.save(aria);
             log.info("Aria agent created with id={}", AriaConstants.ARIA_AGENT_ID);
         } else {
             log.info("Aria agent already exists (id={}) — leaving operator config untouched", AriaConstants.ARIA_AGENT_ID);
@@ -295,7 +301,11 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                         legacyAgents.stream().map(a -> a.getId().toString().substring(0, 8) + "/" + a.getName()).toList());
                 for (Agent agent : legacyAgents) {
                     agent.setAdkProvider(defaultProvider);
-                    agentRepository.save(agent);
+                    // Same assigned-id merge pattern as the Aria create: keep the managed
+                    // instance, never a pre-save local reference (cheap hardening — these
+                    // entities are DB-loaded so createdAt is populated, but the returned
+                    // copy is the authoritative persisted state).
+                    agent = agentRepository.save(agent);
                 }
             }
         }
@@ -374,9 +384,16 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                                     + "opencode → OpenSandbox server reachable (SANDBOX/OPENCODE sandbox server URL, e.g. localhost:8090); "
                                     + "langchain → ADK venv present and langchain-adk server reachable. Cause: {}",
                             AriaConstants.ARIA_AGENT_ID, aria.getAdkProvider(), e.getMessage(), e);
-                    aria.setHealthStatus(HealthStatus.DEGRADED);
-                    aria.setUpdatedAt(Instant.now());
-                    agentRepository.save(aria);
+                    // Re-read before stamping: the pre-warm ran for 10-60s+ and this write
+                    // must never be a stale full-state merge. Merging the pre-warm snapshot
+                    // would both revert concurrent operator edits and — for a builder-created
+                    // entity whose createdAt was only filled by @PrePersist on a discarded
+                    // managed copy — issue "update ... created_at=NULL", a NOT NULL violation
+                    // that killed the boot on fresh installs.
+                    Agent fresh = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(aria);
+                    fresh.setHealthStatus(HealthStatus.DEGRADED);
+                    fresh.setUpdatedAt(Instant.now());
+                    agentRepository.save(fresh);
                 }
             }
         } else {

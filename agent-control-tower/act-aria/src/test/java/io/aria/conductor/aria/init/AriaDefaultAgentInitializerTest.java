@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.core.env.Environment;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -143,6 +144,9 @@ class AriaDefaultAgentInitializerTest {
         when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
         when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
         when(agentRepository.findAll()).thenReturn(java.util.List.of());
+        // Spring Data save() never returns null — the initializer keeps the managed
+        // instance, so model the persist contract (returns the entity itself).
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
         when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
         doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
@@ -230,6 +234,110 @@ class AriaDefaultAgentInitializerTest {
         String config = captor.getValue().getConfig();
         assertThat(config).contains("pass issueRepo");
         assertThat(config).contains("answer trivial questions");
+    }
+
+    // ---- Fresh-install boot-crash regression (stale-snapshot NULL created_at) ----
+
+    @Test
+    void freshDb_preWarmFailure_degradedWriteNeverCarriesNullCreatedAt() {
+        // Regression for the fresh-install boot crash: on a fresh DB the CREATE save()
+        // runs as a JPA merge (assigned UUID id, no @Version) — @PrePersist fills
+        // createdAt only on the managed COPY that Spring Data returns, and the
+        // builder-created original keeps createdAt=null. When the ADK pre-warm then
+        // throws, re-saving that stale snapshot issued "update agents set created_at=NULL"
+        // → H2 NOT NULL violation → DataIntegrityViolationException killed the boot.
+        // The degraded stamp must operate on an entity with populated audit columns.
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        AdkSystemProperties opencodeProps = new AdkSystemProperties();
+        opencodeProps.setDefaultProvider("opencode");
+        final Agent[] committedRow = new Agent[1];
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
+                .thenReturn(Optional.empty()) // step 1: fresh DB, row absent
+                .thenAnswer(inv -> Optional.ofNullable(committedRow[0])); // catch-path re-read: row committed by the create
+        // save() models JPA merge on an assigned id: Hibernate persists a managed COPY
+        // (@PrePersist fires on the copy) and returns it — the detached argument is
+        // never mutated (merge does not copy callback state back into the source).
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> {
+            Agent detached = inv.getArgument(0);
+            Agent managed = Agent.builder()
+                    .id(detached.getId())
+                    .name(detached.getName())
+                    .role(detached.getRole())
+                    .agentType(detached.getAgentType())
+                    .adkProvider(detached.getAdkProvider())
+                    .config(detached.getConfig())
+                    .healthStatus(detached.getHealthStatus())
+                    .build();
+            managed.setUpdatedAt(detached.getUpdatedAt());
+            managed.setCreatedAt(detached.getCreatedAt() != null ? detached.getCreatedAt() : Instant.now());
+            committedRow[0] = managed;
+            return managed;
+        });
+        doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "OpenCode sandbox setup failed for agent: connection refused"))
+                .when(adkProvider).prepareAgent(any(), any());
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+
+        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+
+        // the boot must complete (no constraint violation escapes run())
+        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
+
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository, atLeastOnce()).save(captor.capture());
+        // the last persisted write is the DEGRADED stamp...
+        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
+        // ...and it must NEVER carry a NULL created_at (the live crash wrote created_at=NULL)
+        assertThat(captor.getValue().getCreatedAt()).isNotNull();
+    }
+
+    @Test
+    void preWarmFailure_degradedStampWritesFreshlyLoadedEntity_notPreWarmSnapshot() {
+        // The pre-warm runs for 10-60s+; an operator edit landing inside that window
+        // must not be silently reverted by the DEGRADED stamp merging the pre-warm
+        // snapshot. The catch path must re-read the agent and stamp THAT entity.
+        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        Agent preWarmSnapshot = Agent.builder()
+                .id(AriaConstants.ARIA_AGENT_ID)
+                .name("Aria")
+                .role("AI operator assistant")
+                .agentType(AgentType.NATIVE)
+                .adkProvider("opencode")
+                .config("{\"maxToolCallRounds\":15}")
+                .healthStatus(HealthStatus.HEALTHY)
+                .createdAt(Instant.now())
+                .build();
+        Agent operatorEdited = Agent.builder()
+                .id(AriaConstants.ARIA_AGENT_ID)
+                .name("Aria (operator renamed)")
+                .role("operator-tuned role")
+                .agentType(AgentType.NATIVE)
+                .adkProvider("opencode")
+                .config("{\"taskApprovalRequired\":true}")
+                .healthStatus(HealthStatus.HEALTHY)
+                .createdAt(Instant.now())
+                .build();
+        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
+                .thenReturn(Optional.of(preWarmSnapshot)) // step 1 load
+                .thenReturn(Optional.of(operatorEdited)); // catch-path re-read: operator edit landed during pre-warm
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new IllegalStateException("ADK server did not become ready within 60s"))
+                .when(adkProvider).prepareAgent(any(), any());
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+
+        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
+                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment,
+                new AdkSystemProperties()).run(args);
+
+        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
+        verify(agentRepository, atLeastOnce()).save(captor.capture());
+        // the persisted DEGRADED stamp reflects the current DB row (operator edit intact),
+        // never the stale snapshot taken before the pre-warm
+        assertThat(captor.getValue().getName()).isEqualTo("Aria (operator renamed)");
+        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
     }
 
     // ---- DEGRADED recovery reconciler (called directly — test-friendly) ----

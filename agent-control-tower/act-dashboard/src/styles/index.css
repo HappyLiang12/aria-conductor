@@ -2354,6 +2354,77 @@ body.light .ai-compose .row { background: #ffffff; }
   background: rgba(255,107,122,.15); color: #ff8d99; letter-spacing: .5px;
 }
 
+/* Spec-review markdown (MarkdownViewer contract class) */
+.spec-review-markdown {
+  font-size: 12.5px; line-height: 1.55; color: var(--text-dim);
+  word-break: break-word;
+}
+.spec-review-markdown h1, .spec-review-markdown h2, .spec-review-markdown h3,
+.spec-review-markdown h4, .spec-review-markdown h5, .spec-review-markdown h6 {
+  margin: 10px 0 4px; color: var(--text);
+}
+.spec-review-markdown > :first-child { margin-top: 0; }
+.spec-review-markdown p { margin: 6px 0; }
+.spec-review-markdown ul, .spec-review-markdown ol { margin: 6px 0; padding-left: 20px; }
+.spec-review-markdown li { margin: 2px 0; }
+.spec-review-markdown code {
+  background: rgba(0,0,0,.28); border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 4px; font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.spec-review-markdown pre {
+  background: rgba(0,0,0,.3); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px; overflow-x: auto; margin: 8px 0;
+}
+.spec-review-markdown pre code { background: none; border: none; padding: 0; }
+.spec-review-markdown a {
+  color: var(--accent, #38bdf8); text-decoration: underline; text-underline-offset: 2px;
+}
+.spec-review-markdown a:hover { color: var(--brand-2); }
+.spec-review-markdown table {
+  border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 11.5px;
+}
+.spec-review-markdown th, .spec-review-markdown td {
+  border: 1px solid var(--line-2); padding: 4px 8px; text-align: left;
+}
+.spec-review-markdown th {
+  background: rgba(255,255,255,.04); color: var(--text); font-weight: 600;
+}
+
+/* Stuck approval gates (WAITING_APPROVAL chains with no live pending approval) */
+.stuck-chains {
+  border: 1px solid rgba(255,193,94,.45); background: rgba(255,193,94,.07);
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
+}
+.stuck-chains-title {
+  font-size: 12.5px; font-weight: 700; color: #ffcf7a; letter-spacing: .4px;
+}
+.stuck-chains-desc {
+  font-size: 11.5px; color: var(--text-dim); margin: 4px 0 8px; line-height: 1.45;
+}
+.stuck-chain-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0; border-top: 1px dashed rgba(255,193,94,.25);
+}
+.stuck-chain-name { flex: 1; font-size: 12px; color: var(--text); }
+.stuck-resubmit-btn {
+  border-color: rgba(255,193,94,.45) !important; color: #ffcf7a !important;
+}
+.stuck-resubmit-btn:hover { background: rgba(255,193,94,.12) !important; }
+body.light .stuck-chains { background: rgba(255,193,94,.12); }
+body.light .stuck-resubmit-btn { color: #9a6a00 !important; }
+body.light .spec-review-markdown code,
+body.light .spec-review-markdown pre { background: rgba(0,0,0,.06); }
+body.light .spec-review-markdown th { background: rgba(0,0,0,.03); }
+
+/* Expandable approval history rows */
+.history-row { cursor: pointer; }
+.history-row:hover td { background: rgba(91,140,255,.05); }
+.history-row.expanded td { background: rgba(91,140,255,.07); }
+.history-detail-row td {
+  background: rgba(255,255,255,.015); border-top: 1px dashed var(--line);
+}
+
 /* Forms (Runs start form, LLM provider edit) */
 .form-card {
   background: rgba(255,255,255,.025); border: 1px solid var(--line);

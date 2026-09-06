@@ -196,6 +196,9 @@ export function KnowledgePage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'md' | 'yaml'>('md');
+  // Pending review awaiting user confirmation; single and batch flows both go
+  // through the confirm dialog so no mutation fires on a stray click.
+  const [confirmReview, setConfirmReview] = useState<{ ids: string[]; approved: boolean; batch: boolean } | null>(null);
 
   // mutations
   const reviewMut = useMutation({
@@ -317,6 +320,23 @@ export function KnowledgePage() {
     }
     setFormError(null);
     createMut.mutate(form);
+  };
+
+  const handleConfirmReview = () => {
+    if (!confirmReview) return;
+    const { ids, approved, batch } = confirmReview;
+    if (batch) {
+      batchMut.mutate({
+        ids,
+        approved,
+        reason: reviewReason || (approved ? 'Batch approved' : 'Batch rejected'),
+      });
+    } else if (approved) {
+      reviewMut.mutate({ id: ids[0], approved: true, reason: reviewReason });
+    } else {
+      reviewMut.mutate({ id: ids[0], approved: false, reason: reviewReason || 'Rejected' });
+    }
+    setConfirmReview(null);
   };
 
   return (
@@ -456,10 +476,10 @@ export function KnowledgePage() {
                   className="btn"
                   disabled={checkedIds.size === 0 || batchMut.isPending}
                   onClick={() =>
-                    batchMut.mutate({
+                    setConfirmReview({
                       ids: Array.from(checkedIds),
                       approved: true,
-                      reason: reviewReason || 'Batch approved',
+                      batch: true,
                     })
                   }
                   style={{ color: '#6fe2b6', borderColor: 'rgba(54,211,153,.4)' }}
@@ -470,10 +490,10 @@ export function KnowledgePage() {
                   className="btn"
                   disabled={checkedIds.size === 0 || batchMut.isPending}
                   onClick={() =>
-                    batchMut.mutate({
+                    setConfirmReview({
                       ids: Array.from(checkedIds),
                       approved: false,
-                      reason: reviewReason || 'Batch rejected',
+                      batch: true,
                     })
                   }
                   style={{ color: '#ff8d99', borderColor: 'rgba(255,107,122,.4)' }}
@@ -524,7 +544,7 @@ export function KnowledgePage() {
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button
                         className="btn"
-                        onClick={() => reviewMut.mutate({ id: it.id, approved: true, reason: reviewReason })}
+                        onClick={() => setConfirmReview({ ids: [it.id], approved: true, batch: false })}
                         disabled={reviewMut.isPending}
                         style={{ color: '#6fe2b6', borderColor: 'rgba(54,211,153,.4)' }}
                         title="Approve"
@@ -533,7 +553,7 @@ export function KnowledgePage() {
                       </button>
                       <button
                         className="btn"
-                        onClick={() => reviewMut.mutate({ id: it.id, approved: false, reason: reviewReason || 'Rejected' })}
+                        onClick={() => setConfirmReview({ ids: [it.id], approved: false, batch: false })}
                         disabled={reviewMut.isPending}
                         style={{ color: '#ff8d99', borderColor: 'rgba(255,107,122,.4)' }}
                         title="Reject"
@@ -735,6 +755,41 @@ export function KnowledgePage() {
           <span className="access-label none">NONE</span> denied
         </div>
       </section>
+
+      {/* ---------- Review confirm dialog ---------- */}
+      {confirmReview && (
+        <div className="modal-overlay" onClick={() => setConfirmReview(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Confirm Review</h3>
+            {confirmReview.approved ? (
+              <p>
+                You are about to <strong>approve</strong> {confirmReview.ids.length} item(s).
+                They will be published to the unified knowledge library.
+              </p>
+            ) : (
+              <p>
+                You are about to <strong>reject</strong> {confirmReview.ids.length} item(s).
+                They will be returned to the submitting agent.
+              </p>
+            )}
+            {reviewReason && <div className="approval-reason-preview">Reason: {reviewReason}</div>}
+            <div className="modal-actions">
+              <button
+                className={`btn ${confirmReview.approved ? 'btn-success' : 'btn-danger'}`}
+                onClick={handleConfirmReview}
+                disabled={reviewMut.isPending || batchMut.isPending}
+              >
+                {reviewMut.isPending || batchMut.isPending
+                  ? 'Processing...'
+                  : confirmReview.approved
+                    ? 'Confirm Approve'
+                    : 'Confirm Reject'}
+              </button>
+              <button className="btn" onClick={() => setConfirmReview(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ---------- Submit modal ---------- */}
       {showSubmit && (

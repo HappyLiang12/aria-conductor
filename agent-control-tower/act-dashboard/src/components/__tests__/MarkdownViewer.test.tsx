@@ -52,4 +52,54 @@ describe('MarkdownViewer', () => {
     const { container } = render(<MarkdownViewer content={undefined} />);
     expect(container.firstElementChild?.textContent).toBe('');
   });
+
+  it('markdown_rendersTable_links_code: table, link and fenced code produce real elements', () => {
+    const md = [
+      '| Name | Risk |',
+      '| --- | --- |',
+      '| tool-a | High |',
+      '',
+      'See [Docs](https://example.com/help) for details.',
+      '',
+      '```js',
+      'const x = 1;',
+      '```',
+    ].join('\n');
+    const { container } = render(<MarkdownViewer content={md} />);
+
+    const table = container.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(container.querySelectorAll('th')).toHaveLength(2);
+    expect(container.querySelectorAll('td')).toHaveLength(2);
+    expect(table!.querySelector('th')?.textContent).toBe('Name');
+    expect(table!.querySelector('td')?.textContent).toBe('tool-a');
+
+    const link = container.querySelector('a');
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute('href')).toBe('https://example.com/help');
+    expect(link!.getAttribute('target')).toBe('_blank');
+    expect(link!.getAttribute('rel')).toBe('noopener');
+
+    const pre = container.querySelector('pre');
+    expect(pre).not.toBeNull();
+    expect(pre!.querySelector('code')?.textContent).toBe('const x = 1;');
+  });
+
+  it('renders ordered lists', () => {
+    const { container } = render(<MarkdownViewer content={'1. first\n2. second'} />);
+    const ol = container.querySelector('ol');
+    expect(ol).not.toBeNull();
+    expect(ol!.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  it('keeps fenced code content unparsed (no markdown/HTML interpretation inside)', () => {
+    const { container } = render(
+      <MarkdownViewer content={'```\n**not bold** and <script>x</script>\n```'} />,
+    );
+    const pre = container.querySelector('pre');
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toBe('**not bold** and <script>x</script>');
+    expect(container.querySelector('strong')).toBeNull();
+    expect(container.querySelector('script')).toBeNull();
+  });
 });

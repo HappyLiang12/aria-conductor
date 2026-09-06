@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listApprovals, decideApproval } from '../api/approvals';
+import { listWorkflows, resubmitApproval } from '../api/workflows';
 import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
@@ -34,6 +35,8 @@ export function ApprovalsPage() {
   const [activeTab, setActiveTab] = useState<'pending' | 'history'>('pending');
   const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
   const [confirmApprove, setConfirmApprove] = useState<ApprovalWithReason | null>(null);
+  const [confirmDeny, setConfirmDeny] = useState<ApprovalWithReason | null>(null);
+  const [expandedHistory, setExpandedHistory] = useState<Record<string, boolean>>({});
 
   const { data: approvals, isLoading, error } = useQuery({
     queryKey: ['approvals'],
@@ -46,12 +49,26 @@ export function ApprovalsPage() {
     queryFn: listAgents,
   });
 
+  const { data: workflows } = useQuery({
+    queryKey: ['workflows'],
+    queryFn: listWorkflows,
+  });
+
   const decideMutation = useMutation({
     mutationFn: ({ id, approved, reason }: { id: string; approved: boolean; reason?: string }) =>
       decideApproval(id, { approved, reason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       setConfirmApprove(null);
+      setConfirmDeny(null);
+    },
+  });
+
+  const resubmitMutation = useMutation({
+    mutationFn: (id: string) => resubmitApproval(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
     },
   });
 
@@ -64,6 +81,22 @@ export function ApprovalsPage() {
   const pending = approvals?.filter((a) => a.status === 'PENDING') ?? [];
   const resolved = approvals?.filter((a) => a.status !== 'PENDING') ?? [];
   const agentMap = new Map(agents?.map((a) => [a.id, a]) ?? []);
+
+  // Stuck gates: chains parked at WAITING_APPROVAL whose step runIds match no
+  // live pending approval (e.g. the request expired) — offer a resubmit.
+  const pendingApprovalRunIds = useMemo(
+    () => new Set(pending.map((a) => a.runId)),
+    [pending],
+  );
+  const stuckChains = useMemo(
+    () =>
+      (workflows ?? []).filter(
+        (w) =>
+          w.status === 'WAITING_APPROVAL' &&
+          !(w.steps ?? []).some((s) => s.runId && pendingApprovalRunIds.has(s.runId)),
+      ),
+    [workflows, pendingApprovalRunIds],
+  );
 
   const getCountdown = useCallback((expiresAt: string): { text: string; urgent: boolean } => {
     const now = new Date();
@@ -91,6 +124,32 @@ export function ApprovalsPage() {
         <h2>Approvals</h2>
         {pending.length > 0 && <span className="badge badge-warning">{pending.length} pending</span>}
       </div>
+
+      {/* Stuck chains: WAITING_APPROVAL with no matching pending approval */}
+      {stuckChains.length > 0 && (
+        <div className="stuck-chains" data-testid="stuck-chains">
+          <div className="stuck-chains-title">
+            Stuck approval gates ({stuckChains.length})
+          </div>
+          <div className="stuck-chains-desc">
+            These chains are waiting for an approval that no longer exists (expired or missing).
+            Resubmit to re-open the approval gate.
+          </div>
+          {stuckChains.map((w) => (
+            <div key={w.id} className="stuck-chain-row">
+              <span className="cell-mono">{w.id.slice(0, 8)}</span>
+              <span className="stuck-chain-name">{w.name}</span>
+              <button
+                className="btn stuck-resubmit-btn"
+                onClick={() => resubmitMutation.mutate(w.id)}
+                disabled={resubmitMutation.isPending}
+              >
+                Resubmit approval
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="tab-bar">
@@ -180,7 +239,7 @@ export function ApprovalsPage() {
                       </button>
                       <button
                         className="btn btn-danger btn-deny"
-                        onClick={() => handleDeny(approval.id)}
+                        onClick={() => setConfirmDeny({ id: approval.id, reason: approval.reason })}
                         disabled={decideMutation.isPending}
                       >
                         Deny
@@ -214,13 +273,36 @@ export function ApprovalsPage() {
                 </thead>
                 <tbody>
                   {resolved.map((a) => (
-                    <tr key={a.id}>
-                      <td className="cell-mono">{a.id.slice(0, 8)}</td>
-                      <td className="cell-mono">{a.runId.slice(0, 8)}</td>
-                      <td><StatusBadge status={a.status} size="sm" /></td>
-                      <td>{a.decidedAt ? new Date(a.decidedAt).toLocaleString() : '—'}</td>
-                      <td>{new Date(a.expiresAt).toLocaleString()}</td>
-                    </tr>
+                    <Fragment key={a.id}>
+                      <tr
+                        className={`history-row ${expandedHistory[a.id] ? 'expanded' : ''}`}
+                        onClick={() =>
+                          setExpandedHistory((prev) => ({ ...prev, [a.id]: !prev[a.id] }))
+                        }
+                      >
+                        <td className="cell-mono">{a.id.slice(0, 8)}</td>
+                        <td className="cell-mono">{a.runId.slice(0, 8)}</td>
+                        <td><StatusBadge status={a.status} size="sm" /></td>
+                        <td>{a.decidedAt ? new Date(a.decidedAt).toLocaleString() : '—'}</td>
+                        <td>{new Date(a.expiresAt).toLocaleString()}</td>
+                      </tr>
+                      {expandedHistory[a.id] && (
+                        <tr className="history-detail-row">
+                          <td colSpan={5}>
+                            {a.approvalType === 'SPEC_REVIEW' ? (
+                              <MarkdownViewer content={a.content ?? ''} />
+                            ) : (
+                              <div className="approval-info-row">
+                                <span className="approval-label">Arguments</span>
+                                <span className="cell-mono approval-args" title={a.arguments ?? ''}>
+                                  {a.arguments ?? '—'}
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -241,6 +323,23 @@ export function ApprovalsPage() {
                 {decideMutation.isPending ? 'Processing...' : 'Confirm Approve'}
               </button>
               <button className="btn" onClick={() => setConfirmApprove(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Deny Dialog */}
+      {confirmDeny && (
+        <div className="modal-overlay" onClick={() => setConfirmDeny(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Confirm Denial</h3>
+            <p>You are about to <strong>deny</strong> this request. The chain stays blocked until the approval gate is resubmitted.</p>
+            {confirmDeny.reason && <div className="approval-reason-preview">Reason: {confirmDeny.reason}</div>}
+            <div className="modal-actions">
+              <button className="btn btn-danger" onClick={() => handleDeny(confirmDeny.id)} disabled={decideMutation.isPending}>
+                {decideMutation.isPending ? 'Processing...' : 'Confirm Deny'}
+              </button>
+              <button className="btn" onClick={() => setConfirmDeny(null)}>Cancel</button>
             </div>
           </div>
         </div>

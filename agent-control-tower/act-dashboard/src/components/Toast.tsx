@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
-import { routeForNotificationResource } from '../utils/notificationRoutes';
+import { routeForNotificationType } from '../utils/notificationRoutes';
 
 interface ToastItem {
   id: number;
@@ -71,7 +71,10 @@ export function Toast() {
         if (notifId) shownIds.current.add(notifId);
 
         const title = (eventToUse.payload?.title as string) || 'Notification';
-        const resourceType = eventToUse.payload?.resourceType as string | undefined;
+        // The fine-grained notification type (run.completed, report.generated,
+        // ...) lives in the payload; payload.resourceType is only a coarse
+        // category (RUN/APPROVAL/KNOWLEDGE/REPORT) and has no route mapping.
+        const notifType = eventToUse.payload?.type as string | undefined;
         const notifToast: ToastItem = {
           id,
           message: title,
@@ -79,7 +82,7 @@ export function Toast() {
           action: {
             label: 'View',
             onClick: () => {
-              const route = routeForNotificationResource(resourceType);
+              const route = routeForNotificationType(notifType);
               if (route) navigate(route);
             },
           },

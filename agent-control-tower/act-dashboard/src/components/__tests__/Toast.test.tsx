@@ -184,12 +184,18 @@ describe('Toast', () => {
   });
 
   // The View button on aria.notification toasts must actually navigate to the
-  // resource route (previously it only console.logged).
+  // resource route (previously it only console.logged). Payload shape mirrors
+  // the backend: fine-grained `type` + coarse `resourceType` (NotificationDto).
   it('navigates to the resource route when View is clicked on an aria.notification', () => {
     const paths: string[] = [];
     setEvent({
       type: 'aria.notification',
-      payload: { id: 'n-nav-1', title: 'Report ready', resourceType: 'report.generated' },
+      payload: {
+        id: 'n-nav-1',
+        title: 'Report ready',
+        type: 'report.generated',
+        resourceType: 'REPORT',
+      },
       timestamp: 't1',
     });
     render(
@@ -205,11 +211,35 @@ describe('Toast', () => {
     expect(paths).toContain('/reports');
   });
 
-  it('does not navigate when the notification resourceType has no mapped route', () => {
+  it('does not navigate when the notification type has no mapped route', () => {
     const paths: string[] = [];
     setEvent({
       type: 'aria.notification',
-      payload: { id: 'n-nav-2', title: 'Daily brief', resourceType: '' },
+      payload: { id: 'n-nav-2', title: 'Daily brief', type: 'brief', resourceType: '' },
+      timestamp: 't1',
+    });
+    render(
+      inRouter(
+        <>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </>,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(paths).toEqual(['/']);
+  });
+
+  // The coarse resourceType (RUN/APPROVAL/KNOWLEDGE/REPORT) carried by every
+  // notification is deliberately NOT a routing key — only the fine-grained
+  // `type` field maps to routes. Keying on resourceType was the original bug:
+  // the fine-grained keys never matched, so View was a silent no-op.
+  it('does not navigate when only the coarse resourceType is present', () => {
+    const paths: string[] = [];
+    setEvent({
+      type: 'aria.notification',
+      payload: { id: 'n-nav-3', title: 'Build finished', resourceType: 'REPORT' },
       timestamp: 't1',
     });
     render(

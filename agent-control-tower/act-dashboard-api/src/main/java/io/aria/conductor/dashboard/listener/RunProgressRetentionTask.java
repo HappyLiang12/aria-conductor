@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 
@@ -25,6 +26,8 @@ public class RunProgressRetentionTask {
         this.retentionDays = retentionDays;
     }
 
+    // @Modifying bulk DELETE requires an active transaction (Spring Data custom query methods don't open one)
+    @Transactional
     @Scheduled(cron = "${aria.progress.cleanup-cron:0 30 3 * * *}")
     public void cleanup() {
         int removed = progressRepository.deleteByCreatedAtBefore(Instant.now().minusSeconds(86400L * retentionDays));

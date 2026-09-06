@@ -13,13 +13,15 @@ import {
  * S14: live observability e2e — dual-track acceptance.
  *
  * Track A (gate, runs WITHOUT an LLM key): exercises the WS-driven live UI on
- * a fast-failing NATIVE run — drawer stream window + pump row + collapse,
- * Runs live detail panel, kanban transition flash, toast auto-dismiss.
+ * a fast-failing NATIVE run — drawer Live Activity Stream (idle empty state,
+ * collapse toggle, WS lifecycle fold, retention), Runs live detail panel,
+ * kanban transition final state, toast auto-dismiss.
  *
- * Track B (opencode sandbox + LLM key): same chain plus the progress pump —
- * run.progress source lines in the drawer and pump attached → detached.
- * Skipped when LLM_API_KEY is absent (pump/broadcast correctness is proven by
- * WireMock unit tests in that case).
+ * Track B (opencode sandbox + LLM key): same chain plus run.progress frames
+ * surfacing as 'Agent Progress' stream lines, the iteration display in the
+ * Active Run block, and history retention after the run goes terminal.
+ * Skipped when LLM_API_KEY is absent (progress broadcast correctness is
+ * proven by WireMock unit tests in that case).
  */
 test.describe.configure({ timeout: 300_000 });
 
@@ -55,16 +57,21 @@ async function openAgentDrawer(page: Page, agentId: string) {
 // Track A — gate (no LLM key required)
 // ─────────────────────────────────────────────────────────────────────
 test.describe('Track A — live observability gate (no LLM key)', () => {
-  test('drawer stream window: pump row, collapse toggle, WS lines, toast 5s', async ({ page, request }) => {
+  test('drawer stream window: idle empty state, collapse toggle, WS lines, toast 5s', async ({ page, request }) => {
     const agent = await seedAgent(request);
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await openAgentDrawer(page, agent.id);
 
-    // Pump status row starts idle and advertises the poll contract.
-    await expect(page.locator('.agent-drawer .pump')).toContainText('idle');
+    // Rebuilt drawer (93d25b4): the fake pump stub is gone — the idle state is
+    // the stream's empty-state line and progress history replays into the
+    // Live Activity Stream section.
+    const drawer = page.locator('.agent-drawer');
+    await expect(drawer.getByText('Live Activity Stream')).toBeVisible();
     // Fixed-height stream window badge (UX contract: last 60 lines).
     await expect(page.locator('.agent-drawer .winbadge')).toContainText('last 60 lines');
+    // An empty stream renders the honest idle hint (no seeded demo line).
+    await expect(page.locator('.agent-drawer .stream .ln .tag')).toHaveText('idle');
 
     // Collapse toggle hides the stream body but keeps the section header.
     const tgl = page.locator('.agent-drawer .tgl').first();
@@ -78,10 +85,19 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     const run = await seedRun(request, agent.id, 'e2e observability track A');
     await pollRunStable(request, run.id);
 
-    // Seed line + at least one WS-fed line (run.started / run.completed).
-    await expect(page.locator('.agent-drawer .stream .ln')).not.toHaveCount(1, { timeout: 15_000 });
+    // At least one WS-fed lifecycle line (Run Started / Run Failed / Run
+    // Completed) is folded in AND still visible after the run went terminal —
+    // the completion-time query invalidation must not wipe the stream.
+    await expect(
+      page
+        .locator('.agent-drawer .stream .ln')
+        .filter({ hasText: /Run (Started|Failed|Completed)/ })
+        .first(),
+    ).toBeVisible({ timeout: 15_000 });
+    // The idle empty-state hint is replaced once real lines exist.
+    await expect(page.locator('.agent-drawer .stream .ln .tag').filter({ hasText: 'idle' })).toHaveCount(0);
 
-    // run.completed is toast-worthy; the toast auto-dismisses after 5s.
+    // Failures surface as run.completed toasts ("Run Failed"); auto-dismiss 5s.
     const toast = page.locator('.toast-container .toast-item').first();
     await expect(toast).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('.toast-container')).toBeHidden({ timeout: 8_000 });
@@ -113,7 +129,7 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     await expect(trajCol.locator('.trajectory-list, .empty-mini').first()).toBeVisible();
   });
 
-  test('Kanban live transition: card moves columns with flash class', async ({ page, request }) => {
+  test('Kanban live transition: card moves columns (final state)', async ({ page, request }) => {
     const item = await seedKanbanItem(request, { title: 'e2e-obs-live-move' });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
@@ -121,40 +137,48 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
 
     const { status } = await apiCall(request, 'POST', `/kanban/items/${item.id}/transition`, {
       status: 'IN_PROGRESS',
-      comment: 'e2e observability flash',
+      comment: 'e2e observability move',
     });
     expect(status).toBe(200);
 
-    // WS kanban.transitioned → invalidate + 1.2s flash on the moved card.
+    // WS kanban.transitioned → invalidate → the card lands in the target column.
+    // The 1.2s flash class on the moved card is timing-fragile to observe E2E
+    // (it can expire before the refetched card renders); the flash behavior is
+    // covered deterministically by KanbanBoard.test.tsx ("flashes the moved
+    // card on kanban.transitioned and clears after ~1.2s"), so here we assert
+    // the observable final state: present in the new column, gone from todo.
     const moved = page.locator(`[data-col="in_progress"] [data-card="${item.id}"]`);
     await expect(moved).toBeVisible({ timeout: 15_000 });
-    await expect(moved).toHaveClass(/moving/, { timeout: 5_000 });
-    // Flash clears after the animation window.
-    await expect(moved).not.toHaveClass(/moving/, { timeout: 8_000 });
+    await expect(page.locator(`[data-col="todo"] [data-card="${item.id}"]`)).toHaveCount(0);
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// Track B — opencode progress pump (requires LLM key + sandbox stack)
+// Track B — opencode progress replay (requires LLM key + sandbox stack)
 // ─────────────────────────────────────────────────────────────────────
-test.describe('Track B — opencode progress pump live chain', () => {
-  test('run.progress lines + pump attached → detached + trajectory growth', async ({ page, request }) => {
+test.describe('Track B — opencode progress replay live chain', () => {
+  test('run.progress lines + iteration display + history retention + trajectory growth', async ({ page, request }) => {
     test.skip(!process.env.LLM_API_KEY, 'Track B requires LLM_API_KEY + opencode sandbox stack');
 
     const agent = await seedAdkAgent(request, { adkProvider: 'opencode' });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await openAgentDrawer(page, agent.id);
-    await expect(page.locator('.agent-drawer .pump')).toContainText('idle');
+    // Rebuilt drawer: no pump stub — the Live Activity Stream section is the
+    // progress surface (REST backlog replay + live WS fold).
+    await expect(page.locator('.agent-drawer').getByText('Live Activity Stream')).toBeVisible();
+    await expect(page.locator('.agent-drawer .winbadge')).toContainText('last 60 lines');
 
     const run = await seedRun(request, agent.id, 'Reply with the single word: pong', 1);
     await approveRunApproval(request, run.id);
 
-    // Pump attaches while the task is in flight (first poll within Δ2s).
-    await expect(page.locator('.agent-drawer .pump.on')).toContainText('attached', {
-      timeout: 180_000,
-    });
-    // Pump fragments surface as 'Agent Progress' stream lines.
+    // Active Run block carries the honest iteration display (replaces the
+    // removed token/context cards) while the task is in flight.
+    const nowTask = page.locator('.agent-drawer .now-task');
+    await expect(nowTask).toContainText('Active Run', { timeout: 180_000 });
+    await expect(nowTask).toContainText(/Iter \d+ \/ \d+/);
+
+    // run.progress frames surface as 'Agent Progress' stream lines.
     await expect(
       page.locator('.agent-drawer .stream .ln .msg').filter({ hasText: 'Agent Progress' }).first(),
     ).toBeVisible({ timeout: 60_000 });
@@ -162,8 +186,12 @@ test.describe('Track B — opencode progress pump live chain', () => {
     const terminal = await pollRunTerminal(request, run.id, 300_000);
     expect(terminal.status).toBe('COMPLETED');
 
-    // Pump detaches once the run completes.
-    await expect(page.locator('.agent-drawer .pump')).toContainText('detached', { timeout: 30_000 });
+    // History retention: the completion-time query invalidation must not wipe
+    // the stream — replayed/live 'Agent Progress' lines persist after the run
+    // goes terminal (replaces the removed pump "detached" assertion).
+    await expect(
+      page.locator('.agent-drawer .stream .ln .msg').filter({ hasText: 'Agent Progress' }).first(),
+    ).toBeVisible({ timeout: 15_000 });
 
     // Runs detail shows the grown trajectory with live toggles.
     await page.goto('/runs');

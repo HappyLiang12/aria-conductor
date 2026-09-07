@@ -149,6 +149,8 @@ export default function ChatPage() {
   const [injectedByThread, setInjectedByThread] = useState<Record<string, ChatMessage[]>>({});
   const [readThreads, setReadThreads] = useState<Record<string, boolean>>({});
   const stackRef = useRef<HTMLDivElement | null>(null);
+  // Submit lock: Ctrl+Enter spam must not fire duplicate inject POSTs.
+  const injectingRef = useRef(false);
 
   const { data: runs, isLoading: runsLoading, error: runsError } = useQuery({
     queryKey: ['runs'],
@@ -268,6 +270,8 @@ export default function ChatPage() {
   const handleSend = useCallback(() => {
     const text = draft.trim();
     if (!text || !activeThread) return;
+    if (injectingRef.current) return; // one POST per message
+    injectingRef.current = true;
     const msg: ChatMessage = {
       id: `inject-${Date.now()}`,
       threadId: activeThread.id,
@@ -296,6 +300,8 @@ export default function ChatPage() {
         queryClient.invalidateQueries({ queryKey: ['run-trajectory', activeThread.id] });
       } catch {
         /* offline-friendly: keep local injection only */
+      } finally {
+        injectingRef.current = false;
       }
     })();
   }, [draft, activeThread, queryClient]);

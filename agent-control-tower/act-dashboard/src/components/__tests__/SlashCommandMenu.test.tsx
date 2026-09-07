@@ -11,11 +11,9 @@ const items: SlashCommandItem[] = [
 ];
 
 describe('SlashCommandMenu', () => {
-  it('renders nothing when items is empty', () => {
-    const { container } = render(
-      <SlashCommandMenu items={[]} activeIndex={0} onHover={vi.fn()} onSelect={vi.fn()} />,
-    );
-    expect(container.innerHTML).toBe('');
+  it('shows the empty-state hint when no skills are available', () => {
+    render(<SlashCommandMenu items={[]} activeIndex={0} onHover={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText(/No skills yet — author one in Knowledge/)).toBeInTheDocument();
   });
 
   it('renders all items with command and description', () => {

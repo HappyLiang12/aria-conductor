@@ -4,6 +4,7 @@ import { getUnreadCount, listNotifications, markRead, markAllRead } from '../api
 import type { Notification } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { formatTimestamp } from '../utils/formatTime';
+import { routeForNotificationType } from '../utils/notificationRoutes';
 
 export function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
@@ -56,15 +57,8 @@ export function NotificationBell() {
     } catch { /* silent */ }
   };
 
-  const getNavRoute = (notification: Notification): string | null => {
-    if (!notification.resourceType) return null;
-    const rt = notification.resourceType;
-    if (rt === 'run.completed' || rt === 'run.failed') return '/runs';
-    if (rt === 'approval.requested') return '/approvals';
-    if (rt === 'knowledge.submitted') return '/knowledge';
-    if (rt === 'report.generated') return '/reports';
-    return null;
-  };
+  const getNavRoute = (notification: Notification): string | null =>
+    routeForNotificationType(notification.type);
 
   const handleItemClick = async (notification: Notification) => {
     if (!notification.isRead) {

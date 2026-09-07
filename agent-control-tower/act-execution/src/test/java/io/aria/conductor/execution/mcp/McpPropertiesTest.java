@@ -15,6 +15,10 @@ class McpPropertiesTest {
         assertThat(props.getToken()).isEmpty();
         assertThat(props.getSandboxHostAddress()).isEmpty();
         assertThat(props.getPort()).isEqualTo(8080);
+        // Startup-fragility fix: the execd-readiness window is configurable and the
+        // default was raised from the hardcoded ~5s (10 x 500ms) to 15s — cold first
+        // boots routinely exceeded 5s, silently skipping the mcp block.
+        assertThat(props.getExecdReadyTimeoutMs()).isEqualTo(15000);
         assertThat(props.isTokenMode()).isFalse();
     }
 

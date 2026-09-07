@@ -34,6 +34,9 @@ import java.util.stream.Collectors;
  * Also migrates the system-seeded BA/Dev/QA role agents (V42) still on the legacy
  * hardcoded "langchain" provider to the configured default provider
  * (adk.default-provider) — operator-created agents are never re-pointed.
+ * Fresh-install note: V42 seeds those role agents on the legacy provider, so a
+ * fresh install's first boot always logs the legacy-provider migration WARN —
+ * expected, not a fault; this runtime re-pointing covers it (no seed change).
  * A scheduled reconciler retries the pre-warm while Aria is DEGRADED and re-stamps
  * HEALTHY on the first success, so a transient boot failure is not terminal.
  */
@@ -255,104 +258,140 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         log.info("Initializing Aria default agent...");
 
-        // 1. Ensure the Aria agent exists. The managed write (name/role/provider/config)
-        //    is CREATE-only: an existing record is left untouched so operator edits —
-        //    notably taskApprovalRequired in config and the adkProvider choice — survive
-        //    restarts. Health reconciliation happens below and via recoverDegradedAria().
-        Agent aria = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(null);
-        if (aria == null) {
-            aria = Agent.builder()
-                    .id(AriaConstants.ARIA_AGENT_ID)
-                    .name("Aria")
-                    .role(ARIA_ROLE)
-                    .agentType(AgentType.NATIVE)
-                    .adkProvider(defaultProvider)
-                    .config(buildAriaConfig())
-                    .healthStatus(HealthStatus.HEALTHY)
-                    .build();
-            aria.setUpdatedAt(Instant.now());
-            agentRepository.save(aria);
-            log.info("Aria agent created with id={}", AriaConstants.ARIA_AGENT_ID);
-        } else {
-            log.info("Aria agent already exists (id={}) — leaving operator config untouched", AriaConstants.ARIA_AGENT_ID);
-        }
+        // Boot hardening: steps 1-3 run inside the HIGHEST_PRECEDENCE ApplicationRunner —
+        // an exception there used to abort the whole JVM before any other runner, and the
+        // DEGRADED reconciler could never retry because the app was already dead. Degrade
+        // instead: every step is idempotent and retried on the next boot, so log ERROR
+        // and continue (pre-warm is skipped when the Aria row could not be loaded/created).
+        Agent aria = null;
+        try {
+            // 1. Ensure the Aria agent exists. The managed write (name/role/provider/config)
+            //    is CREATE-only: an existing record is left untouched so operator edits —
+            //    notably taskApprovalRequired in config and the adkProvider choice — survive
+            //    restarts. Health reconciliation happens below and via recoverDegradedAria().
+            aria = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(null);
+            if (aria == null) {
+                aria = Agent.builder()
+                        .id(AriaConstants.ARIA_AGENT_ID)
+                        .name("Aria")
+                        .role(ARIA_ROLE)
+                        .agentType(AgentType.NATIVE)
+                        .adkProvider(defaultProvider)
+                        .config(buildAriaConfig())
+                        .healthStatus(HealthStatus.HEALTHY)
+                        .build();
+                aria.setUpdatedAt(Instant.now());
+                // Capture the managed instance: with an assigned UUID (and no @Version) this
+                // save() runs as em.merge — @PrePersist fills createdAt on the managed COPY
+                // Spring Data returns, NOT on the builder-created original. Discarding the
+                // return used to leave this local holding createdAt=null, and the pre-warm
+                // catch path then merged that stale snapshot into "update ... created_at=NULL"
+                // (NOT NULL violation) which killed the whole boot on fresh installs.
+                aria = agentRepository.save(aria);
+                log.info("Aria agent created with id={}", AriaConstants.ARIA_AGENT_ID);
+            } else {
+                log.info("Aria agent already exists (id={}) — leaving operator config untouched", AriaConstants.ARIA_AGENT_ID);
+            }
 
-        // 2. Migrate the system-seeded SDD role agents still on the legacy hardcoded
-        //    provider to the configured default. When the default IS langchain this is
-        //    a no-op (preserves historical behaviour); when the default is opencode it
-        //    re-points the seeded BA/Dev/QA agents to the sandbox. Operator-created
-        //    agents (any id outside SEEDED_SDD_ROLE_AGENT_IDS) are never touched.
-        if (!LEGACY_PROVIDER.equalsIgnoreCase(defaultProvider)) {
-            List<Agent> legacyAgents = agentRepository.findAll().stream()
-                    .filter(a -> LEGACY_PROVIDER.equalsIgnoreCase(a.getAdkProvider()))
-                    .filter(a -> a.getId() != null && SEEDED_SDD_ROLE_AGENT_IDS.contains(a.getId()))
-                    .toList();
-            if (!legacyAgents.isEmpty()) {
-                log.warn("Migrating {} seeded agent(s) from legacy '{}' provider to '{}': {}",
-                        legacyAgents.size(),
-                        LEGACY_PROVIDER,
-                        defaultProvider,
-                        legacyAgents.stream().map(a -> a.getId().toString().substring(0, 8) + "/" + a.getName()).toList());
-                for (Agent agent : legacyAgents) {
-                    agent.setAdkProvider(defaultProvider);
-                    agentRepository.save(agent);
+            // 2. Migrate the system-seeded SDD role agents still on the legacy hardcoded
+            //    provider to the configured default. When the default IS langchain this is
+            //    a no-op (preserves historical behaviour); when the default is opencode it
+            //    re-points the seeded BA/Dev/QA agents to the sandbox. Operator-created
+            //    agents (any id outside SEEDED_SDD_ROLE_AGENT_IDS) are never touched.
+            if (!LEGACY_PROVIDER.equalsIgnoreCase(defaultProvider)) {
+                List<Agent> legacyAgents = agentRepository.findAll().stream()
+                        .filter(a -> LEGACY_PROVIDER.equalsIgnoreCase(a.getAdkProvider()))
+                        .filter(a -> a.getId() != null && SEEDED_SDD_ROLE_AGENT_IDS.contains(a.getId()))
+                        .toList();
+                if (!legacyAgents.isEmpty()) {
+                    log.warn("Migrating {} seeded agent(s) from legacy '{}' provider to '{}': {}",
+                            legacyAgents.size(),
+                            LEGACY_PROVIDER,
+                            defaultProvider,
+                            legacyAgents.stream().map(a -> a.getId().toString().substring(0, 8) + "/" + a.getName()).toList());
+                    for (Agent agent : legacyAgents) {
+                        agent.setAdkProvider(defaultProvider);
+                        // Same assigned-id merge pattern as the Aria create: keep the managed
+                        // instance, never a pre-save local reference (cheap hardening — these
+                        // entities are DB-loaded so createdAt is populated, but the returned
+                        // copy is the authoritative persisted state).
+                        agent = agentRepository.save(agent);
+                    }
                 }
             }
-        }
 
-        // 2.5: Ensure at least one LLM provider is active (generic, provider-agnostic)
-        if (llmProviderRepository.findByActiveTrue().isEmpty()) {
-            String apiKey = System.getenv("LLM_API_KEY");
-            String baseUrl = System.getenv("LLM_BASE_URL");
-            String model = System.getenv("LLM_MODEL");
-            if (apiKey != null && !apiKey.isBlank()) {
-                String name = inferProviderName(baseUrl);
-                LlmProviderType type = inferProviderType(baseUrl);
-                LlmProvider provider = LlmProvider.builder()
-                        .name(name)
-                        .type(type)
-                        .baseUrl(baseUrl != null ? baseUrl : "https://api.openai.com/v1")
-                        .apiKey(apiKey)
-                        .defaultModel(model != null ? model : "gpt-4o")
-                        .defaultMaxTokens(4096)
-                        .active(true)
-                        .build();
-                llmProviderRepository.save(provider);
-                log.info("Auto-created and ACTIVATED {} LLM provider from environment (LLM_API_KEY set).", name);
+            // 2.5: Ensure at least one LLM provider is active (generic, provider-agnostic)
+            if (llmProviderRepository.findByActiveTrue().isEmpty()) {
+                String apiKey = System.getenv("LLM_API_KEY");
+                String baseUrl = System.getenv("LLM_BASE_URL");
+                String model = System.getenv("LLM_MODEL");
+                if (apiKey != null && !apiKey.isBlank()) {
+                    String name = inferProviderName(baseUrl);
+                    LlmProviderType type = inferProviderType(baseUrl);
+                    LlmProvider provider = LlmProvider.builder()
+                            .name(name)
+                            .type(type)
+                            .baseUrl(baseUrl != null ? baseUrl : "https://api.openai.com/v1")
+                            .apiKey(apiKey)
+                            .defaultModel(model != null ? model : "gpt-4o")
+                            .defaultMaxTokens(4096)
+                            .active(true)
+                            .build();
+                    llmProviderRepository.save(provider);
+                    log.info("Auto-created and ACTIVATED {} LLM provider from environment (LLM_API_KEY set).", name);
+                } else {
+                    // Escalated from INFO (degraded-silent finding #8): with no env key AND no
+                    // DB provider, the opencode config write falls back to hardcoded deepseek
+                    // defaults — a fresh install would silently target a provider the operator
+                    // never configured (wrong model/keys at first run).
+                    log.warn("LLM provider not configured — falling back to deepseek defaults; set LLM_API_KEY or create a provider "
+                            + "(POST /api/v1/llm-providers, or set LLM_BASE_URL/LLM_MODEL to override the deepseek fallback).");
+                }
+            }
+
+            // 3. Assign Aria the orchestration-only tool set (#25) and prune anything outside it.
+            // Aria orchestrates workers; she must NOT hold git/file/shell/http tools herself.
+            List<ToolDefinition> approvedTools = toolDefinitionRepository.findAllApprovedAndEnabled();
+            Map<String, String> orchestrationToolIds = approvedTools.stream()
+                    .filter(t -> ARIA_ORCHESTRATION_TOOLS.contains(t.getName()))
+                    .collect(Collectors.toMap(ToolDefinition::getName, ToolDefinition::getId, (a, b) -> a));
+            int assigned = 0;
+            for (String toolId : orchestrationToolIds.values()) {
+                AgentToolId atId = new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), toolId);
+                if (!agentToolRepository.existsById(atId)) {
+                    AgentTool agentTool = new AgentTool();
+                    agentTool.setId(atId);
+                    agentTool.setAssignedBy("system");
+                    agentToolRepository.save(agentTool);
+                    assigned++;
+                }
+            }
+            // Prune any previously-granted tools that fall outside the orchestration allowlist (idempotent).
+            Set<String> allowedIds = Set.copyOf(orchestrationToolIds.values());
+            List<String> existingToolIds = agentToolRepository.findToolIdsByAgentId(AriaConstants.ARIA_AGENT_ID.toString());
+            int pruned = 0;
+            for (String existingToolId : existingToolIds) {
+                if (!allowedIds.contains(existingToolId)) {
+                    agentToolRepository.deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), existingToolId));
+                    pruned++;
+                }
+            }
+            if (orchestrationToolIds.isEmpty()) {
+                // Escalated from INFO (degraded-silent finding #7): Aria silently ending up
+                // with zero orchestration tools is never healthy — it means the migration-seeded
+                // APPROVED tool definitions are missing/renamed.
+                log.warn("Aria has 0 orchestration tools — check tool seed migrations V38/V41/V49 "
+                        + "(approved tools found: {}, assigned: {}, pruned: {}); Aria cannot orchestrate without them",
+                        approvedTools.size(), assigned, pruned);
             } else {
-                log.info("No active LLM provider and LLM_API_KEY not set. Configure via POST /api/v1/llm-providers or set LLM_API_KEY/LLM_BASE_URL/LLM_MODEL env vars.");
+                log.info("Aria default agent initialized: {} orchestration tools assigned ({} already present), {} pruned, total approved tools: {}",
+                        assigned, orchestrationToolIds.size() - assigned, pruned, approvedTools.size());
             }
+        } catch (Exception e) {
+            log.error("Aria initialization (agent upsert / provider migration / LLM bootstrap / tool assignment) failed — "
+                            + "continuing startup in degraded state; every step is idempotent and retried on the next boot. Cause: {}",
+                    e.getMessage(), e);
         }
-
-        // 3. Assign Aria the orchestration-only tool set (#25) and prune anything outside it.
-        // Aria orchestrates workers; she must NOT hold git/file/shell/http tools herself.
-        List<ToolDefinition> approvedTools = toolDefinitionRepository.findAllApprovedAndEnabled();
-        Map<String, String> orchestrationToolIds = approvedTools.stream()
-                .filter(t -> ARIA_ORCHESTRATION_TOOLS.contains(t.getName()))
-                .collect(Collectors.toMap(ToolDefinition::getName, ToolDefinition::getId, (a, b) -> a));
-        int assigned = 0;
-        for (String toolId : orchestrationToolIds.values()) {
-            AgentToolId atId = new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), toolId);
-            if (!agentToolRepository.existsById(atId)) {
-                AgentTool agentTool = new AgentTool();
-                agentTool.setId(atId);
-                agentTool.setAssignedBy("system");
-                agentToolRepository.save(agentTool);
-                assigned++;
-            }
-        }
-        // Prune any previously-granted tools that fall outside the orchestration allowlist (idempotent).
-        Set<String> allowedIds = Set.copyOf(orchestrationToolIds.values());
-        List<String> existingToolIds = agentToolRepository.findToolIdsByAgentId(AriaConstants.ARIA_AGENT_ID.toString());
-        int pruned = 0;
-        for (String existingToolId : existingToolIds) {
-            if (!allowedIds.contains(existingToolId)) {
-                agentToolRepository.deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), existingToolId));
-                pruned++;
-            }
-        }
-        log.info("Aria default agent initialized: {} orchestration tools assigned ({} already present), {} pruned, total approved tools: {}",
-                assigned, orchestrationToolIds.size() - assigned, pruned, approvedTools.size());
 
         // 4. Pre-warm ADK instance for Aria to eliminate cold-start timeout on first request
         // Skip pre-warming in test/noop-llm profiles to avoid spawning real subprocess
@@ -374,9 +413,16 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                                     + "opencode → OpenSandbox server reachable (SANDBOX/OPENCODE sandbox server URL, e.g. localhost:8090); "
                                     + "langchain → ADK venv present and langchain-adk server reachable. Cause: {}",
                             AriaConstants.ARIA_AGENT_ID, aria.getAdkProvider(), e.getMessage(), e);
-                    aria.setHealthStatus(HealthStatus.DEGRADED);
-                    aria.setUpdatedAt(Instant.now());
-                    agentRepository.save(aria);
+                    // Re-read before stamping: the pre-warm ran for 10-60s+ and this write
+                    // must never be a stale full-state merge. Merging the pre-warm snapshot
+                    // would both revert concurrent operator edits and — for a builder-created
+                    // entity whose createdAt was only filled by @PrePersist on a discarded
+                    // managed copy — issue "update ... created_at=NULL", a NOT NULL violation
+                    // that killed the boot on fresh installs.
+                    Agent fresh = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(aria);
+                    fresh.setHealthStatus(HealthStatus.DEGRADED);
+                    fresh.setUpdatedAt(Instant.now());
+                    agentRepository.save(fresh);
                 }
             }
         } else {

@@ -6,9 +6,9 @@ import org.springframework.context.ApplicationEvent;
 import java.util.UUID;
 
 /**
- * S8: in-memory streaming progress event published by the OpenCode progress pump
- * (and the langchain SSE forwarding fallback). Transient by design — NEVER
- * persisted to the database (no trajectory write amplification).
+ * Streamed progress fragment published by the OpenCode progress pump
+ * (and the langchain SSE forwarding fallback). Persisted to run_progress_events
+ * and broadcast over WS.
  */
 @Getter
 public class RunProgressEvent extends ApplicationEvent {

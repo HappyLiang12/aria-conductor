@@ -6,6 +6,7 @@ import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.RunProgressEventRepository;
 import io.aria.conductor.test.WebMvcTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -28,7 +29,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class RunControllerTest extends WebMvcTestBase {
 
     private final RunService runService = mock(RunService.class);
-    private final MockMvc mvc = mockMvcFor(new RunController(runService));
+    private final RunProgressEventRepository progressRepository = mock(RunProgressEventRepository.class);
+    private final MockMvc mvc = mockMvcFor(new RunController(runService, progressRepository));
 
     private RunResponse run(UUID id, UUID agentId, RunStatus status) {
         return RunResponse.builder().id(id).agentId(agentId).status(status)

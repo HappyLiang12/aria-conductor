@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml, resubmitApproval } from '../api/workflows';
+import { listRuns } from '../api/runs';
 import { listAgents } from '../api/agents';
 import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
@@ -27,6 +28,19 @@ const stepStatusIcon = (s: WorkflowStepStatus): string => {
     default: return '⬜';
   }
 };
+
+// Run statuses that mean the step's run will never advance again. A step still
+// labelled RUNNING whose run reached one of these is stale — display the run's
+// terminal status instead.
+const TERMINAL_RUN_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'ABORTED']);
+
+function displayedStepStatus(step: WorkflowStepInfo, runStatusById: Map<string, string>): WorkflowStepStatus {
+  if (step.status === 'RUNNING' && step.runId) {
+    const runStatus = runStatusById.get(step.runId);
+    if (runStatus && TERMINAL_RUN_STATUSES.has(runStatus)) return runStatus as WorkflowStepStatus;
+  }
+  return step.status;
+}
 
 function StepCard({ step, agentName }: { step: WorkflowStepInfo; agentName: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -68,9 +82,10 @@ function StepCard({ step, agentName }: { step: WorkflowStepInfo; agentName: stri
   );
 }
 
-function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRetry, onResubmit, onDelete }: {
+function WorkflowCard({ wf, agentMap, runStatusById, isSelected, onToggleSelect, onCancel, onRetry, onResubmit, onDelete }: {
   wf: WorkflowChain;
   agentMap: Map<string, string>;
+  runStatusById: Map<string, string>;
   isSelected: boolean;
   onToggleSelect: (id: string) => void;
   onCancel: (id: string) => void;
@@ -78,7 +93,7 @@ function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRe
   onResubmit: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const completedSteps = wf.steps.filter(s => s.status === 'COMPLETED').length;
+  const completedSteps = wf.steps.filter(s => displayedStepStatus(s, runStatusById) === 'COMPLETED').length;
   const progress = wf.totalSteps > 0 ? (completedSteps / wf.totalSteps) * 100 : 0;
 
   return (
@@ -136,7 +151,11 @@ function WorkflowCard({ wf, agentMap, isSelected, onToggleSelect, onCancel, onRe
       {/* Steps */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {wf.steps.map(step => (
-          <StepCard key={step.index} step={step} agentName={agentMap.get(step.agentId) || step.agentId.slice(0, 8)} />
+          <StepCard
+            key={step.index}
+            step={{ ...step, status: displayedStepStatus(step, runStatusById) }}
+            agentName={agentMap.get(step.agentId) || step.agentId.slice(0, 8)}
+          />
         ))}
       </div>
 
@@ -201,6 +220,14 @@ export function WorkflowsPage() {
     queryFn: listAgents,
   });
 
+  // Run statuses by id — used to derive the display status of steps whose
+  // own status went stale (still RUNNING after the run finished).
+  const { data: runs } = useQuery({
+    queryKey: ['runs'],
+    queryFn: listRuns,
+    enabled: activeTab === 'chains',
+  });
+
   // Mutations
   const cancelMutation = useMutation({
     mutationFn: (id: string) => cancelWorkflow(id),
@@ -247,6 +274,10 @@ export function WorkflowsPage() {
   // Build agent ID → name map
   const agentMap = new Map<string, string>();
   agents?.forEach(a => agentMap.set(a.id, a.name));
+
+  // Build run ID → status map for stale-step derivation
+  const runStatusById = new Map<string, string>();
+  runs?.forEach(r => runStatusById.set(r.id, r.status));
 
   // Sort: running first, then by createdAt desc
   const sorted = [...(workflows || [])].sort((a, b) => {
@@ -353,6 +384,7 @@ export function WorkflowsPage() {
           key={wf.id}
           wf={wf}
           agentMap={agentMap}
+          runStatusById={runStatusById}
           isSelected={selectedIds.includes(wf.id)}
           onToggleSelect={toggleSelect}
           onCancel={(id) => cancelMutation.mutate(id)}

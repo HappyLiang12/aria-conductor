@@ -1,9 +1,11 @@
 package io.aria.conductor.agent.controller;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
+import io.aria.conductor.agent.dto.RunProgressEventDto;
 import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.RunProgressEventRepository;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,9 +21,11 @@ import java.util.UUID;
 public class RunController {
 
     private final RunService runService;
+    private final RunProgressEventRepository progressRepository;
 
-    public RunController(RunService runService) {
+    public RunController(RunService runService, RunProgressEventRepository progressRepository) {
         this.runService = runService;
+        this.progressRepository = progressRepository;
     }
 
     @PostMapping
@@ -51,6 +55,20 @@ public class RunController {
     @GetMapping("/{id}")
     public ResponseEntity<RunResponse> getRun(@PathVariable UUID id) {
         return ResponseEntity.ok(runService.getRun(id));
+    }
+
+    @GetMapping("/{id}/progress")
+    public ResponseEntity<List<RunProgressEventDto>> getRunProgress(
+            @PathVariable UUID id,
+            @RequestParam(name = "afterSeq", defaultValue = "0") long afterSeq) {
+        List<RunProgressEventDto> events = progressRepository
+                .findByRunIdAndSeqAfterOrderBySeqAsc(id, afterSeq)
+                .stream()
+                .map(p -> new RunProgressEventDto(p.getId(), p.getRunId(), p.getAgentId(),
+                        p.getIteration(), p.getKind(), p.getSeq(), p.getContent(),
+                        p.getToolName(), p.getCreatedAt()))
+                .toList();
+        return ResponseEntity.ok(events);
     }
 
     @PostMapping("/{id}/pause")

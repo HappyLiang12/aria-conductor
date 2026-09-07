@@ -60,8 +60,8 @@ const COLUMNS: ColumnDef[] = [
   },
   {
     key: 'archived',
-    // F5: label must match the status semantics used elsewhere (KanbanPage,
-    // TaskDrawer) — "Archived" made cancelled/failed work look filed away.
+    // F5: label must match the status semantics used elsewhere (TaskDrawer) —
+    // "Archived" made cancelled/failed work look filed away.
     label: 'Cancelled',
     filter: (it) => it.status === 'CANCELLED',
   },

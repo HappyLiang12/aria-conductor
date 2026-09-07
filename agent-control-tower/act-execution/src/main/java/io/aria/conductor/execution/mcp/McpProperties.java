@@ -33,6 +33,15 @@ public class McpProperties {
     /** Backend port the sandbox-side MCP client targets. */
     private int port = 8080;
 
+    /**
+     * Sandbox execd-readiness wait budget in ms (probed every 500ms). createSandbox
+     * skips the SDK health check, so the MCP host probe first waits out the execd
+     * warmup window; the former hardcoded 10 x 500ms (~5s) budget was routinely
+     * exceeded on cold first boots (observed 13-18s prepares), silently skipping
+     * the mcp block. Fresh installs should keep the 15s default or higher.
+     */
+    private long execdReadyTimeoutMs = 15_000L;
+
     public boolean isTokenMode() {
         return "token".equalsIgnoreCase(authMode);
     }

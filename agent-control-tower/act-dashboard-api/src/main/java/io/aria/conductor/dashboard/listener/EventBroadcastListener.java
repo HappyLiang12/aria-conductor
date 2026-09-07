@@ -18,7 +18,10 @@ import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.model.RunProgressEventEntity;
+import io.aria.conductor.common.repository.RunProgressEventRepository;
 import io.aria.conductor.dashboard.dto.WsBroadcastEvent;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
@@ -26,15 +29,21 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
+@Slf4j
 @Component
 public class EventBroadcastListener {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final RunProgressEventRepository progressRepository;
     private final ObjectMapper objectMapper;
 
-    public EventBroadcastListener(SimpMessagingTemplate messagingTemplate, ObjectMapper objectMapper) {
+    public EventBroadcastListener(SimpMessagingTemplate messagingTemplate,
+                                  RunProgressEventRepository progressRepository,
+                                  ObjectMapper objectMapper) {
         this.messagingTemplate = messagingTemplate;
+        this.progressRepository = progressRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -155,6 +164,22 @@ public class EventBroadcastListener {
 
     @EventListener
     public void onRunProgress(RunProgressEvent event) {
+        // Persist first (history replay source), broadcast best-effort (live view).
+        try {
+            progressRepository.save(RunProgressEventEntity.builder()
+                    .id(UUID.randomUUID())
+                    .runId(event.getRunId())
+                    .agentId(event.getAgentId())
+                    .iteration(event.getIteration())
+                    .kind(event.getKind().name())
+                    .seq(event.getSeq())
+                    .content(truncate(event.getContent()))
+                    .toolName(event.getToolName())
+                    .createdAt(Instant.now())
+                    .build());
+        } catch (Exception e) {
+            log.warn("Failed to persist run progress (run={}): {}", event.getRunId(), e.getMessage());
+        }
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         payload.put("runId", event.getRunId().toString());
         payload.put("agentId", event.getAgentId().toString());
@@ -164,12 +189,13 @@ public class EventBroadcastListener {
         if (event.getToolName() != null) {
             payload.put("toolName", event.getToolName());
         }
-        String content = event.getContent();
-        if (content != null && content.length() > 500) {
-            content = content.substring(0, 500) + "...";
-        }
-        payload.put("content", content);
+        payload.put("content", truncate(event.getContent()));
         broadcast("run.progress", payload);
+    }
+
+    private static String truncate(String content) {
+        if (content == null) return null;
+        return content.length() > 500 ? content.substring(0, 500) + "..." : content;
     }
 
     @EventListener
@@ -236,7 +262,7 @@ public class EventBroadcastListener {
             WsBroadcastEvent wsEvent = new WsBroadcastEvent(type, data, Instant.now().toString());
             messagingTemplate.convertAndSend("/topic/events", wsEvent);
         } catch (Exception e) {
-            System.err.println("[WS Broadcast] Failed to send event: " + e.getMessage());
+            log.warn("[WS Broadcast] Failed to send event: {}", e.getMessage());
         }
     }
 }

@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createKanbanItem, listKanbanItems } from '../api/kanban';
+import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/kanban';
 import { executeHousekeeping } from '../api/housekeeping';
 import { listAgents } from '../api/agents';
-import type { CreateKanbanItemRequest, KanbanItem, KanbanPriority } from '../types';
+import type {
+  CreateKanbanItemRequest,
+  KanbanItem,
+  KanbanPriority,
+  KanbanStatus,
+} from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
@@ -11,61 +16,31 @@ import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 import { dispatchOpenTaskDrawer } from './DrawerContext';
 
 interface ColumnDef {
-  key: string;
+  key: KanbanStatus;
   label: string;
   isGate?: boolean;
   filter: (item: KanbanItem) => boolean;
 }
 
-const hasLabel = (item: KanbanItem, needle: string): boolean => {
-  if (!item.labels) return false;
-  return item.labels
-    .toLowerCase()
-    .split(',')
-    .map((s) => s.trim())
-    .includes(needle.toLowerCase());
-};
-
 const COLUMNS: ColumnDef[] = [
-  {
-    key: 'backlog',
-    label: 'Backlog',
-    filter: (it) => it.status === 'TODO' && hasLabel(it, 'backlog'),
-  },
-  {
-    key: 'todo',
-    label: 'Todo',
-    filter: (it) => it.status === 'TODO' && !hasLabel(it, 'backlog') && !hasLabel(it, 'review'),
-  },
-  {
-    key: 'in_progress',
-    label: 'In Progress',
-    filter: (it) => it.status === 'IN_PROGRESS' && !hasLabel(it, 'qa-gate'),
-  },
-  {
-    key: 'review',
-    label: 'Review',
-    filter: (it) => it.status === 'BLOCKED' || hasLabel(it, 'review'),
-  },
-  {
-    key: 'qa_gate',
-    label: 'QA Gate',
-    isGate: true,
-    filter: (it) => hasLabel(it, 'qa-gate') || hasLabel(it, 'gate'),
-  },
-  {
-    key: 'done',
-    label: 'Done',
-    filter: (it) => it.status === 'DONE',
-  },
-  {
-    key: 'archived',
-    // F5: label must match the status semantics used elsewhere (TaskDrawer) —
-    // "Archived" made cancelled/failed work look filed away.
-    label: 'Cancelled',
-    filter: (it) => it.status === 'CANCELLED',
-  },
+  { key: 'BACKLOG', label: 'Backlog', filter: (it) => it.status === 'BACKLOG' },
+  { key: 'TODO', label: 'Todo', filter: (it) => it.status === 'TODO' },
+  { key: 'IN_PROGRESS', label: 'In Progress', filter: (it) => it.status === 'IN_PROGRESS' },
+  { key: 'REVIEW', label: 'Review', isGate: true, filter: (it) => it.status === 'REVIEW' },
+  { key: 'DONE', label: 'Done', filter: (it) => it.status === 'DONE' },
 ];
+
+// Mirror of the backend ALLOWED_TRANSITIONS — drives drop-target legality only.
+// BLOCKED is retired; CANCELLED/DONE are reachable only via the card ✕ / approve actions.
+const LEGAL_DROPS: Record<KanbanStatus, KanbanStatus[]> = {
+  BACKLOG: ['TODO', 'IN_PROGRESS', 'CANCELLED'],
+  TODO: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
+  IN_PROGRESS: ['TODO', 'BACKLOG', 'REVIEW', 'DONE', 'CANCELLED'],
+  REVIEW: ['IN_PROGRESS', 'TODO', 'DONE', 'CANCELLED'],
+  DONE: [],
+  CANCELLED: [],
+  BLOCKED: [],
+};
 
 function priorityPillClass(priority: KanbanPriority): string {
   switch (priority) {
@@ -99,6 +74,7 @@ export default function KanbanBoard() {
   const [draft, setDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' } | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
 
   // S6: resolve linkedAgentId → agent name for attribution badges.
@@ -129,7 +105,7 @@ export default function KanbanBoard() {
       const payload = lastMessage.payload ?? {};
       const itemId = payload.itemId as string | undefined;
       if (itemId) {
-        setFlash({ itemId, kind: payload.toStatus === 'BLOCKED' ? 'err' : 'ok' });
+        setFlash({ itemId, kind: payload.toStatus === 'CANCELLED' ? 'err' : 'ok' });
       }
     }
   }, [lastMessage, queryClient]);
@@ -155,6 +131,32 @@ export default function KanbanBoard() {
     },
   });
 
+  // Optimistic move with snap-back: the drop updates the cache immediately and
+  // the transition call confirms it; on failure the invalidation refetch
+  // restores the server state and the operator gets a rejection message.
+  const transitionMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: KanbanStatus }) =>
+      transitionKanbanItem(id, { status }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['kanban-items'] }),
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+      setError('Move rejected — the card is back in its column.');
+    },
+  });
+
+  const handleDrop = (target: KanbanStatus) => {
+    const id = draggingId;
+    setDraggingId(null);
+    if (!id) return;
+    const item = (items ?? []).find((i) => i.id === id);
+    if (!item || item.status === target) return;
+    if (!LEGAL_DROPS[item.status]?.includes(target)) return;
+    queryClient.setQueryData<KanbanItem[]>(['kanban-items'], (old) =>
+      (old ?? []).map((i) => (i.id === item.id ? { ...i, status: target } : i))
+    );
+    transitionMutation.mutate({ id: item.id, status: target });
+  };
+
   const grouped = useMemo(() => {
     const map: Record<string, KanbanItem[]> = {};
     COLUMNS.forEach((c) => (map[c.key] = []));
@@ -166,8 +168,12 @@ export default function KanbanBoard() {
   }, [items]);
 
   // H2: quick-clear finished cards (DONE + CANCELLED) via the housekeeping batch.
+  // CANCELLED has no column by design (cancel is an action, not a state column);
+  // the housekeeping sweep is its only exit, so count both from the list.
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
-  const finishedCount = (grouped['done'] ?? []).length + (grouped['archived'] ?? []).length;
+  const finishedCount = (items ?? []).filter(
+    (i) => i.status === 'DONE' || i.status === 'CANCELLED'
+  ).length;
 
   const handleCreate = () => {
     const title = draft.title.trim();
@@ -181,6 +187,11 @@ export default function KanbanBoard() {
       assignee: draft.assignee.trim() || undefined,
     });
   };
+
+  // Legal drop targets for the card currently being dragged.
+  const legalTargets: KanbanStatus[] = draggingId
+    ? LEGAL_DROPS[(items ?? []).find((i) => i.id === draggingId)?.status ?? 'DONE'] ?? []
+    : [];
 
   return (
     <section className="panel" style={{ position: 'relative' }}>
@@ -208,6 +219,14 @@ export default function KanbanBoard() {
         </button>
       </h2>
 
+      {/* Board-level transition feedback (snap-back message per spec 5.1):
+          the same error slot the modal uses, but visible while it is closed. */}
+      {error && !showCreate && (
+        <div className="kanban-form-error" role="status" style={{ margin: '0 0 8px 4px' }}>
+          {error}
+        </div>
+      )}
+
       <div className="kanban">
         <div className="kanban-grid">
           {COLUMNS.map((col) => {
@@ -217,34 +236,47 @@ export default function KanbanBoard() {
                 key={col.key}
                 className={`col-k${col.isGate ? ' gate' : ''}`}
                 data-col={col.key}
+                onDragOver={(e) => {
+                  if (draggingId && legalTargets.includes(col.key)) e.preventDefault();
+                }}
+                onDrop={() => handleDrop(col.key)}
               >
                 <header>
                   <span>{col.label}</span>
                   <span className="count">{columnItems.length}</span>
                 </header>
-                <div className="lane">
+                <div className="lane" data-testid={`lane-${col.key}`}>
                   {isLoading && columnItems.length === 0 ? null : null}
                   {columnItems.map((item) => (
                     <div
                       key={item.id}
                       className={`card${col.isGate ? ' gate' : ''}${
-                        item.status === 'BLOCKED' ? ' blocked' : ''
-                      }${item.status === 'DONE' ? ' done' : ''}${
+                        item.status === 'DONE' ? ' done' : ''
+                      }${
                         flash?.itemId === item.id ? (flash.kind === 'err' ? ' moving-err' : ' moving') : ''
                       }`}
                       data-card={item.id}
+                      draggable
+                      data-dragging={draggingId === item.id || undefined}
+                      onDragStart={() => setDraggingId(item.id)}
+                      onDragEnd={() => setDraggingId(null)}
                       onClick={() => dispatchOpenTaskDrawer(item.id)}
                     >
                       <div className="gateline" />
                       <div className="id">{item.id.slice(0, 8)}</div>
                       <div className="t">{item.title}</div>
+                      {item.status === 'REVIEW' && !!item.pendingAskCount && (
+                        <span className="pill warn">{item.pendingAskCount} asks</span>
+                      )}
+                      {item.lastError && (
+                        <div className="owner" style={{ color: 'var(--red)' }}>
+                          {item.lastError}
+                        </div>
+                      )}
                       <div className="meta">
                         <span className={priorityPillClass(item.priority)}>
                           {item.priority}
                         </span>
-                        {item.status === 'BLOCKED' && (
-                          <span className="owner" style={{ color: 'var(--red)' }}>BLOCKED</span>
-                        )}
                         {item.linkedAgentId && agentNameById.get(item.linkedAgentId) && (
                           <span className="owner">↪ {agentNameById.get(item.linkedAgentId)}</span>
                         )}
@@ -252,6 +284,18 @@ export default function KanbanBoard() {
                           <span className="owner">@{item.assignee}</span>
                         )}
                       </div>
+                      {item.status !== 'DONE' && item.status !== 'CANCELLED' && (
+                        <button
+                          className="card-cancel"
+                          title="Cancel task"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            transitionMutation.mutate({ id: item.id, status: 'CANCELLED' });
+                          }}
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

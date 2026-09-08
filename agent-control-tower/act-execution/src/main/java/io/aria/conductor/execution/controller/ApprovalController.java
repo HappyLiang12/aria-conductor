@@ -142,9 +142,12 @@ public class ApprovalController {
     }
 
     /**
-     * Records the operator's answer to a HITL ask (spec 4.4): free-text answer, optionally
-     * marking the ask APPROVED/DENIED. Delegates to {@link ApprovalAnswerService} — lighter
-     * than the gate's decide flow (no run resume, no workflow side effects).
+     * Records the operator's answer to a HITL QUESTION ask (spec 4.4): free-text
+     * answer, optionally marking the ask APPROVED/DENIED. Delegates to
+     * {@link ApprovalAnswerService} — lighter than the gate's decide flow (no
+     * run resume, no workflow side effects). Gate approvals (TOOL_CALL /
+     * SPEC_REVIEW asks) must use {@code /decide} instead; only PENDING asks are
+     * answerable here and a decided ask is rejected.
      */
     @PostMapping("/{id}/answer")
     public ResponseEntity<Approval> answer(@PathVariable UUID id,

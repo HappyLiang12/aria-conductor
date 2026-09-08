@@ -17,6 +17,12 @@ import java.util.UUID;
  * <p>Intentionally lighter than {@link ApprovalGate#decideApproval}: no gate
  * future unblocking and no workflow-advancing {@code ApprovalDecidedEvent} —
  * answering a QUESTION ask must not resume the paused run or advance an SDD chain.
+ *
+ * <p>Guards: only PENDING asks are answerable (a decided ask is immutable), and
+ * the approved/denied flag is restricted to QUESTION asks — gate approvals must
+ * go through {@link ApprovalGate#decideApproval} ({@code /decide}) so they get
+ * the run-resume/workflow side effects. Free-text answer-only updates remain
+ * allowed for any PENDING ask.
  */
 @Service
 @RequiredArgsConstructor
@@ -28,6 +34,13 @@ public class ApprovalAnswerService {
     public Approval answer(UUID id, String answer, Boolean approved, String reason) {
         Approval approval = approvalRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + id));
+        if (approval.getStatus() != ApprovalStatus.PENDING) {
+            throw new IllegalArgumentException("Approval already decided: " + approval.getStatus());
+        }
+        if (approved != null && approval.getAskType() != Approval.AskType.QUESTION) {
+            throw new IllegalArgumentException(
+                    "Only QUESTION asks are answerable here; gate approvals must use /decide");
+        }
         approval.setAnswer(answer);
         if (approved != null) {
             approval.setStatus(approved ? ApprovalStatus.APPROVED : ApprovalStatus.DENIED);

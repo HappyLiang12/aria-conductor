@@ -149,10 +149,17 @@ class ApprovalControllerTest extends WebMvcTestBase {
         verify(approvalRepository, never()).findAll(any(Pageable.class));
     }
 
+    /** QUESTION ask: the only ask type whose approved/denied flag may be set via /answer. */
+    private Approval questionAsk(UUID id) {
+        Approval approval = anApproval().withId(id).build();
+        approval.setAskType(Approval.AskType.QUESTION);
+        return approval;
+    }
+
     @Test
     void answer_recordsAnswerAndApprovalDecision() throws Exception {
         UUID id = UUID.randomUUID();
-        Approval approval = anApproval().withId(id).build();
+        Approval approval = questionAsk(id);
         when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
         when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -170,7 +177,7 @@ class ApprovalControllerTest extends WebMvcTestBase {
     @Test
     void answer_deny_marksDenied() throws Exception {
         UUID id = UUID.randomUUID();
-        Approval approval = anApproval().withId(id).build();
+        Approval approval = questionAsk(id);
         when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
         when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -196,6 +203,50 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.answer").value("use semicolons"))
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.decidedAt").isEmpty());
+    }
+
+    @Test
+    void answer_answerOnlyOnQuestionAsk_passes() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval approval = questionAsk(id);
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "option B please"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.answer").value("option B please"))
+                .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    void answer_alreadyDecided_returns400() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval decided = anApproval().withId(id).withStatus(ApprovalStatus.DENIED).build();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(decided));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "late answer"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Approval already decided: DENIED"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"APPROVAL", "REVIEW_REQUEST"})
+    void answer_approvedFlagOnGateAsk_returns400(String askType) throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval approval = anApproval().withId(id).build();
+        approval.setAskType(Approval.AskType.valueOf(askType));
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("approved", true))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value("Only QUESTION asks are answerable here; gate approvals must use /decide"));
     }
 
     @Test

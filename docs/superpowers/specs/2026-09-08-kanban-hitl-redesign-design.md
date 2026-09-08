@@ -149,3 +149,15 @@ Stacked form: Title input; Description = large textarea (6-8 rows); Priority = s
 - Automatic draining of the Todo queue (no scheduler; pickup is always user-action driven).
 - Multi-board support; per-column WIP limits; board persistence of column order.
 - Rework of approval types beyond the new columns (tool-call approvals keep their current flow, they just surface through Review cards).
+
+## 9. Accepted deviations (implementation record)
+
+- Agent assignment is rule-based only (template/label match → first healthy agent); no LLM fallback in v1 (§4.2).
+- CHANGES_REQUESTED ask state is represented as EXPIRED + reason "superseded by request changes" (ApprovalStatus has no dedicated value).
+- Answer endpoint (`POST /approvals/{id}/answer`) intentionally does not release ApprovalGate futures or publish ApprovalDecidedEvent; the frontend routes gate asks through /decide and QUESTION asks through /answer (§5.2).
+- Pickup failure semantics: predictable failures (agent not found / retired / unhealthy / no eligible agent) leave the card in place with `lastError`; unexpected createRun failures propagate and roll the whole transition back (§4.2/§6 refinement).
+- BACKLOG→IN_PROGRESS is rejected on all surfaces; Backlog items dispatch only via Todo (D3 enforced at the orchestrator, the board legality mirror, and the MCP/Aria tool documentation).
+- REVIEW→IN_PROGRESS with a terminal linked run transitions the card without re-dispatch ("force-continue" is a manual operator decision; re-dispatch goes through TODO).
+- Notification bell routes approval.requested to the overview; opening the exact Review card is done from the Waiting-on-you card (§5.4 reduction).
+- `kanban.assigning` is broadcast during the synchronous transition request; the initiating client sees the optimistic move instead (the indicator serves concurrent viewers).
+- Pre-existing (not introduced here): `approveApproval`/`rejectApproval` in `api/approvals.ts` try `/approve`|`/reject` endpoints that no controller exposes and fall back to `/decide` — follow-up cleanup candidate.

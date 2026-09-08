@@ -33,18 +33,15 @@ public class KanbanService {
 
     static {
         EnumMap<KanbanStatus, Set<KanbanStatus>> map = new EnumMap<>(KanbanStatus.class);
-        map.put(KanbanStatus.TODO,
-                EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.BLOCKED, KanbanStatus.CANCELLED));
-        map.put(KanbanStatus.IN_PROGRESS,
-                EnumSet.of(KanbanStatus.DONE, KanbanStatus.BLOCKED,
-                        KanbanStatus.CANCELLED, KanbanStatus.REVIEW));
-        map.put(KanbanStatus.BLOCKED,
-                EnumSet.of(KanbanStatus.TODO, KanbanStatus.IN_PROGRESS, KanbanStatus.CANCELLED));
-        map.put(KanbanStatus.REVIEW,
-                EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.DONE,
-                        KanbanStatus.BLOCKED, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.BACKLOG, EnumSet.of(KanbanStatus.TODO, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.TODO, EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.BACKLOG, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.IN_PROGRESS, EnumSet.of(KanbanStatus.TODO, KanbanStatus.BACKLOG,
+                KanbanStatus.REVIEW, KanbanStatus.DONE, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.REVIEW, EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.TODO,
+                KanbanStatus.DONE, KanbanStatus.CANCELLED));
         map.put(KanbanStatus.DONE, EnumSet.noneOf(KanbanStatus.class));
         map.put(KanbanStatus.CANCELLED, EnumSet.noneOf(KanbanStatus.class));
+        // BLOCKED is retired: no outgoing transitions; V52 migrated rows to REVIEW.
         ALLOWED_TRANSITIONS = map;
     }
 

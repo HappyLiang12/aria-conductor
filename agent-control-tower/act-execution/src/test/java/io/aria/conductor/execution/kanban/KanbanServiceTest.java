@@ -139,14 +139,14 @@ class KanbanServiceTest {
     }
 
     @Test
-    void transition_blockedToTodo_succeeds() {
+    void transition_blockedToTodo_isRejected() {
+        // BLOCKED is retired: no outgoing transitions; V52 migrated rows to REVIEW.
         stored.setStatus(KanbanStatus.BLOCKED);
         when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
-        when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        KanbanItem result = service.transition(stored.getId(), KanbanStatus.TODO, "unblocked");
-
-        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.TODO, "unblocked"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid kanban transition");
     }
 
     @Test

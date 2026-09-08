@@ -4,8 +4,15 @@ import {
   getKanbanItem,
   transitionKanbanItem,
 } from '../api/kanban';
+import {
+  listAsksByKanbanItem,
+  answerAsk,
+  approveApproval,
+  rejectApproval,
+} from '../api/approvals';
 import { useDrawerContext } from './DrawerContext';
-import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
+import { MarkdownViewer } from './MarkdownViewer';
+import type { Approval, KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
@@ -28,17 +35,23 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
   CRITICAL: 'pill danger',
 };
 
-// NOTE: stale mirror of the retired backend table — Task 14 replaces this
-// drawer's transition UI with the new ALLOWED_TRANSITIONS semantics
-// (BACKLOG -> TODO/IN_PROGRESS dispatch, REVIEW request-changes, etc.).
+const ASK_TYPE_LABEL: Record<string, string> = {
+  QUESTION: 'Question',
+  REVIEW_REQUEST: 'Review',
+  APPROVAL: 'Approval',
+};
+
+// Mirror of the backend ALLOWED_TRANSITIONS — drives the drawer's transition
+// buttons only (drop-target legality lives in KanbanBoard's LEGAL_DROPS).
+// BLOCKED is retired; CANCELLED/DONE are reachable only via footer actions.
 const TRANSITIONS: Record<KanbanStatus, KanbanStatus[]> = {
-  BACKLOG: ['TODO', 'IN_PROGRESS', 'CANCELLED'],
+  BACKLOG: ['TODO', 'CANCELLED'],
   TODO: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
-  IN_PROGRESS: ['DONE', 'BACKLOG', 'REVIEW', 'TODO', 'CANCELLED'],
-  REVIEW: ['IN_PROGRESS', 'DONE', 'TODO', 'CANCELLED'],
-  BLOCKED: ['IN_PROGRESS', 'CANCELLED'],
+  IN_PROGRESS: ['TODO', 'BACKLOG', 'REVIEW', 'DONE', 'CANCELLED'],
+  REVIEW: ['IN_PROGRESS', 'TODO', 'DONE', 'CANCELLED'],
   DONE: [],
   CANCELLED: [],
+  BLOCKED: [],
 };
 
 interface ParsedLabels {
@@ -78,11 +91,14 @@ function parseLabels(item: KanbanItem | undefined): ParsedLabels {
 /* -------------------------------------------------------------------------- */
 
 export function TaskDrawer() {
-  const { state, closeTaskDrawer } = useDrawerContext();
+  const { state, closeTaskDrawer, openTaskDrawer, openReviewMode, closeReviewMode } =
+    useDrawerContext();
   const { open, itemId } = state.taskDrawer;
   const queryClient = useQueryClient();
 
   const [comment, setComment] = useState('');
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [changeFeedback, setChangeFeedback] = useState('');
 
   const taskQuery = useQuery({
     queryKey: ['kanban', 'item', itemId],
@@ -91,9 +107,28 @@ export function TaskDrawer() {
     retry: false,
   });
 
+  const item = taskQuery.data;
+
+  // HITL asks attached to this card — only fetched while it sits in Review.
+  const asksQuery = useQuery({
+    queryKey: ['kanban', 'asks', itemId],
+    queryFn: () => listAsksByKanbanItem(itemId as string),
+    enabled: open && Boolean(itemId) && item?.status === 'REVIEW',
+  });
+  const pendingAsks = (asksQuery.data ?? []).filter((a) => a.status === 'PENDING');
+
   const transitionMutation = useMutation({
-    mutationFn: ({ id, status, comment: c }: { id: string; status: KanbanStatus; comment?: string }) =>
-      transitionKanbanItem(id, { status, comment: c }),
+    mutationFn: ({
+      id,
+      status,
+      comment: c,
+      feedback,
+    }: {
+      id: string;
+      status: KanbanStatus;
+      comment?: string;
+      feedback?: string;
+    }) => transitionKanbanItem(id, { status, comment: c, feedback }),
     onSuccess: (data) => {
       queryClient.setQueryData(['kanban', 'item', data.id], data);
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
@@ -101,7 +136,36 @@ export function TaskDrawer() {
     },
   });
 
-  const item = taskQuery.data;
+  // Ask resolution: gate approvals go through the decide endpoints; QUESTION
+  // asks (free-text answers allowed on any PENDING ask) use /answer. Rejecting
+  // an APPROVAL ask is the deny semantics.
+  const resolveAsk = useMutation({
+    mutationFn: ({ ask, approved, answer }: { ask: Approval; approved: boolean; answer?: string }) =>
+      ask.askType === 'QUESTION'
+        ? answerAsk(ask.id, { approved, answer })
+        : approved
+          ? approveApproval(ask.id, answer)
+          : rejectApproval(ask.id, answer),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['kanban'] });
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    },
+  });
+
+  // Review siblings come from the board list cache so the operator can walk
+  // every card waiting on them without closing the drawer.
+  const reviewSiblings = (queryClient.getQueryData<KanbanItem[]>(['kanban-items']) ?? []).filter(
+    (it) => it.status === 'REVIEW',
+  );
+  const siblingIndex = reviewSiblings.findIndex((it) => it.id === itemId);
+  const prevSibling = siblingIndex > 0 ? reviewSiblings[siblingIndex - 1] : null;
+  const nextSibling =
+    siblingIndex >= 0 && siblingIndex < reviewSiblings.length - 1
+      ? reviewSiblings[siblingIndex + 1]
+      : null;
+
+  const answerOf = (ask: Approval) => answers[ask.id] || undefined;
+
   const parsed = useMemo(() => parseLabels(item), [item]);
 
   // Acceptance criteria: derive simple states from item labels OR a default checklist.
@@ -129,6 +193,88 @@ export function TaskDrawer() {
   const errMsg = (transitionMutation.error as { response?: { data?: { error?: string } } } | null)
     ?.response?.data?.error;
 
+  // Shared between the collapsed drawer body and the full-page review rail so
+  // both surfaces always offer the exact same decisions.
+  const renderDecisionZone = () => (
+    <div className="decision-zone">
+      <div className="dz-title">⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks</div>
+      {pendingAsks.map((ask) => (
+        <div key={ask.id} className="ask-card">
+          <div className="ask-q">
+            {ASK_TYPE_LABEL[ask.askType ?? 'APPROVAL']}: {ask.content?.slice(0, 160)}
+          </div>
+          {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
+          <textarea
+            className="dod-textarea"
+            rows={2}
+            aria-label={`Answer for ask ${ask.id}`}
+            placeholder="Answer / feedback (optional)"
+            value={answers[ask.id] ?? ''}
+            onChange={(e) => setAnswers((prev) => ({ ...prev, [ask.id]: e.target.value }))}
+          />
+          <div className="ask-actions">
+            <button
+              className="btn primary"
+              disabled={resolveAsk.isPending}
+              onClick={() => resolveAsk.mutate({ ask, approved: true, answer: answerOf(ask) })}
+            >
+              Approve
+            </button>
+            <button
+              className="btn"
+              disabled={resolveAsk.isPending}
+              onClick={() => resolveAsk.mutate({ ask, approved: false, answer: answerOf(ask) })}
+            >
+              Deny
+            </button>
+          </div>
+        </div>
+      ))}
+      <div className="ask-actions dz-footer">
+        <button
+          className="btn primary"
+          disabled={resolveAsk.isPending}
+          onClick={() =>
+            pendingAsks.forEach((a) =>
+              resolveAsk.mutate({ ask: a, approved: true, answer: answerOf(a) }),
+            )
+          }
+        >
+          ✓ Approve all
+        </button>
+        <textarea
+          className="dod-textarea"
+          rows={2}
+          aria-label="Request-changes feedback"
+          placeholder="What should change? (sent back to the agent)"
+          value={changeFeedback}
+          onChange={(e) => setChangeFeedback(e.target.value)}
+        />
+        <button
+          className="btn"
+          disabled={transitionMutation.isPending}
+          onClick={() => {
+            if (!item) return;
+            transitionMutation.mutate({
+              id: item.id,
+              status: 'TODO',
+              feedback: changeFeedback.trim() || undefined,
+            });
+            setChangeFeedback('');
+          }}
+        >
+          ✎ Request changes
+        </button>
+      </div>
+    </div>
+  );
+
+  const goToSibling = (sibling: KanbanItem | null) => {
+    if (!sibling) return;
+    setAnswers({});
+    openTaskDrawer(sibling.id);
+  };
+
   return (
     <>
       {open && (
@@ -153,6 +299,31 @@ export function TaskDrawer() {
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
+          {item?.status === 'REVIEW' && (prevSibling || nextSibling) && (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                className="btn"
+                disabled={!prevSibling}
+                aria-label="Previous review card"
+                onClick={() => goToSibling(prevSibling)}
+              >
+                ← prev
+              </button>
+              <button
+                className="btn"
+                disabled={!nextSibling}
+                aria-label="Next review card"
+                onClick={() => goToSibling(nextSibling)}
+              >
+                next →
+              </button>
+            </div>
+          )}
+          {item?.status === 'REVIEW' && (
+            <button className="btn" onClick={openReviewMode} aria-label="Expand review">
+              ⤢ Expand
+            </button>
+          )}
           <div className="close" onClick={closeTaskDrawer} role="button" aria-label="Close">
             ✕
           </div>
@@ -172,6 +343,10 @@ export function TaskDrawer() {
 
           {item && (
             <>
+              {/* Review decision zone: the first thing an operator sees on a
+                  card that is waiting on them. */}
+              {item.status === 'REVIEW' && pendingAsks.length > 0 && renderDecisionZone()}
+
               {/* Status row */}
               <div className="section-h">Status</div>
               <div
@@ -326,6 +501,35 @@ export function TaskDrawer() {
           </button>
         </footer>
       </aside>
+
+      {/* Full-page review workspace: expanded spec + the same decision rail. */}
+      {open && state.reviewExpanded && item && (
+        <div
+          className="review-fullpage"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Review workspace"
+        >
+          <div className="rf-head">
+            <h3>{item.title}</h3>
+            <button className="btn" onClick={closeReviewMode}>
+              ⤡ Collapse
+            </button>
+          </div>
+          <div className="rf-body">
+            <div className="rf-spec">
+              <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
+            </div>
+            <div className="rf-decisions">
+              {pendingAsks.length > 0 ? (
+                renderDecisionZone()
+              ) : (
+                <div className="empty-state">No pending asks on this card.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

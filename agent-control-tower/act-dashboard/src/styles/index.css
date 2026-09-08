@@ -2520,3 +2520,21 @@ body.light .error-text,
 body.light .error-state,
 body.light .btn-danger { color: #c2273a; }
 body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
+
+/* === Kanban HITL: TaskDrawer decision zone + full-page review workspace === */
+.decision-zone { background: rgba(232,163,61,0.08); border: 1px solid rgba(232,163,61,0.4); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.dz-title { color: #e8a33d; font-weight: 700; margin-bottom: 8px; }
+.ask-card { border-bottom: 1px dashed var(--line-2); padding: 8px 0; }
+.ask-card:last-of-type { border-bottom: none; }
+.ask-q { font-weight: 600; margin-bottom: 4px; }
+.ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
+.ask-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.ask-actions .dod-textarea { width: 100%; }
+.dz-footer { flex-direction: column; align-items: stretch; }
+.review-fullpage { position: fixed; top: 64px; left: 0; right: 0; bottom: 0; background: var(--bg-1, #0d1426); z-index: 60; display: flex; flex-direction: column; padding: 16px; }
+.rf-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.rf-head h3 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rf-body { display: flex; gap: 16px; flex: 1; min-height: 0; }
+.rf-spec { flex: 1.4; overflow-y: auto; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 16px; }
+.rf-decisions { flex: 1; overflow-y: auto; min-width: 320px; }
+body.light .review-fullpage { background: #f4f6fb; }

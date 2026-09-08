@@ -28,6 +28,57 @@ function esc(target: EventTarget = window) {
   });
 }
 
+/** Probe for the full-page review-mode state machine. */
+function ReviewProbe() {
+  const { state, openTaskDrawer, openReviewMode, closeReviewMode, closeTaskDrawer } =
+    useDrawerContext();
+  return (
+    <div>
+      <span data-testid="task-open">{String(state.taskDrawer.open)}</span>
+      <span data-testid="review-expanded">{String(state.reviewExpanded)}</span>
+      <button data-testid="open-task" onClick={() => openTaskDrawer('k-1')} />
+      <button data-testid="open-review" onClick={openReviewMode} />
+      <button data-testid="close-review" onClick={closeReviewMode} />
+      <button data-testid="close-task" onClick={closeTaskDrawer} />
+    </div>
+  );
+}
+
+describe('DrawerContext review mode', () => {
+  it('opens and closes review mode without touching the drawer slot', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    expect(getByTestId('review-expanded').textContent).toBe('false');
+
+    act(() => getByTestId('open-task').click());
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-expanded').textContent).toBe('true');
+    expect(getByTestId('task-open').textContent).toBe('true');
+
+    act(() => getByTestId('close-review').click());
+    expect(getByTestId('review-expanded').textContent).toBe('false');
+    expect(getByTestId('task-open').textContent).toBe('true');
+  });
+
+  it('closing the task drawer also resets reviewExpanded', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-task').click());
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-expanded').textContent).toBe('true');
+
+    act(() => getByTestId('close-task').click());
+    expect(getByTestId('task-open').textContent).toBe('false');
+    expect(getByTestId('review-expanded').textContent).toBe('false');
+  });
+});
+
 describe('DrawerContext Escape handling (regression)', () => {
   it('Escape closes drawers when pressed outside them', () => {
     const { getByTestId } = render(

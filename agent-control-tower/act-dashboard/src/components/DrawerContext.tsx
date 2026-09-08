@@ -21,12 +21,16 @@ export interface AgentDrawerSlot {
 export interface DrawerState {
   taskDrawer: DrawerSlot;
   agentDrawer: AgentDrawerSlot;
+  // Full-page review workspace flag (kanban REVIEW cards only).
+  reviewExpanded: boolean;
 }
 
 export interface DrawerContextValue {
   state: DrawerState;
   openTaskDrawer: (itemId: string) => void;
   closeTaskDrawer: () => void;
+  openReviewMode: () => void;
+  closeReviewMode: () => void;
   openAgentDrawer: (agentId: string) => void;
   closeAgentDrawer: () => void;
 }
@@ -34,6 +38,7 @@ export interface DrawerContextValue {
 const initialState: DrawerState = {
   taskDrawer: { open: false, itemId: null },
   agentDrawer: { open: false, agentId: null },
+  reviewExpanded: false,
 };
 
 const DrawerContext = createContext<DrawerContextValue | null>(null);
@@ -63,7 +68,17 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({
       ...prev,
       taskDrawer: { open: false, itemId: prev.taskDrawer.itemId },
+      // Leaving the drawer must never leave a stale full-page review behind.
+      reviewExpanded: false,
     }));
+  }, []);
+
+  const openReviewMode = useCallback(() => {
+    setState((prev) => ({ ...prev, reviewExpanded: true }));
+  }, []);
+
+  const closeReviewMode = useCallback(() => {
+    setState((prev) => ({ ...prev, reviewExpanded: false }));
   }, []);
 
   const openAgentDrawer = useCallback((agentId: string) => {
@@ -104,7 +119,7 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const target = e.target instanceof Element ? e.target : null;
-      if (target?.closest('.agent-drawer.open, .drawer.open')) return;
+      if (target?.closest('.agent-drawer.open, .drawer.open, .review-fullpage')) return;
       if (state.taskDrawer.open) closeTaskDrawer();
       if (state.agentDrawer.open) closeAgentDrawer();
     };
@@ -117,10 +132,12 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
       state,
       openTaskDrawer,
       closeTaskDrawer,
+      openReviewMode,
+      closeReviewMode,
       openAgentDrawer,
       closeAgentDrawer,
     }),
-    [state, openTaskDrawer, closeTaskDrawer, openAgentDrawer, closeAgentDrawer]
+    [state, openTaskDrawer, closeTaskDrawer, openReviewMode, closeReviewMode, openAgentDrawer, closeAgentDrawer]
   );
 
   return <DrawerContext.Provider value={value}>{children}</DrawerContext.Provider>;

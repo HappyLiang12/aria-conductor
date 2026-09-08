@@ -149,6 +149,34 @@ class ApprovalControllerTest extends WebMvcTestBase {
         verify(approvalRepository, never()).findAll(any(Pageable.class));
     }
 
+    /**
+     * HITL asks round-trip their ask fields through {@code toDetail}: the Review
+     * panel renders the QUESTION prompt, options and recorded answer from the
+     * {@code GET /api/v1/approvals?kanbanItemId=} payload.
+     */
+    @Test
+    void listApprovals_kanbanItemIdParam_returnsQuestionAskFields() throws Exception {
+        String cardId = "card-ask";
+        Approval ask = anApproval().withReason("which export format?").build();
+        ask.setAskType(Approval.AskType.QUESTION);
+        ask.setKanbanItemId(cardId);
+        ask.setContextMd("### Context\nPick the format for the weekly report.");
+        ask.setOptionsJson("[{\"label\":\"CSV\"},{\"label\":\"XLSX\"}]");
+        ask.setAnswer("CSV");
+        when(approvalRepository.findByKanbanItemId(cardId)).thenReturn(List.of(ask));
+
+        mvc.perform(get("/api/v1/approvals").param("kanbanItemId", cardId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].kanbanItemId").value(cardId))
+                .andExpect(jsonPath("$[0].askType").value("QUESTION"))
+                .andExpect(jsonPath("$[0].contextMd")
+                        .value("### Context\nPick the format for the weekly report."))
+                .andExpect(jsonPath("$[0].optionsJson")
+                        .value("[{\"label\":\"CSV\"},{\"label\":\"XLSX\"}]"))
+                .andExpect(jsonPath("$[0].answer").value("CSV"));
+    }
+
     /** QUESTION ask: the only ask type whose approved/denied flag may be set via /answer. */
     private Approval questionAsk(UUID id) {
         Approval approval = anApproval().withId(id).build();

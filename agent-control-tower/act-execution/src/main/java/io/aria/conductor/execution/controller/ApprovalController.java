@@ -76,7 +76,14 @@ public class ApprovalController {
             UUID knowledgeItemId,
             String toolName,
             String arguments,
-            String riskTier) {}
+            String riskTier,
+            // HITL ask fields: the Review panel renders the QUESTION prompt,
+            // options and recorded answer from these (kanban card surface).
+            String kanbanItemId,
+            String askType,
+            String contextMd,
+            String optionsJson,
+            String answer) {}
 
     /**
      * List approvals, optionally filtered by {@link ApprovalStatus} or by the kanban card the
@@ -138,7 +145,10 @@ public class ApprovalController {
                 a.getContent(),
                 a.getContentKind() != null ? a.getContentKind().name() : null,
                 a.getKnowledgeItemId(),
-                toolName, tc != null ? tc.getArguments() : null, riskTier);
+                toolName, tc != null ? tc.getArguments() : null, riskTier,
+                a.getKanbanItemId(),
+                a.getAskType() != null ? a.getAskType().name() : null,
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
     }
 
     /**

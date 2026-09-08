@@ -29,4 +29,7 @@ public class CreateKanbanItemRequest {
     private String linkedRunId;
 
     private String linkedAgentId;
+
+    /** Agent template the new-task modal assigns; null lets Aria auto-assign. */
+    private String agentTemplateId;
 }

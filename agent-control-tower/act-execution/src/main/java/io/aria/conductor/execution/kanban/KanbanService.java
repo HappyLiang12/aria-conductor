@@ -76,6 +76,7 @@ public class KanbanService {
                     .labels(request.getLabels())
                     .linkedRunId(request.getLinkedRunId())
                     .linkedAgentId(request.getLinkedAgentId())
+                    .agentTemplateId(request.getAgentTemplateId())
                     .build();
 
             KanbanItem saved = repository.save(item);

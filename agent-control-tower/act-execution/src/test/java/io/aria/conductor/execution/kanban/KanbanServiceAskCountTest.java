@@ -30,6 +30,17 @@ class KanbanServiceAskCountTest {
     }
 
     @Test
+    void createPersistsAgentTemplateId() {
+        CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
+                .title("assigned card").agentTemplateId("ba-agent").build();
+
+        KanbanItem created = kanbanService.create(request);
+        KanbanItem loaded = kanbanRepository.findById(created.getId()).orElseThrow();
+
+        assertThat(loaded.getAgentTemplateId()).isEqualTo("ba-agent");
+    }
+
+    @Test
     void listPopulatesPendingAskCount() {
         KanbanItem card = kanbanService.create(CreateKanbanItemRequest.builder().title("reviewed").build());
         approvalRepository.save(Approval.builder()

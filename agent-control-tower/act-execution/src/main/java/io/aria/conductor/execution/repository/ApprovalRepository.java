@@ -30,6 +30,9 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
            "and a.kanbanItemId in :ids group by a.kanbanItemId")
     List<Object[]> countPendingByKanbanItemIds(@Param("ids") Collection<String> ids);
 
+    /** Bulk deny of a card's PENDING asks (work cancelled): single-statement
+     *  bulk update, no entity load; callers must be @Transactional and results
+     *  bypass the persistence context. */
     @Modifying
     @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.DENIED, " +
            "a.reason = :reason, a.decidedAt = :now " +
@@ -38,11 +41,15 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
                                   @Param("reason") String reason,
                                   @Param("now") Instant now);
 
+    /** Marks PENDING asks on a card stale (EXPIRED) when the operator sends
+     *  the work back with changes. Single-statement bulk update, no entity
+     *  load; callers must be @Transactional and results bypass the persistence
+     *  context. */
     @Modifying
     @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
-           "a.reason = 'superseded by request changes' " +
+           "a.reason = 'superseded by request changes', a.decidedAt = :now " +
            "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING")
-    int markStaleByKanbanItemId(@Param("itemId") String itemId);
+    int markStaleByKanbanItemId(@Param("itemId") String itemId, @Param("now") Instant now);
 
     /** Housekeeping S1: single-statement bulk delete (set-based, no entity load). */
     @Modifying

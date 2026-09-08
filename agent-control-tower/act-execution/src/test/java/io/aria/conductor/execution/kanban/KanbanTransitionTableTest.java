@@ -8,6 +8,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class KanbanTransitionTableTest {
 
+    // Null collaborators are safe here: isValidTransition only reads the static
+    // transition table, so none of the injected beans are ever touched.
     private final KanbanService service = new KanbanService(null, null, null, null);
 
     @ParameterizedTest

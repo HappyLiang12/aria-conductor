@@ -51,4 +51,21 @@ class ApprovalAskRepositoryTest extends DataJpaTestBase {
         flushAndClear();
         assertThat(repository.findById(a.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.DENIED);
     }
+
+    @Test
+    void markStaleByKanbanItemIdOnlyTouchesPending() {
+        Approval a = saveAsk("item-7", Approval.AskType.QUESTION);
+        Approval b = saveAsk("item-7", Approval.AskType.QUESTION);
+        b.setStatus(ApprovalStatus.APPROVED);
+        repository.save(b);
+
+        int stale = repository.markStaleByKanbanItemId("item-7", java.time.Instant.now());
+
+        assertThat(stale).isEqualTo(1);
+        // Bulk update bypasses the persistence context; force a real SQL round-trip.
+        flushAndClear();
+        Approval reloaded = repository.findById(a.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(reloaded.getDecidedAt()).isNotNull();
+    }
 }

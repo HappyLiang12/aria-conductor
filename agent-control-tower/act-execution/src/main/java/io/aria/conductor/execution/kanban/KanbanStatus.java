@@ -13,7 +13,7 @@ package io.aria.conductor.execution.kanban;
  *   <li>CANCELLED   → (terminal)</li>
  * </ul>
  *
- * <p>BLOCKED is retired: it still exists so persisted rows deserialze, has no
+ * <p>BLOCKED is retired: it still exists so persisted rows deserialize, has no
  * outgoing transitions, and V52 migrated legacy rows to REVIEW.
  */
 public enum KanbanStatus {

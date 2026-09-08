@@ -7,9 +7,11 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * Production {@link AgentPickerService.Candidates} adapter: non-retired agents
- * from {@link AgentRepository} (DEGRADED/UNHEALTHY agents stay eligible so a
- * degraded agent is still better than no pickup).
+ * Production {@link AgentPickerService.Candidates} adapter: agents from
+ * {@link AgentRepository} whose health is HEALTHY or DEGRADED. UNHEALTHY is
+ * excluded too — RunService.createRun rejects it, so picking an unhealthy
+ * agent only guarantees a failed pickup — while a degraded agent is still
+ * better than no pickup.
  */
 @Component
 public class AgentRepositoryCandidates implements AgentPickerService.Candidates {
@@ -23,6 +25,8 @@ public class AgentRepositoryCandidates implements AgentPickerService.Candidates 
     @Override
     public List<AgentPickerService.Candidate> healthy() {
         return agentRepository.findByHealthStatusNot(HealthStatus.RETIRED).stream()
+                .filter(a -> a.getHealthStatus() == HealthStatus.HEALTHY
+                          || a.getHealthStatus() == HealthStatus.DEGRADED)
                 .map(a -> new AgentPickerService.Candidate(a.getId(), a.getName()))
                 .toList();
     }

@@ -185,8 +185,9 @@ class RunKanbanAutoCreatorTest {
             "ABORTED,   CANCELLED",
             "CANCELLED, CANCELLED",
             // F5: failed work must stay visible in the attention column
-            // (BLOCKED) instead of silently vanishing into CANCELLED/Archived.
-            "FAILED,    BLOCKED",
+            // instead of silently vanishing into CANCELLED/Archived.
+            // BLOCKED is retired (V52); failed work surfaces in REVIEW for the operator.
+            "FAILED,    REVIEW",
             "PAUSED,    DONE"          // default branch of the status switch
     })
     void onRunCompleted_transitionsActiveItemToMappedStatus(RunStatus runStatus, KanbanStatus expected) {

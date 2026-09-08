@@ -260,6 +260,33 @@ body.afterhours .badge.afterhours { display: inline-flex; }
   50% { box-shadow: 0 0 0 4px rgba(246,196,83,.18); }
 }
 
+/* ---------- New Task modal form (HITL redesign) ---------- */
+.kanban-form { display: flex; flex-direction: column; gap: 10px; }
+.kanban-form-row { display: flex; flex-direction: column; gap: 5px; }
+.kanban-form-row > span { font-size: 11px; color: var(--text-dim); letter-spacing: .5px; text-transform: uppercase; }
+.kanban-form-row input,
+.kanban-form-row select,
+.kanban-form-row textarea {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 8px;
+  background: rgba(0,0,0,.22); color: var(--text);
+  padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; resize: vertical;
+}
+.kanban-form-row input:focus,
+.kanban-form-row select:focus,
+.kanban-form-row textarea:focus { border-color: var(--brand-2); }
+.kanban-form-row textarea::placeholder { color: var(--text-mute); }
+.kanban-form-error { color: var(--red); font-size: 12px; }
+.priority-seg { display: flex; gap: 4px; }
+.priority-seg button {
+  flex: 1; padding: 6px 0; border-radius: 6px;
+  border: 1px solid var(--line-2); background: transparent;
+  color: var(--text-mute); font-weight: 600; font-size: 11px; cursor: pointer;
+}
+.priority-seg button.on {
+  border-color: var(--brand-2); color: var(--brand-2);
+  background: rgba(77, 163, 255, 0.08);
+}
+
 /* ---------- Agent panel ---------- */
 .agents { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; }
 .agent {

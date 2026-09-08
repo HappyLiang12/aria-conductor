@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/kanban';
 import { executeHousekeeping } from '../api/housekeeping';
-import { listAgents } from '../api/agents';
+import { listAgentTemplates, listAgents } from '../api/agents';
 import type {
   CreateKanbanItemRequest,
   KanbanItem,
@@ -58,15 +58,12 @@ function priorityPillClass(priority: KanbanPriority): string {
 
 interface NewItemDraft {
   title: string;
+  description: string;
   priority: KanbanPriority;
-  assignee: string;
+  agentTemplateId: string;
 }
 
-const EMPTY_DRAFT: NewItemDraft = {
-  title: '',
-  priority: 'MEDIUM',
-  assignee: '',
-};
+const EMPTY_DRAFT: NewItemDraft = { title: '', description: '', priority: 'MEDIUM', agentTemplateId: '' };
 
 export default function KanbanBoard() {
   const queryClient = useQueryClient();
@@ -84,6 +81,12 @@ export default function KanbanBoard() {
     (agents ?? []).forEach((a) => m.set(a.id, a.name));
     return m;
   }, [agents]);
+
+  // New Task modal: agent templates for the Assign-to picker.
+  const { data: templates } = useQuery({
+    queryKey: ['agent-templates'],
+    queryFn: listAgentTemplates,
+  });
 
   const { data: items, isLoading } = useQuery({
     queryKey: ['kanban-items'],
@@ -175,7 +178,7 @@ export default function KanbanBoard() {
     (i) => i.status === 'DONE' || i.status === 'CANCELLED'
   ).length;
 
-  const handleCreate = () => {
+  const handleCreate = (target: 'TODO' | 'BACKLOG') => {
     const title = draft.title.trim();
     if (!title) {
       setError('Title is required');
@@ -183,8 +186,10 @@ export default function KanbanBoard() {
     }
     createMutation.mutate({
       title,
+      description: draft.description.trim() || undefined,
       priority: draft.priority,
-      assignee: draft.assignee.trim() || undefined,
+      agentTemplateId: draft.agentTemplateId || undefined,
+      status: target,
     });
   };
 
@@ -314,7 +319,7 @@ export default function KanbanBoard() {
           }}
         >
           <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <h3>New Kanban Item</h3>
+            <h3>New Task</h3>
             <div className="kanban-form">
               <label className="kanban-form-row">
                 <span>Title *</span>
@@ -325,34 +330,57 @@ export default function KanbanBoard() {
                 />
               </label>
               <label className="kanban-form-row">
-                <span>Priority</span>
-                <select
-                  value={draft.priority}
-                  onChange={(e) =>
-                    setDraft({ ...draft, priority: e.target.value as KanbanPriority })
-                  }
-                >
-                  <option value="LOW">LOW</option>
-                  <option value="MEDIUM">MEDIUM</option>
-                  <option value="HIGH">HIGH</option>
-                  <option value="CRITICAL">CRITICAL</option>
-                </select>
-              </label>
-              <label className="kanban-form-row">
-                <span>Assignee</span>
-                <input
-                  value={draft.assignee}
-                  onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
+                <span>Description</span>
+                <textarea
+                  rows={7}
+                  placeholder="Background, goal, acceptance criteria — Aria reads this first."
+                  value={draft.description}
+                  onChange={(e) => setDraft({ ...draft, description: e.target.value })}
                 />
+              </label>
+              <div className="kanban-form-row">
+                <span>Priority</span>
+                <div className="priority-seg">
+                  {(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as KanbanPriority[]).map((p) => (
+                    <button
+                      key={p}
+                      className={draft.priority === p ? 'on' : ''}
+                      onClick={() => setDraft({ ...draft, priority: p })}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="kanban-form-row">
+                <span>Assign to</span>
+                <select
+                  value={draft.agentTemplateId}
+                  onChange={(e) => setDraft({ ...draft, agentTemplateId: e.target.value })}
+                >
+                  <option value="">Aria auto-assign</option>
+                  {(templates ?? []).map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
               </label>
               {error && <div className="kanban-form-error">{error}</div>}
               <div className="modal-actions">
                 <button
                   className="btn primary"
-                  onClick={handleCreate}
                   disabled={createMutation.isPending}
+                  onClick={() => handleCreate('TODO')}
                 >
-                  {createMutation.isPending ? 'Creating…' : 'Create'}
+                  {createMutation.isPending ? 'Creating…' : 'Create in Todo'}
+                </button>
+                <button
+                  className="btn"
+                  disabled={createMutation.isPending}
+                  onClick={() => handleCreate('BACKLOG')}
+                >
+                  Backlog
                 </button>
                 <button
                   className="btn"
@@ -361,7 +389,7 @@ export default function KanbanBoard() {
                     setError(null);
                   }}
                 >
-                  Cancel
+                  Close
                 </button>
               </div>
             </div>

@@ -330,3 +330,89 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     expect(await screen.findByText(/port 9300 busy/)).toBeInTheDocument();
   });
 });
+
+describe('KanbanBoard new-task modal (Task 13)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+    kanbanData = [];
+  });
+
+  const openModal = async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    act(() => { screen.getByRole('button', { name: /\+ new item/i }).click(); });
+  };
+
+  it('shows Title / Description / priority segments / Assign-to with auto-assign default', async () => {
+    await openModal();
+    expect(screen.getByLabelText('Title *')).toBeInTheDocument();
+    expect(screen.getByLabelText('Description')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'LOW' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CRITICAL' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MEDIUM' }).className).toContain('on');
+
+    const select = screen.getByLabelText('Assign to') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(screen.getByRole('option', { name: 'Aria auto-assign' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'BA Agent' })).toBeInTheDocument();
+  });
+
+  it('Create in Todo submits with status TODO; agentTemplateId only when selected', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockResolvedValueOnce(baseItem());
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'add CSV export');
+    await userEvent.type(screen.getByLabelText('Description'), 'export runs to csv');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+    await waitFor(() =>
+      expect(createKanbanItem).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'add CSV export',
+          description: 'export runs to csv',
+          priority: 'MEDIUM',
+          status: 'TODO',
+        }),
+      ),
+    );
+    const calls = vi.mocked(createKanbanItem).mock.calls;
+    const payload = calls[calls.length - 1][0];
+    expect(payload.agentTemplateId).toBeUndefined();
+  });
+
+  it('selecting a template sends agentTemplateId', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockResolvedValueOnce(baseItem());
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'ba task');
+    await userEvent.selectOptions(await screen.findByLabelText('Assign to'), 'ba-agent');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+    await waitFor(() =>
+      expect(createKanbanItem).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'ba task', agentTemplateId: 'ba-agent', status: 'TODO' }),
+      ),
+    );
+  });
+
+  it('Backlog button submits with status BACKLOG', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockResolvedValueOnce(baseItem({ status: 'BACKLOG' }));
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'idea');
+    await userEvent.click(screen.getByRole('button', { name: 'Backlog' }));
+    await waitFor(() =>
+      expect(createKanbanItem).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'idea', status: 'BACKLOG' }),
+      ),
+    );
+  });
+
+  it('empty title shows "Title is required" and does not call the API', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    await openModal();
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+    expect(screen.getByText('Title is required')).toBeInTheDocument();
+    expect(createKanbanItem).not.toHaveBeenCalled();
+  });
+});

@@ -30,6 +30,9 @@ export async function getTemplates(): Promise<AgentTemplate[]> {
   return data;
 }
 
+/** Same endpoint as getTemplates — named for the Kanban new-task modal picker. */
+export const listAgentTemplates = getTemplates;
+
 export async function createFromTemplate(templateName: string): Promise<Agent> {
   const { data } = await client.post<Agent>(`/api/v1/agents/from-template/${templateName}`);
   return data;

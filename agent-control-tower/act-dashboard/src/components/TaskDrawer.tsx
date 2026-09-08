@@ -12,6 +12,7 @@ import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 /* -------------------------------------------------------------------------- */
 
 const STATUS_LABEL: Record<KanbanStatus, string> = {
+  BACKLOG: 'Backlog',
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
   REVIEW: 'Review',
@@ -27,13 +28,17 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
   CRITICAL: 'pill danger',
 };
 
+// NOTE: stale mirror of the retired backend table — Task 14 replaces this
+// drawer's transition UI with the new ALLOWED_TRANSITIONS semantics
+// (BACKLOG -> TODO/IN_PROGRESS dispatch, REVIEW request-changes, etc.).
 const TRANSITIONS: Record<KanbanStatus, KanbanStatus[]> = {
-  TODO: ['IN_PROGRESS', 'BLOCKED', 'CANCELLED'],
-  IN_PROGRESS: ['DONE', 'BLOCKED', 'TODO', 'CANCELLED'],
-  REVIEW: ['IN_PROGRESS', 'DONE', 'BLOCKED', 'CANCELLED'],
+  BACKLOG: ['TODO', 'IN_PROGRESS', 'CANCELLED'],
+  TODO: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
+  IN_PROGRESS: ['DONE', 'BACKLOG', 'REVIEW', 'TODO', 'CANCELLED'],
+  REVIEW: ['IN_PROGRESS', 'DONE', 'TODO', 'CANCELLED'],
   BLOCKED: ['IN_PROGRESS', 'CANCELLED'],
-  DONE: ['IN_PROGRESS'],
-  CANCELLED: ['TODO'],
+  DONE: [],
+  CANCELLED: [],
 };
 
 interface ParsedLabels {

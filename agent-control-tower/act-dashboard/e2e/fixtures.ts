@@ -99,6 +99,10 @@ export interface SeedKanbanOpts {
   priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   assignee?: string;
   labels?: string;
+  /** Pins the dispatch agent: AgentPickerService matches this string against agent names. */
+  agentTemplateId?: string;
+  /** Landing column; TODO (default) or BACKLOG (queued, never auto-dispatches). */
+  status?: 'TODO' | 'BACKLOG';
 }
 
 /** POST /kanban/items — new items land in TODO (rendered in the Todo column). */
@@ -112,6 +116,8 @@ export async function seedKanbanItem(
     priority: opts.priority ?? 'MEDIUM',
     ...(opts.assignee ? { assignee: opts.assignee } : {}),
     ...(opts.labels ? { labels: opts.labels } : {}),
+    ...(opts.agentTemplateId ? { agentTemplateId: opts.agentTemplateId } : {}),
+    ...(opts.status ? { status: opts.status } : {}),
   });
   if (status !== 201) {
     throw new Error(`seedKanbanItem failed: HTTP ${status} ${JSON.stringify(data)}`);
@@ -388,4 +394,18 @@ export function executeYamlWorkflow(
     yamlContent,
     ...(parameters ? { parameters } : {}),
   });
+}
+
+/**
+ * POST /kanban/items/{id}/transition — the HITL-redesign orchestrator semantics:
+ * TODO→IN_PROGRESS dispatches (two-phase pickup), IN_PROGRESS→TODO/BACKLOG pauses,
+ * REVIEW→TODO requests changes, CANCELLED cancels, same status is a no-op.
+ */
+export function transitionKanban(
+  request: APIRequestContext,
+  id: string,
+  status: string,
+  extra: Record<string, unknown> = {},
+) {
+  return apiCall(request, 'POST', `/kanban/items/${id}/transition`, { status, ...extra });
 }

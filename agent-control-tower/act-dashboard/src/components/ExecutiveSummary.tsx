@@ -3,18 +3,33 @@ import { getSummary } from '../api/dashboard';
 import { listKanbanItems } from '../api/kanban';
 import { listRuns } from '../api/runs';
 import { listKnowledge } from '../api/knowledge';
+import { dispatchOpenTaskDrawer } from './DrawerContext';
+import type { KanbanItem } from '../types';
 
 interface StatCellProps {
   label: string;
   value: string | number;
   detail: string;
   variant?: 'default' | 'cyan' | 'amber' | 'purple' | 'red' | 'green';
+  onClick?: () => void;
 }
 
-function StatCell({ label, value, detail, variant = 'default' }: StatCellProps) {
+function StatCell({ label, value, detail, variant = 'default', onClick }: StatCellProps) {
   const variantClass = variant === 'default' ? '' : ` ${variant}`;
   return (
-    <div className={`stat${variantClass}`}>
+    <div
+      className={`stat${variantClass}${onClick ? ' clickable' : ''}`}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === 'Enter') onClick();
+            }
+          : undefined
+      }
+    >
       <div className="l">{label}</div>
       <div className="v">{value}</div>
       <div className="d">{detail}</div>
@@ -60,6 +75,12 @@ export default function ExecutiveSummary() {
   const totalRuns = runs?.length ?? 0;
   const knowledgeCount = knowledge?.length ?? 0;
 
+  // Single HITL signal: every ask waiting on the operator lives on a kanban
+  // card in the Review column; the card click opens the first one.
+  const reviewCards = (kanbanItems ?? []).filter((i) => i.status === 'REVIEW');
+  const waitingAsks = reviewCards.reduce((sum, i) => sum + (i.pendingAskCount ?? 0), 0);
+  const firstReviewCard: KanbanItem | undefined = reviewCards[0];
+
   return (
     <section className="panel" id="panel-exec">
       <h2>
@@ -73,10 +94,11 @@ export default function ExecutiveSummary() {
           detail="Healthy & responsive"
         />
         <StatCell
-          label="Pending Approvals"
-          value={summary?.pendingApprovals ?? '—'}
-          detail="Awaiting human review"
-          variant="amber"
+          label="Waiting on you"
+          value={waitingAsks}
+          detail={waitingAsks > 0 ? 'Review cards need a decision' : 'Nothing pending'}
+          variant={waitingAsks > 0 ? 'amber' : undefined}
+          onClick={firstReviewCard ? () => dispatchOpenTaskDrawer(firstReviewCard.id) : undefined}
         />
         <StatCell
           label="Tasks In Progress"

@@ -2538,3 +2538,8 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .rf-spec { flex: 1.4; overflow-y: auto; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 16px; }
 .rf-decisions { flex: 1; overflow-y: auto; min-width: 320px; }
 body.light .review-fullpage { background: #f4f6fb; }
+
+/* === Kanban HITL: clickable "Waiting on you" stat card (Task 15) === */
+.stat.clickable { cursor: pointer; transition: border-color .15s ease; }
+.stat.clickable:hover { border-color: var(--brand-2); }
+.stat.clickable:focus-visible { outline: 1px solid var(--brand-2); outline-offset: 1px; }

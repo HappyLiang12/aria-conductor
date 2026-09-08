@@ -12,6 +12,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import org.mockito.ArgumentCaptor;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -26,6 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class KanbanControllerTest {
 
     private KanbanService kanbanService;
+    private KanbanTransitionService kanbanTransitionService;
     private MockMvc mockMvc;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Environment mockEnv = mock(Environment.class);
@@ -36,7 +40,8 @@ class KanbanControllerTest {
     @BeforeEach
     void setUp() {
         kanbanService = mock(KanbanService.class);
-        KanbanController controller = new KanbanController(kanbanService);
+        kanbanTransitionService = mock(KanbanTransitionService.class);
+        KanbanController controller = new KanbanController(kanbanService, kanbanTransitionService);
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new GlobalExceptionHandler(mockEnv))
                 .build();
@@ -95,7 +100,7 @@ class KanbanControllerTest {
     @Test
     void transition_returns200() throws Exception {
         KanbanItem after = sampleItem("xyz", KanbanStatus.IN_PROGRESS);
-        when(kanbanService.transition(eq("xyz"), eq(KanbanStatus.IN_PROGRESS), any()))
+        when(kanbanTransitionService.transition(eq("xyz"), any(TransitionRequest.class)))
                 .thenReturn(after);
 
         TransitionRequest body = TransitionRequest.builder()
@@ -112,7 +117,7 @@ class KanbanControllerTest {
 
     @Test
     void transition_invalid_returns400() throws Exception {
-        when(kanbanService.transition(eq("xyz"), eq(KanbanStatus.IN_PROGRESS), any()))
+        when(kanbanTransitionService.transition(eq("xyz"), any(TransitionRequest.class)))
                 .thenThrow(new IllegalArgumentException("Invalid kanban transition: DONE -> IN_PROGRESS"));
 
         TransitionRequest body = TransitionRequest.builder()
@@ -124,6 +129,24 @@ class KanbanControllerTest {
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Invalid kanban transition: DONE -> IN_PROGRESS"));
+    }
+
+    @Test
+    void transitionDelegatesToOrchestrator() throws Exception {
+        KanbanItem after = sampleItem("c1", KanbanStatus.IN_PROGRESS);
+        when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
+                .thenReturn(after);
+
+        mockMvc.perform(post("/api/v1/kanban/items/c1/transition")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"TODO\",\"feedback\":\"redo\",\"agentTemplateId\":\"ba-agent\"}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService).transition(eq("c1"), captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(KanbanStatus.TODO);
+        assertThat(captor.getValue().getFeedback()).isEqualTo("redo");
+        assertThat(captor.getValue().getAgentTemplateId()).isEqualTo("ba-agent");
     }
 
     @Test

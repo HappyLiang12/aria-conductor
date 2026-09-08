@@ -24,9 +24,11 @@ import java.util.List;
 public class KanbanController {
 
     private final KanbanService kanbanService;
+    private final KanbanTransitionService kanbanTransitionService;
 
-    public KanbanController(KanbanService kanbanService) {
+    public KanbanController(KanbanService kanbanService, KanbanTransitionService kanbanTransitionService) {
         this.kanbanService = kanbanService;
+        this.kanbanTransitionService = kanbanTransitionService;
     }
 
     @PostMapping
@@ -51,11 +53,11 @@ public class KanbanController {
         return ResponseEntity.ok(kanbanService.update(id, request));
     }
 
+    /** Delegates to the orchestrator so run side effects (pickup/pause/cancel) fire. */
     @PostMapping("/{id}/transition")
     public ResponseEntity<KanbanItem> transition(@PathVariable String id,
                                                  @Valid @RequestBody TransitionRequest request) {
-        return ResponseEntity.ok(
-                kanbanService.transition(id, request.getStatus(), request.getComment()));
+        return ResponseEntity.ok(kanbanTransitionService.transition(id, request));
     }
 
     @DeleteMapping("/{id}")

@@ -134,6 +134,83 @@ class ApprovalControllerTest extends WebMvcTestBase {
     }
 
     @Test
+    void listApprovals_kanbanItemIdParam_routesToPerCardFinder() throws Exception {
+        String cardId = "card-1";
+        Approval ask = anApproval().withReason("what format do you want?").build();
+        when(approvalRepository.findByKanbanItemId(cardId)).thenReturn(List.of(ask));
+
+        mvc.perform(get("/api/v1/approvals").param("kanbanItemId", cardId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].reason").value("what format do you want?"));
+
+        verify(approvalRepository).findByKanbanItemId(cardId);
+        verify(approvalRepository, never()).findByStatus(any());
+        verify(approvalRepository, never()).findAll(any(Pageable.class));
+    }
+
+    @Test
+    void answer_recordsAnswerAndApprovalDecision() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval approval = anApproval().withId(id).build();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "CSV is fine", "approved", true, "reason", "ok"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id.toString()))
+                .andExpect(jsonPath("$.answer").value("CSV is fine"))
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.decidedAt").exists())
+                .andExpect(jsonPath("$.reason").value("ok"));
+    }
+
+    @Test
+    void answer_deny_marksDenied() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval approval = anApproval().withId(id).build();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "not this one", "approved", false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("DENIED"))
+                .andExpect(jsonPath("$.decidedAt").exists());
+    }
+
+    @Test
+    void answer_freeTextWithoutDecision_keepsStatusPending() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval approval = anApproval().withId(id).build();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(approval));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "use semicolons"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.answer").value("use semicolons"))
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.decidedAt").isEmpty());
+    }
+
+    @Test
+    void answer_unknownId_returns400() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(approvalRepository.findById(id)).thenReturn(Optional.empty());
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "x"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Approval not found: " + id));
+    }
+
+    @Test
     void getApproval_returns200WithEnrichedDetail() throws Exception {
         UUID id = UUID.randomUUID();
         UUID runId = UUID.randomUUID();

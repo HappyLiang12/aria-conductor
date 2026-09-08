@@ -7,8 +7,9 @@ import type { WsEvent } from '../../types';
 vi.mock('../../api/dashboard', () => ({
   getSummary: vi.fn().mockResolvedValue({ totalTokensBurned: 0, activeAgents: 0, pendingApprovals: 0, runningRuns: 0 }),
 }));
+let kanbanData: unknown[] = [];
 vi.mock('../../api/kanban', () => ({
-  listKanbanItems: vi.fn().mockResolvedValue([]),
+  listKanbanItems: vi.fn(() => Promise.resolve(kanbanData)),
 }));
 
 let mockCtx: { lastMessage: WsEvent | null; isConnected: boolean } = {
@@ -62,5 +63,42 @@ describe('MorningBriefing WS invalidation (S5)', () => {
 
     expect(spy.mock.calls.filter((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['kanban-items']))).toHaveLength(0);
     expect(spy.mock.calls.filter((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['dashboard-summary']))).toHaveLength(0);
+  });
+});
+
+describe('MorningBriefing briefing signals (single HITL signal, D7)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+  });
+
+  it('counts REVIEW cards waiting on review and never surfaces pendingApprovals', async () => {
+    const { getSummary } = await import('../../api/dashboard');
+    // Non-zero pendingApprovals proves the second HITL signal is truly gone,
+    // not just zero by coincidence.
+    vi.mocked(getSummary).mockResolvedValue({
+      totalTokensBurned: 0, activeAgents: 0, pendingApprovals: 5, runningRuns: 3,
+    });
+    kanbanData = [
+      { id: 'k-1', title: 'a', priority: 'MEDIUM', status: 'REVIEW' },
+      { id: 'k-2', title: 'b', priority: 'MEDIUM', status: 'REVIEW' },
+      { id: 'k-3', title: 'c', priority: 'MEDIUM', status: 'TODO' },
+    ];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={qc}><MorningBriefing /></QueryClientProvider>,
+    );
+    // waitFor (not a bare act flush): under full-suite load the React Query
+    // resolution needs more microtask turns than one act gives it.
+    await waitFor(() => {
+      expect(container.textContent).toContain('2 cards waiting on review');
+    });
+
+    // Review cards are the real waiting-on-review signal (BLOCKED was retired
+    // in V52, so the old count was always 0).
+    expect(container.textContent).toContain('2 cards waiting on review');
+    expect(container.textContent).not.toContain('blocker');
+    // Second HITL signal removed: D7 wants exactly one "Waiting on you" signal.
+    expect(container.textContent).not.toContain('queued for approval');
+    expect(container.textContent).not.toContain('approval');
   });
 });

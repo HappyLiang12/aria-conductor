@@ -35,9 +35,18 @@ export default function OverviewPage() {
         )}
       </div>
       {expanded && (
+        // D5: widgets reflow to the bottom while the review is expanded. The
+        // strip gets a deterministic height so .review-fullpage (fixed overlay)
+        // can end above it — see the bottom: 196px rule in styles/index.css;
+        // keep the 180px height + 16px gap in sync with that value.
         <div
-          className="layout"
-          style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', marginTop: 8 }}
+          className="expanded-strip layout"
+          style={{
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+            height: 180,
+            overflowY: 'auto',
+            boxSizing: 'border-box',
+          }}
         >
           <AgentTeam />
           <ReviewQueue />

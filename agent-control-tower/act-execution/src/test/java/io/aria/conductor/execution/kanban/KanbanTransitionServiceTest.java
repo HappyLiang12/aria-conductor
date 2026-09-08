@@ -1,15 +1,19 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
+import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -17,19 +21,24 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link KanbanTransitionService}: every kanban transition must
  * trigger the matching run side effect (spec 4) — pickup dispatches a run,
- * dragging back pauses it, request-changes re-dispatches with the operator
- * feedback, cancel denies open asks and cancels the run.
+ * dragging to TODO or BACKLOG pauses the linked run, request-changes
+ * re-dispatches with the operator feedback, cancel denies open asks and cancels
+ * the run. Eligibility failures are pre-validated before the createRun proxy is
+ * crossed (no rollback-only surprises); unexpected createRun failures propagate.
  */
 class KanbanTransitionServiceTest {
 
@@ -40,6 +49,7 @@ class KanbanTransitionServiceTest {
     private KanbanService kanbanService;
     private RunService runService;
     private RunRepository runRepository;
+    private AgentRepository agentRepository;
     private AgentPickerService agentPicker;
     private ApprovalRepository approvalRepository;
     private ApplicationEventPublisher eventPublisher;
@@ -53,17 +63,25 @@ class KanbanTransitionServiceTest {
         kanbanService = mock(KanbanService.class);
         runService = mock(RunService.class);
         runRepository = mock(RunRepository.class);
+        agentRepository = mock(AgentRepository.class);
         agentPicker = mock(AgentPickerService.class);
         approvalRepository = mock(ApprovalRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         service = new KanbanTransitionService(kanbanRepository, kanbanService, runService,
-                runRepository, agentPicker, approvalRepository, eventPublisher);
+                runRepository, agentRepository, agentPicker, approvalRepository, eventPublisher);
 
         card = KanbanItem.builder().id("c1").title("add CSV export")
                 .status(KanbanStatus.TODO).priority(KanbanPriority.MEDIUM).build();
         when(kanbanRepository.findById("c1")).thenReturn(Optional.of(card));
         when(kanbanRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(kanbanService.transition(any(), any(), any())).thenAnswer(inv -> card);
+        // Default: the linked agent is eligible (tests override when probing pre-validation).
+        when(agentRepository.findById(any(UUID.class)))
+                .thenAnswer(inv -> Optional.of(agentWithStatus(inv.getArgument(0), HealthStatus.HEALTHY)));
+    }
+
+    private Agent agentWithStatus(UUID id, HealthStatus status) {
+        return Agent.builder().id(id).name("BA Agent").healthStatus(status).build();
     }
 
     // ---- behavior 1: TODO pickup ----
@@ -124,40 +142,110 @@ class KanbanTransitionServiceTest {
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
     }
 
-    // ---- behavior 2: pickup failure ----
+    // ---- behavior 2: pickup failure is pre-validated (never crosses createRun) ----
 
     @Test
-    void pickupFailure_keepsCardInTodoAndRecordsAbbreviatedLastError() {
-        when(agentPicker.pick(any(), anyString(), any()))
-                .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
-        when(runService.createRun(any(CreateRunRequest.class)))
-                .thenThrow(new IllegalArgumentException("x".repeat(600)));
+    void pickupFailure_unhealthyAgent_preValidatedBeforeCreateRun() {
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+        when(agentRepository.findById(AGENT_ID))
+                .thenReturn(Optional.of(agentWithStatus(AGENT_ID, HealthStatus.UNHEALTHY)));
+
+        KanbanItem result = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+
+        // Pre-validation mirrors RunService.createRun's message exactly.
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
+        assertThat(result.getLastError())
+                .isEqualTo("Cannot create run for unhealthy agent: " + AGENT_ID);
+        // The transaction proxy must never be crossed with a doomed request.
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanRepository).save(card);
+    }
+
+    @Test
+    void pickupFailure_retiredAgent_preValidatedBeforeCreateRun() {
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+        when(agentRepository.findById(AGENT_ID))
+                .thenReturn(Optional.of(agentWithStatus(AGENT_ID, HealthStatus.RETIRED)));
+
+        KanbanItem result = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
+        assertThat(result.getLastError())
+                .isEqualTo("Cannot create run for retired agent: " + AGENT_ID);
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+    }
+
+    @Test
+    void pickupFailure_missingAgent_lastErrorAbbreviated() {
+        // A non-UUID linkedAgentId cannot resolve to an agent; the oversized
+        // not-found message exercises the lastError abbreviation cap.
+        String garbageId = "a".repeat(600);
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(garbageId);
 
         KanbanItem result = service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.IN_PROGRESS).build());
 
         assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
         assertThat(result.getLastError()).hasSize(480);
-        verify(kanbanService, never()).transition(any(), any(), any());
+        assertThat(result.getLastError()).startsWith("Agent not found with id: ");
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
         verify(kanbanRepository).save(card);
     }
 
     @Test
-    void pickupFailure_shortMessage_storedVerbatim() {
-        when(agentPicker.pick(any(), anyString(), any()))
-                .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
+    void pickupCreateRunUnexpectedFailure_propagatesAndSkipsTransition() {
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString()); // pre-validation passes (HEALTHY)
         when(runService.createRun(any(CreateRunRequest.class)))
-                .thenThrow(new IllegalArgumentException("unhealthy agent"));
+                .thenThrow(new IllegalStateException("db connection lost"));
 
-        service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("db connection lost");
 
-        assertThat(card.getLastError()).isEqualTo("unhealthy agent");
-        assertThat(card.getStatus()).isEqualTo(KanbanStatus.TODO);
+        // Unexpected failures roll the whole transition back: no IN_PROGRESS move.
         verify(kanbanService, never()).transition(any(), any(), any());
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.TODO);
     }
 
-    // ---- behavior 3: drag back ----
+    // ---- behavior 3: no-op guard ----
+
+    @Test
+    void sameStatusTransition_isNoOpWithoutSideEffects() {
+        card.setStatus(KanbanStatus.IN_PROGRESS);
+        card.setLinkedRunId(RUN_ID.toString());
+        card.setLastError("previous pickup hiccup");
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().status(RunStatus.RUNNING).build()));
+
+        KanbanItem result = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+
+        assertThat(result).isSameAs(card);
+        // Truly no-op: no pause, no run dispatch, no card transition, and
+        // lastError is not cleared either.
+        verifyNoInteractions(runService, agentPicker);
+        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
+        assertThat(card.getLastError()).isEqualTo("previous pickup hiccup");
+    }
+
+    @Test
+    void transition_nullStatus_throwsBeforeAnyLookup() {
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder().build()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Target status is required");
+        verify(kanbanRepository, never()).findById(any());
+    }
+
+    // ---- behavior 4: drag back ----
 
     @Test
     void dragBackFromInProgress_pausesRunningRun() {
@@ -184,7 +272,67 @@ class KanbanTransitionServiceTest {
         verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, null);
     }
 
-    // ---- behavior 4: cancel ----
+    @Test
+    void inProgressToTodo_pausesRunWithoutRedispatch() {
+        card.setStatus(KanbanStatus.IN_PROGRESS);
+        card.setLinkedRunId(RUN_ID.toString());
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().status(RunStatus.RUNNING).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).comment("needs rework").build());
+
+        verify(runService).pauseRun(RUN_ID);
+        verify(kanbanService).transition("c1", KanbanStatus.TODO, "needs rework");
+        // Dragging back must not dispatch a new run.
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+    }
+
+    @Test
+    void backlogToTodo_normalizesThenPicksUp() {
+        card.setStatus(KanbanStatus.BACKLOG);
+        card.setAgentTemplateId("ba-agent");
+        when(agentPicker.pick(eq("ba-agent"), anyString(), any()))
+                .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).comment("ready now").build());
+
+        // Intermediate BACKLOG -> TODO normalization precedes the pickup's
+        // TODO -> IN_PROGRESS dispatch step.
+        verify(kanbanService).transition("c1", KanbanStatus.TODO, "ready now");
+        verify(runService).createRun(any(CreateRunRequest.class));
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "ready now");
+    }
+
+    @Test
+    void backlogToInProgress_normalizesThenPicksUp() {
+        card.setStatus(KanbanStatus.BACKLOG);
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+
+        verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
+        verify(runService).createRun(any(CreateRunRequest.class));
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+    }
+
+    @Test
+    void terminalCardToTodo_rejectsBeforePickupSideEffects() {
+        card.setStatus(KanbanStatus.CANCELLED);
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid kanban transition: CANCELLED -> TODO");
+
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+        verify(kanbanService, never()).transition(any(), any(), any());
+    }
+
+    // ---- behavior 5: cancel ----
 
     @Test
     void cancelFromReview_deniesPendingAsksAndCancelsRun() {
@@ -202,6 +350,23 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
+    void cancel_transitionsCardBeforeCancellingRun() {
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setLinkedRunId(RUN_ID.toString());
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().status(RunStatus.RUNNING).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.CANCELLED).build());
+
+        // The card must land on CANCELLED before any listener racing the run
+        // cancellation can observe the card mid-flight.
+        InOrder inOrder = inOrder(kanbanService, runService);
+        inOrder.verify(kanbanService).transition("c1", KanbanStatus.CANCELLED, null);
+        inOrder.verify(runService).cancelRun(RUN_ID);
+    }
+
+    @Test
     void cancelFromReview_withCompletedRun_doesNotCancelRun() {
         card.setStatus(KanbanStatus.REVIEW);
         card.setLinkedRunId(RUN_ID.toString());
@@ -216,7 +381,7 @@ class KanbanTransitionServiceTest {
         verify(kanbanService).transition("c1", KanbanStatus.CANCELLED, null);
     }
 
-    // ---- behavior 5: request changes ----
+    // ---- behavior 6: request changes ----
 
     @Test
     void reviewToTodoWithFeedback_marksAsksStaleAndRedispatches() {
@@ -251,7 +416,7 @@ class KanbanTransitionServiceTest {
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
     }
 
-    // ---- behavior 6: REVIEW -> IN_PROGRESS (approve & continue) ----
+    // ---- behavior 7: REVIEW -> IN_PROGRESS (approve & continue) ----
 
     @Test
     void reviewToInProgress_withPausedRun_resumesRun() {
@@ -281,5 +446,29 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).resumeRun(any(UUID.class));
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
         assertThat(card.getLastError()).isNull();
+    }
+
+    // ---- behavior 8: prompt seed caps ----
+
+    @Test
+    void pickup_promptSeedSectionsAreCapped() {
+        card.setTitle("T".repeat(250));
+        card.setDescription("D".repeat(4100));
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).feedback("F".repeat(2100)).build());
+
+        ArgumentCaptor<CreateRunRequest> runCaptor = ArgumentCaptor.forClass(CreateRunRequest.class);
+        verify(runService).createRun(runCaptor.capture());
+        String seed = runCaptor.getValue().getPromptSeed();
+        assertThat(seed).startsWith("Kanban task: " + "T".repeat(200));
+        assertThat(seed).contains("\n\nDescription:\n" + "D".repeat(4000));
+        assertThat(seed).contains("\n\nOperator feedback on the previous attempt:\n" + "F".repeat(2000));
+        // Delimiters are unchanged; no section exceeds its cap.
+        assertThat(seed).doesNotContain("T".repeat(201));
+        assertThat(seed).doesNotContain("D".repeat(4001));
+        assertThat(seed).doesNotContain("F".repeat(2001));
     }
 }

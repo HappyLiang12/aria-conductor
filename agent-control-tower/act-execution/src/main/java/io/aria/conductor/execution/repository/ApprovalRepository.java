@@ -44,7 +44,8 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
     /** Marks PENDING asks on a card stale (EXPIRED) when the operator sends
      *  the work back with changes. Single-statement bulk update, no entity
      *  load; callers must be @Transactional and results bypass the persistence
-     *  context. */
+     *  context. Represents the spec's CHANGES_REQUESTED ask state via
+     *  EXPIRED + reason (ApprovalStatus has no dedicated value). */
     @Modifying
     @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
            "a.reason = 'superseded by request changes', a.decidedAt = :now " +

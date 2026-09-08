@@ -185,4 +185,25 @@ class KanbanReviewCardListenerTest {
         verify(kanbanService).create(captor.capture());
         assertThat(captor.getValue().getTitle()).isEqualTo("Review: approval (run 11111111)");
     }
+
+    // ---- behavior 4: defensive listener (mirrors RunKanbanAutoCreator) ----
+
+    @Test
+    void nullRunId_skipsLinkageWithoutTouchingRepositories() {
+        ApprovalRequestedEvent event = new ApprovalRequestedEvent(this, APPROVAL_ID, null, null, "TOOL_CALL");
+
+        listener.onApprovalRequested(event);
+
+        verifyNoInteractions(approvalRepository, kanbanRepository, kanbanService);
+    }
+
+    @Test
+    void repositoryFailure_isSwallowed() {
+        when(approvalRepository.findById(APPROVAL_ID)).thenThrow(new IllegalStateException("db down"));
+
+        listener.onApprovalRequested(event());
+
+        verify(kanbanService, never()).create(any());
+        verify(approvalRepository, never()).save(any());
+    }
 }

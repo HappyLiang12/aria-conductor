@@ -1,10 +1,13 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -19,18 +22,29 @@ import java.util.UUID;
 
 /**
  * Orchestrates kanban transitions with their run side effects (spec section 4):
- * Todo entry is a dispatch intent (two-phase pickup), dragging back pauses the
- * linked run at a step boundary, request-changes re-dispatches with feedback,
+ * Todo entry is a dispatch intent (two-phase pickup), dragging to TODO or
+ * BACKLOG pauses the linked run, request-changes re-dispatches with feedback,
  * cancel denies open asks and cancels the run.
+ *
+ * <p>Pickup pre-validates agent eligibility so the predictable failure modes
+ * (missing/retired/unhealthy agent) stay in-transaction with lastError on the
+ * card; anything slipping past pre-validation propagates and rolls the whole
+ * transition back.
  */
 @Slf4j
 @Service
 public class KanbanTransitionService {
 
+    /** Prompt-seed section caps so a huge card/feedback cannot blow up the run prompt. */
+    private static final int MAX_TITLE_CHARS = 200;
+    private static final int MAX_DESCRIPTION_CHARS = 4000;
+    private static final int MAX_FEEDBACK_CHARS = 2000;
+
     private final KanbanRepository kanbanRepository;
     private final KanbanService kanbanService;
     private final RunService runService;
     private final RunRepository runRepository;
+    private final AgentRepository agentRepository;
     private final AgentPickerService agentPicker;
     private final ApprovalRepository approvalRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -39,6 +53,7 @@ public class KanbanTransitionService {
                                    KanbanService kanbanService,
                                    RunService runService,
                                    RunRepository runRepository,
+                                   AgentRepository agentRepository,
                                    AgentPickerService agentPicker,
                                    ApprovalRepository approvalRepository,
                                    ApplicationEventPublisher eventPublisher) {
@@ -46,6 +61,7 @@ public class KanbanTransitionService {
         this.kanbanService = kanbanService;
         this.runService = runService;
         this.runRepository = runRepository;
+        this.agentRepository = agentRepository;
         this.agentPicker = agentPicker;
         this.approvalRepository = approvalRepository;
         this.eventPublisher = eventPublisher;
@@ -53,9 +69,18 @@ public class KanbanTransitionService {
 
     @Transactional
     public KanbanItem transition(String id, TransitionRequest request) {
+        KanbanStatus to = request.getStatus();
+        if (to == null) {
+            throw new IllegalArgumentException("Target status is required");
+        }
         KanbanItem item = kanbanRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("KanbanItem", id));
-        KanbanStatus to = request.getStatus();
+        // Idempotent no-op: repeating the current status must not re-dispatch a
+        // run, re-fire listeners, or clear lastError (a second CANCELLED click
+        // stays side-effect free).
+        if (item.getStatus() == to) {
+            return item;
+        }
         item.setLastError(null);
 
         return switch (to) {
@@ -63,20 +88,57 @@ public class KanbanTransitionService {
                 pauseIfRunning(item);
                 yield kanbanService.transition(id, KanbanStatus.BACKLOG, request.getComment());
             }
-            case TODO -> item.getStatus() == KanbanStatus.REVIEW
-                    ? requestChanges(item, request)
-                    : pickup(item, request);
-            case IN_PROGRESS -> item.getStatus() == KanbanStatus.REVIEW
-                    ? resume(item)
-                    : pickup(item, request);
+            case TODO -> switch (item.getStatus()) {
+                case REVIEW -> requestChanges(item, request);
+                // Dragging an in-flight card back to TODO pauses the run; no re-dispatch.
+                case IN_PROGRESS -> {
+                    pauseIfRunning(item);
+                    yield kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
+                }
+                // Normalize BACKLOG -> TODO first, then the pickup's TODO -> IN_PROGRESS
+                // step is a legal transition.
+                case BACKLOG -> {
+                    kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
+                    yield pickup(item, request);
+                }
+                case TODO -> pickup(item, request);
+                // Terminal states: reject BEFORE any pickup side effect can fire.
+                default -> throw new IllegalArgumentException(
+                        "Invalid kanban transition: " + item.getStatus() + " -> " + to);
+            };
+            case IN_PROGRESS -> switch (item.getStatus()) {
+                case REVIEW -> resume(item);
+                // Same normalization: BACKLOG -> TODO -> IN_PROGRESS via pickup.
+                case BACKLOG -> {
+                    kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
+                    yield pickup(item, request);
+                }
+                case TODO -> pickup(item, request);
+                // IN_PROGRESS is handled by the no-op guard above.
+                default -> throw new IllegalArgumentException(
+                        "Invalid kanban transition: " + item.getStatus() + " -> " + to);
+            };
             case REVIEW -> kanbanService.transition(id, KanbanStatus.REVIEW, request.getComment());
             case DONE -> kanbanService.transition(id, KanbanStatus.DONE, request.getComment());
             case CANCELLED -> cancel(item, request.getComment());
+            // BLOCKED is retired: persisted rows may still carry it; it has no
+            // orchestrator side effects and is rejected like any illegal move.
             default -> throw new IllegalArgumentException("Unsupported target status: " + to);
         };
     }
 
-    /** Two-phase pickup: assign (rule-based) then create the run (spec 4.2). */
+    /**
+     * Two-phase pickup: assign (rule-based) then create the run (spec 4.2).
+     *
+     * <p>Agent eligibility is pre-validated here (against the same
+     * {@link AgentRepository} lookup {@link RunService#createRun} performs) so
+     * the predictable failure modes stay in this transaction with lastError on
+     * the card. Crossing the createRun proxy with a doomed request would mark
+     * the shared transaction rollback-only, and catching the failure to
+     * "continue" would only defer it to an UnexpectedRollbackException at
+     * commit. Unexpected createRun failures are therefore not caught: they
+     * propagate and roll the whole transition back atomically.
+     */
     private KanbanItem pickup(KanbanItem item, TransitionRequest request) {
         if (isBlank(item.getAssignee()) && isBlank(item.getLinkedAgentId())) {
             eventPublisher.publishEvent(new KanbanItemAssigningEvent(this, item.getId()));
@@ -88,17 +150,38 @@ public class KanbanTransitionService {
                 item.setAgentTemplateId(templateId);
             }
         }
-        try {
-            runService.createRun(CreateRunRequest.builder()
-                    .agentId(UUID.fromString(item.getLinkedAgentId()))
-                    .promptSeed(buildPromptSeed(item, request.getFeedback()))
-                    .build());
-        } catch (RuntimeException e) {
-            log.warn("Kanban pickup failed for {}: {}", item.getId(), e.getMessage());
-            item.setLastError(abbreviate(e.getMessage()));
+        String violation = agentEligibilityViolation(item.getLinkedAgentId());
+        if (violation != null) {
+            log.warn("Kanban pickup failed for {}: {}", item.getId(), violation);
+            item.setLastError(abbreviate(violation));
             return kanbanRepository.save(item); // stays in TODO, no auto retry
         }
+        runService.createRun(CreateRunRequest.builder()
+                .agentId(UUID.fromString(item.getLinkedAgentId()))
+                .promptSeed(buildPromptSeed(item, request.getFeedback()))
+                .build());
         return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, request.getComment());
+    }
+
+    /** Mirrors {@code RunService.createRun}'s eligibility guards; {@code null} means eligible. */
+    private String agentEligibilityViolation(String linkedAgentId) {
+        UUID agentId;
+        try {
+            agentId = UUID.fromString(linkedAgentId);
+        } catch (IllegalArgumentException e) {
+            return "Agent not found with id: " + linkedAgentId;
+        }
+        Agent agent = agentRepository.findById(agentId).orElse(null);
+        if (agent == null) {
+            return "Agent not found with id: " + agentId;
+        }
+        if (agent.getHealthStatus() == HealthStatus.RETIRED) {
+            return "Cannot create run for retired agent: " + agent.getId();
+        }
+        if (agent.getHealthStatus() == HealthStatus.UNHEALTHY) {
+            return "Cannot create run for unhealthy agent: " + agent.getId();
+        }
+        return null;
     }
 
     private KanbanItem requestChanges(KanbanItem item, TransitionRequest request) {
@@ -118,13 +201,19 @@ public class KanbanTransitionService {
 
     private KanbanItem cancel(KanbanItem item, String comment) {
         approvalRepository.denyPendingByKanbanItemId(item.getId(), "task cancelled", Instant.now());
+        // Card transition FIRST: the card lands on CANCELLED before any listener
+        // can race it. The synchronous RunKanbanAutoCreator.onRunCompleted (fired
+        // by cancelRun below) then finds the card already CANCELLED; its
+        // from==to attempt throws inside that listener's own try/catch and only
+        // logs a warn — acceptable and intentional.
+        kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
         findRun(item).ifPresent(run -> {
             if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
                     || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED) {
                 runService.cancelRun(UUID.fromString(item.getLinkedRunId()));
             }
         });
-        return kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
+        return item;
     }
 
     private void pauseIfRunning(KanbanItem item) {
@@ -145,12 +234,14 @@ public class KanbanTransitionService {
     }
 
     private String buildPromptSeed(KanbanItem item, String feedback) {
-        StringBuilder sb = new StringBuilder("Kanban task: ").append(item.getTitle());
+        StringBuilder sb = new StringBuilder("Kanban task: ")
+                .append(cap(item.getTitle(), MAX_TITLE_CHARS));
         if (!isBlank(item.getDescription())) {
-            sb.append("\n\nDescription:\n").append(item.getDescription());
+            sb.append("\n\nDescription:\n").append(cap(item.getDescription(), MAX_DESCRIPTION_CHARS));
         }
         if (!isBlank(feedback)) {
-            sb.append("\n\nOperator feedback on the previous attempt:\n").append(feedback);
+            sb.append("\n\nOperator feedback on the previous attempt:\n")
+                    .append(cap(feedback, MAX_FEEDBACK_CHARS));
         }
         return sb.toString();
     }
@@ -159,6 +250,11 @@ public class KanbanTransitionService {
 
     private static String firstNonBlank(String a, String b) {
         return !isBlank(a) ? a : b;
+    }
+
+    private static String cap(String s, int max) {
+        if (s == null) return "";
+        return s.length() > max ? s.substring(0, max) : s;
     }
 
     private static String abbreviate(String msg) {

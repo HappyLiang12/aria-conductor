@@ -32,19 +32,31 @@ public class KanbanReviewCardListener {
     @EventListener
     @Transactional
     public void onApprovalRequested(ApprovalRequestedEvent event) {
-        approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
-            if (approval.getKanbanItemId() != null) return;
+        // Defensive mirroring of RunKanbanAutoCreator: a listener must never
+        // break the publisher's transaction.
+        if (event.getRunId() == null) {
+            log.warn("ApprovalRequestedEvent without runId (approval {}) — skipping review-card linkage",
+                    event.getApprovalId());
+            return;
+        }
+        try {
+            approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
+                if (approval.getKanbanItemId() != null) return;
 
-            kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
-                    .filter(card -> card.getStatus() == KanbanStatus.REVIEW
-                            || card.getStatus() == KanbanStatus.IN_PROGRESS
-                            || card.getStatus() == KanbanStatus.TODO)
-                    .findFirst()
-                    .ifPresentOrElse(
-                            card -> approval.setKanbanItemId(card.getId()),
-                            () -> createCard(approval, event));
-            approvalRepository.save(approval);
-        });
+                kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
+                        .filter(card -> card.getStatus() == KanbanStatus.REVIEW
+                                || card.getStatus() == KanbanStatus.IN_PROGRESS
+                                || card.getStatus() == KanbanStatus.TODO)
+                        .findFirst()
+                        .ifPresentOrElse(
+                                card -> approval.setKanbanItemId(card.getId()),
+                                () -> createCard(approval, event));
+                approvalRepository.save(approval);
+            });
+        } catch (Exception e) {
+            log.warn("Failed to surface review card for approval {}: {}",
+                    event.getApprovalId(), e.getMessage());
+        }
     }
 
     private void createCard(Approval approval, ApprovalRequestedEvent event) {

@@ -17,7 +17,7 @@ public class TransitionRequest {
 
     private String comment;
 
-    /** Used when a REVIEW card is sent back to TODO (request changes). */
+    /** Feedback included in the re-dispatch prompt (request changes, or pickup retries). */
     private String feedback;
 
     /** Optional agent template hint for pickup; overrides item value. */

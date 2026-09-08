@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
+import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
@@ -156,10 +157,15 @@ public class KanbanTransitionService {
             item.setLastError(abbreviate(violation));
             return kanbanRepository.save(item); // stays in TODO, no auto retry
         }
-        runService.createRun(CreateRunRequest.builder()
+        // suppressAutoCard: the pickup owns card linkage for orchestrator-created
+        // runs — RunKanbanAutoCreator must not double-card the board.
+        RunResponse run = runService.createRun(CreateRunRequest.builder()
                 .agentId(UUID.fromString(item.getLinkedAgentId()))
                 .promptSeed(buildPromptSeed(item, request.getFeedback()))
+                .suppressAutoCard(true)
                 .build());
+        // Link BEFORE the IN_PROGRESS move so every later card face shows the run.
+        item.setLinkedRunId(run.getId().toString());
         return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, request.getComment());
     }
 

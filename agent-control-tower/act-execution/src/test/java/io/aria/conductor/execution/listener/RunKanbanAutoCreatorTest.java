@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -142,6 +143,14 @@ class RunKanbanAutoCreatorTest {
                 ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
         verify(kanbanService).create(captor.capture());
         assertThat(captor.getValue().getLinkedRunId()).isEqualTo(runId.toString());
+    }
+
+    @Test
+    void onRunStarted_suppressAutoCard_skipsCardCreation() {
+        // Kanban pickup owns card linkage for orchestrator-created runs.
+        creator.onRunStarted(new RunStartedEvent(this, runId, agentId, true));
+
+        verifyNoInteractions(runRepository, kanbanService);
     }
 
     // ---- onRunIteration ----

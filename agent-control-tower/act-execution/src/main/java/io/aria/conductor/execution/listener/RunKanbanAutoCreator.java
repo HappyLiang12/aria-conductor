@@ -41,6 +41,13 @@ public class RunKanbanAutoCreator {
 
     @EventListener
     public void onRunStarted(RunStartedEvent event) {
+        // Kanban pickup owns card linkage for orchestrator-created runs: it sets
+        // linkedRunId on the card it just dispatched, so a duplicate auto-card
+        // here would race and double-card the board.
+        if (event.isSuppressAutoCard()) {
+            log.debug("Skipping auto-card for run {} (suppressAutoCard)", event.getRunId());
+            return;
+        }
         try {
             // Use the run's promptSeed as a meaningful title (truncated)
             String title = runRepository.findById(event.getRunId())

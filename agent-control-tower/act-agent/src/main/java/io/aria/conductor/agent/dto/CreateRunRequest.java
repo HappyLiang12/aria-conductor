@@ -23,4 +23,11 @@ public class CreateRunRequest {
 
     @Builder.Default
     private int maxIterations = 50;
+
+    /**
+     * Suppresses the RunKanbanAutoCreator auto-card for runs whose creating
+     * flow manages kanban linkage itself (kanban orchestrator pickup).
+     */
+    @Builder.Default
+    private boolean suppressAutoCard = false;
 }

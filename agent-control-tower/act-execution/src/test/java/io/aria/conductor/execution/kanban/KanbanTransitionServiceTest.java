@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
+import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
@@ -78,6 +79,9 @@ class KanbanTransitionServiceTest {
         // Default: the linked agent is eligible (tests override when probing pre-validation).
         when(agentRepository.findById(any(UUID.class)))
                 .thenAnswer(inv -> Optional.of(agentWithStatus(inv.getArgument(0), HealthStatus.HEALTHY)));
+        // Default: createRun dispatches a run with the well-known id.
+        when(runService.createRun(any(CreateRunRequest.class)))
+                .thenReturn(RunResponse.builder().id(RUN_ID).build());
     }
 
     private Agent agentWithStatus(UUID id, HealthStatus status) {
@@ -110,6 +114,10 @@ class KanbanTransitionServiceTest {
         verify(runService).createRun(runCaptor.capture());
         assertThat(runCaptor.getValue().getAgentId()).isEqualTo(AGENT_ID);
         assertThat(runCaptor.getValue().getPromptSeed()).contains("add CSV export");
+        // Orchestrator-created runs suppress the auto-card: the pickup owns linkage.
+        assertThat(runCaptor.getValue().isSuppressAutoCard()).isTrue();
+        // The created run is linked back onto the card before the IN_PROGRESS move.
+        assertThat(card.getLinkedRunId()).isEqualTo(RUN_ID.toString());
 
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
     }

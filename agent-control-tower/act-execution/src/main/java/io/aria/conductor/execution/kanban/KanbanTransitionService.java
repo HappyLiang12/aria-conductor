@@ -209,9 +209,8 @@ public class KanbanTransitionService {
         approvalRepository.denyPendingByKanbanItemId(item.getId(), "task cancelled", Instant.now());
         // Card transition FIRST: the card lands on CANCELLED before any listener
         // can race it. The synchronous RunKanbanAutoCreator.onRunCompleted (fired
-        // by cancelRun below) then finds the card already CANCELLED; its
-        // from==to attempt throws inside that listener's own try/catch and only
-        // logs a warn — acceptable and intentional.
+        // by cancelRun below) then finds the card already CANCELLED and skips it
+        // (terminal cards are never re-transitioned) — harmless by design.
         kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
         findRun(item).ifPresent(run -> {
             if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING

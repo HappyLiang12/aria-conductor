@@ -6,6 +6,7 @@ import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.HousekeepingProgressEvent;
+import io.aria.conductor.common.event.KanbanItemAssigningEvent;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.event.KnowledgeApprovedEvent;
@@ -334,6 +335,15 @@ class EventBroadcastListenerTest {
         assertThat(event.data()).containsEntry("itemId", "k-1")
                 .containsEntry("fromStatus", "TODO")
                 .containsEntry("toStatus", "DOING");
+    }
+
+    @Test
+    void onKanbanItemAssigning_broadcastsItemId() {
+        listener.onKanbanItemAssigning(new KanbanItemAssigningEvent(this, "k-1"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("kanban.assigning");
+        assertThat(event.data()).containsEntry("itemId", "k-1");
     }
 
     @Test

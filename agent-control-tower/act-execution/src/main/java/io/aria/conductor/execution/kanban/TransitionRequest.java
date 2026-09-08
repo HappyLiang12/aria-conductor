@@ -16,4 +16,10 @@ public class TransitionRequest {
     private KanbanStatus status;
 
     private String comment;
+
+    /** Used when a REVIEW card is sent back to TODO (request changes). */
+    private String feedback;
+
+    /** Optional agent template hint for pickup; overrides item value. */
+    private String agentTemplateId;
 }

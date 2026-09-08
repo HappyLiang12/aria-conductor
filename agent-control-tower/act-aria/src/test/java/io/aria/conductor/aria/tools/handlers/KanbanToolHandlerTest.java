@@ -22,6 +22,9 @@ class KanbanToolHandlerTest {
     @Mock
     private KanbanService kanbanService;
 
+    @Mock
+    private KanbanTransitionService kanbanTransitionService;
+
     @InjectMocks
     private KanbanToolHandler handler;
 
@@ -128,15 +131,27 @@ class KanbanToolHandlerTest {
     }
 
     @Test
-    void transitionKanbanItemShouldCallService() {
-        KanbanItem transitioned = KanbanItem.builder()
-                .id("kb-1")
-                .title("Item")
-                .status(KanbanStatus.IN_PROGRESS)
-                .priority(KanbanPriority.MEDIUM)
-                .createdAt(Instant.now())
-                .build();
-        when(kanbanService.transition(eq("kb-1"), eq(KanbanStatus.IN_PROGRESS), any())).thenReturn(transitioned);
+    void transitionDelegatesToOrchestratorWithStatusKey() {
+        when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
+                .thenReturn(KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.TODO).build());
+
+        String result = handler.execute(Map.of(
+                "toolName", "transition_kanban_item",
+                "id", "c1",
+                "status", "TODO"
+        ));
+
+        assertTrue(result.contains("transitioned to TODO"));
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService).transition(eq("c1"), captor.capture());
+        assertEquals(KanbanStatus.TODO, captor.getValue().getStatus());
+        verifyNoInteractions(kanbanService);
+    }
+
+    @Test
+    void transitionLegacyNewStatusKeyStillWorks() {
+        when(kanbanTransitionService.transition(eq("kb-1"), any(TransitionRequest.class)))
+                .thenReturn(KanbanItem.builder().id("kb-1").title("Item").status(KanbanStatus.IN_PROGRESS).build());
 
         String result = handler.execute(Map.of(
                 "toolName", "transition_kanban_item",
@@ -146,7 +161,42 @@ class KanbanToolHandlerTest {
         ));
 
         assertTrue(result.contains("IN_PROGRESS"));
-        verify(kanbanService).transition(eq("kb-1"), eq(KanbanStatus.IN_PROGRESS), eq("starting work"));
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService).transition(eq("kb-1"), captor.capture());
+        assertEquals(KanbanStatus.IN_PROGRESS, captor.getValue().getStatus());
+        assertEquals("starting work", captor.getValue().getComment());
+    }
+
+    @Test
+    void transitionMapsFeedbackAndAgentTemplateId() {
+        when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
+                .thenReturn(KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.TODO).build());
+
+        handler.execute(Map.of(
+                "toolName", "transition_kanban_item",
+                "id", "c1",
+                "status", "TODO",
+                "feedback", "use streaming",
+                "agentTemplateId", "ba-agent"
+        ));
+
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService).transition(eq("c1"), captor.capture());
+        assertEquals("use streaming", captor.getValue().getFeedback());
+        assertEquals("ba-agent", captor.getValue().getAgentTemplateId());
+    }
+
+    @Test
+    void transitionInvalidStatusMentionsBacklog() {
+        String result = handler.execute(Map.of(
+                "toolName", "transition_kanban_item",
+                "id", "c1",
+                "status", "SHIPPED"
+        ));
+
+        assertTrue(result.startsWith("Error"));
+        assertTrue(result.contains("BACKLOG"));
+        verifyNoInteractions(kanbanTransitionService, kanbanService);
     }
 
     @Test
@@ -157,7 +207,7 @@ class KanbanToolHandlerTest {
         ));
 
         assertTrue(result.startsWith("Error"));
-        verifyNoInteractions(kanbanService);
+        verifyNoInteractions(kanbanService, kanbanTransitionService);
     }
 
     @Test
@@ -168,7 +218,7 @@ class KanbanToolHandlerTest {
         ));
 
         assertTrue(result.startsWith("Error"));
-        verifyNoInteractions(kanbanService);
+        verifyNoInteractions(kanbanService, kanbanTransitionService);
     }
 
     @Test

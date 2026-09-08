@@ -149,6 +149,58 @@ describe('TaskDrawer review decision zone', () => {
     expect(screen.getByText(/NEEDS YOUR DECISION/)).toBeInTheDocument();
   });
 
+  it('closes the full-page review once the card leaves REVIEW (ask resolved)', async () => {
+    const user = userEvent.setup();
+    // Initial load: REVIEW with one ask. After the ask resolves, the
+    // invalidated queries refetch: item comes back DONE, asks come back [].
+    mockedGetKanbanItem.mockResolvedValueOnce(mkItem());
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'DONE' }));
+    mockedListAsks.mockResolvedValueOnce([
+      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'ship it' }),
+    ]);
+    mockedListAsks.mockResolvedValue([]);
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    const fullpage = document.querySelector('.review-fullpage') as HTMLElement;
+    expect(fullpage).not.toBeNull();
+
+    await user.click(within(fullpage.querySelector('.ask-card') as HTMLElement).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(mockedApproveApproval).toHaveBeenCalledWith('a1', undefined));
+
+    // The stale workspace must not linger with already-decided asks.
+    await waitFor(() => expect(document.querySelector('.review-fullpage')).toBeNull());
+    // The collapsed drawer itself stays open.
+    expect(screen.getByText('Spec task')).toBeInTheDocument();
+  });
+
+  it('Escape closes the full-page review workspace but leaves the drawer open', async () => {
+    const user = userEvent.setup();
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'ship it' }),
+    ]);
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    expect(document.querySelector('.review-fullpage')).not.toBeNull();
+
+    // Escape originates inside the fullpage and bubbles to window, mirroring
+    // a real keypress with focus in the review workspace. Only the expanded
+    // mode may exit — the drawer itself must stay open.
+    act(() => {
+      (document.querySelector('.review-fullpage') as HTMLElement).dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+
+    expect(document.querySelector('.review-fullpage')).toBeNull();
+    expect(screen.getByText(/NEEDS YOUR DECISION/)).toBeInTheDocument();
+  });
+
   it('Approve on an APPROVAL ask calls approveApproval (gate semantics), not answerAsk', async () => {
     const user = userEvent.setup();
     mockedListAsks.mockResolvedValue([

@@ -2531,7 +2531,11 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .ask-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .ask-actions .dod-textarea { width: 100%; }
 .dz-footer { flex-direction: column; align-items: stretch; }
-.review-fullpage { position: fixed; top: 64px; left: 0; right: 0; bottom: 0; background: var(--bg-1, #0d1426); z-index: 60; display: flex; flex-direction: column; padding: 16px; }
+/* Must stack ABOVE the task drawer (z-index 100) and its click-to-close
+   backdrop (99): any lower and the scrim dims the fullpage and swallows every
+   click (incl. Collapse) into "close drawer". Kept BELOW the agent drawer
+   stack (backdrop 109 / drawer 110) so the live agent drawer still overlays it. */
+.review-fullpage { position: fixed; top: 64px; left: 0; right: 0; bottom: 0; background: var(--bg-1, #0d1426); z-index: 105; display: flex; flex-direction: column; padding: 16px; }
 .rf-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .rf-head h3 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rf-body { display: flex; gap: 16px; flex: 1; min-height: 0; }

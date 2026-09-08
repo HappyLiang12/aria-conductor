@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getKanbanItem,
@@ -275,6 +275,20 @@ export function TaskDrawer() {
     openTaskDrawer(sibling.id);
   };
 
+  // While the full-page review workspace is expanded, Escape exits the
+  // expanded mode only (back to the drawer) — it must NOT close the whole
+  // drawer. DrawerContext's global Escape guard already skips events whose
+  // target sits inside `.review-fullpage`, so the two listeners don't fight.
+  useEffect(() => {
+    if (!open || !state.reviewExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      closeReviewMode();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, state.reviewExpanded, closeReviewMode]);
+
   return (
     <>
       {open && (
@@ -502,8 +516,11 @@ export function TaskDrawer() {
         </footer>
       </aside>
 
-      {/* Full-page review workspace: expanded spec + the same decision rail. */}
-      {open && state.reviewExpanded && item && (
+      {/* Full-page review workspace: expanded spec + the same decision rail.
+          Gated on the card still being in REVIEW so the stale workspace cannot
+          linger after an ask is resolved (e.g. "Approve all" moves the card to
+          DONE and the refetched item/asks close the workspace). */}
+      {open && state.reviewExpanded && item?.status === 'REVIEW' && (
         <div
           className="review-fullpage"
           role="dialog"

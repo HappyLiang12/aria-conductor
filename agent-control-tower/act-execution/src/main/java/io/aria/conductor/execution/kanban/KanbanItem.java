@@ -73,6 +73,14 @@ public class KanbanItem {
     @Column(name = "last_error", length = 500)
     private String lastError;
 
+    /**
+     * Optimistic-lock version (Flyway V54): concurrent board moves of the same
+     * card fail the losing writer, mapped to HTTP 409 by the global handler.
+     */
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     /** Not persisted: number of PENDING asks surfaced in the Review column. */
     @Transient
     private Integer pendingAskCount;

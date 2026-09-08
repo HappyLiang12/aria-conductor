@@ -59,6 +59,16 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, Object>> handleOptimisticLock(
+            org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+        // Concurrent modification (e.g. two operators moving the same kanban card):
+        // optimistic-lock miss is a client conflict the caller can resolve by refreshing.
+        log.warn("Optimistic lock conflict: {}", ex.getMessage());
+        return buildResponse(HttpStatus.CONFLICT,
+                "Card was modified by another move — refresh and retry.");
+    }
+
     @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(
             org.springframework.web.bind.MethodArgumentNotValidException ex) {

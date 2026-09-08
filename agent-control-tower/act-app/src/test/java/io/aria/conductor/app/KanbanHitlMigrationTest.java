@@ -34,4 +34,21 @@ class KanbanHitlMigrationTest {
         assertThat(reloaded.getAgentTemplateId()).isEqualTo("ba-agent");
         assertThat(reloaded.getLastError()).isEqualTo("boom");
     }
+
+    @Test
+    void kanbanItemsCarryOptimisticLockVersionColumn() {
+        // V54: version column exists (Flyway) and is managed by JPA
+        // (@Version) — inserted rows start at 0 and increment on update.
+        KanbanItem item = kanbanRepository.save(KanbanItem.builder()
+                .title("version probe")
+                .build());
+        KanbanItem reloaded = kanbanRepository.findById(item.getId()).orElseThrow();
+        assertThat(reloaded.getVersion()).isNotNull();
+        assertThat(reloaded.getVersion()).isZero();
+
+        reloaded.setTitle("version probe v2");
+        KanbanItem updated = kanbanRepository.save(reloaded);
+        kanbanRepository.flush();
+        assertThat(updated.getVersion()).isEqualTo(1L);
+    }
 }

@@ -92,6 +92,16 @@ class GlobalExceptionHandlerMappingTest {
     }
 
     @Test
+    void handleOptimisticLock_maps409WithRefreshHint() {
+        var response = handler.handleOptimisticLock(
+                new org.springframework.orm.ObjectOptimisticLockingFailureException(
+                        Object.class, UUID.randomUUID()));
+        assertStandardBody(response, HttpStatus.CONFLICT);
+        assertThat(response.getBody().get("message"))
+                .isEqualTo("Card was modified by another move — refresh and retry.");
+    }
+
+    @Test
     void handleValidation_joinsFieldErrorsWithSemicolon() {
         BindingResult bindingResult = mock(BindingResult.class);
         when(bindingResult.getFieldErrors()).thenReturn(List.of(

@@ -8,7 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class KanbanTransitionTableTest {
 
-    private final KanbanService service = new KanbanService(null, null, null);
+    private final KanbanService service = new KanbanService(null, null, null, null);
 
     @ParameterizedTest
     @CsvSource({

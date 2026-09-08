@@ -17,6 +17,9 @@ public class CreateKanbanItemRequest {
 
     private String description;
 
+    /** Initial status; defaults to TODO when omitted (e.g. BACKLOG from the new-task modal). */
+    private KanbanStatus status;
+
     private KanbanPriority priority;
 
     private String assignee;

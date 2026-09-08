@@ -2,6 +2,7 @@ package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +33,9 @@ class KanbanServiceTest {
 
     @Mock
     RunRepository runRepository;
+
+    @Mock
+    ApprovalRepository approvalRepository;
 
     @InjectMocks
     KanbanService service;

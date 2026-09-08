@@ -9,6 +9,7 @@ import jakarta.persistence.Index;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -63,6 +64,18 @@ public class KanbanItem {
 
     @Column(name = "linked_agent_id", length = 36)
     private String linkedAgentId;
+
+    /** Agent template requested at creation (assignment hint for pickup). */
+    @Column(name = "agent_template_id", length = 100)
+    private String agentTemplateId;
+
+    /** Last pickup/transition failure, surfaced on the card face. */
+    @Column(name = "last_error", length = 500)
+    private String lastError;
+
+    /** Not persisted: number of PENDING asks surfaced in the Review column. */
+    @Transient
+    private Integer pendingAskCount;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;

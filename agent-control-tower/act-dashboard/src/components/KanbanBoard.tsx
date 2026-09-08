@@ -89,7 +89,7 @@ export default function KanbanBoard() {
     queryFn: listAgentTemplates,
   });
 
-  const { data: items, isLoading } = useQuery({
+  const { data: items } = useQuery({
     queryKey: ['kanban-items'],
     queryFn: () => listKanbanItems(),
     refetchInterval: 12000,
@@ -121,6 +121,19 @@ export default function KanbanBoard() {
     return () => clearTimeout(h);
   }, [flash]);
 
+  // Escape closes the new-task modal (mirrors ConfigureModal's window handler).
+  useEffect(() => {
+    if (!showCreate) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowCreate(false);
+        setError(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showCreate]);
+
   const createMutation = useMutation({
     mutationFn: (request: CreateKanbanItemRequest) => createKanbanItem(request),
     onSuccess: () => {
@@ -141,10 +154,17 @@ export default function KanbanBoard() {
   const transitionMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: KanbanStatus }) =>
       transitionKanbanItem(id, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['kanban-items'] }),
-    onError: () => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
-      setError('Move rejected — the card is back in its column.');
+      setError(null);
+    },
+    onError: (err: unknown) => {
+      queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+      // Prefer the backend's rejection reason (same axios shape as TaskDrawer's
+      // errMsg); fall back to the generic snap-back message.
+      const reason = (err as { response?: { data?: { error?: string } } } | null)
+        ?.response?.data?.error;
+      setError(reason ?? 'Move rejected — the card is back in its column.');
     },
   });
 
@@ -251,8 +271,12 @@ export default function KanbanBoard() {
                   <span>{col.label}</span>
                   <span className="count">{columnItems.length}</span>
                 </header>
-                <div className="lane" data-testid={`lane-${col.key}`}>
-                  {isLoading && columnItems.length === 0 ? null : null}
+                <div
+                  className={`lane${
+                    draggingId && legalTargets.includes(col.key) ? ' drop-legal' : ''
+                  }${draggingId && !legalTargets.includes(col.key) ? ' drop-illegal' : ''}`}
+                  data-testid={`lane-${col.key}`}
+                >
                   {columnItems.map((item) => (
                     <div
                       key={item.id}
@@ -294,6 +318,8 @@ export default function KanbanBoard() {
                         <button
                           className="card-cancel"
                           title="Cancel task"
+                          aria-label="Cancel task"
+                          disabled={transitionMutation.isPending}
                           onClick={(e) => {
                             e.stopPropagation();
                             transitionMutation.mutate({ id: item.id, status: 'CANCELLED' });
@@ -319,7 +345,13 @@ export default function KanbanBoard() {
             setError(null);
           }}
         >
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="New task"
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3>New Task</h3>
             <div className="kanban-form">
               <label className="kanban-form-row">

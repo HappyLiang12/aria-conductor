@@ -272,7 +272,12 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     vi.mocked(transitionKanbanItem).mockResolvedValueOnce(baseItem({ status: 'IN_PROGRESS' }));
     const { container } = await renderBoard([baseItem()]); // TODO card
     const card = container.querySelector('[data-card="k-1"]') as HTMLElement;
-    dropOn(card, screen.getByTestId('lane-IN_PROGRESS'));
+    const lane = screen.getByTestId('lane-IN_PROGRESS');
+    fireEvent.dragStart(card);
+    // While dragging, a legal target lane lights up with the drop-legal affordance.
+    expect(lane).toHaveClass('drop-legal');
+    fireEvent.dragOver(lane);
+    fireEvent.drop(lane);
     await waitFor(() =>
       expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'IN_PROGRESS' }),
     );
@@ -284,7 +289,11 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
       baseItem({ id: 'k-done', title: 'Finished', status: 'DONE' }),
     ]);
     const card = container.querySelector('[data-card="k-done"]') as HTMLElement;
-    dropOn(card, screen.getByTestId('lane-TODO'));
+    fireEvent.dragStart(card);
+    // While dragging, an illegal target lane dims via the drop-illegal affordance.
+    expect(screen.getByTestId('lane-TODO')).toHaveClass('drop-illegal');
+    fireEvent.dragOver(screen.getByTestId('lane-TODO'));
+    fireEvent.drop(screen.getByTestId('lane-TODO'));
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(transitionKanbanItem).not.toHaveBeenCalled();
   });
@@ -300,21 +309,39 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     expect(transitionKanbanItem).not.toHaveBeenCalled();
   });
 
-  it('transition failure snaps the card back and refetches the list', async () => {
+  it('transition failure snaps the card back, refetches, and surfaces the backend reason', async () => {
     const { transitionKanbanItem } = await import('../../api/kanban');
-    vi.mocked(transitionKanbanItem).mockRejectedValueOnce({ message: 'invalid transition' });
+    // Deferred rejection: the optimistic state must be observable before the
+    // transition call fails, so the mock rejects only when we release it.
+    let rejectMove!: (reason: unknown) => void;
+    vi.mocked(transitionKanbanItem).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectMove = reject; }),
+    );
     await renderBoard([baseItem()]); // TODO card
     fireEvent.dragStart(screen.getByTestId('lane-TODO').querySelector('[data-card="k-1"]')!);
     const lane = screen.getByTestId('lane-IN_PROGRESS');
     fireEvent.dragOver(lane);
     fireEvent.drop(lane);
 
-    // Optimistic move put the card in IN_PROGRESS; after the rejection the
-    // query invalidation refetches and the card is back in its TODO lane.
+    // Optimistic move: the card shows in IN_PROGRESS while the call is pending.
+    expect(screen.getByTestId('lane-IN_PROGRESS').querySelector('[data-card="k-1"]')).not.toBeNull();
+
+    // Wait until the transition call reached the deferred mock (the promise
+    // executor has now captured rejectMove), then release the rejection.
+    await waitFor(() =>
+      expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'IN_PROGRESS' }),
+    );
+    act(() => {
+      rejectMove({ message: 'Request failed', response: { data: { error: 'Invalid kanban transition' } } });
+    });
+
+    // After the rejection the query invalidation refetches and the card is
+    // back in its TODO lane; the banner surfaces the backend reason verbatim.
     await waitFor(() => {
       expect(screen.getByTestId('lane-TODO').querySelector('[data-card="k-1"]')).not.toBeNull();
     });
-    expect(await screen.findByText(/Move rejected/i)).toBeInTheDocument();
+    expect(screen.getByTestId('lane-IN_PROGRESS').querySelector('[data-card="k-1"]')).toBeNull();
+    expect(screen.getByText('Invalid kanban transition')).toBeInTheDocument();
   });
 
   it('cancel button transitions to CANCELLED without opening the drawer', async () => {
@@ -425,5 +452,15 @@ describe('KanbanBoard new-task modal (Task 13)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
     expect(screen.getByText('Title is required')).toBeInTheDocument();
     expect(createKanbanItem).not.toHaveBeenCalled();
+  });
+
+  it('exposes dialog semantics and closes on Escape', async () => {
+    await openModal();
+    const dialog = screen.getByRole('dialog', { name: 'New task' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+
+    // Escape closes the modal (mirrors ConfigureModal's window keydown handler).
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'New task' })).not.toBeInTheDocument();
   });
 });

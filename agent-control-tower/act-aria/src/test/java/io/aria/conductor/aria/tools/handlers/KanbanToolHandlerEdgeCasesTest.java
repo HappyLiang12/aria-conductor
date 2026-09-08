@@ -51,6 +51,8 @@ class KanbanToolHandlerEdgeCasesTest {
 
     @Test
     void transition_passesCommentThroughToService() {
+        when(kanbanService.get("k-1")).thenReturn(
+                KanbanItem.builder().id("k-1").title("T").status(KanbanStatus.REVIEW).build());
         when(kanbanTransitionService.transition(eq("k-1"), any(TransitionRequest.class)))
                 .thenReturn(KanbanItem.builder().id("k-1").title("T").status(KanbanStatus.DONE).build());
 
@@ -132,6 +134,8 @@ class KanbanToolHandlerEdgeCasesTest {
 
     @Test
     void serviceExceptionIsMappedToErrorString() {
+        when(kanbanService.get("k-1")).thenReturn(
+                KanbanItem.builder().id("k-1").title("T").status(KanbanStatus.IN_PROGRESS).build());
         when(kanbanTransitionService.transition(eq("k-1"), any(TransitionRequest.class)))
                 .thenThrow(new IllegalStateException("illegal transition BLOCKED -> DONE"));
 

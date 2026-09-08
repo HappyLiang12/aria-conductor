@@ -132,6 +132,8 @@ class KanbanToolHandlerTest {
 
     @Test
     void transitionDelegatesToOrchestratorWithStatusKey() {
+        when(kanbanService.get("c1")).thenReturn(
+                KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.BACKLOG).build());
         when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
                 .thenReturn(KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.TODO).build());
 
@@ -145,11 +147,13 @@ class KanbanToolHandlerTest {
         ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
         verify(kanbanTransitionService).transition(eq("c1"), captor.capture());
         assertEquals(KanbanStatus.TODO, captor.getValue().getStatus());
-        verifyNoInteractions(kanbanService);
+        verify(kanbanService).get("c1");
     }
 
     @Test
     void transitionLegacyNewStatusKeyStillWorks() {
+        when(kanbanService.get("kb-1")).thenReturn(
+                KanbanItem.builder().id("kb-1").title("Item").status(KanbanStatus.TODO).build());
         when(kanbanTransitionService.transition(eq("kb-1"), any(TransitionRequest.class)))
                 .thenReturn(KanbanItem.builder().id("kb-1").title("Item").status(KanbanStatus.IN_PROGRESS).build());
 
@@ -169,6 +173,8 @@ class KanbanToolHandlerTest {
 
     @Test
     void transitionMapsFeedbackAndAgentTemplateId() {
+        when(kanbanService.get("c1")).thenReturn(
+                KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.BACKLOG).build());
         when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
                 .thenReturn(KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.TODO).build());
 
@@ -184,6 +190,45 @@ class KanbanToolHandlerTest {
         verify(kanbanTransitionService).transition(eq("c1"), captor.capture());
         assertEquals("use streaming", captor.getValue().getFeedback());
         assertEquals("ba-agent", captor.getValue().getAgentTemplateId());
+    }
+
+    @Test
+    void transitionDualKeysStatusWinsOverLegacyNewStatus() {
+        // The TS MCP contract sends "status"; the legacy Aria contract sends
+        // "newStatus". When both keys arrive, the modern "status" key must win.
+        when(kanbanService.get("c1")).thenReturn(
+                KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.TODO).build());
+        when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
+                .thenReturn(KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.REVIEW).build());
+
+        handler.execute(Map.of(
+                "toolName", "transition_kanban_item",
+                "id", "c1",
+                "status", "REVIEW",
+                "newStatus", "DONE"
+        ));
+
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService).transition(eq("c1"), captor.capture());
+        assertEquals(KanbanStatus.REVIEW, captor.getValue().getStatus());
+    }
+
+    @Test
+    void transitionNoOpReportsAlreadyInsteadOfTransitioned() {
+        // Same-status request is an orchestrator no-op: no delegation and an
+        // honest "already" message instead of a claimed transition.
+        when(kanbanService.get("c1")).thenReturn(
+                KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.REVIEW).build());
+
+        String result = handler.execute(Map.of(
+                "toolName", "transition_kanban_item",
+                "id", "c1",
+                "status", "REVIEW"
+        ));
+
+        assertEquals("Kanban item c1 already REVIEW.", result);
+        verify(kanbanService).get("c1");
+        verifyNoInteractions(kanbanTransitionService);
     }
 
     @Test

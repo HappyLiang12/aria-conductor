@@ -46,7 +46,7 @@ export const kanbanTools = [
     name: 'transition_kanban_item',
     description:
       'Move a kanban item to a new status column. Todo entry triggers agent pickup and a run; '
-      + 'moving out of In Progress pauses the linked run; returning a Review item to Todo with '
+      + 'moving back to Todo or Backlog pauses the linked run; returning a Review item to Todo with '
       + 'feedback re-dispatches it with the feedback.',
     inputSchema: z.object({
       id: z.string().describe('Kanban item ID'),

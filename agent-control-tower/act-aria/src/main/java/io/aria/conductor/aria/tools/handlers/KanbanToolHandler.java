@@ -128,6 +128,13 @@ public class KanbanToolHandler implements ToolHandler {
                     + ". Valid: BACKLOG, TODO, IN_PROGRESS, REVIEW, DONE, CANCELLED");
         }
 
+        // Mirror the orchestrator's idempotent no-op guard: repeating the current
+        // status must not delegate (no run side effects) and must not claim a
+        // "transitioned to" that never happened.
+        if (kanbanService.get(id).getStatus() == status) {
+            return "Kanban item " + id + " already " + status.name() + ".";
+        }
+
         TransitionRequest request = TransitionRequest.builder()
                 .status(status)
                 .comment(blankToNull(Objects.toString(args.get("comment"), "")))

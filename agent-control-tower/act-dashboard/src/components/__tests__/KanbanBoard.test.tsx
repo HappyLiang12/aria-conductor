@@ -228,6 +228,36 @@ describe('KanbanBoard live move feedback (S6)', () => {
   });
 });
 
+describe('KanbanBoard assigning indicator (spec 4.2)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    kanbanData = [
+      { id: 'k-1', title: 'Fix pump cursor', priority: 'HIGH', status: 'TODO', linkedAgentId: null, assignee: null, labels: null },
+    ];
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('shows "Aria assigning…" on the card during kanban.assigning and clears after ~1.2s', async () => {
+    vi.useFakeTimers();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container, rerender } = ui(qc);
+    await act(async () => { vi.advanceTimersByTime(50); });
+
+    act(() => {
+      mockCtx = { lastMessage: { type: 'kanban.assigning', payload: { itemId: 'k-1' }, timestamp: 't' }, isConnected: true };
+      rerender(<QueryClientProvider client={qc}><KanbanBoard /></QueryClientProvider>);
+    });
+
+    const card = container.querySelector('[data-card="k-1"]');
+    expect(card!.textContent).toContain('◐ Aria assigning…');
+    // Same moving affordance as the transition flash.
+    expect(card!.className).toMatch(/moving/);
+
+    act(() => { vi.advanceTimersByTime(1300); });
+    expect(container.querySelector('[data-card="k-1"]')!.textContent).not.toContain('Aria assigning…');
+  });
+});
+
 describe('KanbanBoard status board + DnD (Task 12)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

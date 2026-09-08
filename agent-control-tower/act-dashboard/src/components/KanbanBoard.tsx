@@ -71,7 +71,9 @@ export default function KanbanBoard() {
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
-  const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' } | null>(null);
+  // Flash kinds: ok/err = transition result; assign = "Aria assigning…" while
+  // the pickup's assign phase runs (spec 4.2).
+  const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' | 'assign' } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
 
@@ -110,6 +112,17 @@ export default function KanbanBoard() {
       const itemId = payload.itemId as string | undefined;
       if (itemId) {
         setFlash({ itemId, kind: payload.toStatus === 'CANCELLED' ? 'err' : 'ok' });
+      }
+    }
+    // Spec 4.2: "Aria assigning…" indicator during the pickup's assign phase.
+    // Broadcast while the transition request is in flight, so the initiating
+    // client has already moved the card optimistically — the indicator mainly
+    // serves concurrent viewers.
+    if (t === 'kanban.assigning') {
+      const payload = lastMessage.payload ?? {};
+      const itemId = payload.itemId as string | undefined;
+      if (itemId) {
+        setFlash({ itemId, kind: 'assign' });
       }
     }
   }, [lastMessage, queryClient]);
@@ -297,6 +310,11 @@ export default function KanbanBoard() {
                       <div className="t">{item.title}</div>
                       {item.status === 'REVIEW' && !!item.pendingAskCount && (
                         <span className="pill warn">{item.pendingAskCount} asks</span>
+                      )}
+                      {flash?.itemId === item.id && flash.kind === 'assign' && (
+                        <span className="owner" style={{ color: 'var(--brand-2)' }}>
+                          ◐ Aria assigning…
+                        </span>
                       )}
                       {item.lastError && (
                         <div className="owner" style={{ color: 'var(--red)' }}>

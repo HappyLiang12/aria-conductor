@@ -109,11 +109,10 @@ public class KanbanTransitionService {
             };
             case IN_PROGRESS -> switch (item.getStatus()) {
                 case REVIEW -> resume(item);
-                // Same normalization: BACKLOG -> TODO -> IN_PROGRESS via pickup.
-                case BACKLOG -> {
-                    kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
-                    yield pickup(item, request);
-                }
+                // D3: Backlog never executes — direct dispatch is rejected; the
+                // card must be routed through Todo (the only dispatch entry).
+                case BACKLOG -> throw new IllegalArgumentException(
+                        "Route the card through Todo first — Backlog items do not dispatch directly");
                 case TODO -> pickup(item, request);
                 // IN_PROGRESS is handled by the no-op guard above.
                 default -> throw new IllegalArgumentException(
@@ -144,9 +143,21 @@ public class KanbanTransitionService {
         if (isBlank(item.getAssignee()) && isBlank(item.getLinkedAgentId())) {
             eventPublisher.publishEvent(new KanbanItemAssigningEvent(this, item.getId()));
             String templateId = firstNonBlank(request.getAgentTemplateId(), item.getAgentTemplateId());
-            AgentPickerService.Choice choice = agentPicker.pick(templateId, item.getTitle(), item.getDescription());
-            item.setLinkedAgentId(choice.agentId().toString());
-            item.setAssignee(choice.agentName());
+            // AgentPickerService is a plain bean (no transaction proxy), so an
+            // empty healthy pool can be caught here without deferring a
+            // rollback-only transaction to commit — unlike createRun below.
+            try {
+                AgentPickerService.Choice choice = agentPicker.pick(templateId, item.getTitle(), item.getDescription());
+                item.setLinkedAgentId(choice.agentId().toString());
+                item.setAssignee(choice.agentName());
+            } catch (IllegalStateException e) {
+                // Predictable failure (no eligible agent): the card stays in its
+                // source status with lastError instead of rolling the whole
+                // transition back; re-drag retries (spec 4.2/6 refinement).
+                log.warn("Kanban pickup failed for {}: {}", item.getId(), e.getMessage());
+                item.setLastError(abbreviate(e.getMessage()));
+                return kanbanRepository.save(item);
+            }
             if (!isBlank(templateId)) {
                 item.setAgentTemplateId(templateId);
             }

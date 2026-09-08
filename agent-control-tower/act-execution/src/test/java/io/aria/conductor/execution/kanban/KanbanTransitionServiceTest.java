@@ -223,6 +223,25 @@ class KanbanTransitionServiceTest {
         assertThat(card.getStatus()).isEqualTo(KanbanStatus.TODO);
     }
 
+    @Test
+    void pickupFailure_emptyAgentPool_lastErrorInsteadOfRollback() {
+        // Assign phase: the healthy pool is empty — a predictable failure that
+        // must leave the card in place with lastError, not roll the transition back.
+        when(agentPicker.pick(any(), anyString(), any()))
+                .thenThrow(new IllegalStateException("No healthy agent available for kanban pickup"));
+
+        KanbanItem result = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
+        assertThat(result.getLastError())
+                .isEqualTo("No healthy agent available for kanban pickup");
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+        // No IN_PROGRESS transition after the failed assign phase.
+        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(kanbanRepository).save(card);
+    }
+
     // ---- behavior 3: no-op guard ----
 
     @Test
@@ -314,17 +333,18 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
-    void backlogToInProgress_normalizesThenPicksUp() {
+    void backlogToInProgress_isRejected_routesThroughTodoFirst() {
         card.setStatus(KanbanStatus.BACKLOG);
-        card.setAssignee("BA Agent");
-        card.setLinkedAgentId(AGENT_ID.toString());
 
-        service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
+        // D3: Backlog never executes — direct dispatch is rejected on all
+        // surfaces; the card must be routed through Todo to pick up.
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Route the card through Todo first — Backlog items do not dispatch directly");
 
-        verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
-        verify(runService).createRun(any(CreateRunRequest.class));
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        verify(kanbanService, never()).transition(any(), any(), any());
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
     }
 
     @Test

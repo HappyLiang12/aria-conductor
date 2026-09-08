@@ -83,7 +83,13 @@ public class KanbanToolHandler implements ToolHandler {
                     .append(" | Status: ").append(item.getStatus() != null ? item.getStatus().name() : "N/A")
                     .append(" | Priority: ").append(item.getPriority() != null ? item.getPriority().name() : "N/A")
                     .append(" | Assignee: ").append(item.getAssignee() != null ? item.getAssignee() : "N/A")
-                    .append("\n");
+                    // HITL signals: pending asks on Review cards (0 when none) and
+                    // the last pickup/transition failure (omitted when clean).
+                    .append(" | Asks: ").append(item.getPendingAskCount() != null ? item.getPendingAskCount() : 0);
+            if (item.getLastError() != null) {
+                sb.append(" | Error: ").append(item.getLastError());
+            }
+            sb.append("\n");
         }
         return sb.toString().trim();
     }

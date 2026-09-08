@@ -102,6 +102,27 @@ class KanbanToolHandlerTest {
     }
 
     @Test
+    void listKanbanItems_includesAskCountAndLastError() {
+        // Review card with pending asks and a pickup failure: Aria needs both
+        // HITL signals in the listing (pending asks + last error).
+        KanbanItem withAsks = KanbanItem.builder().id("a").title("A").status(KanbanStatus.REVIEW)
+                .priority(KanbanPriority.MEDIUM).pendingAskCount(2)
+                .lastError("Agent not found with id: 999").createdAt(Instant.now()).build();
+        KanbanItem clean = KanbanItem.builder().id("b").title("B").status(KanbanStatus.TODO)
+                .priority(KanbanPriority.LOW).createdAt(Instant.now()).build();
+        when(kanbanService.list(null)).thenReturn(List.of(withAsks, clean));
+
+        String result = handler.execute(Map.of("toolName", "list_kanban_items"));
+
+        assertTrue(result.contains("| Asks: 2"));
+        assertTrue(result.contains("| Error: Agent not found with id: 999"));
+        // Null ask/error fields normalize to a zero ask count and no Error segment.
+        String cleanLine = result.lines().filter(l -> l.contains("- b |")).findFirst().orElseThrow();
+        assertTrue(cleanLine.contains("| Asks: 0"));
+        assertFalse(cleanLine.contains("| Error:"));
+    }
+
+    @Test
     void updateKanbanItemShouldCallService() {
         KanbanItem updated = KanbanItem.builder()
                 .id("kb-1")

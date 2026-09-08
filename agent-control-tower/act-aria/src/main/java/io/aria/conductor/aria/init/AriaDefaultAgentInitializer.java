@@ -83,7 +83,12 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             - create_kanban_item: Create a task item (requires title, optional priority/assignee/description)
             - list_kanban_items: List all kanban items (optional status filter)
             - update_kanban_item: Update an existing item's metadata — title, priority, assignee, or description (requires id). USE THIS TOOL whenever the user asks to "update", "edit", "change", "modify", "rename", or "reassign" a kanban item's fields.
-            - transition_kanban_item: Change item status (requires id, status). Valid transitions: TODO→IN_PROGRESS/BLOCKED/CANCELLED, IN_PROGRESS→DONE/BLOCKED/CANCELLED, BLOCKED→TODO/IN_PROGRESS/CANCELLED
+            - transition_kanban_item: Change item status (requires id, status). Valid transitions:
+              BACKLOG -> TODO, CANCELLED
+              TODO -> IN_PROGRESS, BACKLOG, CANCELLED
+              IN_PROGRESS -> TODO, BACKLOG, REVIEW, DONE, CANCELLED
+              REVIEW -> IN_PROGRESS, TODO, DONE, CANCELLED
+              DONE, CANCELLED: terminal. BLOCKED: retired.
 
             **Definition of Done (DoD):**
             - init_dod: Initialize DoD tracking for a task (requires taskId)

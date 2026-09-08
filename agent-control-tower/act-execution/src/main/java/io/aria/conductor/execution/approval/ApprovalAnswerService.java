@@ -19,8 +19,9 @@ import java.util.UUID;
  * answering a QUESTION ask must not resume the paused run or advance an SDD chain.
  *
  * <p>Guards: only PENDING asks are answerable (a decided ask is immutable), and
- * the approved/denied flag is restricted to QUESTION asks — gate approvals must
- * go through {@link ApprovalGate#decideApproval} ({@code /decide}) so they get
+ * the approved/denied flag is restricted to QUESTION asks — gate approvals
+ * (APPROVAL / REVIEW_REQUEST asks) must go through
+ * {@link ApprovalGate#decideApproval} ({@code /decide}) so they get
  * the run-resume/workflow side effects. Free-text answer-only updates remain
  * allowed for any PENDING ask.
  */

@@ -102,7 +102,7 @@ public class KanbanTransitionService {
                     kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                     yield pickup(item, request);
                 }
-                case TODO -> pickup(item, request);
+                // (TODO -> TODO never reaches here: the same-status no-op guard above returns first.)
                 // Terminal states: reject BEFORE any pickup side effect can fire.
                 default -> throw new IllegalArgumentException(
                         "Invalid kanban transition: " + item.getStatus() + " -> " + to);

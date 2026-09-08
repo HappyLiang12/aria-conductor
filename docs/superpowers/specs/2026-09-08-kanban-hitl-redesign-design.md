@@ -33,12 +33,14 @@ Add `BACKLOG`. Transition table (`KanbanService.VALID_TRANSITIONS`):
 
 ```
 BACKLOG      -> TODO, CANCELLED
-TODO         -> IN_PROGRESS, CANCELLED
-IN_PROGRESS  -> REVIEW, DONE, CANCELLED
+TODO         -> IN_PROGRESS, BACKLOG, CANCELLED
+IN_PROGRESS  -> TODO, BACKLOG, REVIEW, DONE, CANCELLED
 REVIEW       -> IN_PROGRESS, TODO, DONE, CANCELLED
 DONE         -> (terminal)
 CANCELLED    -> (terminal)
 ```
+
+Note: `IN_PROGRESS -> TODO/BACKLOG` is the pause path (drag the card back); `TODO -> BACKLOG` re-queues without executing.
 
 - `BLOCKED` stays in the enum but is no longer used by the board. Migration rewrites existing `BLOCKED` items to `REVIEW`.
 - The frontend column filters that rely on labels (`backlog`, `review`, `qa-gate`) are removed; migration recomputes item statuses from labels before the columns stop reading them.
@@ -78,7 +80,7 @@ Each transition publishes `KanbanTransitionedEvent` (existing WS broadcast path)
 
 ### 4.2 Two-phase pickup on -> TODO
 
-1. **Assign phase**: if the card has no assignee, Aria selects an agent template. Fast path: exact match on `agentTemplateId` / task-type rule match (no LLM call). Fallback: one LLM decision. Writes `assignee` + `linkedAgentId`. Frontend shows "Aria assigning..." driven by `kanban.assigning` WS event.
+1. **Assign phase**: if the card has no assignee, pick an agent by rule — exact `agentTemplateId`/template-label match against healthy agents, falling back to the first healthy agent (rule-based only, no LLM call in v1). Writes `assignee` + `linkedAgentId`. Frontend shows "Aria assigning..." driven by `kanban.assigning` WS event.
 2. **Pickup phase**: creates and starts a run via `RunService.createRun/startRun`, then transitions the item to `IN_PROGRESS`.
 
 Failure semantics: pickup failure (agent/ADK unavailable) leaves the card in `TODO` with `last_error` set; no automatic retry — the user re-drags to retry.

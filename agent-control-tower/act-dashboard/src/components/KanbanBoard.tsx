@@ -32,8 +32,9 @@ const COLUMNS: ColumnDef[] = [
 
 // Mirror of the backend ALLOWED_TRANSITIONS — drives drop-target legality only.
 // BLOCKED is retired; CANCELLED/DONE are reachable only via the card ✕ / approve actions.
+// D3: BACKLOG is queued and never dispatches — a Backlog card must go through TODO first.
 const LEGAL_DROPS: Record<KanbanStatus, KanbanStatus[]> = {
-  BACKLOG: ['TODO', 'IN_PROGRESS', 'CANCELLED'],
+  BACKLOG: ['TODO', 'CANCELLED'],
   TODO: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
   IN_PROGRESS: ['TODO', 'BACKLOG', 'REVIEW', 'DONE', 'CANCELLED'],
   REVIEW: ['IN_PROGRESS', 'TODO', 'DONE', 'CANCELLED'],

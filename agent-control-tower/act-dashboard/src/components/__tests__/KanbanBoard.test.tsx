@@ -289,6 +289,17 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     expect(transitionKanbanItem).not.toHaveBeenCalled();
   });
 
+  it('drop on an ILLEGAL target (BACKLOG card → In Progress lane) does not call the API (D3)', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    const { container } = await renderBoard([
+      baseItem({ id: 'k-b', title: 'Queued idea', status: 'BACKLOG' }),
+    ]);
+    const card = container.querySelector('[data-card="k-b"]') as HTMLElement;
+    dropOn(card, screen.getByTestId('lane-IN_PROGRESS'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(transitionKanbanItem).not.toHaveBeenCalled();
+  });
+
   it('transition failure snaps the card back and refetches the list', async () => {
     const { transitionKanbanItem } = await import('../../api/kanban');
     vi.mocked(transitionKanbanItem).mockRejectedValueOnce({ message: 'invalid transition' });

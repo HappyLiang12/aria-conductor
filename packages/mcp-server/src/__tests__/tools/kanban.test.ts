@@ -31,6 +31,36 @@ describe('Kanban tools', () => {
     expect(fetchMock.calls[0].url).toContain('/transition');
     expect((fetchMock.calls[0].body as any).status).toBe('DONE');
   });
+
+  it('transition_kanban_item posts status+feedback to the transition endpoint', async () => {
+    fetchMock = mockFetch({
+      '/api/v1/kanban/items/c1/transition': { status: 200, body: { id: 'c1', status: 'TODO' } },
+    });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({
+      name: 'transition_kanban_item',
+      arguments: { id: 'c1', status: 'TODO', feedback: 'use streaming', agentTemplateId: 'ba-agent' },
+    });
+    const call = fetchMock.calls.find((c) => c.url.includes('/transition'));
+    expect(call.method).toBe('POST');
+    // mockFetch records the request body as an already-parsed object
+    expect(call.body).toEqual({
+      status: 'TODO',
+      feedback: 'use streaming',
+      agentTemplateId: 'ba-agent',
+    });
+    expect(JSON.parse(resultText(r)).id).toBe('c1');
+  });
+
+  it('list_kanban_items accepts CANCELLED filter', async () => {
+    fetchMock = mockFetch({
+      '/api/v1/kanban/items': { status: 200, body: [] },
+    });
+    ctx = await createTestClient();
+    await ctx.client.callTool({ name: 'list_kanban_items', arguments: { status: 'CANCELLED' } });
+    const call = fetchMock.calls.find((c) => c.url.includes('/api/v1/kanban/items'));
+    expect(call.url).toContain('status=CANCELLED');
+  });
 });
 
 describe('Kanban tools — validation & error mapping', () => {

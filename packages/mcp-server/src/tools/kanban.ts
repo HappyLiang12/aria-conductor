@@ -6,7 +6,7 @@ export const kanbanTools = [
     name: 'list_kanban_items',
     description: 'List kanban board items, optionally filtered by status.',
     inputSchema: z.object({
-      status: z.enum(['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE', 'BLOCKED']).optional().describe('Filter by kanban status'),
+      status: z.enum(['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE', 'CANCELLED']).optional().describe('Filter by kanban status'),
     }),
     handler: async ({ status }: { status?: string }) =>
       toJsonResult(await http.get(`/api/v1/kanban/items${qs({ status })}`)),
@@ -44,13 +44,20 @@ export const kanbanTools = [
   },
   {
     name: 'transition_kanban_item',
-    description: 'Move a kanban item to a new status column.',
+    description:
+      'Move a kanban item to a new status column. Todo entry triggers agent pickup and a run; '
+      + 'moving out of In Progress pauses the linked run; returning a Review item to Todo with '
+      + 'feedback re-dispatches it with the feedback.',
     inputSchema: z.object({
       id: z.string().describe('Kanban item ID'),
-      status: z.enum(['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE', 'BLOCKED']).describe('Target status'),
+      status: z
+        .enum(['BACKLOG', 'TODO', 'IN_PROGRESS', 'REVIEW', 'DONE', 'CANCELLED'])
+        .describe('Target status'),
       comment: z.string().optional().describe('Optional transition comment'),
+      feedback: z.string().optional().describe('Feedback sent when returning a REVIEW item to Todo'),
+      agentTemplateId: z.string().optional().describe('Agent template hint for pickup'),
     }),
-    handler: async ({ id, ...body }: { id: string; status: string; comment?: string }) =>
+    handler: async ({ id, ...body }: { id: string;[k: string]: unknown }) =>
       toJsonResult(await http.post(`/api/v1/kanban/items/${id}/transition`, body)),
   },
 ];

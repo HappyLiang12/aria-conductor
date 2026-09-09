@@ -272,8 +272,16 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     return utils;
   };
 
-  const dropOn = (card: HTMLElement, lane: HTMLElement) => {
+  // dragStart defers the draggingId state update by one task (Chromium cancels
+  // a native drag when the dragged node mutates synchronously) — tests must
+  // flush timers between dragStart and any dependent assertion/dispatch.
+  const flushDragState = async () => {
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  };
+
+  const dropOn = async (card: HTMLElement, lane: HTMLElement) => {
     fireEvent.dragStart(card);
+    await flushDragState();
     fireEvent.dragOver(lane);
     fireEvent.drop(lane);
   };
@@ -304,6 +312,7 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     const card = container.querySelector('[data-card="k-1"]') as HTMLElement;
     const lane = screen.getByTestId('lane-IN_PROGRESS');
     fireEvent.dragStart(card);
+    await flushDragState();
     // While dragging, a legal target lane lights up with the drop-legal affordance.
     expect(lane).toHaveClass('drop-legal');
     fireEvent.dragOver(lane);
@@ -320,6 +329,7 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     ]);
     const card = container.querySelector('[data-card="k-done"]') as HTMLElement;
     fireEvent.dragStart(card);
+    await flushDragState();
     // While dragging, an illegal target lane dims via the drop-illegal affordance.
     expect(screen.getByTestId('lane-TODO')).toHaveClass('drop-illegal');
     fireEvent.dragOver(screen.getByTestId('lane-TODO'));
@@ -334,7 +344,7 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
       baseItem({ id: 'k-b', title: 'Queued idea', status: 'BACKLOG' }),
     ]);
     const card = container.querySelector('[data-card="k-b"]') as HTMLElement;
-    dropOn(card, screen.getByTestId('lane-IN_PROGRESS'));
+    await dropOn(card, screen.getByTestId('lane-IN_PROGRESS'));
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(transitionKanbanItem).not.toHaveBeenCalled();
   });
@@ -349,6 +359,7 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     );
     await renderBoard([baseItem()]); // TODO card
     fireEvent.dragStart(screen.getByTestId('lane-TODO').querySelector('[data-card="k-1"]')!);
+    await flushDragState();
     const lane = screen.getByTestId('lane-IN_PROGRESS');
     fireEvent.dragOver(lane);
     fireEvent.drop(lane);

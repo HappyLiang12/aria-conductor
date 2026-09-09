@@ -301,7 +301,17 @@ export default function KanbanBoard() {
                       data-card={item.id}
                       draggable
                       data-dragging={draggingId === item.id || undefined}
-                      onDragStart={() => setDraggingId(item.id)}
+                      onDragStart={(e) => {
+                        // Deferred on purpose: mutating the dragged node
+                        // synchronously inside dragstart (data-dragging attr
+                        // triggers a re-render) makes Chromium cancel the
+                        // native drag immediately, so no drop ever fires.
+                        // (real browsers always provide dataTransfer; jsdom
+                        // synthetic events do not, hence the optional chain)
+                        e.dataTransfer?.setData('text/plain', item.id);
+                        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+                        setTimeout(() => setDraggingId(item.id), 0);
+                      }}
                       onDragEnd={() => setDraggingId(null)}
                       onClick={() => dispatchOpenTaskDrawer(item.id)}
                     >

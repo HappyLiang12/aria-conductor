@@ -11,13 +11,14 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.UUID;
 
 /**
  * Spec 10.2: every run-completed card entering REVIEW carries a REVIEW_REQUEST
  * ask so the Review column always surfaces a structured decision surface.
  * Idempotent: skipped when a PENDING ask already exists on the card.
+ * DB-level failures on save surface at commit time and roll the whole transition
+ * back (all-or-nothing by design).
  */
 @Slf4j
 @Component
@@ -53,7 +54,7 @@ public class KanbanReviewAskCreator {
                 UUID runId = UUID.fromString(item.getLinkedRunId());
                 Run run = runRepository.findById(runId).orElse(null);
 
-                String status = run != null && run.getStatus() != null ? run.getStatus().name() : "COMPLETED";
+                String status = run != null && run.getStatus() != null ? run.getStatus().name() : "UNKNOWN";
                 String content = "Run " + runId.toString().substring(0, 8) + " completed (" + status
                         + ") - awaiting your review: " + item.getTitle();
                 StringBuilder ctx = new StringBuilder()
@@ -61,7 +62,8 @@ public class KanbanReviewAskCreator {
                         .append("**Agent:** ").append(item.getAssignee() != null ? item.getAssignee() : "n/a").append('\n')
                         .append("**Run:** ").append(runId).append('\n');
                 if (run != null) {
-                    ctx.append("**Completed:** ").append(run.getCompletedAt() != null ? run.getCompletedAt() : Instant.now()).append('\n')
+                    // Truthful: never fabricate a completion timestamp; print n/a when absent.
+                    ctx.append("**Completed:** ").append(run.getCompletedAt() != null ? run.getCompletedAt().toString() : "n/a").append('\n')
                        .append("**Iterations:** ").append(run.getIterationCount())
                        .append(" | **Tokens:** ").append(run.getTotalTokensUsed()).append('\n');
                     if (item.getDescription() != null && !item.getDescription().isBlank()) {

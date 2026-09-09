@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -91,6 +92,39 @@ class KanbanReviewAskCreatorTest {
     void skipsWhenNoLinkedRun() {
         card.setLinkedRunId(null);
         creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+        verify(approvalRepository, never()).save(any());
+    }
+
+    @Test
+    void createsAskWithUnknownStatusWhenRunRowMissing() {
+        // Dangling linkedRunId: the run row is gone, but the ask is still created
+        // (informational) and must not fabricate run facts it does not have.
+        when(approvalRepository.findByStatusAndKanbanItemId(ApprovalStatus.PENDING, "c1"))
+                .thenReturn(List.of());
+        when(runRepository.findById(runId)).thenReturn(Optional.empty());
+
+        creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+
+        ArgumentCaptor<Approval> captor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(captor.capture());
+        assertThat(captor.getValue().getContent()).contains("UNKNOWN");
+        assertThat(captor.getValue().getContextMd()).doesNotContain("**Iterations:**");
+    }
+
+    @Test
+    void skipsWhenLinkedRunIdIsBlank() {
+        card.setLinkedRunId("   ");
+        creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+        verify(approvalRepository, never()).save(any());
+    }
+
+    @Test
+    void toleratesMalformedLinkedRunIdWithoutSave() {
+        // Documents the contract: UUID parsing failures are swallowed by the
+        // event listener guard, so a malformed id neither throws nor saves.
+        card.setLinkedRunId("not-a-uuid");
+        assertThatCode(() -> creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW")))
+                .doesNotThrowAnyException();
         verify(approvalRepository, never()).save(any());
     }
 

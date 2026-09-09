@@ -312,6 +312,23 @@ describe('TaskDrawer review decision zone', () => {
     );
   });
 
+  it('short approval view waits for the asks query before rendering (no flash)', async () => {
+    let resolveAsks!: (asks: Approval[]) => void;
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW' }));
+    mockedListAsks.mockReturnValue(new Promise<Approval[]>((res) => { resolveAsks = res; }));
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    // Item is loaded but asks are still in flight: the ask-less short view
+    // must NOT flash in before we know the card truly has no asks.
+    await screen.findByText('Spec task');
+    expect(screen.queryByText(/Run completed/)).not.toBeInTheDocument();
+    expect(document.querySelector('.decision-zone')).toBeNull();
+
+    act(() => resolveAsks([]));
+    expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
+  });
+
   it('navigates to the next REVIEW sibling from the kanban-items cache', async () => {
     const user = userEvent.setup();
     mockedGetKanbanItem.mockResolvedValue(mkItem());

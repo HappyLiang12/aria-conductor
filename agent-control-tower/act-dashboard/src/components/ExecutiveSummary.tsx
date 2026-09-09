@@ -80,7 +80,7 @@ export default function ExecutiveSummary() {
   // that has pending asks.
   const cardsWithAsks = (kanbanItems ?? []).filter((i) => (i.pendingAskCount ?? 0) > 0);
   const waitingAsks = cardsWithAsks.reduce((sum, i) => sum + (i.pendingAskCount ?? 0), 0);
-  const firstReviewCard: KanbanItem | undefined = cardsWithAsks[0];
+  const firstCardWithAsks: KanbanItem | undefined = cardsWithAsks[0];
 
   return (
     <section className="panel" id="panel-exec">
@@ -99,7 +99,7 @@ export default function ExecutiveSummary() {
           value={waitingAsks}
           detail={waitingAsks > 0 ? 'Cards need a decision' : 'Nothing pending'}
           variant={waitingAsks > 0 ? 'amber' : undefined}
-          onClick={firstReviewCard ? () => dispatchOpenTaskDrawer(firstReviewCard.id) : undefined}
+          onClick={firstCardWithAsks ? () => dispatchOpenTaskDrawer(firstCardWithAsks.id) : undefined}
         />
         <StatCell
           label="Tasks In Progress"

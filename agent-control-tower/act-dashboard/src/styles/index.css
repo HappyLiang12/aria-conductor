@@ -2523,6 +2523,7 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 
 /* === Kanban HITL: TaskDrawer decision zone + full-page review workspace === */
 .decision-zone { background: rgba(232,163,61,0.08); border: 1px solid rgba(232,163,61,0.4); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.decision-zone.short-view { border-style: dashed; }
 .dz-title { color: #e8a33d; font-weight: 700; margin-bottom: 8px; }
 .ask-card { border-bottom: 1px dashed var(--line-2); padding: 8px 0; }
 .ask-card:last-of-type { border-bottom: none; }
@@ -2530,7 +2531,6 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
 .ask-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .ask-actions .dod-textarea { width: 100%; }
-.dz-footer { flex-direction: column; align-items: stretch; }
 /* Must stack ABOVE the task drawer (z-index 100) and its click-to-close
    backdrop (99): any lower and the scrim dims the fullpage and swallows every
    click (incl. Collapse) into "close drawer". Kept BELOW the agent drawer

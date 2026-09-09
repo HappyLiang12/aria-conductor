@@ -266,9 +266,15 @@ export function TaskDrawer() {
           {item && (
             <>
               {/* Review decision zone: the first thing an operator sees on a
-                  card that is waiting on them — on any column (spec 10.1). */}
-              {pendingAsks.length > 0 && <DecisionPanel item={item} pendingAsks={pendingAsks} />}
-              {item.status === 'REVIEW' && pendingAsks.length === 0 && (
+                  card that is waiting on them — on any column (spec 10.1).
+                  While the fullpage workspace is expanded the rail is the only
+                  decision surface (interim until Task 4 deletes the fullpage):
+                  rendering both would hold separate answer drafts. Keyed by
+                  card so answer drafts reset on sibling navigation. */}
+              {!state.reviewExpanded && pendingAsks.length > 0 && (
+                <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
+              )}
+              {item.status === 'REVIEW' && asksQuery.isSuccess && pendingAsks.length === 0 && (
                 <ShortApprovalView item={item} />
               )}
 

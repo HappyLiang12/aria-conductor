@@ -161,3 +161,57 @@ Stacked form: Title input; Description = large textarea (6-8 rows); Priority = s
 - Notification bell routes approval.requested to the overview; opening the exact Review card is done from the Waiting-on-you card (§5.4 reduction).
 - `kanban.assigning` is broadcast during the synchronous transition request; the initiating client sees the optimistic move instead (the indicator serves concurrent viewers).
 - Pre-existing (not introduced here): `approveApproval`/`rejectApproval` in `api/approvals.ts` try `/approve`|`/reject` endpoints that no controller exposes and fall back to `/decide` — follow-up cleanup candidate.
+
+## 10. Revision (2026-09-09): Review panel display rules + in-place expand
+
+Post-implementation review with the operator surfaced two UX gaps: ask-less Review
+cards showed no approval UI at all, and gate asks fired mid-run (agent blocked,
+waiting on the operator) were invisible on the board because badges and the
+Waiting-on-you aggregate only covered REVIEW cards. This revision supersedes the
+conflicting parts of §4.3, §5.2 and §5.4.
+
+### 10.1 Panel display rules (supersedes §5.2 gating, extends §5.4)
+
+- Any card in ANY column with one or more PENDING asks shows the amber `N asks`
+  badge on the card face and the decision zone when opened (fixes mid-run
+  invisibility: an agent blocked on its approval gate is visible immediately).
+- Every Review-column card always shows an approval surface:
+  - with PENDING asks: the full decision zone (unchanged);
+  - without asks: a short view — "Run completed — quick decision", one summary
+    line (agent, completed time, run link) and three actions: Approve
+    (transition DONE), Request changes (feedback → transition TODO), Deny
+    (transition CANCELLED). All through the existing transition endpoint.
+- Waiting-on-you aggregation counts PENDING asks across ALL cards, not only
+  Review cards.
+
+### 10.2 Auto REVIEW_REQUEST ask (extends §4.3)
+
+A listener on `KanbanItemTransitionedEvent` (IN_PROGRESS → REVIEW) creates a
+`REVIEW_REQUEST` ask when the card has no PENDING asks: content = run completion
+summary, contextMd = run report/trajectory digest, linked to the run. Idempotent.
+Cleanup needs no new logic: request-changes marks PENDING asks stale via the
+existing `markStale`, cancel auto-denies via the existing `denyPending`.
+
+### 10.3 In-place expand (supersedes the overlay in §5.2 / decision D5 detail)
+
+Expand no longer opens a fixed full-screen overlay. On Expand: the TaskDrawer
+collapses, the expanded item id enters DrawerContext (`reviewTargetId`), and the
+Overview main column renders `ReviewWorkspace` in-flow (markdown pane left,
+decision rail right — including the short view for ask-less cards) while the
+side widgets reflow into the bottom strip. RailNav and TopBar stay visible and
+untouched at all times. Collapse returns to the two-column layout and reopens
+the drawer on the same card. Transitions are pure CSS: `grid-template-columns`
+280 ms ease on the layout container, fade+rise entry for the workspace, fade-in
+for the widget strip — no animation library. prev/next moves to the workspace
+header (removed from the drawer). The Expand affordance only renders on the
+overview route (the board's home); leaving REVIEW auto-exits the workspace
+(unchanged effect).
+
+### 10.4 Testing additions
+
+- Frontend: badge/decision-zone visibility on non-Review columns; short view on
+  ask-less Review cards (actions call the transition endpoint); Waiting-on-you
+  aggregate over all cards; ReviewWorkspace renders in-flow with strip present;
+  collapse reopens the drawer.
+- Backend: auto-ask listener unit tests (creates once, idempotent, content
+  fields, no creation when pending asks exist).

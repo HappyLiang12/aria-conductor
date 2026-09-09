@@ -63,11 +63,11 @@ beforeEach(() => {
 });
 
 describe('ExecutiveSummary Waiting-on-you signal', () => {
-  it('aggregates pending asks across REVIEW cards and opens the first one on click', async () => {
+  it('aggregates pending asks across all cards and opens the first one on click', async () => {
     const user = userEvent.setup();
     mockedListKanbanItems.mockResolvedValue([
       mkItem({ id: 'r1', status: 'REVIEW', pendingAskCount: 2 }),
-      mkItem({ id: 'r2', status: 'TODO' }),
+      mkItem({ id: 'r2', status: 'TODO', pendingAskCount: 3 }), // mid-run gate ask
     ]);
     renderSummary();
 
@@ -75,8 +75,8 @@ describe('ExecutiveSummary Waiting-on-you signal', () => {
     const stat = label.closest('.stat') as HTMLElement;
     // The label mounts before the kanban-items query resolves — wait for the
     // aggregated ask count, then assert the rest of the same committed render.
-    await waitFor(() => expect(stat).toHaveTextContent('2'));
-    expect(stat).toHaveTextContent('Review cards need a decision');
+    await waitFor(() => expect(stat).toHaveTextContent('5'));
+    expect(stat).toHaveTextContent('Cards need a decision');
     // Amber styling + clickable affordance when work is waiting.
     expect(stat.className).toContain('amber');
     expect(stat.className).toContain('clickable');

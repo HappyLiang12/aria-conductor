@@ -75,11 +75,12 @@ export default function ExecutiveSummary() {
   const totalRuns = runs?.length ?? 0;
   const knowledgeCount = knowledge?.length ?? 0;
 
-  // Single HITL signal: every ask waiting on the operator lives on a kanban
-  // card in the Review column; the card click opens the first one.
-  const reviewCards = (kanbanItems ?? []).filter((i) => i.status === 'REVIEW');
-  const waitingAsks = reviewCards.reduce((sum, i) => sum + (i.pendingAskCount ?? 0), 0);
-  const firstReviewCard: KanbanItem | undefined = reviewCards[0];
+  // Single HITL signal: every ask waiting on the operator, on cards in ANY
+  // column (mid-run gate asks included); the click opens the first card
+  // that has pending asks.
+  const cardsWithAsks = (kanbanItems ?? []).filter((i) => (i.pendingAskCount ?? 0) > 0);
+  const waitingAsks = cardsWithAsks.reduce((sum, i) => sum + (i.pendingAskCount ?? 0), 0);
+  const firstReviewCard: KanbanItem | undefined = cardsWithAsks[0];
 
   return (
     <section className="panel" id="panel-exec">
@@ -96,7 +97,7 @@ export default function ExecutiveSummary() {
         <StatCell
           label="Waiting on you"
           value={waitingAsks}
-          detail={waitingAsks > 0 ? 'Review cards need a decision' : 'Nothing pending'}
+          detail={waitingAsks > 0 ? 'Cards need a decision' : 'Nothing pending'}
           variant={waitingAsks > 0 ? 'amber' : undefined}
           onClick={firstReviewCard ? () => dispatchOpenTaskDrawer(firstReviewCard.id) : undefined}
         />

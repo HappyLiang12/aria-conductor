@@ -4,15 +4,11 @@ import {
   getKanbanItem,
   transitionKanbanItem,
 } from '../api/kanban';
-import {
-  listAsksByKanbanItem,
-  answerAsk,
-  approveApproval,
-  rejectApproval,
-} from '../api/approvals';
+import { listAsksByKanbanItem } from '../api/approvals';
 import { useDrawerContext } from './DrawerContext';
 import { MarkdownViewer } from './MarkdownViewer';
-import type { Approval, KanbanItem, KanbanPriority, KanbanStatus } from '../types';
+import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                   */
@@ -33,12 +29,6 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
   MEDIUM: 'pill',
   HIGH: 'pill warn',
   CRITICAL: 'pill danger',
-};
-
-const ASK_TYPE_LABEL: Record<string, string> = {
-  QUESTION: 'Question',
-  REVIEW_REQUEST: 'Review',
-  APPROVAL: 'Approval',
 };
 
 // Mirror of the backend ALLOWED_TRANSITIONS — drives the drawer's transition
@@ -97,8 +87,6 @@ export function TaskDrawer() {
   const queryClient = useQueryClient();
 
   const [comment, setComment] = useState('');
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [changeFeedback, setChangeFeedback] = useState('');
 
   const taskQuery = useQuery({
     queryKey: ['kanban', 'item', itemId],
@@ -137,22 +125,6 @@ export function TaskDrawer() {
     },
   });
 
-  // Ask resolution: gate approvals go through the decide endpoints; QUESTION
-  // asks (free-text answers allowed on any PENDING ask) use /answer. Rejecting
-  // an APPROVAL ask is the deny semantics.
-  const resolveAsk = useMutation({
-    mutationFn: ({ ask, approved, answer }: { ask: Approval; approved: boolean; answer?: string }) =>
-      ask.askType === 'QUESTION'
-        ? answerAsk(ask.id, { approved, answer })
-        : approved
-          ? approveApproval(ask.id, answer)
-          : rejectApproval(ask.id, answer),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['kanban'] });
-      queryClient.invalidateQueries({ queryKey: ['approvals'] });
-    },
-  });
-
   // Review siblings come from the board list cache so the operator can walk
   // every card waiting on them without closing the drawer.
   const reviewSiblings = (queryClient.getQueryData<KanbanItem[]>(['kanban-items']) ?? []).filter(
@@ -164,8 +136,6 @@ export function TaskDrawer() {
     siblingIndex >= 0 && siblingIndex < reviewSiblings.length - 1
       ? reviewSiblings[siblingIndex + 1]
       : null;
-
-  const answerOf = (ask: Approval) => answers[ask.id] || undefined;
 
   const parsed = useMemo(() => parseLabels(item), [item]);
 
@@ -195,84 +165,12 @@ export function TaskDrawer() {
     ?.response?.data?.error;
 
   // Shared between the collapsed drawer body and the full-page review rail so
-  // both surfaces always offer the exact same decisions.
-  const renderDecisionZone = () => (
-    <div className="decision-zone">
-      <div className="dz-title">⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks</div>
-      {pendingAsks.map((ask) => (
-        <div key={ask.id} className="ask-card">
-          <div className="ask-q">
-            {ASK_TYPE_LABEL[ask.askType ?? 'APPROVAL']}: {ask.content?.slice(0, 160)}
-          </div>
-          {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
-          <textarea
-            className="dod-textarea"
-            rows={2}
-            aria-label={`Answer for ask ${ask.id}`}
-            placeholder="Answer / feedback (optional)"
-            value={answers[ask.id] ?? ''}
-            onChange={(e) => setAnswers((prev) => ({ ...prev, [ask.id]: e.target.value }))}
-          />
-          <div className="ask-actions">
-            <button
-              className="btn primary"
-              disabled={resolveAsk.isPending}
-              onClick={() => resolveAsk.mutate({ ask, approved: true, answer: answerOf(ask) })}
-            >
-              Approve
-            </button>
-            <button
-              className="btn"
-              disabled={resolveAsk.isPending}
-              onClick={() => resolveAsk.mutate({ ask, approved: false, answer: answerOf(ask) })}
-            >
-              Deny
-            </button>
-          </div>
-        </div>
-      ))}
-      <div className="ask-actions dz-footer">
-        <button
-          className="btn primary"
-          disabled={resolveAsk.isPending}
-          onClick={() =>
-            pendingAsks.forEach((a) =>
-              resolveAsk.mutate({ ask: a, approved: true, answer: answerOf(a) }),
-            )
-          }
-        >
-          ✓ Approve all
-        </button>
-        <textarea
-          className="dod-textarea"
-          rows={2}
-          aria-label="Request-changes feedback"
-          placeholder="What should change? (sent back to the agent)"
-          value={changeFeedback}
-          onChange={(e) => setChangeFeedback(e.target.value)}
-        />
-        <button
-          className="btn"
-          disabled={transitionMutation.isPending}
-          onClick={() => {
-            if (!item) return;
-            transitionMutation.mutate({
-              id: item.id,
-              status: 'TODO',
-              feedback: changeFeedback.trim() || undefined,
-            });
-            setChangeFeedback('');
-          }}
-        >
-          ✎ Request changes
-        </button>
-      </div>
-    </div>
-  );
+  // both surfaces always offer the exact same decisions. Delegates to the
+  // shared DecisionPanel (Task 4 removes this wrapper with the fullpage JSX).
+  const renderDecisionZone = () => <DecisionPanel item={item!} pendingAsks={pendingAsks} />;
 
   const goToSibling = (sibling: KanbanItem | null) => {
     if (!sibling) return;
-    setAnswers({});
     openTaskDrawer(sibling.id);
   };
 
@@ -369,7 +267,10 @@ export function TaskDrawer() {
             <>
               {/* Review decision zone: the first thing an operator sees on a
                   card that is waiting on them — on any column (spec 10.1). */}
-              {pendingAsks.length > 0 && renderDecisionZone()}
+              {pendingAsks.length > 0 && <DecisionPanel item={item} pendingAsks={pendingAsks} />}
+              {item.status === 'REVIEW' && pendingAsks.length === 0 && (
+                <ShortApprovalView item={item} />
+              )}
 
               {/* Status row */}
               <div className="section-h">Status</div>

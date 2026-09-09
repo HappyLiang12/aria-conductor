@@ -292,15 +292,15 @@ describe('TaskDrawer review decision zone', () => {
     expect(mockedRejectApproval).not.toHaveBeenCalled();
   });
 
-  it('Request changes sends the card back to TODO with the typed feedback', async () => {
+  it('Request changes (short view) sends the card back to TODO with the typed feedback', async () => {
     const user = userEvent.setup();
-    mockedListAsks.mockResolvedValue([
-      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'ship it' }),
-    ]);
+    // Ask-less Review card: the short approval view carries the Request-changes affordance.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW' }));
+    mockedListAsks.mockResolvedValue([]);
     renderDrawer();
     openTaskDrawerEvent();
 
-    await screen.findByText(/NEEDS YOUR DECISION/);
+    await screen.findByText(/Run completed/);
     await user.type(screen.getByLabelText('Request-changes feedback'), 'fix the flaky test');
     await user.click(screen.getByRole('button', { name: /request changes/i }));
 

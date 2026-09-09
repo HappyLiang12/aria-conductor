@@ -1,0 +1,94 @@
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { transitionKanbanItem } from '../api/kanban';
+import { answerAsk, approveApproval, rejectApproval } from '../api/approvals';
+import type { Approval, KanbanItem, KanbanStatus } from '../types';
+
+interface PanelProps {
+  item: KanbanItem;
+  pendingAsks: Approval[];
+}
+
+/** Ask decision surface - used by the collapsed drawer and the ReviewWorkspace rail. */
+export function DecisionPanel({ item, pendingAsks }: PanelProps) {
+  const queryClient = useQueryClient();
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const resolveAsk = useMutation({
+    mutationFn: ({ ask, approved, answer }: { ask: Approval; approved: boolean; answer?: string }) =>
+      ask.askType === 'QUESTION'
+        ? answerAsk(ask.id, { approved, answer })
+        : approved
+          ? approveApproval(ask.id, answer)
+          : rejectApproval(ask.id, answer),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['kanban'] });
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    },
+  });
+
+  return (
+    <div className="decision-zone">
+      <div className="dz-title">⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks</div>
+      {pendingAsks.map((ask) => (
+        <div key={ask.id} className="ask-card">
+          <div className="ask-q">
+            {ask.askType === 'QUESTION' ? 'Question' : ask.askType === 'REVIEW_REQUEST' ? 'Review' : 'Approval'}
+            : {ask.content?.slice(0, 160)}
+          </div>
+          {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
+          <textarea
+            className="dod-textarea"
+            rows={2}
+            aria-label={`Answer for ask ${ask.id}`}
+            placeholder="Answer / feedback (optional)"
+            value={answers[ask.id] ?? ''}
+            onChange={(e) => setAnswers((prev) => ({ ...prev, [ask.id]: e.target.value }))}
+          />
+          <div className="ask-actions">
+            <button className="btn primary" onClick={() => resolveAsk.mutate({ ask, approved: true, answer: answers[ask.id] || undefined })}>Approve</button>
+            <button className="btn" onClick={() => resolveAsk.mutate({ ask, approved: false, answer: answers[ask.id] || undefined })}>Deny</button>
+          </div>
+        </div>
+      ))}
+      <button className="btn primary" onClick={() => pendingAsks.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }))}>
+        ✓ Approve all
+      </button>
+    </div>
+  );
+}
+
+/** Quick decision surface for ask-less Review cards (spec 10.1). */
+export function ShortApprovalView({ item }: { item: KanbanItem }) {
+  const queryClient = useQueryClient();
+  const [feedback, setFeedback] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const move = useMutation({
+    mutationFn: ({ status, feedback: fb }: { status: KanbanStatus; feedback?: string }) =>
+      transitionKanbanItem(item.id, { status, feedback: fb }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['kanban-items'] }),
+    onError: () => setError('Action rejected — the card is unchanged.'),
+  });
+
+  return (
+    <div className="decision-zone short-view">
+      <div className="dz-title">Run completed — quick decision</div>
+      <div className="ask-ctx">
+        agent {item.assignee ?? 'n/a'} · run {item.linkedRunId ? item.linkedRunId.slice(0, 8) : '—'}
+      </div>
+      <textarea
+        className="dod-textarea"
+        rows={2}
+        aria-label="Request-changes feedback"
+        placeholder="What should change? (sent back to the agent)"
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+      />
+      {error && <div className="kanban-form-error">{error}</div>}
+      <div className="ask-actions">
+        <button className="btn primary" onClick={() => move.mutate({ status: 'DONE' })}>Approve</button>
+        <button className="btn" onClick={() => { move.mutate({ status: 'TODO', feedback: feedback.trim() || undefined }); setFeedback(''); }}>Request changes</button>
+        <button className="btn danger" onClick={() => move.mutate({ status: 'CANCELLED' })}>Deny</button>
+      </div>
+    </div>
+  );
+}

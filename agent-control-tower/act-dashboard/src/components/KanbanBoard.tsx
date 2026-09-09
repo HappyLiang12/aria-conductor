@@ -173,11 +173,11 @@ export default function KanbanBoard() {
     },
     onError: (err: unknown) => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
-      // Prefer the backend's rejection reason (same axios shape as TaskDrawer's
-      // errMsg); fall back to the generic snap-back message.
-      const reason = (err as { response?: { data?: { error?: string } } } | null)
-        ?.response?.data?.error;
-      setError(reason ?? 'Move rejected — the card is back in its column.');
+      // GlobalExceptionHandler puts the rejection reason in `message` (`error`
+      // carries only the HTTP reason phrase); same axios shape as TaskDrawer.
+      const data = (err as { response?: { data?: { message?: string; error?: string } } } | null)
+        ?.response?.data;
+      setError(data?.message ?? data?.error ?? 'Move rejected — the card is back in its column.');
     },
   });
 

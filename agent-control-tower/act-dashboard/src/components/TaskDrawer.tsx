@@ -289,6 +289,15 @@ export function TaskDrawer() {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, state.reviewExpanded, closeReviewMode]);
 
+  // Leaving REVIEW (e.g. "Approve all" resolved the asks) exits review mode so
+  // the fullpage workspace and OverviewPage's bottom widget strip don't linger
+  // on a card that no longer needs a decision.
+  useEffect(() => {
+    if (open && state.reviewExpanded && item && item.status !== 'REVIEW') {
+      closeReviewMode();
+    }
+  }, [open, state.reviewExpanded, item, closeReviewMode]);
+
   return (
     <>
       {open && (

@@ -117,6 +117,17 @@ describe('TaskDrawer review decision zone', () => {
     expect(screen.getByRole('button', { name: /expand/i })).toBeInTheDocument();
   });
 
+  it('shows the decision zone on an IN_PROGRESS card when it has pending asks', async () => {
+    mockedGetKanbanItem.mockResolvedValue({ ...mkItem(), status: 'IN_PROGRESS', pendingAskCount: 1 });
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a9', askType: 'APPROVAL', content: 'gate approval mid-run', status: 'PENDING' }),
+    ]);
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText(/NEEDS YOUR DECISION/)).toBeInTheDocument();
+  });
+
   it('shows no decision zone for a non-REVIEW card', async () => {
     mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'TODO' }));
     renderDrawer();

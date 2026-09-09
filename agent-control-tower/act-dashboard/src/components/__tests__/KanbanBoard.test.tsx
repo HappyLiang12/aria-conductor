@@ -305,6 +305,11 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     expect(screen.getByText('2 asks')).toBeInTheDocument();
   });
 
+  it('shows the asks badge on an IN_PROGRESS card with pending asks (mid-run gate)', async () => {
+    await renderBoard([baseItem({ id: 'k-ip', status: 'IN_PROGRESS', pendingAskCount: 1 })]);
+    expect(screen.getByText('1 asks')).toBeInTheDocument();
+  });
+
   it('drop on a legal target calls transitionKanbanItem(id, {status: target})', async () => {
     const { transitionKanbanItem } = await import('../../api/kanban');
     vi.mocked(transitionKanbanItem).mockResolvedValueOnce(baseItem({ status: 'IN_PROGRESS' }));

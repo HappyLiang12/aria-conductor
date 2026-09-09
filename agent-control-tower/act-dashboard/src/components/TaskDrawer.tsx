@@ -109,11 +109,12 @@ export function TaskDrawer() {
 
   const item = taskQuery.data;
 
-  // HITL asks attached to this card — only fetched while it sits in Review.
+  // HITL asks attached to this card — fetched whenever the drawer is open,
+  // because asks may sit on any column (mid-run gate approvals included).
   const asksQuery = useQuery({
     queryKey: ['kanban', 'asks', itemId],
     queryFn: () => listAsksByKanbanItem(itemId as string),
-    enabled: open && Boolean(itemId) && item?.status === 'REVIEW',
+    enabled: open && Boolean(itemId),
   });
   const pendingAsks = (asksQuery.data ?? []).filter((a) => a.status === 'PENDING');
 
@@ -367,8 +368,8 @@ export function TaskDrawer() {
           {item && (
             <>
               {/* Review decision zone: the first thing an operator sees on a
-                  card that is waiting on them. */}
-              {item.status === 'REVIEW' && pendingAsks.length > 0 && renderDecisionZone()}
+                  card that is waiting on them — on any column (spec 10.1). */}
+              {pendingAsks.length > 0 && renderDecisionZone()}
 
               {/* Status row */}
               <div className="section-h">Status</div>

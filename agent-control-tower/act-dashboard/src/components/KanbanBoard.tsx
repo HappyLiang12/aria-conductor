@@ -318,7 +318,7 @@ export default function KanbanBoard() {
                       <div className="gateline" />
                       <div className="id">{item.id.slice(0, 8)}</div>
                       <div className="t">{item.title}</div>
-                      {item.status === 'REVIEW' && !!item.pendingAskCount && (
+                      {!!item.pendingAskCount && (
                         <span className="pill warn">{item.pendingAskCount} asks</span>
                       )}
                       {flash?.itemId === item.id && flash.kind === 'assign' && (

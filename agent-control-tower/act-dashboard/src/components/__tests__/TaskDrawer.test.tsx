@@ -3,7 +3,7 @@ import { render, screen, within, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TaskDrawer } from '../TaskDrawer';
-import { DrawerProvider, TASK_DRAWER_EVENT } from '../DrawerContext';
+import { DrawerProvider, TASK_DRAWER_EVENT, useDrawerContext } from '../DrawerContext';
 import type { Approval, KanbanItem } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
@@ -72,10 +72,22 @@ function renderDrawer() {
     <QueryClientProvider client={qc}>
       <DrawerProvider>
         <TaskDrawer />
+        <StateProbe />
       </DrawerProvider>
     </QueryClientProvider>,
   );
   return { ...utils, qc };
+}
+
+/** Exposes DrawerContext state so tests can assert the in-place review target. */
+function StateProbe() {
+  const { state } = useDrawerContext();
+  return (
+    <div>
+      <span data-testid="task-open">{String(state.taskDrawer.open)}</span>
+      <span data-testid="review-target">{state.reviewTargetId ?? ''}</span>
+    </div>
+  );
 }
 
 /** The canonical open path: DrawerContext listens for the window event. */
@@ -139,7 +151,7 @@ describe('TaskDrawer review decision zone', () => {
     expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
   });
 
-  it('expand renders the full-page review workspace; collapse returns to the drawer', async () => {
+  it('Expand collapses the drawer and sets the in-place review target (spec 10.3)', async () => {
     const user = userEvent.setup();
     mockedListAsks.mockResolvedValue([
       mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'spec v2' }),
@@ -148,68 +160,13 @@ describe('TaskDrawer review decision zone', () => {
     openTaskDrawerEvent();
 
     await screen.findByText(/NEEDS YOUR DECISION/);
-    expect(document.querySelector('.review-fullpage')).toBeNull();
+    expect(screen.getByTestId('review-target').textContent).toBe('');
 
     await user.click(screen.getByRole('button', { name: /expand/i }));
-    expect(document.querySelector('.review-fullpage')).not.toBeNull();
-    expect(document.querySelector('.spec-review-markdown')).not.toBeNull();
-
-    await user.click(screen.getByRole('button', { name: /collapse/i }));
-    expect(document.querySelector('.review-fullpage')).toBeNull();
-    // The collapsed drawer is still open with its decision zone.
-    expect(screen.getByText(/NEEDS YOUR DECISION/)).toBeInTheDocument();
-  });
-
-  it('closes the full-page review once the card leaves REVIEW (ask resolved)', async () => {
-    const user = userEvent.setup();
-    // Initial load: REVIEW with one ask. After the ask resolves, the
-    // invalidated queries refetch: item comes back DONE, asks come back [].
-    mockedGetKanbanItem.mockResolvedValueOnce(mkItem());
-    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'DONE' }));
-    mockedListAsks.mockResolvedValueOnce([
-      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'ship it' }),
-    ]);
-    mockedListAsks.mockResolvedValue([]);
-    renderDrawer();
-    openTaskDrawerEvent();
-
-    await screen.findByText(/NEEDS YOUR DECISION/);
-    await user.click(screen.getByRole('button', { name: /expand/i }));
-    const fullpage = document.querySelector('.review-fullpage') as HTMLElement;
-    expect(fullpage).not.toBeNull();
-
-    await user.click(within(fullpage.querySelector('.ask-card') as HTMLElement).getByRole('button', { name: 'Approve' }));
-    await waitFor(() => expect(mockedApproveApproval).toHaveBeenCalledWith('a1', undefined));
-
-    // The stale workspace must not linger with already-decided asks.
-    await waitFor(() => expect(document.querySelector('.review-fullpage')).toBeNull());
-    // The collapsed drawer itself stays open.
-    expect(screen.getByText('Spec task')).toBeInTheDocument();
-  });
-
-  it('Escape closes the full-page review workspace but leaves the drawer open', async () => {
-    const user = userEvent.setup();
-    mockedListAsks.mockResolvedValue([
-      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'ship it' }),
-    ]);
-    renderDrawer();
-    openTaskDrawerEvent();
-
-    await screen.findByText(/NEEDS YOUR DECISION/);
-    await user.click(screen.getByRole('button', { name: /expand/i }));
-    expect(document.querySelector('.review-fullpage')).not.toBeNull();
-
-    // Escape originates inside the fullpage and bubbles to window, mirroring
-    // a real keypress with focus in the review workspace. Only the expanded
-    // mode may exit — the drawer itself must stay open.
-    act(() => {
-      (document.querySelector('.review-fullpage') as HTMLElement).dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
-      );
-    });
-
-    expect(document.querySelector('.review-fullpage')).toBeNull();
-    expect(screen.getByText(/NEEDS YOUR DECISION/)).toBeInTheDocument();
+    // The drawer hands over to the in-place ReviewWorkspace: it closes itself
+    // and the context records which card is under review.
+    expect(screen.getByTestId('task-open').textContent).toBe('false');
+    expect(screen.getByTestId('review-target').textContent).toBe('task-1');
   });
 
   it('Approve on an APPROVAL ask calls approveApproval (gate semantics), not answerAsk', async () => {
@@ -327,24 +284,5 @@ describe('TaskDrawer review decision zone', () => {
 
     act(() => resolveAsks([]));
     expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
-  });
-
-  it('navigates to the next REVIEW sibling from the kanban-items cache', async () => {
-    const user = userEvent.setup();
-    mockedGetKanbanItem.mockResolvedValue(mkItem());
-    const { qc } = renderDrawer();
-    qc.setQueryData(['kanban-items'], [
-      mkItem(),
-      mkItem({ id: 'task-2', title: 'Second review' }),
-      mkItem({ id: 'task-3', status: 'TODO' }),
-    ]);
-    openTaskDrawerEvent();
-
-    await screen.findByText('Spec task');
-    // task-1 is the first REVIEW sibling: prev disabled, next targets task-2.
-    expect(screen.getByRole('button', { name: /prev/i })).toBeDisabled();
-    await user.click(screen.getByRole('button', { name: /next/i }));
-
-    await waitFor(() => expect(mockedGetKanbanItem).toHaveBeenCalledWith('task-2'));
   });
 });

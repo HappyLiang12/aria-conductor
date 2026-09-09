@@ -28,54 +28,64 @@ function esc(target: EventTarget = window) {
   });
 }
 
-/** Probe for the full-page review-mode state machine. */
+/** Probe for the in-place review-mode state machine (spec 10.3). */
 function ReviewProbe() {
   const { state, openTaskDrawer, openReviewMode, closeReviewMode, closeTaskDrawer } =
     useDrawerContext();
   return (
     <div>
       <span data-testid="task-open">{String(state.taskDrawer.open)}</span>
-      <span data-testid="review-expanded">{String(state.reviewExpanded)}</span>
-      <button data-testid="open-task" onClick={() => openTaskDrawer('k-1')} />
-      <button data-testid="open-review" onClick={openReviewMode} />
+      <span data-testid="task-item">{state.taskDrawer.itemId ?? ''}</span>
+      <span data-testid="review-target">{state.reviewTargetId ?? ''}</span>
+      <button data-testid="open-task" onClick={() => openTaskDrawer('k-prev')} />
+      <button data-testid="open-review" onClick={() => openReviewMode('k1')} />
       <button data-testid="close-review" onClick={closeReviewMode} />
       <button data-testid="close-task" onClick={closeTaskDrawer} />
     </div>
   );
 }
 
-describe('DrawerContext review mode', () => {
-  it('opens and closes review mode without touching the drawer slot', () => {
+describe('DrawerContext review mode (in-place expand, spec 10.3)', () => {
+  it('openReviewMode sets the review target AND collapses the drawer', () => {
     const { getByTestId } = render(
       <DrawerProvider>
         <ReviewProbe />
       </DrawerProvider>,
     );
-    expect(getByTestId('review-expanded').textContent).toBe('false');
-
     act(() => getByTestId('open-task').click());
     act(() => getByTestId('open-review').click());
-    expect(getByTestId('review-expanded').textContent).toBe('true');
-    expect(getByTestId('task-open').textContent).toBe('true');
-
-    act(() => getByTestId('close-review').click());
-    expect(getByTestId('review-expanded').textContent).toBe('false');
-    expect(getByTestId('task-open').textContent).toBe('true');
+    expect(getByTestId('review-target').textContent).toBe('k1');
+    expect(getByTestId('task-open').textContent).toBe('false');
   });
 
-  it('closing the task drawer also resets reviewExpanded', () => {
+  it('closeReviewMode clears the target AND reopens the drawer on that card', () => {
     const { getByTestId } = render(
       <DrawerProvider>
         <ReviewProbe />
       </DrawerProvider>,
     );
-    act(() => getByTestId('open-task').click());
     act(() => getByTestId('open-review').click());
-    expect(getByTestId('review-expanded').textContent).toBe('true');
+    expect(getByTestId('review-target').textContent).toBe('k1');
+
+    act(() => getByTestId('close-review').click());
+    expect(getByTestId('review-target').textContent).toBe('');
+    expect(getByTestId('task-open').textContent).toBe('true');
+    // Collapse reopens the drawer on the card that was under review.
+    expect(getByTestId('task-item').textContent).toBe('k1');
+  });
+
+  it('closing the task drawer also clears the review target', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-target').textContent).toBe('k1');
 
     act(() => getByTestId('close-task').click());
     expect(getByTestId('task-open').textContent).toBe('false');
-    expect(getByTestId('review-expanded').textContent).toBe('false');
+    expect(getByTestId('review-target').textContent).toBe('');
   });
 });
 

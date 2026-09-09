@@ -4,29 +4,38 @@ import AgentTeam from '../components/AgentTeam';
 import ReviewQueue from '../components/ReviewQueue';
 import ActivityTimeline from '../components/ActivityTimeline';
 import MorningBriefing from '../components/MorningBriefing';
+import { ReviewWorkspace } from '../components/ReviewWorkspace';
 import { useDrawerContext } from '../components/DrawerContext';
 
 export default function OverviewPage() {
   const { state } = useDrawerContext();
-  // Full-page review mode: the review workspace takes over; widgets reflow to
-  // a single bottom strip instead of sharing the screen with the board.
-  const expanded = state.taskDrawer.open && state.reviewExpanded;
+  // Spec 10.3 in-place expand: while a review target is set, the
+  // ReviewWorkspace is rendered inside the main column (no fixed overlay) and
+  // the widgets reflow into a single bottom strip. The grid column change is
+  // animated via the .layout transition rule in styles/index.css.
+  const reviewId = state.reviewTargetId;
   return (
     <div className="view-zone" data-view="overview">
       <div
         className="layout"
         style={{
-          gridTemplateColumns: expanded
+          gridTemplateColumns: reviewId
             ? 'minmax(0, 1fr)'
             : 'minmax(0, 1fr) minmax(320px, 380px)',
         }}
       >
         <div className="col">
-          <ExecutiveSummary />
-          <KanbanBoard />
-          {!expanded && <MorningBriefing />}
+          {reviewId ? (
+            <ReviewWorkspace itemId={reviewId} />
+          ) : (
+            <>
+              <ExecutiveSummary />
+              <KanbanBoard />
+              <MorningBriefing />
+            </>
+          )}
         </div>
-        {!expanded && (
+        {!reviewId && (
           <div className="col">
             <AgentTeam />
             <ReviewQueue />
@@ -34,11 +43,10 @@ export default function OverviewPage() {
           </div>
         )}
       </div>
-      {expanded && (
-        // D5: widgets reflow to the bottom while the review is expanded. The
-        // strip gets a deterministic height so .review-fullpage (fixed overlay)
-        // can end above it — see the bottom: 196px rule in styles/index.css;
-        // keep the 180px height + 16px gap in sync with that value.
+      {reviewId && (
+        // D5: widgets reflow to the bottom while the review workspace is in
+        // place. Height stays deterministic (180px + scroll) so the strip is
+        // visible without ever covering the workspace above it.
         <div
           className="expanded-strip layout"
           style={{

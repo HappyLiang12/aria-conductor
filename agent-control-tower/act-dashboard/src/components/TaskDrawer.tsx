@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getKanbanItem,
@@ -6,7 +6,6 @@ import {
 } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
 import { useDrawerContext } from './DrawerContext';
-import { MarkdownViewer } from './MarkdownViewer';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
@@ -81,8 +80,7 @@ function parseLabels(item: KanbanItem | undefined): ParsedLabels {
 /* -------------------------------------------------------------------------- */
 
 export function TaskDrawer() {
-  const { state, closeTaskDrawer, openTaskDrawer, openReviewMode, closeReviewMode } =
-    useDrawerContext();
+  const { state, closeTaskDrawer, openReviewMode } = useDrawerContext();
   const { open, itemId } = state.taskDrawer;
   const queryClient = useQueryClient();
 
@@ -125,18 +123,6 @@ export function TaskDrawer() {
     },
   });
 
-  // Review siblings come from the board list cache so the operator can walk
-  // every card waiting on them without closing the drawer.
-  const reviewSiblings = (queryClient.getQueryData<KanbanItem[]>(['kanban-items']) ?? []).filter(
-    (it) => it.status === 'REVIEW',
-  );
-  const siblingIndex = reviewSiblings.findIndex((it) => it.id === itemId);
-  const prevSibling = siblingIndex > 0 ? reviewSiblings[siblingIndex - 1] : null;
-  const nextSibling =
-    siblingIndex >= 0 && siblingIndex < reviewSiblings.length - 1
-      ? reviewSiblings[siblingIndex + 1]
-      : null;
-
   const parsed = useMemo(() => parseLabels(item), [item]);
 
   // Acceptance criteria: derive simple states from item labels OR a default checklist.
@@ -164,39 +150,6 @@ export function TaskDrawer() {
   const errMsg = (transitionMutation.error as { response?: { data?: { error?: string } } } | null)
     ?.response?.data?.error;
 
-  // Shared between the collapsed drawer body and the full-page review rail so
-  // both surfaces always offer the exact same decisions. Delegates to the
-  // shared DecisionPanel (Task 4 removes this wrapper with the fullpage JSX).
-  const renderDecisionZone = () => <DecisionPanel item={item!} pendingAsks={pendingAsks} />;
-
-  const goToSibling = (sibling: KanbanItem | null) => {
-    if (!sibling) return;
-    openTaskDrawer(sibling.id);
-  };
-
-  // While the full-page review workspace is expanded, Escape exits the
-  // expanded mode only (back to the drawer) — it must NOT close the whole
-  // drawer. DrawerContext's global Escape guard already skips events whose
-  // target sits inside `.review-fullpage`, so the two listeners don't fight.
-  useEffect(() => {
-    if (!open || !state.reviewExpanded) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      closeReviewMode();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, state.reviewExpanded, closeReviewMode]);
-
-  // Leaving REVIEW (e.g. "Approve all" resolved the asks) exits review mode so
-  // the fullpage workspace and OverviewPage's bottom widget strip don't linger
-  // on a card that no longer needs a decision.
-  useEffect(() => {
-    if (open && state.reviewExpanded && item && item.status !== 'REVIEW') {
-      closeReviewMode();
-    }
-  }, [open, state.reviewExpanded, item, closeReviewMode]);
-
   return (
     <>
       {open && (
@@ -221,28 +174,12 @@ export function TaskDrawer() {
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
-          {item?.status === 'REVIEW' && (prevSibling || nextSibling) && (
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                className="btn"
-                disabled={!prevSibling}
-                aria-label="Previous review card"
-                onClick={() => goToSibling(prevSibling)}
-              >
-                ← prev
-              </button>
-              <button
-                className="btn"
-                disabled={!nextSibling}
-                aria-label="Next review card"
-                onClick={() => goToSibling(nextSibling)}
-              >
-                next →
-              </button>
-            </div>
-          )}
           {item?.status === 'REVIEW' && (
-            <button className="btn" onClick={openReviewMode} aria-label="Expand review">
+            <button
+              className="btn"
+              onClick={() => item && openReviewMode(item.id)}
+              aria-label="Expand review"
+            >
               ⤢ Expand
             </button>
           )}
@@ -267,11 +204,10 @@ export function TaskDrawer() {
             <>
               {/* Review decision zone: the first thing an operator sees on a
                   card that is waiting on them — on any column (spec 10.1).
-                  While the fullpage workspace is expanded the rail is the only
-                  decision surface (interim until Task 4 deletes the fullpage):
-                  rendering both would hold separate answer drafts. Keyed by
+                  While the in-place ReviewWorkspace is open the drawer is
+                  closed entirely, so no zone gate is needed here. Keyed by
                   card so answer drafts reset on sibling navigation. */}
-              {!state.reviewExpanded && pendingAsks.length > 0 && (
+              {pendingAsks.length > 0 && (
                 <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
               )}
               {item.status === 'REVIEW' && asksQuery.isSuccess && pendingAsks.length === 0 && (
@@ -432,38 +368,6 @@ export function TaskDrawer() {
           </button>
         </footer>
       </aside>
-
-      {/* Full-page review workspace: expanded spec + the same decision rail.
-          Gated on the card still being in REVIEW so the stale workspace cannot
-          linger after an ask is resolved (e.g. "Approve all" moves the card to
-          DONE and the refetched item/asks close the workspace). */}
-      {open && state.reviewExpanded && item?.status === 'REVIEW' && (
-        <div
-          className="review-fullpage"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Review workspace"
-        >
-          <div className="rf-head">
-            <h3>{item.title}</h3>
-            <button className="btn" onClick={closeReviewMode}>
-              ⤡ Collapse
-            </button>
-          </div>
-          <div className="rf-body">
-            <div className="rf-spec">
-              <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
-            </div>
-            <div className="rf-decisions">
-              {pendingAsks.length > 0 ? (
-                renderDecisionZone()
-              ) : (
-                <div className="empty-state">No pending asks on this card.</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }

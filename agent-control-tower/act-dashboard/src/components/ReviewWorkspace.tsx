@@ -1,0 +1,127 @@
+import { useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getKanbanItem } from '../api/kanban';
+import { listAsksByKanbanItem } from '../api/approvals';
+import { MarkdownViewer } from './MarkdownViewer';
+import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { useDrawerContext } from './DrawerContext';
+import type { KanbanItem } from '../types';
+
+/**
+ * Spec 10.3: the expanded story card, rendered IN-FLOW inside the Overview
+ * layout (no fixed overlay) while DrawerContext.reviewTargetId is set.
+ * Prev/next walk sibling REVIEW cards in place; Collapse hands back to the
+ * drawer on the same card via closeReviewMode.
+ */
+export function ReviewWorkspace({ itemId }: { itemId: string }) {
+  const { openReviewMode, closeReviewMode } = useDrawerContext();
+  const queryClient = useQueryClient();
+
+  const itemQuery = useQuery({
+    queryKey: ['kanban', 'item', itemId],
+    queryFn: () => getKanbanItem(itemId),
+    retry: false,
+  });
+  const item = itemQuery.data;
+
+  const asksQuery = useQuery({
+    queryKey: ['kanban', 'asks', itemId],
+    queryFn: () => listAsksByKanbanItem(itemId),
+    enabled: Boolean(itemId),
+  });
+  const pendingAsks = (asksQuery.data ?? []).filter((a) => a.status === 'PENDING');
+
+  // Auto-exit when the card leaves REVIEW (e.g. the short-view Approve moved
+  // it to DONE): a stale workspace must not linger on a card that no longer
+  // needs a decision. closeReviewMode also reopens the drawer on the card.
+  useEffect(() => {
+    if (item && item.status !== 'REVIEW') closeReviewMode();
+  }, [item, closeReviewMode]);
+
+  // Review siblings come from the board list cache so the operator can walk
+  // every card waiting on them without leaving the workspace.
+  const siblings = useMemo(
+    () =>
+      (queryClient.getQueryData<KanbanItem[]>(['kanban-items']) ?? []).filter(
+        (i) => i.status === 'REVIEW',
+      ),
+    // itemQuery.data refreshes the sibling window whenever the card reloads
+    // (e.g. after a transition invalidates the cache).
+    [queryClient, itemQuery.data],
+  );
+  const siblingIndex = siblings.findIndex((i) => i.id === itemId);
+  const prevSibling = siblingIndex > 0 ? siblings[siblingIndex - 1] : undefined;
+  const nextSibling =
+    siblingIndex >= 0 && siblingIndex < siblings.length - 1
+      ? siblings[siblingIndex + 1]
+      : undefined;
+
+  if (!item) {
+    return (
+      <section className="panel review-workspace" data-testid="review-workspace">
+        <div className="loading-spinner" style={{ padding: 20 }}>
+          <div className="spinner" />
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className="panel review-workspace"
+      data-testid="review-workspace"
+      aria-label="Review workspace"
+    >
+      <div className="rw-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="id">TASK · {item.id.slice(0, 8).toUpperCase()}</div>
+          <h3
+            style={{
+              margin: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {item.title}
+          </h3>
+        </div>
+        <div className="rw-nav">
+          <button
+            className="btn"
+            disabled={!prevSibling}
+            aria-label="Previous review card"
+            onClick={() => prevSibling && openReviewMode(prevSibling.id)}
+          >
+            ← prev
+          </button>
+          <button
+            className="btn"
+            disabled={!nextSibling}
+            aria-label="Next review card"
+            onClick={() => nextSibling && openReviewMode(nextSibling.id)}
+          >
+            next →
+          </button>
+          <button className="btn" onClick={closeReviewMode} aria-label="Collapse review">
+            ⤡ Collapse
+          </button>
+        </div>
+      </div>
+      <div className="rw-body">
+        <div className="rf-spec">
+          <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
+        </div>
+        <div className="rf-decisions">
+          {pendingAsks.length > 0 ? (
+            <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
+          ) : (
+            <ShortApprovalView item={item} />
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default ReviewWorkspace;

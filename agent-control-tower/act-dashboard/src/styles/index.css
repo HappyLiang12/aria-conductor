@@ -2521,7 +2521,7 @@ body.light .error-state,
 body.light .btn-danger { color: #c2273a; }
 body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 
-/* === Kanban HITL: TaskDrawer decision zone + full-page review workspace === */
+/* === Kanban HITL: TaskDrawer decision zone + in-place review workspace === */
 .decision-zone { background: rgba(232,163,61,0.08); border: 1px solid rgba(232,163,61,0.4); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
 .decision-zone.short-view { border-style: dashed; }
 .dz-title { color: #e8a33d; font-weight: 700; margin-bottom: 8px; }
@@ -2531,20 +2531,21 @@ body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
 .ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
 .ask-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .ask-actions .dod-textarea { width: 100%; }
-/* Must stack ABOVE the task drawer (z-index 100) and its click-to-close
-   backdrop (99): any lower and the scrim dims the fullpage and swallows every
-   click (incl. Collapse) into "close drawer". Kept BELOW the agent drawer
-   stack (backdrop 109 / drawer 110) so the live agent drawer still overlays it.
-   COUPLING: bottom must clear OverviewPage's .expanded-strip (height 180px)
-   plus a 16px gap = 196px — the opaque overlay must never cover the reflowed
-   bottom widgets (spec D5). Keep in sync with OverviewPage.tsx. */
-.review-fullpage { position: fixed; top: 64px; left: 0; right: 0; bottom: 196px; background: var(--bg-1, #0d1426); z-index: 105; display: flex; flex-direction: column; padding: 16px; }
-.rf-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.rf-head h3 { margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rf-body { display: flex; gap: 16px; flex: 1; min-height: 0; }
-.rf-spec { flex: 1.4; overflow-y: auto; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 16px; }
-.rf-decisions { flex: 1; overflow-y: auto; min-width: 320px; }
-body.light .review-fullpage { background: #f4f6fb; }
+/* In-place expand (spec 10.3): the ReviewWorkspace renders INSIDE the Overview
+   layout while DrawerContext.reviewTargetId is set — no fixed positioning, no
+   z-index stack, no bottom-strip coupling. The grid-column transition gives
+   expand/collapse a smooth reflow; reviewIn fades + rises the workspace and
+   the reflowed widget strip in. */
+.layout { transition: grid-template-columns 280ms ease; }
+.review-workspace { animation: reviewIn 240ms ease; display: flex; flex-direction: column; gap: 12px; }
+@keyframes reviewIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.review-workspace .rw-head { display: flex; align-items: center; gap: 12px; }
+.review-workspace .rw-head h3 { margin: 0; }
+.review-workspace .rw-nav { margin-left: auto; display: flex; gap: 8px; }
+.review-workspace .rw-body { display: flex; gap: 16px; min-height: 420px; }
+.review-workspace .rf-spec { flex: 1.4; min-width: 0; overflow-y: auto; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 16px; max-height: 60vh; }
+.review-workspace .rf-decisions { flex: 1; min-width: 320px; overflow-y: auto; max-height: 60vh; }
+.expanded-strip { animation: reviewIn 240ms ease; }
 
 /* === Kanban HITL: clickable "Waiting on you" stat card (Task 15) === */
 .stat.clickable { cursor: pointer; transition: border-color .15s ease; }

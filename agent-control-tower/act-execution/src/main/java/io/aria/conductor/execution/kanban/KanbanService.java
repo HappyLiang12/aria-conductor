@@ -41,7 +41,10 @@ public class KanbanService {
                 KanbanStatus.REVIEW, KanbanStatus.DONE, KanbanStatus.CANCELLED));
         map.put(KanbanStatus.REVIEW, EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.TODO,
                 KanbanStatus.DONE, KanbanStatus.CANCELLED));
-        map.put(KanbanStatus.DONE, EnumSet.noneOf(KanbanStatus.class));
+        // DONE is re-doable (operator defect D3): redo re-enters the flow at
+        // Backlog or Todo and must be dispatched again explicitly — a finished
+        // card never jumps straight back into execution.
+        map.put(KanbanStatus.DONE, EnumSet.of(KanbanStatus.BACKLOG, KanbanStatus.TODO));
         map.put(KanbanStatus.CANCELLED, EnumSet.noneOf(KanbanStatus.class));
         // BLOCKED is retired: no outgoing transitions; V52 migrated rows to REVIEW.
         ALLOWED_TRANSITIONS = map;

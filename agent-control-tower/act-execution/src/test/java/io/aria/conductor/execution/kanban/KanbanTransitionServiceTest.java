@@ -316,6 +316,54 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
+    void doneToTodo_redoesWithAFreshRun() {
+        // Defect D3: a finished card is re-doable. Redo normalizes DONE -> TODO
+        // and then behaves exactly like a normal dispatch (fresh run).
+        card.setStatus(KanbanStatus.DONE);
+        card.setAssignee("dev-agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+        card.setLinkedRunId(RUN_ID.toString());
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().status(RunStatus.COMPLETED).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).comment("redo after demo").build());
+
+        // The completed run is never paused/resumed; a NEW run carries the redo.
+        verify(runService, never()).pauseRun(any());
+        verify(runService, never()).resumeRun(any());
+        verify(runService).createRun(any(CreateRunRequest.class));
+        verify(kanbanService).transition("c1", KanbanStatus.TODO, "redo after demo");
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "redo after demo");
+    }
+
+    @Test
+    void doneToBacklog_queuesWithoutAnyRun() {
+        card.setStatus(KanbanStatus.DONE);
+        card.setLinkedRunId(RUN_ID.toString());
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().status(RunStatus.COMPLETED).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).comment("park it").build());
+
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+        verify(runService, never()).pauseRun(any());
+        verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, "park it");
+    }
+
+    @Test
+    void doneToInProgress_isRejected() {
+        card.setStatus(KanbanStatus.DONE);
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
+    }
+
+    @Test
     void backlogToTodo_normalizesThenPicksUp() {
         card.setStatus(KanbanStatus.BACKLOG);
         card.setAgentTemplateId("ba-agent");

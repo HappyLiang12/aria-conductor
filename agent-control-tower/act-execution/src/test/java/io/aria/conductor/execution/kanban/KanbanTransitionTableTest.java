@@ -27,16 +27,28 @@ class KanbanTransitionTableTest {
             "TODO,CANCELLED",
             "IN_PROGRESS,CANCELLED",
             "REVIEW,CANCELLED",
-            "BACKLOG,CANCELLED"
+            "BACKLOG,CANCELLED",
+            // Operator-reported defect D3: a finished card must be re-doable.
+            // Redo re-enters the flow at Backlog or Todo; it never jumps back
+            // into execution directly.
+            "DONE,BACKLOG",
+            "DONE,TODO"
     })
     void allowsSpecTransitions(String from, String to) {
         assertThat(service.isValidTransition(KanbanStatus.valueOf(from), KanbanStatus.valueOf(to))).isTrue();
     }
 
     @Test
-    void terminalStatesHaveNoOutgoing() {
-        assertThat(service.isValidTransition(KanbanStatus.DONE, KanbanStatus.TODO)).isFalse();
+    void redoTargetsAreTheOnlyWayOutOfDone() {
+        assertThat(service.isValidTransition(KanbanStatus.DONE, KanbanStatus.IN_PROGRESS)).isFalse();
+        assertThat(service.isValidTransition(KanbanStatus.DONE, KanbanStatus.REVIEW)).isFalse();
+        assertThat(service.isValidTransition(KanbanStatus.DONE, KanbanStatus.CANCELLED)).isFalse();
+    }
+
+    @Test
+    void cancelledRemainsTerminal() {
         assertThat(service.isValidTransition(KanbanStatus.CANCELLED, KanbanStatus.TODO)).isFalse();
+        assertThat(service.isValidTransition(KanbanStatus.CANCELLED, KanbanStatus.BACKLOG)).isFalse();
     }
 
     @Test

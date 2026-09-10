@@ -345,7 +345,33 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     );
   });
 
-  it('drop on an ILLEGAL target (DONE card → TODO lane) does not call the API', async () => {
+  it('done card can be dragged back to BACKLOG for redo (defect D3)', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'BACKLOG' }));
+    const { container } = await renderBoard([
+      baseItem({ id: 'k-done', title: 'Finished', status: 'DONE' }),
+    ]);
+    const doneCard = container.querySelector('[data-card="k-done"]') as HTMLElement;
+    await dropOn(doneCard, screen.getByTestId('lane-BACKLOG'));
+    await waitFor(() =>
+      expect(transitionKanbanItem).toHaveBeenCalledWith('k-done', { status: 'BACKLOG' }),
+    );
+  });
+
+  it('done card can be dragged back to TODO for redo (defect D3)', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'TODO' }));
+    const { container } = await renderBoard([
+      baseItem({ id: 'k-done2', title: 'Finished again', status: 'DONE' }),
+    ]);
+    const doneCard = container.querySelector('[data-card="k-done2"]') as HTMLElement;
+    await dropOn(doneCard, screen.getByTestId('lane-TODO'));
+    await waitFor(() =>
+      expect(transitionKanbanItem).toHaveBeenCalledWith('k-done2', { status: 'TODO' }),
+    );
+  });
+
+  it('done card still cannot be dragged straight into In Progress', async () => {
     const { transitionKanbanItem } = await import('../../api/kanban');
     const { container } = await renderBoard([
       baseItem({ id: 'k-done', title: 'Finished', status: 'DONE' }),
@@ -353,10 +379,11 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     const card = container.querySelector('[data-card="k-done"]') as HTMLElement;
     fireEvent.dragStart(card);
     await flushDragState();
-    // While dragging, an illegal target lane dims via the drop-illegal affordance.
-    expect(screen.getByTestId('lane-TODO')).toHaveClass('drop-illegal');
-    fireEvent.dragOver(screen.getByTestId('lane-TODO'));
-    fireEvent.drop(screen.getByTestId('lane-TODO'));
+    // Redo must route through Backlog/Todo — a finished card never re-enters
+    // execution directly, so the lane dims and the drop is refused locally.
+    expect(screen.getByTestId('lane-IN_PROGRESS')).toHaveClass('drop-illegal');
+    fireEvent.dragOver(screen.getByTestId('lane-IN_PROGRESS'));
+    fireEvent.drop(screen.getByTestId('lane-IN_PROGRESS'));
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(transitionKanbanItem).not.toHaveBeenCalled();
   });

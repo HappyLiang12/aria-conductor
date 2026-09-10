@@ -39,7 +39,8 @@ const TRANSITIONS: Record<KanbanStatus, KanbanStatus[]> = {
   TODO: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
   IN_PROGRESS: ['TODO', 'BACKLOG', 'REVIEW', 'DONE', 'CANCELLED'],
   REVIEW: ['IN_PROGRESS', 'TODO', 'DONE', 'CANCELLED'],
-  DONE: [],
+  // Defect D3: a finished card can be sent back for redo (Backlog or Todo).
+  DONE: ['BACKLOG', 'TODO'],
   CANCELLED: [],
   BLOCKED: [],
 };

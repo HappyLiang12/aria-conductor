@@ -96,9 +96,11 @@ public class KanbanTransitionService {
                     pauseIfRunning(item);
                     yield kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                 }
-                // Normalize BACKLOG -> TODO first, then the pickup's TODO -> IN_PROGRESS
-                // step is a legal transition.
-                case BACKLOG -> {
+                // Normalize BACKLOG/DONE -> TODO first, then the pickup's
+                // TODO -> IN_PROGRESS step is a legal transition. DONE means
+                // "redo": the completed run stays as history and the pickup
+                // creates a fresh run for the new attempt (defect D3).
+                case BACKLOG, DONE -> {
                     kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                     yield pickup(item, request);
                 }

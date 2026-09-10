@@ -45,13 +45,13 @@ export default function OverviewPage() {
       </div>
       {reviewId && (
         // D5: widgets reflow to the bottom while the review workspace is in
-        // place. Height stays deterministic (180px + scroll) so the strip is
+        // place. Height stays deterministic (240px + scroll) so the strip is
         // visible without ever covering the workspace above it.
         <div
           className="expanded-strip layout"
           style={{
             gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            height: 180,
+            height: 240,
             overflowY: 'auto',
             boxSizing: 'border-box',
           }}

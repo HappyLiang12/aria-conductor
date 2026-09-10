@@ -165,6 +165,17 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
       </div>
       <div className="rw-body">
         <div className="rf-spec">
+          <div className="rf-meta">
+            <span className="pill">{item.status}</span>
+            <span className={item.priority === 'CRITICAL' || item.priority === 'HIGH' ? 'pill warn' : 'pill'}>
+              {item.priority}
+            </span>
+            <span className="owner">{item.assignee ? `@${item.assignee}` : 'unassigned'}</span>
+            {item.linkedRunId && (
+              <span className="owner cell-mono">run {item.linkedRunId.slice(0, 8)}</span>
+            )}
+            <span className="owner">updated {new Date(item.updatedAt).toLocaleString()}</span>
+          </div>
           <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
         </div>
         <div className="rf-decisions">

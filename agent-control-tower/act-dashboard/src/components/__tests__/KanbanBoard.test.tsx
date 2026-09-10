@@ -3,6 +3,7 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import KanbanBoard from '../KanbanBoard';
+import { DrawerProvider, useDrawerContext, type DrawerContextValue } from '../DrawerContext';
 import type { KanbanItem, WsEvent } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
@@ -53,10 +54,21 @@ vi.mock('../Layout', () => ({
   useWebSocketContext: () => mockCtx,
 }));
 
+// Captured drawer context so tests can assert openReviewMode/closeReviewMode effects.
+let drawerState: DrawerContextValue | null = null;
+
+function DrawerStateProbe() {
+  drawerState = useDrawerContext();
+  return null;
+}
+
 function ui(qc: QueryClient) {
   return render(
     <QueryClientProvider client={qc}>
-      <KanbanBoard />
+      <DrawerProvider>
+        <DrawerStateProbe />
+        <KanbanBoard />
+      </DrawerProvider>
     </QueryClientProvider>,
   );
 }
@@ -87,7 +99,9 @@ describe('KanbanBoard WS invalidation whitelist (S1)', () => {
         };
         rerender(
           <QueryClientProvider client={qc}>
-            <KanbanBoard />
+            <DrawerProvider>
+              <KanbanBoard />
+            </DrawerProvider>
           </QueryClientProvider>,
         );
       }
@@ -106,7 +120,9 @@ describe('KanbanBoard WS invalidation whitelist (S1)', () => {
       mockCtx = { lastMessage: { type: 'run.started', payload: { runId: 'r-1' }, timestamp: 't' }, isConnected: true };
       rerender(
         <QueryClientProvider client={qc}>
-          <KanbanBoard />
+          <DrawerProvider>
+            <KanbanBoard />
+          </DrawerProvider>
         </QueryClientProvider>,
       );
     });
@@ -114,7 +130,9 @@ describe('KanbanBoard WS invalidation whitelist (S1)', () => {
       mockCtx = { lastMessage: { type: 'kanban.transitioned', payload: { itemId: 'k-1' }, timestamp: 't2' }, isConnected: true };
       rerender(
         <QueryClientProvider client={qc}>
-          <KanbanBoard />
+          <DrawerProvider>
+            <KanbanBoard />
+          </DrawerProvider>
         </QueryClientProvider>,
       );
     });
@@ -218,7 +236,7 @@ describe('KanbanBoard live move feedback (S6)', () => {
 
     act(() => {
       mockCtx = { lastMessage: { type: 'kanban.transitioned', payload: { itemId: 'k-1', fromStatus: 'TODO', toStatus: 'IN_PROGRESS' }, timestamp: 't' }, isConnected: true };
-      rerender(<QueryClientProvider client={qc}><KanbanBoard /></QueryClientProvider>);
+      rerender(<QueryClientProvider client={qc}><DrawerProvider><KanbanBoard /></DrawerProvider></QueryClientProvider>);
     });
     const card = container.querySelector('[data-card="k-1"]');
     expect(card!.className).toMatch(/moving/);
@@ -245,7 +263,7 @@ describe('KanbanBoard assigning indicator (spec 4.2)', () => {
 
     act(() => {
       mockCtx = { lastMessage: { type: 'kanban.assigning', payload: { itemId: 'k-1' }, timestamp: 't' }, isConnected: true };
-      rerender(<QueryClientProvider client={qc}><KanbanBoard /></QueryClientProvider>);
+      rerender(<QueryClientProvider client={qc}><DrawerProvider><KanbanBoard /></DrawerProvider></QueryClientProvider>);
     });
 
     const card = container.querySelector('[data-card="k-1"]');
@@ -412,6 +430,38 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
   it('renders lastError on the card face', async () => {
     await renderBoard([baseItem({ lastError: 'Agent pickup failed: port 9300 busy' })]);
     expect(await screen.findByText(/port 9300 busy/)).toBeInTheDocument();
+  });
+
+  it('review card carries quick approve, request-changes and expand actions', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValueOnce(baseItem({ status: 'DONE' }));
+    const received: Array<Record<string, unknown>> = [];
+    const listener = (e: Event) => received.push((e as CustomEvent).detail);
+    window.addEventListener('act:open-task-drawer', listener);
+    try {
+      await renderBoard([baseItem({ status: 'REVIEW' })]);
+      // Quick approve on the card face -> DONE transition, no drawer.
+      await userEvent.click(screen.getByLabelText('Quick approve'));
+      await waitFor(() =>
+        expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'DONE' }),
+      );
+      expect(received).toHaveLength(0);
+      // ✎ opens the task drawer (feedback lives in the short view there).
+      await userEvent.click(screen.getByLabelText('Review or request changes'));
+      expect(received).toHaveLength(1);
+      expect(received[0]['itemId']).toBe('k-1');
+      // ⤢ opens the review workspace (reviewTargetId set, drawer stays closed).
+      await userEvent.click(screen.getByLabelText('Expand review workspace'));
+      expect(drawerState?.state.reviewTargetId).toBe('k-1');
+      expect(drawerState?.state.taskDrawer.open).toBe(false);
+    } finally {
+      window.removeEventListener('act:open-task-drawer', listener);
+    }
+  });
+
+  it('non-review cards do not render the quick approval row', async () => {
+    await renderBoard([baseItem()]); // TODO card
+    expect(screen.queryByLabelText('Quick approve')).not.toBeInTheDocument();
   });
 });
 

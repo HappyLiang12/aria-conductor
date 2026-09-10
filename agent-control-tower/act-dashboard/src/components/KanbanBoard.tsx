@@ -13,7 +13,7 @@ import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
 // that sent { id } silently swallowed every card click (TaskDrawer never opened).
-import { dispatchOpenTaskDrawer } from './DrawerContext';
+import { dispatchOpenTaskDrawer, useDrawerContext } from './DrawerContext';
 
 interface ColumnDef {
   key: KanbanStatus;
@@ -76,6 +76,7 @@ export default function KanbanBoard() {
   const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' | 'assign' } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
+  const { openReviewMode } = useDrawerContext();
 
   // S6: resolve linkedAgentId → agent name for attribution badges.
   const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: () => listAgents() });
@@ -342,6 +343,44 @@ export default function KanbanBoard() {
                           <span className="owner">@{item.assignee}</span>
                         )}
                       </div>
+                      {item.status === 'REVIEW' && (
+                        <div className="card-approve">
+                          <button
+                            className="cap-btn ok"
+                            title="Approve (complete task)"
+                            aria-label="Quick approve"
+                            disabled={transitionMutation.isPending}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              transitionMutation.mutate({ id: item.id, status: 'DONE' });
+                            }}
+                          >
+                            ✓ Approve
+                          </button>
+                          <button
+                            className="cap-btn"
+                            title="Review / request changes"
+                            aria-label="Review or request changes"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              dispatchOpenTaskDrawer(item.id);
+                            }}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            className="cap-btn"
+                            title="Expand review workspace"
+                            aria-label="Expand review workspace"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openReviewMode(item.id);
+                            }}
+                          >
+                            ⤢
+                          </button>
+                        </div>
+                      )}
                       {item.status !== 'DONE' && item.status !== 'CANCELLED' && (
                         <button
                           className="card-cancel"

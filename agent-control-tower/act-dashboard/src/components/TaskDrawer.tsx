@@ -6,8 +6,10 @@ import {
   transitionKanbanItem,
 } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
+import { getRun } from '../api/runs';
 import { useDrawerContext } from './DrawerContext';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { MarkdownViewer } from './MarkdownViewer';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -111,6 +113,17 @@ export function TaskDrawer() {
     enabled: open && Boolean(itemId),
   });
   const pendingAsks = (asksQuery.data ?? []).filter((a) => a.status === 'PENDING');
+
+  // Defect D4: the card's linked run is fetched on demand so the drawer can show
+  // the run's actual work output (status, effort, tokens, result) instead of an
+  // inert truncated id. Disabled when the card has no run link.
+  const runQuery = useQuery({
+    queryKey: ['runs', 'detail', item?.linkedRunId],
+    queryFn: () => getRun(item?.linkedRunId as string),
+    enabled: open && Boolean(item?.linkedRunId),
+    retry: false,
+  });
+  const linkedRun = runQuery.data;
 
   const transitionMutation = useMutation({
     mutationFn: ({
@@ -299,6 +312,59 @@ export function TaskDrawer() {
                   </div>
                 ))}
               </div>
+
+              {/* Linked run result (D4): the card detail must expose what the
+                  run actually produced, not just its id in Artifacts. */}
+              {item.linkedRunId && (
+                <div className="run-result">
+                  <div className="section-h">Run Result</div>
+                  {runQuery.isLoading && (
+                    <div
+                      style={{ fontSize: 11.5, color: 'var(--text-mute)', padding: '4px 2px' }}
+                    >
+                      Loading run…
+                    </div>
+                  )}
+                  {runQuery.isError && !runQuery.isLoading && (
+                    <div className="evidence-error">Failed to load run {item.linkedRunId.slice(0, 8)}.</div>
+                  )}
+                  {linkedRun && (
+                    <>
+                      <div className="run-meta">
+                        <span className="pill">{linkedRun.status}</span>
+                        <span className="cell-mono">Iter {linkedRun.iterationCount}</span>
+                        <span className="cell-mono">
+                          {linkedRun.totalTokensUsed.toLocaleString()} tokens
+                        </span>
+                        <span className="cell-mono">
+                          {linkedRun.completedAt
+                            ? new Date(linkedRun.completedAt).toLocaleString()
+                            : 'not finished'}
+                        </span>
+                      </div>
+                      {linkedRun.errorMessage && (
+                        <div
+                          className="evidence-error"
+                          style={{
+                            background: 'rgba(255,107,122,.06)',
+                            border: '1px solid rgba(255,107,122,.2)',
+                            borderRadius: 8,
+                            padding: '10px 12px',
+                            marginTop: 8,
+                          }}
+                        >
+                          {linkedRun.errorMessage}
+                        </div>
+                      )}
+                      {linkedRun.finalOutput && (
+                        <div className="artifact-result">
+                          <MarkdownViewer content={linkedRun.finalOutput} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               {/* Comments */}
               <div className="section-h">Comments</div>

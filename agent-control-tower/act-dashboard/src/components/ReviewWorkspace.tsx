@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getKanbanItem } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
+import { getRun } from '../api/runs';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
 import { useDrawerContext } from './DrawerContext';
@@ -30,6 +31,16 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
     enabled: Boolean(itemId),
   });
   const pendingAsks = (asksQuery.data ?? []).filter((a) => a.status === 'PENDING');
+
+  // Defect D4: the spec rail must show what the linked run produced, not just a
+  // truncated run id. Fetched only when the card actually carries a run link.
+  const runQuery = useQuery({
+    queryKey: ['runs', 'detail', item?.linkedRunId],
+    queryFn: () => getRun(item?.linkedRunId as string),
+    enabled: Boolean(item?.linkedRunId),
+    retry: false,
+  });
+  const linkedRun = runQuery.data;
 
   // Auto-exit when the card leaves REVIEW (e.g. the short-view Approve moved
   // it to DONE): a stale workspace must not linger on a card that no longer
@@ -177,6 +188,55 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
             <span className="owner">updated {new Date(item.updatedAt).toLocaleString()}</span>
           </div>
           <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
+
+          {/* Linked run result (D4): reviewers need the run's actual output to
+              judge the card, not just the truncated run id in the meta row. */}
+          {item.linkedRunId && (
+            <div className="run-result">
+              <div className="section-h">Run Result</div>
+              {runQuery.isLoading && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-mute)' }}>Loading run…</div>
+              )}
+              {runQuery.isError && !runQuery.isLoading && (
+                <div className="evidence-error">Failed to load run {item.linkedRunId.slice(0, 8)}.</div>
+              )}
+              {linkedRun && (
+                <>
+                  <div className="rf-meta">
+                    <span className="pill">{linkedRun.status}</span>
+                    <span className="owner cell-mono">Iter {linkedRun.iterationCount}</span>
+                    <span className="owner cell-mono">
+                      {linkedRun.totalTokensUsed.toLocaleString()} tokens
+                    </span>
+                    <span className="owner cell-mono">
+                      {linkedRun.completedAt
+                        ? new Date(linkedRun.completedAt).toLocaleString()
+                        : 'not finished'}
+                    </span>
+                  </div>
+                  {linkedRun.errorMessage && (
+                    <div
+                      className="evidence-error"
+                      style={{
+                        background: 'rgba(255,107,122,.06)',
+                        border: '1px solid rgba(255,107,122,.2)',
+                        borderRadius: 8,
+                        padding: '10px 12px',
+                        marginTop: 8,
+                      }}
+                    >
+                      {linkedRun.errorMessage}
+                    </div>
+                  )}
+                  {linkedRun.finalOutput && (
+                    <div className="artifact-result">
+                      <MarkdownViewer content={linkedRun.finalOutput} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
         <div className="rf-decisions">
           {pendingAsks.length > 0 ? (

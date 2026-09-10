@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { TaskDrawer } from '../TaskDrawer';
 import { DrawerProvider, TASK_DRAWER_EVENT, useDrawerContext } from '../DrawerContext';
-import type { Approval, KanbanItem } from '../../types';
+import type { Approval, KanbanItem, Run } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
   getKanbanItem: vi.fn(),
@@ -17,6 +17,9 @@ vi.mock('../../api/approvals', () => ({
   approveApproval: vi.fn(),
   rejectApproval: vi.fn(),
 }));
+vi.mock('../../api/runs', () => ({
+  getRun: vi.fn(),
+}));
 
 import { getKanbanItem, transitionKanbanItem } from '../../api/kanban';
 import {
@@ -25,6 +28,7 @@ import {
   approveApproval,
   rejectApproval,
 } from '../../api/approvals';
+import { getRun } from '../../api/runs';
 
 const mockedGetKanbanItem = vi.mocked(getKanbanItem);
 const mockedTransition = vi.mocked(transitionKanbanItem);
@@ -32,6 +36,7 @@ const mockedListAsks = vi.mocked(listAsksByKanbanItem);
 const mockedAnswerAsk = vi.mocked(answerAsk);
 const mockedApproveApproval = vi.mocked(approveApproval);
 const mockedRejectApproval = vi.mocked(rejectApproval);
+const mockedGetRun = vi.mocked(getRun);
 
 function mkItem(over: Partial<KanbanItem> = {}): KanbanItem {
   return {
@@ -61,6 +66,23 @@ function mkAsk(over: Partial<Approval> = {}): Approval {
     decidedAt: null,
     expiresAt: '2026-09-08T01:00:00Z',
     kanbanItemId: 'task-1',
+    ...over,
+  };
+}
+
+function mkRun(over: Partial<Run> = {}): Run {
+  return {
+    id: 'run-7',
+    agentId: 'a-1',
+    status: 'COMPLETED',
+    promptSeed: 'Deliver the spec',
+    maxIterations: 15,
+    totalTokensUsed: 1234,
+    iterationCount: 4,
+    errorMessage: null,
+    finalOutput: 'Delivered the spec deliverable',
+    createdAt: '2026-09-08T00:00:00Z',
+    completedAt: '2026-09-08T00:10:00Z',
     ...over,
   };
 }
@@ -117,6 +139,61 @@ beforeEach(() => {
   mockedAnswerAsk.mockResolvedValue(mkAsk());
   mockedApproveApproval.mockResolvedValue(mkAsk({ status: 'APPROVED' }));
   mockedRejectApproval.mockResolvedValue(mkAsk({ status: 'DENIED' }));
+  mockedGetRun.mockResolvedValue(mkRun());
+});
+
+// Defect D4: a card that carries a linked run must surface that run's work
+// output (status, effort, tokens, completion time, final output / error) in the
+// drawer instead of an inert truncated id under Artifacts.
+describe('TaskDrawer linked run result (D4)', () => {
+  it('render_taskDrawer_showsLinkedRunResult', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(
+      mkRun({ finalOutput: 'Delivered the spec deliverable' }),
+    );
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('Run Result')).toBeInTheDocument();
+    // The run query resolves asynchronously: wait for the status pill.
+    expect(await screen.findByText('COMPLETED')).toBeInTheDocument();
+    expect(mockedGetRun).toHaveBeenCalledWith('run-7');
+    // Status pill + effort counters + completion time, scoped to the run
+    // section so the drawer's own "Updated <date>" line cannot satisfy them.
+    const runSection = document.querySelector('.run-result') as HTMLElement;
+    expect(runSection).not.toBeNull();
+    expect(within(runSection).getByText('COMPLETED')).toBeInTheDocument();
+    expect(within(runSection).getByText(/iter 4/i)).toBeInTheDocument();
+    expect(within(runSection).getByText(/1,?234/)).toBeInTheDocument();
+    expect(within(runSection).getByText(/2026/)).toBeInTheDocument();
+    // The run output is rendered through MarkdownViewer, not as raw text.
+    const output = runSection.querySelector('.spec-review-markdown') as HTMLElement;
+    expect(output).not.toBeNull();
+    expect(output.textContent).toContain('Delivered the spec deliverable');
+    // The existing Artifacts entry stays.
+    expect(screen.getByText(/Run ·/)).toBeInTheDocument();
+  });
+
+  it('render_taskDrawer_showsLinkedRunError', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(
+      mkRun({ status: 'FAILED', finalOutput: null, errorMessage: 'tool call blew up' }),
+    );
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('tool call blew up')).toBeInTheDocument();
+  });
+
+  it('render_taskDrawer_withoutRunId_doesNotFetchRun', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: null }));
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText('Spec task');
+    expect(mockedGetRun).not.toHaveBeenCalled();
+    expect(screen.queryByText('Run Result')).not.toBeInTheDocument();
+  });
 });
 
 describe('TaskDrawer review decision zone', () => {

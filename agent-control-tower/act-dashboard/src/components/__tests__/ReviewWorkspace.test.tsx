@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReviewWorkspace } from '../ReviewWorkspace';
 import { DrawerProvider, useDrawerContext } from '../DrawerContext';
-import type { Approval, KanbanItem } from '../../types';
+import type { Approval, KanbanItem, Run } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
   getKanbanItem: vi.fn(),
@@ -16,12 +16,17 @@ vi.mock('../../api/approvals', () => ({
   approveApproval: vi.fn(),
   rejectApproval: vi.fn(),
 }));
+vi.mock('../../api/runs', () => ({
+  getRun: vi.fn(),
+}));
 
 import { getKanbanItem } from '../../api/kanban';
 import { listAsksByKanbanItem } from '../../api/approvals';
+import { getRun } from '../../api/runs';
 
 const mockedGetKanbanItem = vi.mocked(getKanbanItem);
 const mockedListAsks = vi.mocked(listAsksByKanbanItem);
+const mockedGetRun = vi.mocked(getRun);
 
 function mkItem(over: Partial<KanbanItem> = {}): KanbanItem {
   return {
@@ -51,6 +56,23 @@ function mkAsk(over: Partial<Approval> = {}): Approval {
     decidedAt: null,
     expiresAt: '2026-09-08T01:00:00Z',
     kanbanItemId: 'task-1',
+    ...over,
+  };
+}
+
+function mkRun(over: Partial<Run> = {}): Run {
+  return {
+    id: 'run-7',
+    agentId: 'a-1',
+    status: 'COMPLETED',
+    promptSeed: 'Deliver the spec',
+    maxIterations: 15,
+    totalTokensUsed: 1234,
+    iterationCount: 4,
+    errorMessage: null,
+    finalOutput: 'Delivered the spec deliverable',
+    createdAt: '2026-09-08T00:00:00Z',
+    completedAt: '2026-09-08T00:10:00Z',
     ...over,
   };
 }
@@ -93,6 +115,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedGetKanbanItem.mockResolvedValue(mkItem());
   mockedListAsks.mockResolvedValue([]);
+  mockedGetRun.mockResolvedValue(mkRun());
 });
 
 describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
@@ -112,6 +135,30 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     // The spec pane shows the first pending ask's content over the description.
     const spec = container.querySelector('.rf-spec .spec-review-markdown') as HTMLElement;
     expect(spec.textContent).toContain('run completed');
+  });
+
+  it('spec rail shows the linked run status and output (D4)', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({ finalOutput: 'Reviewed deliverable output' }));
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    expect(await screen.findByText('COMPLETED')).toBeInTheDocument();
+    expect(mockedGetRun).toHaveBeenCalledWith('run-7');
+    const output = document.querySelector('.run-result .spec-review-markdown') as HTMLElement;
+    expect(output).not.toBeNull();
+    expect(output.textContent).toContain('Reviewed deliverable output');
+  });
+
+  it('spec rail has no run section when the card has no linked run (D4)', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: null }));
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    expect(document.querySelector('.run-result')).toBeNull();
+    expect(mockedGetRun).not.toHaveBeenCalled();
   });
 
   it('shows the ShortApprovalView when the card has no asks (no empty state)', async () => {

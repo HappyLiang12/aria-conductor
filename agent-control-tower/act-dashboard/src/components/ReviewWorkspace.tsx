@@ -5,7 +5,7 @@ import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
-import { useDrawerContext } from './DrawerContext';
+import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import type { KanbanItem } from '../types';
 
 /**
@@ -148,6 +148,16 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
           </h3>
         </div>
         <div className="rw-nav">
+          {/* Defect D7: entry point into the linked agent's live stream. */}
+          {item.linkedAgentId && (
+            <button
+              className="btn"
+              aria-label="Open live activity"
+              onClick={() => dispatchOpenAgentDrawer(item.linkedAgentId as string)}
+            >
+              ▶ Live activity
+            </button>
+          )}
           <button
             className="btn"
             disabled={!prevSibling}

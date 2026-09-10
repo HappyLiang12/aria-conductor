@@ -7,7 +7,7 @@ import {
 } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
-import { useDrawerContext } from './DrawerContext';
+import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
@@ -195,6 +195,17 @@ export function TaskDrawer() {
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
+          {/* Defect D7: entry point into the linked agent's Live Activity
+              Stream — only meaningful when the card carries an agent. */}
+          {item?.linkedAgentId && (
+            <button
+              className="btn"
+              aria-label="Open live activity"
+              onClick={() => dispatchOpenAgentDrawer(item.linkedAgentId as string)}
+            >
+              ▶ Live activity
+            </button>
+          )}
           {onOverview && item?.status === 'REVIEW' && (
             <button
               className="btn"

@@ -161,6 +161,35 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(mockedGetRun).not.toHaveBeenCalled();
   });
 
+  it('header nav opens the linked agent live activity stream (D7)', async () => {
+    const user = userEvent.setup();
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedAgentId: 'a-9' }));
+    const received: Array<Record<string, unknown>> = [];
+    const listener = (e: Event) => received.push((e as CustomEvent).detail);
+    window.addEventListener('act:open-agent-drawer', listener);
+    try {
+      renderWorkspace();
+      await openReview();
+      await screen.findByText('Spec task');
+
+      await user.click(screen.getByLabelText('Open live activity'));
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toEqual({ agentId: 'a-9' });
+    } finally {
+      window.removeEventListener('act:open-agent-drawer', listener);
+    }
+  });
+
+  it('header nav hides the live activity entry without a linked agent (D7)', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedAgentId: null }));
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    expect(screen.queryByLabelText('Open live activity')).not.toBeInTheDocument();
+  });
+
   it('shows the ShortApprovalView when the card has no asks (no empty state)', async () => {
     mockedListAsks.mockResolvedValue([]);
     renderWorkspace();

@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import org.springframework.stereotype.Component;
 
@@ -12,9 +13,17 @@ import java.util.List;
  * excluded too — RunService.createRun rejects it, so picking an unhealthy
  * agent only guarantees a failed pickup — while a degraded agent is still
  * better than no pickup.
+ *
+ * <p>Defect D2: the pool must contain real workers only. Agents without a
+ * model (the reserved Aria operator assistant) or with the `mock` test model
+ * would "complete" a run instantly without doing any work, so an unassigned
+ * card must never be handed to them.
  */
 @Component
 public class AgentRepositoryCandidates implements AgentPickerService.Candidates {
+
+    /** Model value used by seeded/test agents that return canned responses. */
+    private static final String MOCK_MODEL = "mock";
 
     private final AgentRepository agentRepository;
 
@@ -27,7 +36,15 @@ public class AgentRepositoryCandidates implements AgentPickerService.Candidates 
         return agentRepository.findByHealthStatusNot(HealthStatus.RETIRED).stream()
                 .filter(a -> a.getHealthStatus() == HealthStatus.HEALTHY
                           || a.getHealthStatus() == HealthStatus.DEGRADED)
+                .filter(AgentRepositoryCandidates::isRealWorker)
                 .map(a -> new AgentPickerService.Candidate(a.getId(), a.getName()))
                 .toList();
+    }
+
+    private static boolean isRealWorker(Agent agent) {
+        String model = agent.getModel();
+        return model != null
+                && !model.isBlank()
+                && !MOCK_MODEL.equalsIgnoreCase(model.trim());
     }
 }

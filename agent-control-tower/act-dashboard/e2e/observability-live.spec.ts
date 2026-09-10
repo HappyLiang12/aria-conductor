@@ -130,10 +130,21 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
   });
 
   test('Kanban live transition: card moves columns (final state)', async ({ page, request }) => {
-    const item = await seedKanbanItem(request, { title: 'e2e-obs-live-move' });
+    // HITL redesign: TODO → IN_PROGRESS is a dispatch (two-phase pickup), so
+    // the card is pinned to THIS fresh agent (AgentPickerService matches
+    // agentTemplateId against agent names) — without pinning the picker falls
+    // back to the Aria assistant, whose real-LLM run moves cards asynchronously
+    // via its kanban MCP tools.
+    const agent = await seedAgent(request);
+    const item = await seedKanbanItem(request, {
+      title: 'e2e-obs-live-move',
+      agentTemplateId: agent.name,
+    });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await expect(page.locator(`[data-col="todo"] [data-card="${item.id}"]`)).toBeVisible();
+    // Column keys render UPPERCASE under the 5-column model (BACKLOG/TODO/
+    // IN_PROGRESS/REVIEW/DONE — data-col attributes).
+    await expect(page.locator(`[data-col="TODO"] [data-card="${item.id}"]`)).toBeVisible();
 
     const { status } = await apiCall(request, 'POST', `/kanban/items/${item.id}/transition`, {
       status: 'IN_PROGRESS',
@@ -147,9 +158,9 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     // covered deterministically by KanbanBoard.test.tsx ("flashes the moved
     // card on kanban.transitioned and clears after ~1.2s"), so here we assert
     // the observable final state: present in the new column, gone from todo.
-    const moved = page.locator(`[data-col="in_progress"] [data-card="${item.id}"]`);
+    const moved = page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`);
     await expect(moved).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator(`[data-col="todo"] [data-card="${item.id}"]`)).toHaveCount(0);
+    await expect(page.locator(`[data-col="TODO"] [data-card="${item.id}"]`)).toHaveCount(0);
   });
 });
 

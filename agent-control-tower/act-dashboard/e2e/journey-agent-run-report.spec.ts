@@ -49,28 +49,44 @@ test('2. run starts and reaches a real state (fails fast without a key)', async 
 });
 
 test('3. approvals surface stays consistent with the API', async ({ page, request }) => {
-  // Tool-call approvals only fire during real LLM tool use; assert consistency,
-  // not the (unreachable) approval itself.
+  // HITL redesign: the approvals page is retired — /approvals redirects to the
+  // board, whose Review column (per-card asks) is the single approvals surface.
+  // The REST API remains the ask source, so consistency still means: every ask
+  // advertised on a Review card is a real PENDING approval in the API.
   const { status } = await apiCall(request, 'GET', '/approvals');
   expect(status).toBe(200);
 
   await page.goto('/approvals');
+  await expect(page).toHaveURL(/\/$/);
   await page.waitForLoadState('networkidle');
-
-  const pendingTab = page.locator('.tab-btn').filter({ hasText: 'Pending' });
-  await expect(pendingTab).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible({ timeout: 15_000 });
 
   // Count-agnostic mirror check: the approvals queue is SHARED (live chains
-  // decide gates concurrently, and /approvals returns every status on a dirty
-  // DB), so no fixed total can be asserted. Re-read the API and the rendered
-  // tab count together until they agree — the tab must reflect the live
-  // PENDING queue at some moment within the window.
+  // decide gates concurrently, and the local DB is dirty), so no fixed total
+  // can be asserted. Instead: every Review card that advertises "n asks" must
+  // find at least that many PENDING approvals through the API. The converse is
+  // deliberately not required — mid-run gate asks also attach to cards in
+  // other columns.
   await expect
     .poll(async () => {
-      const { data: now } = await apiCall(request, 'GET', '/approvals');
-      const apiPending = (Array.isArray(now) ? now : []).filter((a) => a?.status === 'PENDING').length;
-      const shown = Number(((await pendingTab.textContent()) ?? '').match(/Pending \((\d+)\)/)?.[1] ?? -1);
-      return shown === apiPending;
+      const cards = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('[data-col="REVIEW"] [data-card]')).map((el) => ({
+          id: el.getAttribute('data-card'),
+          asks: Number(
+            Array.from(el.querySelectorAll('.pill.warn'))
+              .map((p) => p.textContent ?? '')
+              .find((t) => /\d+\s*asks?/.test(t))
+              ?.match(/(\d+)/)?.[1] ?? 0,
+          ),
+        })),
+      );
+      for (const card of cards) {
+        if (!card.id || card.asks <= 0) continue;
+        const { data } = await apiCall(request, 'GET', `/approvals?kanbanItemId=${card.id}`);
+        const pending = (Array.isArray(data) ? data : []).filter((a) => a?.status === 'PENDING').length;
+        if (pending < card.asks) return false;
+      }
+      return true;
     }, { timeout: 20_000 })
     .toBe(true);
 });

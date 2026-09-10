@@ -12,9 +12,14 @@ test.describe('Overview dashboard', () => {
 
     const exec = page.locator('#panel-exec');
     await expect(exec.locator('h2')).toContainText('Executive Summary');
-    for (const label of ['Active Agents', 'Pending Approvals', 'Total Runs']) {
+    // HITL redesign: the old 'Pending Approvals' stat became 'Waiting on you'
+    // (aggregates pendingAskCount over cards in ANY column).
+    for (const label of ['Active Agents', 'Waiting on you', 'Total Runs']) {
       await expect(exec.locator('.stat').filter({ hasText: label })).toBeVisible();
     }
+    // The approvals surface moved into the board: the Review Queue panel lists
+    // cards waiting on a decision.
+    await expect(page.locator('#panel-queue h2')).toContainText('Review Queue');
     // Panels nest, so the section.panel+hasText filter also matches the outer
     // wrapper; assert the board heading at page level instead.
     await expect(page.locator('h2').filter({ hasText: 'Kanban Board' }).first()).toBeVisible();

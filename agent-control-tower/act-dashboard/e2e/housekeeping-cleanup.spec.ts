@@ -1,17 +1,29 @@
 import { test, expect } from '@playwright/test';
-import { apiCall, seedAgent, seedKanbanItem, uniqueName } from './fixtures';
+import { apiCall, pollRunTerminal, seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
 
 /**
  * Housekeeping e2e (no-LLM gate track): scan renders counts, kanban quick-clear
  * removes finished cards through the batch endpoint, and crew bulk-retire
  * retires leftover e2e agents. All destructive paths go through confirm modals.
+ *
+ * ADAPTATION NOTE (kanban HITL redesign): the scan's kanban category counts
+ * DONE + CANCELLED cards, and CANCELLED cards render nowhere on the board
+ * (cancel is an action, not a column). TODO→IN_PROGRESS is now a two-phase
+ * pickup dispatch that needs an eligible healthy agent — on a fresh CI DB the
+ * un-pinned old seeding silently stayed TODO (lastError) and TODO→DONE is
+ * illegal, so nothing ever reached the scan category. Seeding now either
+ * cancels directly (scan test) or pins a fresh agent and waits for the linked
+ * run to go terminal before DONE (quick-clear test — the DONE guard rejects
+ * while the linked run is still active).
  */
 test.describe('Housekeeping cleanup', () => {
   test('Ops panel scans and shows category counts', async ({ page, request }) => {
-    // Guarantee at least one finished kanban card so the scan has something to show.
+    // Guarantee at least one finished kanban card so the scan has something to
+    // show: TODO → CANCELLED is legal without a run and counts in the scan's
+    // kanban category (DONE + CANCELLED).
     const item = await seedKanbanItem(request, { title: uniqueName('e2e-hk-scan') });
-    await apiCall(request, 'POST', `/kanban/items/${item.id}/transition`, { status: 'IN_PROGRESS' });
-    await apiCall(request, 'POST', `/kanban/items/${item.id}/transition`, { status: 'DONE' });
+    const cancelled = await transitionKanban(request, item.id, 'CANCELLED');
+    expect(cancelled.status).toBe(200);
 
     await page.goto('/ops');
     await page.waitForLoadState('networkidle');
@@ -28,9 +40,23 @@ test.describe('Housekeeping cleanup', () => {
   });
 
   test('kanban quick-clear removes finished cards via confirm modal', async ({ page, request }) => {
-    const done = await seedKanbanItem(request, { title: uniqueName('e2e-hk-clear') });
-    await apiCall(request, 'POST', `/kanban/items/${done.id}/transition`, { status: 'IN_PROGRESS' });
-    await apiCall(request, 'POST', `/kanban/items/${done.id}/transition`, { status: 'DONE' });
+    // The card must be VISIBLE before the clear (cancelled cards never render),
+    // so drive it to DONE: pin a fresh healthy agent for the pickup, then wait
+    // for the linked run to go terminal before the DONE transition.
+    const agent = await seedAgent(request, uniqueName('e2e-hk-clear-agent'));
+    const done = await seedKanbanItem(request, {
+      title: uniqueName('e2e-hk-clear'),
+      agentTemplateId: agent.name,
+    });
+    const dispatched = await transitionKanban(request, done.id, 'IN_PROGRESS');
+    expect(dispatched.status).toBe(200);
+    // A pickup pre-validation failure returns 200 with the card still in TODO
+    // (lastError set) — fail fast here instead of timing out on the run poll.
+    expect(dispatched.data.status).toBe('IN_PROGRESS');
+    expect(dispatched.data.linkedRunId).toBeTruthy();
+    await pollRunTerminal(request, dispatched.data.linkedRunId, 60_000);
+    const finished = await transitionKanban(request, done.id, 'DONE');
+    expect(finished.status).toBe(200);
 
     await page.goto('/');
     await page.waitForLoadState('networkidle');

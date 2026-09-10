@@ -68,6 +68,19 @@ public class KanbanTransitionService {
         this.eventPublisher = eventPublisher;
     }
 
+    /**
+     * Dispatch a card that is already sitting in Todo (spec D3: Todo entry is a
+     * dispatch intent). Used by the create path — a card created directly in
+     * Todo must be picked up, not left waiting for a manual drag (defect D1).
+     */
+    @Transactional
+    public KanbanItem dispatch(String id, String agentTemplateId) {
+        KanbanItem item = kanbanRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("KanbanItem", id));
+        item.setLastError(null);
+        return pickup(item, TransitionRequest.builder().agentTemplateId(agentTemplateId).build());
+    }
+
     @Transactional
     public KanbanItem transition(String id, TransitionRequest request) {
         KanbanStatus to = request.getStatus();

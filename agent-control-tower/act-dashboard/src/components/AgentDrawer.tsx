@@ -86,7 +86,13 @@ function progressToEntry(
 
 function pickAgentRuns(runs: Run[] | undefined, agentId: string | null): Run[] {
   if (!runs || !agentId) return [];
-  return runs.filter((r) => r.agentId === agentId).slice(0, 5);
+  // GET /api/v1/runs returns rows unsorted, but the drawer's replay target is
+  // the agent's LATEST run — normalise to newest-first here so agentRuns[0] is
+  // always the most recent run regardless of backend ordering.
+  return runs
+    .filter((r) => r.agentId === agentId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 5);
 }
 
 function clampPercent(n: number): number {
@@ -136,46 +142,41 @@ export function AgentDrawer() {
     (r) => r.status === 'RUNNING' || r.status === 'INITIALIZING' || r.status === 'PAUSED'
   );
 
-  // Task 6: replay the persisted progress backlog for the active run instead of
-  // seeding a fake demo connect line. Also re-arms the runId+seq dedupe so
-  // backlog rows and live frames dedupe against the same watermark.
-  // Review fix: remember the last non-null run id so the query invalidation at
-  // run completion (activeRun → undefined) cannot wipe the stream; replay keys
-  // on the remembered id, scoped to the agent it belonged to.
-  const lastRunIdRef = useRef<string | null>(null);
-  const lastRunAgentRef = useRef<string | null>(null);
-  if (activeRun?.id) {
-    lastRunIdRef.current = activeRun.id;
-    lastRunAgentRef.current = agentId;
-  }
-  const replayRunId =
-    activeRun?.id ?? (lastRunAgentRef.current === agentId ? lastRunIdRef.current : null);
+  // Task 6 / defect D5: replay target = the run whose persisted progress
+  // backlog (GET /runs/{id}/progress) the stream mirrors. Prefer the active run;
+  // otherwise the agent's NEWEST run regardless of status, so a run that
+  // completed (or failed) between polls still has a reachable history. The
+  // previous "remember the last active run id" ref dance is gone: agentRuns[0]
+  // is now a stable answer for terminal runs too.
+  const replayRun = activeRun ?? agentRuns[0] ?? null;
+  const replayRunId = replayRun?.id ?? null;
   const lastFetchedRunRef = useRef<string | null>(null);
   const lastStreamAgentRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!open || !agent) {
-      // Drawer closed or agent unknown (e.g. mid-switch): clear + re-arm. This
-      // is the ONLY place the stream is cleared besides an agent switch below.
-      setStream([]);
-      lastFetchedRunRef.current = null;
-      seenSeqs.current.clear();
+    // Closed drawer: leave the buffer untouched. History must survive a
+    // close/reopen (it is re-seeded from the persisted backlog below); only an
+    // agent switch wipes it.
+    if (!open || !agentId) {
       return;
     }
-    if (lastStreamAgentRef.current !== agent.id) {
+    if (lastStreamAgentRef.current !== agentId) {
       // Agent switch: wipe the previous agent's history + re-arm dedupe.
-      lastStreamAgentRef.current = agent.id;
-      lastRunIdRef.current = null;
+      lastStreamAgentRef.current = agentId;
       lastFetchedRunRef.current = null;
       seenSeqs.current.clear();
       setStream([]);
     }
     const runId = replayRunId;
-    if (!runId || lastFetchedRunRef.current === runId) return;
-    lastFetchedRunRef.current = runId;
-    seenSeqs.current.clear();
-    let cancelled = false;
+    if (!runId) return;
     const rk = String(runId);
+    if (lastFetchedRunRef.current !== rk) {
+      // New replay target: re-arm the runId+seq watermark so the replayed rows
+      // and live frames dedupe against the same watermark.
+      lastFetchedRunRef.current = rk;
+      seenSeqs.current.clear();
+    }
+    let cancelled = false;
     const markSeqSeen = (runKey: string, seq: number | null | undefined) => {
       if (seq == null) return;
       let seen = seenSeqs.current.get(runKey);
@@ -185,12 +186,16 @@ export function AgentDrawer() {
       }
       seen.add(seq);
     };
+    // Defect D5: this runs on EVERY open (not just the first one for a run) so
+    // a reopened drawer re-seeds from the persisted backlog — including for a
+    // run that has already completed.
     getRunProgress(runId)
       .then((backlog) => {
         if (cancelled) return;
         // Review fix: MERGE, never replace — live frames folded while the fetch
         // was in flight must survive backlog resolution. Prepend backlog entries
         // whose seq is not already on screen; backlog order preserved first.
+        // On reopen the same rows are already on screen, so they dedupe out.
         setStream((prev) => {
           const have = new Set(
             prev.map((l) => l.seq).filter((s): s is number => s != null)
@@ -223,7 +228,7 @@ export function AgentDrawer() {
     return () => {
       cancelled = true;
     };
-  }, [open, agent?.id, replayRunId]);
+  }, [open, agentId, replayRunId]);
 
   // Task 6: fold WS events via subscribe — every frame is delivered to the
   // handler (no polling drops) + invalidate queries for real-time updates.
@@ -472,8 +477,11 @@ export function AgentDrawer() {
                 </div>
               )}
 
-              {/* Run Result (shown when latest run completed with output) */}
-              {activeRun?.status === 'COMPLETED' && activeRun.finalOutput && (
+              {/* Run Result / failure (defect D5): keyed on the REPLAYED run,
+                  so a completed or failed run's output is visible too — the
+                  old gate (activeRun.status === 'COMPLETED') was unreachable
+                  because activeRun only ever holds RUNNING/INITIALIZING/PAUSED. */}
+              {replayRun?.finalOutput && (
                 <>
                   <div className="section-h" style={{ color: '#4dd88a' }}>Run Result</div>
                   <div
@@ -491,11 +499,11 @@ export function AgentDrawer() {
                       overflowY: 'auto',
                     }}
                   >
-                    {activeRun.finalOutput}
+                    {replayRun.finalOutput}
                   </div>
                 </>
               )}
-              {activeRun?.status === 'FAILED' && activeRun.errorMessage && (
+              {replayRun?.errorMessage && (
                 <>
                   <div className="section-h" style={{ color: '#ff6b7a' }}>Run Failed</div>
                   <div
@@ -508,7 +516,7 @@ export function AgentDrawer() {
                       marginBottom: 12,
                     }}
                   >
-                    {activeRun.errorMessage}
+                    {replayRun.errorMessage}
                   </div>
                 </>
               )}

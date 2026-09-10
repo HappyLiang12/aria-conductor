@@ -62,6 +62,10 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({
       ...prev,
       taskDrawer: { open: true, itemId },
+      // Surfaces are mutually exclusive (defense-in-depth): opening a task
+      // drawer while a review workspace target is set tears the workspace
+      // down so it can never linger behind an open drawer.
+      reviewTargetId: null,
     }));
   }, []);
 

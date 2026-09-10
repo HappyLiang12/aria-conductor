@@ -38,6 +38,20 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
     if (item && item.status !== 'REVIEW') closeReviewMode();
   }, [item, closeReviewMode]);
 
+  // Escape collapses the workspace back to the drawer (keyboard exit). The
+  // component only mounts while a review target is set, so the listener's
+  // lifetime is exactly the workspace's. DrawerContext's global Escape handler
+  // is a no-op while expanded (both drawers are closed), so the two listeners
+  // never fight.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      closeReviewMode();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [closeReviewMode]);
+
   // Review siblings come from the board list cache so the operator can walk
   // every card waiting on them without leaving the workspace.
   const siblings = useMemo(
@@ -55,6 +69,35 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
     siblingIndex >= 0 && siblingIndex < siblings.length - 1
       ? siblings[siblingIndex + 1]
       : undefined;
+
+  // Load failure: a dead-end spinner is not acceptable — mirror the drawer's
+  // error wording and keep the Collapse exit reachable.
+  if (itemQuery.isError) {
+    return (
+      <section
+        className="panel review-workspace"
+        data-testid="review-workspace"
+        aria-label="Review workspace"
+      >
+        <div className="rw-head">
+          <div style={{ minWidth: 0 }} />
+          <div className="rw-nav">
+            <button
+              className="btn"
+              onClick={closeReviewMode}
+              aria-label="Collapse review"
+              autoFocus
+            >
+              ⤡ Collapse
+            </button>
+          </div>
+        </div>
+        <div className="rw-body">
+          <div className="evidence-error">Failed to load task. It may have been deleted.</div>
+        </div>
+      </section>
+    );
+  }
 
   if (!item) {
     return (
@@ -103,7 +146,12 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
           >
             next →
           </button>
-          <button className="btn" onClick={closeReviewMode} aria-label="Collapse review">
+          <button
+            className="btn"
+            onClick={closeReviewMode}
+            aria-label="Collapse review"
+            autoFocus
+          >
             ⤡ Collapse
           </button>
         </div>
@@ -115,9 +163,12 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
         <div className="rf-decisions">
           {pendingAsks.length > 0 ? (
             <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
-          ) : (
+          ) : asksQuery.isSuccess ? (
+            // Mirrors the drawer's guard: while the asks query is in flight an
+            // empty pendingAsks array is NOT evidence that the card has no
+            // asks — the rail stays empty instead of flashing the short view.
             <ShortApprovalView item={item} />
-          )}
+          ) : null}
         </div>
       </div>
     </section>

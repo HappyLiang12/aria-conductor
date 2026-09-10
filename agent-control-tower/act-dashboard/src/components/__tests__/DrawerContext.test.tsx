@@ -87,6 +87,24 @@ describe('DrawerContext review mode (in-place expand, spec 10.3)', () => {
     expect(getByTestId('task-open').textContent).toBe('false');
     expect(getByTestId('review-target').textContent).toBe('');
   });
+
+  it('opening the task drawer while a review workspace target is set closes the workspace', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-target').textContent).toBe('k1');
+
+    // Surfaces are mutually exclusive: opening a task drawer tears the
+    // in-place workspace down (defense-in-depth — the workspace must never
+    // linger behind an open drawer).
+    act(() => getByTestId('open-task').click());
+    expect(getByTestId('task-open').textContent).toBe('true');
+    expect(getByTestId('task-item').textContent).toBe('k-prev');
+    expect(getByTestId('review-target').textContent).toBe('');
+  });
 });
 
 describe('DrawerContext Escape handling (regression)', () => {

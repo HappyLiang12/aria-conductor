@@ -138,6 +138,69 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(screen.queryByTestId('review-workspace')).toBeNull();
   });
 
+  it('does not render the ShortApprovalView while the asks query is in flight', async () => {
+    // Mirrors the drawer's guard: until the asks query succeeds, the empty
+    // pendingAsks array is NOT evidence that the card has no asks — the rail
+    // must stay empty rather than flash the short view during load.
+    let resolveAsks!: (asks: Approval[]) => void;
+    mockedListAsks.mockImplementation(
+      () => new Promise<Approval[]>((res) => { resolveAsks = res; }),
+    );
+    renderWorkspace();
+    await openReview();
+    // Wait past the loading shell: the item is rendered, asks still pending.
+    await screen.findByText('Spec task');
+    expect(screen.queryByText(/Run completed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/NEEDS YOUR DECISION/)).not.toBeInTheDocument();
+
+    // Asks resolve empty: NOW the short view may appear.
+    await act(async () => {
+      resolveAsks([]);
+    });
+    expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
+  });
+
+  it('renders an error shell with a Collapse button when the item query fails', async () => {
+    const user = userEvent.setup();
+    mockedGetKanbanItem.mockRejectedValue(new Error('404'));
+    renderWorkspace();
+    await openReview();
+
+    // A dead-end spinner is not acceptable: the operator needs the message
+    // AND a way back to the board/drawer.
+    expect(
+      await screen.findByText('Failed to load task. It may have been deleted.'),
+    ).toBeInTheDocument();
+    const collapse = screen.getByRole('button', { name: /collapse/i });
+    expect(collapse).toBeInTheDocument();
+
+    await user.click(collapse);
+    expect(screen.getByTestId('review-target').textContent).toBe('');
+    expect(screen.getByTestId('task-open').textContent).toBe('true');
+    expect(screen.queryByTestId('review-workspace')).toBeNull();
+  });
+
+  it('Escape collapses the workspace and reopens the drawer on the same card', async () => {
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    await waitFor(() => expect(screen.getByTestId('review-target').textContent).toBe(''));
+    expect(screen.getByTestId('task-open').textContent).toBe('true');
+    expect(screen.getByTestId('task-item').textContent).toBe('task-1');
+    expect(screen.queryByTestId('review-workspace')).toBeNull();
+  });
+
+  it('focuses the Collapse button when the workspace opens (keyboard entry point)', async () => {
+    renderWorkspace();
+    await openReview();
+    const collapse = await screen.findByRole('button', { name: /collapse/i });
+    expect(document.activeElement).toBe(collapse);
+  });
+
   it('auto-exits when the card leaves REVIEW (refetch returns a non-REVIEW status)', async () => {
     mockedGetKanbanItem
       .mockResolvedValueOnce(mkItem())

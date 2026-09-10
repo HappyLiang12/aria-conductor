@@ -75,6 +75,9 @@ export default function KanbanBoard() {
   // the pickup's assign phase runs (spec 4.2).
   const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' | 'assign' } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // Inline card composer: which REVIEW card is currently asking "what should change?".
+  const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
+  const [cardFeedback, setCardFeedback] = useState('');
   const { lastMessage } = useWebSocketContext();
   const { openReviewMode } = useDrawerContext();
 
@@ -166,10 +169,11 @@ export default function KanbanBoard() {
   // the transition call confirms it; on failure the invalidation refetch
   // restores the server state and the operator gets a rejection message.
   const transitionMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: KanbanStatus }) =>
-      transitionKanbanItem(id, { status }),
+    mutationFn: ({ id, status, feedback }: { id: string; status: KanbanStatus; feedback?: string }) =>
+      transitionKanbanItem(id, { status, feedback }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban'] });
       setError(null);
     },
     onError: (err: unknown) => {
@@ -344,41 +348,96 @@ export default function KanbanBoard() {
                         )}
                       </div>
                       {item.status === 'REVIEW' && (
-                        <div className="card-approve">
-                          <button
-                            className="cap-btn ok"
-                            title="Approve (complete task)"
-                            aria-label="Quick approve"
-                            disabled={transitionMutation.isPending}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              transitionMutation.mutate({ id: item.id, status: 'DONE' });
-                            }}
-                          >
-                            ✓ Approve
-                          </button>
-                          <button
-                            className="cap-btn"
-                            title="Review / request changes"
-                            aria-label="Review or request changes"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              dispatchOpenTaskDrawer(item.id);
-                            }}
-                          >
-                            ✎
-                          </button>
-                          <button
-                            className="cap-btn"
-                            title="Expand review workspace"
-                            aria-label="Expand review workspace"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openReviewMode(item.id);
-                            }}
-                          >
-                            ⤢
-                          </button>
+                        // Full quick decision lives on the card face: approve,
+                        // request changes (inline composer) and deny without
+                        // ever opening the drawer or the workspace.
+                        <div className="card-approve" onClick={(e) => e.stopPropagation()}>
+                          {feedbackFor === item.id ? (
+                            <div className="cap-compose">
+                              <input
+                                className="cap-input"
+                                autoFocus
+                                placeholder="What should change?"
+                                aria-label="Request-changes feedback"
+                                value={cardFeedback}
+                                onChange={(e) => setCardFeedback(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Escape') {
+                                    setFeedbackFor(null);
+                                    setCardFeedback('');
+                                  }
+                                }}
+                              />
+                              <div className="cap-row">
+                                <button
+                                  className="cap-btn ok"
+                                  aria-label="Send request changes"
+                                  disabled={transitionMutation.isPending}
+                                  onClick={() => {
+                                    transitionMutation.mutate({
+                                      id: item.id,
+                                      status: 'TODO',
+                                      feedback: cardFeedback.trim() || undefined,
+                                    });
+                                    setFeedbackFor(null);
+                                    setCardFeedback('');
+                                  }}
+                                >
+                                  Send
+                                </button>
+                                <button
+                                  className="cap-btn"
+                                  aria-label="Cancel request changes"
+                                  onClick={() => {
+                                    setFeedbackFor(null);
+                                    setCardFeedback('');
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                className="cap-btn ok"
+                                title="Approve (complete task)"
+                                aria-label="Quick approve"
+                                disabled={transitionMutation.isPending}
+                                onClick={() => transitionMutation.mutate({ id: item.id, status: 'DONE' })}
+                              >
+                                ✓ Approve
+                              </button>
+                              <button
+                                className="cap-btn"
+                                title="Request changes (sent back to the agent)"
+                                aria-label="Request changes"
+                                onClick={() => {
+                                  setFeedbackFor(item.id);
+                                  setCardFeedback('');
+                                }}
+                              >
+                                ✎ Changes
+                              </button>
+                              <button
+                                className="cap-btn danger"
+                                title="Deny (cancel task)"
+                                aria-label="Quick deny"
+                                disabled={transitionMutation.isPending}
+                                onClick={() => transitionMutation.mutate({ id: item.id, status: 'CANCELLED' })}
+                              >
+                                ✕ Deny
+                              </button>
+                              <button
+                                className="cap-btn"
+                                title="Expand review workspace"
+                                aria-label="Expand review workspace"
+                                onClick={() => openReviewMode(item.id)}
+                              >
+                                ⤢
+                              </button>
+                            </>
+                          )}
                         </div>
                       )}
                       {item.status !== 'DONE' && item.status !== 'CANCELLED' && (

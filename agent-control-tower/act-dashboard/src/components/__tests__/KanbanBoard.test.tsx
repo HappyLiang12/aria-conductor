@@ -432,31 +432,47 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     expect(await screen.findByText(/port 9300 busy/)).toBeInTheDocument();
   });
 
-  it('review card carries quick approve, request-changes and expand actions', async () => {
+  it('review card carries the full quick decision on its face', async () => {
     const { transitionKanbanItem } = await import('../../api/kanban');
-    vi.mocked(transitionKanbanItem).mockResolvedValueOnce(baseItem({ status: 'DONE' }));
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'DONE' }));
     const received: Array<Record<string, unknown>> = [];
     const listener = (e: Event) => received.push((e as CustomEvent).detail);
     window.addEventListener('act:open-task-drawer', listener);
     try {
       await renderBoard([baseItem({ status: 'REVIEW' })]);
-      // Quick approve on the card face -> DONE transition, no drawer.
+      // Approve -> DONE straight from the card, no drawer.
       await userEvent.click(screen.getByLabelText('Quick approve'));
       await waitFor(() =>
         expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'DONE' }),
       );
-      expect(received).toHaveLength(0);
-      // ✎ opens the task drawer (feedback lives in the short view there).
-      await userEvent.click(screen.getByLabelText('Review or request changes'));
-      expect(received).toHaveLength(1);
-      expect(received[0]['itemId']).toBe('k-1');
-      // ⤢ opens the review workspace (reviewTargetId set, drawer stays closed).
-      await userEvent.click(screen.getByLabelText('Expand review workspace'));
-      expect(drawerState?.state.reviewTargetId).toBe('k-1');
-      expect(drawerState?.state.taskDrawer.open).toBe(false);
+      // Request changes opens the inline composer; Send routes the feedback to
+      // the orchestrator without leaving the board.
+      await userEvent.click(screen.getByLabelText('Request changes'));
+      await userEvent.type(screen.getByLabelText('Request-changes feedback'), 'use streaming');
+      await userEvent.click(screen.getByLabelText('Send request changes'));
+      await waitFor(() =>
+        expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', {
+          status: 'TODO',
+          feedback: 'use streaming',
+        }),
+      );
+      expect(received).toHaveLength(0); // card clicks never leak to the drawer
     } finally {
       window.removeEventListener('act:open-task-drawer', listener);
     }
+  });
+
+  it('quick deny cancels the card and expand opens the workspace', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'CANCELLED' }));
+    await renderBoard([baseItem({ status: 'REVIEW' })]);
+    await userEvent.click(screen.getByLabelText('Quick deny'));
+    await waitFor(() =>
+      expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'CANCELLED' }),
+    );
+    await userEvent.click(screen.getByLabelText('Expand review workspace'));
+    expect(drawerState?.state.reviewTargetId).toBe('k-1');
+    expect(drawerState?.state.taskDrawer.open).toBe(false);
   });
 
   it('non-review cards do not render the quick approval row', async () => {

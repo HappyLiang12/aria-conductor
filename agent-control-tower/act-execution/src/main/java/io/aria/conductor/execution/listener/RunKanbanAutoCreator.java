@@ -96,14 +96,17 @@ public class RunKanbanAutoCreator {
         try {
             List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
             KanbanStatus targetStatus = switch (event.getStatus()) {
-                case COMPLETED -> KanbanStatus.DONE;
+                // Defect D8: completed work always stops in REVIEW for human
+                // sign-off. Auto-DONE bypassed the review/approval loop (no
+                // REVIEW_REQUEST ask, no workspace, nothing to inspect).
+                case COMPLETED -> KanbanStatus.REVIEW;
                 case ABORTED -> KanbanStatus.CANCELLED;
                 case CANCELLED -> KanbanStatus.CANCELLED;
                 // F5: failed work stays visible in the attention column instead of
                 // silently vanishing into CANCELLED (rendered as "Archived").
                 // BLOCKED is retired (V52); failed work surfaces in REVIEW for the operator.
                 case FAILED -> KanbanStatus.REVIEW;
-                default -> KanbanStatus.DONE;
+                default -> KanbanStatus.REVIEW;
             };
             for (KanbanItem item : items) {
                 if (item.getStatus() != KanbanStatus.DONE

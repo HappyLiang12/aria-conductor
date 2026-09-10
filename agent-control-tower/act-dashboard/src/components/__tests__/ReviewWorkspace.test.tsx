@@ -194,6 +194,33 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(screen.queryByTestId('review-workspace')).toBeNull();
   });
 
+  it('Escape while typing in a workspace textarea does not discard the draft', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+    const feedback = await screen.findByLabelText('Request-changes feedback');
+    await user.type(feedback, 'keep my draft');
+
+    // Escape pressed while the draft textarea has focus: the event target is
+    // the textarea, and both the workspace and the draft must survive.
+    act(() => {
+      feedback.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+    expect(screen.getByTestId('review-target').textContent).toBe('task-1');
+    expect(screen.getByTestId('review-workspace')).not.toBeNull();
+    expect((feedback as HTMLTextAreaElement).value).toBe('keep my draft');
+
+    // Escape from the body (target = window) still collapses to the drawer.
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    await waitFor(() => expect(screen.getByTestId('review-target').textContent).toBe(''));
+    expect(screen.queryByTestId('review-workspace')).toBeNull();
+  });
+
   it('focuses the Collapse button when the workspace opens (keyboard entry point)', async () => {
     renderWorkspace();
     await openReview();

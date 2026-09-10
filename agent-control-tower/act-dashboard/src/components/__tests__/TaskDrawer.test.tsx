@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { TaskDrawer } from '../TaskDrawer';
 import { DrawerProvider, TASK_DRAWER_EVENT, useDrawerContext } from '../DrawerContext';
 import type { Approval, KanbanItem } from '../../types';
@@ -64,15 +65,20 @@ function mkAsk(over: Partial<Approval> = {}): Approval {
   };
 }
 
-function renderDrawer() {
+function renderDrawer(opts: { pathname?: string } = {}) {
+  const { pathname = '/' } = opts;
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const utils = render(
     <QueryClientProvider client={qc}>
       <DrawerProvider>
-        <TaskDrawer />
-        <StateProbe />
+        {/* TaskDrawer mounts inside the app Router via Layout and reads the
+            route for the overview-only Expand affordance (spec 10.3). */}
+        <MemoryRouter initialEntries={[pathname]}>
+          <TaskDrawer />
+          <StateProbe />
+        </MemoryRouter>
       </DrawerProvider>
     </QueryClientProvider>,
   );
@@ -167,6 +173,31 @@ describe('TaskDrawer review decision zone', () => {
     // and the context records which card is under review.
     expect(screen.getByTestId('task-open').textContent).toBe('false');
     expect(screen.getByTestId('review-target').textContent).toBe('task-1');
+  });
+
+  it('Expand affordance renders on the overview route (spec 10.3)', async () => {
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'spec v2' }),
+    ]);
+    renderDrawer({ pathname: '/' });
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    expect(screen.getByRole('button', { name: /expand/i })).toBeInTheDocument();
+  });
+
+  it('Expand affordance is hidden off the overview route (spec 10.3)', async () => {
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a1', askType: 'APPROVAL', content: 'spec v2' }),
+    ]);
+    // The ReviewWorkspace renders in-flow inside the Overview layout only; on
+    // any other route Expand would create a stranded workspace, so the
+    // affordance must not render there (hidden, not disabled).
+    renderDrawer({ pathname: '/runs' });
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument();
   });
 
   it('Approve on an APPROVAL ask calls approveApproval (gate semantics), not answerAsk', async () => {

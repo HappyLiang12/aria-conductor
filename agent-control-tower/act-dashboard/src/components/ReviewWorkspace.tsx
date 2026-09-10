@@ -42,10 +42,17 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
   // component only mounts while a review target is set, so the listener's
   // lifetime is exactly the workspace's. DrawerContext's global Escape handler
   // is a no-op while expanded (both drawers are closed), so the two listeners
-  // never fight.
+  // never fight. Escape fired while the operator is typing in an editable
+  // control (ask answers, request-changes feedback) is ignored — it must not
+  // silently discard an in-progress draft.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      // e.target is only an Element for events dispatched on a DOM node —
+      // window-targeted events have no editable target to protect (same
+      // narrowing DrawerContext uses for its own Escape handler).
+      const t = e.target instanceof Element ? e.target : null;
+      if (t && t.closest('textarea, input, select, [contenteditable="true"]')) return;
       closeReviewMode();
     };
     window.addEventListener('keydown', onKey);

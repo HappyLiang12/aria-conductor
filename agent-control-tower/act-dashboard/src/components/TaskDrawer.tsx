@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getKanbanItem,
@@ -83,6 +84,12 @@ export function TaskDrawer() {
   const { state, closeTaskDrawer, openReviewMode } = useDrawerContext();
   const { open, itemId } = state.taskDrawer;
   const queryClient = useQueryClient();
+
+  // Spec 10.3: Expand swaps the drawer for the in-place ReviewWorkspace, which
+  // only exists inside the Overview layout ('/'). The drawer itself mounts on
+  // every route, so on any other route the affordance must not render —
+  // expanding there would create a workspace with nowhere to land.
+  const onOverview = useLocation().pathname === '/';
 
   const [comment, setComment] = useState('');
 
@@ -174,7 +181,7 @@ export function TaskDrawer() {
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
-          {item?.status === 'REVIEW' && (
+          {onOverview && item?.status === 'REVIEW' && (
             <button
               className="btn"
               onClick={() => item && openReviewMode(item.id)}

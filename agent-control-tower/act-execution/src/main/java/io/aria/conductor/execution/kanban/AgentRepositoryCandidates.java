@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import org.springframework.stereotype.Component;
@@ -14,10 +15,13 @@ import java.util.List;
  * agent only guarantees a failed pickup — while a degraded agent is still
  * better than no pickup.
  *
- * <p>Defect D2: the pool must contain real workers only. Agents without a
- * model (the reserved Aria operator assistant) or with the `mock` test model
- * would "complete" a run instantly without doing any work, so an unassigned
- * card must never be handed to them.
+ * <p>Defect D2: the pool must contain real workers only. The reserved Aria
+ * operator assistant (excluded by {@link AriaConstants#ARIA_AGENT_ID}, not by
+ * its null model — NATIVE workers are created model-less and resolve the
+ * platform default LLM provider at run time) and `mock`-model agents
+ * (seeded/test workers returning canned responses) would "complete" a run
+ * instantly without doing any work, so an unassigned card must never be handed
+ * to them.
  */
 @Component
 public class AgentRepositoryCandidates implements AgentPickerService.Candidates {
@@ -42,9 +46,10 @@ public class AgentRepositoryCandidates implements AgentPickerService.Candidates 
     }
 
     private static boolean isRealWorker(Agent agent) {
+        if (AriaConstants.ARIA_AGENT_ID.equals(agent.getId())) {
+            return false;
+        }
         String model = agent.getModel();
-        return model != null
-                && !model.isBlank()
-                && !MOCK_MODEL.equalsIgnoreCase(model.trim());
+        return model == null || !MOCK_MODEL.equalsIgnoreCase(model.trim());
     }
 }

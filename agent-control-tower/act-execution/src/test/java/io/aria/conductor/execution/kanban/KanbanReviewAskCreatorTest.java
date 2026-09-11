@@ -64,6 +64,11 @@ class KanbanReviewAskCreatorTest {
         assertThat(ask.getRunId()).isEqualTo(runId);
         assertThat(ask.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(ask.getAskType()).isEqualTo(Approval.AskType.REVIEW_REQUEST);
+        // The ask is a kanban HITL entry, NOT a spec gate: it must not be typed
+        // SPEC_REVIEW, or every consumer that looks up a run's pending spec
+        // approval (SpecReviewCoordinator's idempotency guard, SddWorkflow/
+        // GitPipeline IT helpers, sdd-workflow E2E) mistakes it for the gate.
+        assertThat(ask.getApprovalType()).isEqualTo(Approval.ApprovalType.TOOL_CALL);
         assertThat(ask.getKanbanItemId()).isEqualTo("c1");
         assertThat(ask.getContent()).contains("COMPLETED").contains("add CSV export");
         assertThat(ask.getContextMd()).contains("dev-agent").contains("add CSV export");

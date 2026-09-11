@@ -2,6 +2,7 @@ package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "aria.kanban.auto-dispatch-on-create", havingValue = "true", matchIfMissing = true)
 public class KanbanAutoDispatchListener {
 
     private final KanbanRepository kanbanRepository;

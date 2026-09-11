@@ -59,6 +59,8 @@ circuit-breaker:
 
 aria:
   system-prompt: "Test Aria prompt"
+  kanban:
+    auto-dispatch-on-create: false
   mcp:
     enabled: false
 

@@ -142,9 +142,10 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    // Column keys render UPPERCASE under the 5-column model (BACKLOG/TODO/
-    // IN_PROGRESS/REVIEW/DONE — data-col attributes).
-    await expect(page.locator(`[data-col="TODO"] [data-card="${item.id}"]`)).toBeVisible();
+    // D1: card may be auto-dispatched from TODO. Accept any governed column.
+    await expect(
+      page.locator(`[data-card="${item.id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
 
     const { status } = await apiCall(request, 'POST', `/kanban/items/${item.id}/transition`, {
       status: 'IN_PROGRESS',
@@ -158,7 +159,10 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     // covered deterministically by KanbanBoard.test.tsx ("flashes the moved
     // card on kanban.transitioned and clears after ~1.2s"), so here we assert
     // the observable final state: present in the new column, gone from todo.
-    const moved = page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`);
+    // D8: a mock/instant run completes immediately, moving the card to REVIEW.
+    const moved = page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`).or(
+      page.locator(`[data-col="REVIEW"] [data-card="${item.id}"]`),
+    );
     await expect(moved).toBeVisible({ timeout: 15_000 });
     await expect(page.locator(`[data-col="TODO"] [data-card="${item.id}"]`)).toHaveCount(0);
   });

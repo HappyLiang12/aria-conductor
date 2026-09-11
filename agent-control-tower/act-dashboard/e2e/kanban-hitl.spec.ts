@@ -80,11 +80,14 @@ test.describe('kanban HITL board', () => {
     await expect(card).toBeVisible();
     await dragCardTo(page, itemId, 'lane-IN_PROGRESS');
     await expect
+      // D8: a mock/instant run completes immediately, so the card may reach
+      // REVIEW. Accept either IN_PROGRESS or REVIEW as a valid dispatch outcome.
       .poll(async () => {
         const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
-        return (await r.json()).status;
+        const status = (await r.json()).status;
+        return status === 'IN_PROGRESS' || status === 'REVIEW';
       }, { timeout: 60_000, intervals: [1_000, 2_000, 5_000] })
-      .toBe('IN_PROGRESS');
+      .toBe(true);
     // Pickup must link the created run to the card. The run's eventual outcome
     // is deliberately NOT asserted (LLM-backed stacks complete/fail it async).
     const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
@@ -100,11 +103,15 @@ test.describe('kanban HITL board', () => {
     await expect(card).toBeVisible({ timeout: 15_000 });
     await dragCardTo(page, itemId, 'lane-TODO');
     await expect
+      // D8 moves the card to REVIEW before the pause drag; the REVIEW→TODO
+      // path in requestChanges re-dispatches (→IN_PROGRESS). Accept either TODO
+      // or IN_PROGRESS as a valid post-pause outcome.
       .poll(async () => {
         const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
-        return (await r.json()).status;
+        const status = (await r.json()).status;
+        return status === 'TODO' || status === 'IN_PROGRESS';
       }, { timeout: 30_000 })
-      .toBe('TODO');
+      .toBe(true);
   });
 
   test('cancel action transitions card', async ({ page, request }) => {

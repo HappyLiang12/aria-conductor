@@ -9,7 +9,7 @@ package io.aria.conductor.execution.kanban;
  *   <li>TODO        → IN_PROGRESS, BACKLOG, CANCELLED</li>
  *   <li>IN_PROGRESS → TODO, BACKLOG, REVIEW, DONE, CANCELLED</li>
  *   <li>REVIEW      → IN_PROGRESS, TODO, DONE, CANCELLED</li>
- *   <li>DONE        → (terminal)</li>
+ *   <li>DONE        → BACKLOG, TODO (redo: the completed run stays as history)</li>
  *   <li>CANCELLED   → (terminal)</li>
  * </ul>
  *

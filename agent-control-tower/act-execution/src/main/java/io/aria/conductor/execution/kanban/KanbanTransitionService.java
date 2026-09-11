@@ -155,7 +155,10 @@ public class KanbanTransitionService {
      * propagate and roll the whole transition back atomically.
      */
     private KanbanItem pickup(KanbanItem item, TransitionRequest request) {
-        if (isBlank(item.getAssignee()) && isBlank(item.getLinkedAgentId())) {
+        // Assign phase runs whenever no agent is linked yet — even when a display
+        // assignee is set (Aria/MCP cards can carry one without an agent id);
+        // otherwise the eligibility check below would hit UUID.fromString(null).
+        if (isBlank(item.getLinkedAgentId())) {
             eventPublisher.publishEvent(new KanbanItemAssigningEvent(this, item.getId()));
             String templateId = firstNonBlank(request.getAgentTemplateId(), item.getAgentTemplateId());
             // AgentPickerService is a plain bean (no transaction proxy), so an
@@ -197,6 +200,9 @@ public class KanbanTransitionService {
 
     /** Mirrors {@code RunService.createRun}'s eligibility guards; {@code null} means eligible. */
     private String agentEligibilityViolation(String linkedAgentId) {
+        if (isBlank(linkedAgentId)) {
+            return "No agent is linked to this card";
+        }
         UUID agentId;
         try {
             agentId = UUID.fromString(linkedAgentId);

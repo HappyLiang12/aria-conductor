@@ -41,7 +41,11 @@ public class AgentRepositoryCandidates implements AgentPickerService.Candidates 
                 .filter(a -> a.getHealthStatus() == HealthStatus.HEALTHY
                           || a.getHealthStatus() == HealthStatus.DEGRADED)
                 .filter(AgentRepositoryCandidates::isRealWorker)
-                .map(a -> new AgentPickerService.Candidate(a.getId(), a.getName()))
+                // Deterministic pool order: "first healthy agent" must not depend
+                // on the DB's plan for an unordered query.
+                .sorted(java.util.Comparator.comparing(
+                        Agent::getName, java.util.Comparator.nullsLast(String::compareTo)))
+                .map(a -> new AgentPickerService.Candidate(a.getId(), a.getName(), a.getRole()))
                 .toList();
     }
 

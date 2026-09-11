@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -146,6 +147,25 @@ class KanbanTransitionServiceTest {
         // Manual re-dispatch: no assign phase, but a new run is still created.
         verify(eventPublisher, never()).publishEvent(any(KanbanItemAssigningEvent.class));
         verify(agentPicker, never()).pick(any(), any(), any());
+        verify(runService).createRun(any(CreateRunRequest.class));
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+    }
+
+    @Test
+    void pickup_assigneeWithoutLinkedAgent_assignsAndDispatches() {
+        // Aria / MCP create_kanban_item can set a display assignee without an
+        // agent id. The assign phase must run — otherwise the eligibility check
+        // hits UUID.fromString(null) (NPE) and the card can never be dispatched.
+        card.setAssignee("Someone");
+        when(agentPicker.pick(isNull(), anyString(), any()))
+                .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
+
+        KanbanItem result = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+
+        verify(agentPicker).pick(isNull(), anyString(), any());
+        assertThat(result.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
+        assertThat(result.getAssignee()).isEqualTo("BA Agent");
         verify(runService).createRun(any(CreateRunRequest.class));
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
     }

@@ -289,15 +289,25 @@ public class AgentLoopEngine {
         log.info("Run resumed: runId={}", runId);
     }
 
-    /** True when the run has at least one PENDING approval (HITL gate not yet decided). */
+    /** True when the run has at least one PENDING run-gate approval (HITL gate not yet decided). */
     private boolean hasPendingApproval(UUID runId) {
         try {
             return approvalRepository.findByRunId(runId).stream()
-                    .anyMatch(a -> a.getStatus() == ApprovalStatus.PENDING);
+                    .anyMatch(AgentLoopEngine::isBlockingGateApproval);
         } catch (Exception e) {
             log.debug("Could not check pending approvals for run {}: {}", runId, e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * A run gate is a PENDING approval that pauses the run loop. The kanban
+     * REVIEW_REQUEST ask is a display-only HITL prompt created after run
+     * completion — it must never block resuming.
+     */
+    static boolean isBlockingGateApproval(Approval a) {
+        return a.getStatus() == ApprovalStatus.PENDING
+                && a.getAskType() != Approval.AskType.REVIEW_REQUEST;
     }
 
     /**

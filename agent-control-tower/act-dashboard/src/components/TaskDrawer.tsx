@@ -168,8 +168,11 @@ export function TaskDrawer() {
 
   const validTransitions = item ? TRANSITIONS[item.status] : [];
 
-  const errMsg = (transitionMutation.error as { response?: { data?: { error?: string } } } | null)
-    ?.response?.data?.error;
+  // GlobalExceptionHandler puts the human reason in `message` and the HTTP
+  // phrase in `error` (e.g. "Bad Request"); prefer the reason when present.
+  const errData = (transitionMutation.error as { response?: { data?: { message?: string; error?: string } } } | null)
+    ?.response?.data;
+  const errMsg = errData?.message ?? errData?.error;
 
   return (
     <>

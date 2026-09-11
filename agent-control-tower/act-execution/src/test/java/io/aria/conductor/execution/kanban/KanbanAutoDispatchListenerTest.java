@@ -54,6 +54,20 @@ class KanbanAutoDispatchListenerTest {
     }
 
     @Test
+    void runManagedCardIsNotDispatched() {
+        // Cards auto-created for a run (RunKanbanAutoCreator) carry linkedRunId.
+        // Dispatching them would create a SECOND run for the same agent — the
+        // card describes run R1, it is not an operator dispatch intent.
+        KanbanItem card = KanbanItem.builder().id("c5").title("t")
+                .status(KanbanStatus.TODO).linkedRunId("r-1").linkedAgentId("a-1").build();
+        when(kanbanRepository.findById("c5")).thenReturn(Optional.of(card));
+
+        listener.onKanbanItemCreated(created("c5"));
+
+        verify(kanbanTransitionService, never()).dispatch(any(), any());
+    }
+
+    @Test
     void missingCardIsANoOp() {
         when(kanbanRepository.findById("c3")).thenReturn(Optional.empty());
 

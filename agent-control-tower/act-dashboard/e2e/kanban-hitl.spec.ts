@@ -19,9 +19,9 @@ import {
  *
  * Runs start asynchronously and, against an LLM-backed stack, execute for real —
  * so every card is pinned to a freshly seeded agent via agentTemplateId
- * (AgentPickerService matches it against agent names). Without pinning the
- * picker falls back to the first healthy agent — the Aria assistant — whose run
- * can asynchronously move the card through its kanban MCP tools mid-test.
+ * (AgentPickerService matches it against agent roles and names). Without
+ * pinning, the picker falls back to the first healthy agent (by name order),
+ * whose run can asynchronously move the card mid-test.
  *
  * Card states only are asserted, never run outcomes.
  */

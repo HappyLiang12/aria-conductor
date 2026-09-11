@@ -16,9 +16,9 @@ import java.util.UUID;
 /**
  * Spec 10.2: every run-completed card entering REVIEW carries a REVIEW_REQUEST
  * ask so the Review column always surfaces a structured decision surface.
- * Idempotent: skipped when a PENDING ask already exists on the card.
- * DB-level failures on save surface at commit time and roll the whole transition
- * back (all-or-nothing by design).
+ * Idempotent: skipped when a PENDING ask already exists on the card. In-listener
+ * failures are swallowed (a display ask must never break the transition);
+ * only DB-constraint failures at flush time reach the caller's transaction.
  */
 @Slf4j
 @Component

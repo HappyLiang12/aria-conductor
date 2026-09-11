@@ -39,6 +39,13 @@ public class KanbanAutoDispatchListener {
                 if (item.getStatus() != KanbanStatus.TODO) {
                     return; // Backlog is a queue; other statuses are explicit placements.
                 }
+                // Run-managed cards (auto-created by RunKanbanAutoCreator for a run
+                // that already exists) describe that run — dispatching them would
+                // create a duplicate second run for the same agent. Only cards
+                // created WITHOUT a run (operator/Aria intent) are dispatch intents.
+                if (!isBlank(item.getLinkedRunId())) {
+                    return;
+                }
                 kanbanTransitionService.dispatch(item.getId(), item.getAgentTemplateId());
             });
         } catch (Exception e) {
@@ -46,4 +53,6 @@ public class KanbanAutoDispatchListener {
             log.warn("Auto-dispatch on create failed for {}: {}", event.getItemId(), e.getMessage());
         }
     }
+
+    private static boolean isBlank(String s) { return s == null || s.isBlank(); }
 }

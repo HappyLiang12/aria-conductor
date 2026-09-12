@@ -11,6 +11,7 @@ import { WorkflowsPage } from './pages/WorkflowsPage';
 import { ScheduledJobsPage } from './pages/ScheduledJobsPage';
 import { RunsPage } from './pages/RunsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
+import NotFoundPage from './pages/NotFoundPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/ops" element={<OpsPage />} />
               <Route path="/scheduled-jobs" element={<ScheduledJobsPage />} />
               <Route path="/runs" element={<RunsPage />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

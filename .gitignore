@@ -30,6 +30,7 @@ coverage/
 # Runtime data
 .m2-local/
 data/
+.run/
 
 # Python
 __pycache__/

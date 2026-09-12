@@ -49,15 +49,14 @@ test('2. run starts and reaches a real state (fails fast without a key)', async 
 });
 
 test('3. approvals surface stays consistent with the API', async ({ page, request }) => {
-  // HITL redesign: the approvals page is retired — /approvals redirects to the
-  // board, whose Review column (per-card asks) is the single approvals surface.
-  // The REST API remains the ask source, so consistency still means: every ask
-  // advertised on a Review card is a real PENDING approval in the API.
+  // The /approvals page and route are deleted — the board's Review column
+  // (per-card asks) is the single approvals surface. The REST API remains the
+  // ask source, so consistency still means: every ask advertised on a Review
+  // card is a real PENDING approval in the API.
   const { status } = await apiCall(request, 'GET', '/approvals');
   expect(status).toBe(200);
 
-  await page.goto('/approvals');
-  await expect(page).toHaveURL(/\/$/);
+  await page.goto('/');
   await page.waitForLoadState('networkidle');
   await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible({ timeout: 15_000 });
 

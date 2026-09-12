@@ -31,9 +31,9 @@ test.describe('Git Pack Governance Lifecycle', () => {
     const requestApproval = tools.find((t: any) => t.name === 'request_approval');
     expect(requestApproval).toBeDefined();
 
-    // 3. Navigate to Approvals page
-    await page.goto(`${BASE_URL}/approvals`);
-    await expect(page.locator('h1, h2, [data-testid="approvals-title"]').first()).toBeVisible();
+    // 3. The approvals surface is the kanban Review column on the overview.
+    await page.goto(`${BASE_URL}/`);
+    await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible();
 
     // 4. Verify pack management API
     const packsResp = await request.get(`${API_URL}/api/v1/packs`);

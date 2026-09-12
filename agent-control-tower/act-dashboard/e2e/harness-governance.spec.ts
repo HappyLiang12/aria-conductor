@@ -108,8 +108,8 @@ test.describe('Customisable Harness Governance', () => {
       expect(a).toHaveProperty('arguments');
     }
 
-    await page.goto(`${BASE_URL}/approvals`);
-    await expect(page.locator('h1, h2').first()).toBeVisible();
+    await page.goto(`${BASE_URL}/`);
+    await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible();
     const hardcodedMedium = page.locator('.risk-badge', { hasText: 'Medium' });
     expect(await hardcodedMedium.count()).toBe(0);
   });

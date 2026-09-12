@@ -1354,7 +1354,6 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
    ============================================================ */
 .knowledge-grid { display: grid; grid-template-columns: minmax(420px, .95fr) minmax(480px, 1.05fr); gap: 16px; align-items: start; }
 .knowledge-stack { display: grid; gap: 16px; }
-.knowledge-wide { margin-top: 16px; }
 @media (max-width: 1180px) { .knowledge-grid, .kb-layout { grid-template-columns: 1fr !important; } }
 .knowledge-flow {
   display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;

@@ -108,6 +108,8 @@ test.describe('Housekeeping cleanup', () => {
 
     await page.getByRole('button', { name: /select leftovers/i }).click();
     await page.getByRole('button', { name: /retire selected/i }).click();
+    // Task 10: bulk retire is gated by the shared confirmation dialog.
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click();
 
     await expect(card).toBeHidden({ timeout: 20_000 });
     const { data } = await apiCall(request, 'GET', `/agents/${agent.id}`);

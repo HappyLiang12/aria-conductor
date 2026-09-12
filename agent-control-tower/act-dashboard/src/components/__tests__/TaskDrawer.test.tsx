@@ -428,3 +428,62 @@ describe('TaskDrawer review decision zone', () => {
     expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
   });
 });
+
+// Task 10: Reject is destructive, so it must be confirmed before it fires. Only
+// the confirmation's Confirm handler may reach the transition (Approve is a
+// separate, untouched path).
+describe('TaskDrawer reject confirmation (Task 10)', () => {
+  it('does not fire the reject transition until the operator confirms', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(mockedTransition).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: /Reject task/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(mockedTransition).toHaveBeenCalledTimes(1));
+    expect(mockedTransition).toHaveBeenCalledWith('task-1', {
+      status: 'CANCELLED',
+      comment: undefined,
+    });
+    // Completion clears the pending state.
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Reject task/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('dismissing with Cancel clears the pending state and mutates nothing', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(mockedTransition).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: /Reject task/ })).not.toBeInTheDocument();
+  });
+
+  it('Approve stays ungated', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    // Scoped to the footer: the body's short approval view has its own Approve.
+    const footer = document.querySelector('.drawer footer') as HTMLElement;
+    await user.click(within(footer).getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() =>
+      expect(mockedTransition).toHaveBeenCalledWith('task-1', {
+        status: 'DONE',
+        comment: undefined,
+      }),
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});

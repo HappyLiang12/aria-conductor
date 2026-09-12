@@ -9,6 +9,7 @@ import {
 } from '../api/knowledge';
 import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import type {
   Agent,
   CreateKnowledgeRequest,
@@ -206,6 +207,9 @@ export function KnowledgePage() {
   // Pending review awaiting user confirmation; single and batch flows both go
   // through the confirm dialog so no mutation fires on a stray click.
   const [confirmReview, setConfirmReview] = useState<{ ids: string[]; approved: boolean; batch: boolean } | null>(null);
+  // Pending promote awaiting user confirmation — promotion is irreversible for
+  // the operator, so it must not fire on a stray click either.
+  const [confirmingPromote, setConfirmingPromote] = useState(false);
 
   // mutations
   const reviewMut = useMutation({
@@ -351,6 +355,19 @@ export function KnowledgePage() {
     }
     // Dialog closes in onSuccess only — on failure it stays open so the user
     // can retry or cancel, and the error surfaces via toast.
+  };
+
+  const handleConfirmPromote = () => {
+    if (!selected) return;
+    const target = selected;
+    // Closed immediately: the action is settled, so the dialog must not linger
+    // over it. The finally re-clears (idempotent) so a failure can never leave
+    // it stranded open.
+    setConfirmingPromote(false);
+    updateKnowledge(target.id, { status: 'PROMOTED' })
+      .then(() => queryClient.invalidateQueries({ queryKey: ['knowledge'] }))
+      .catch(() => setToast('Promote failed. Please retry.'))
+      .finally(() => setConfirmingPromote(false));
   };
 
   return (
@@ -716,12 +733,7 @@ export function KnowledgePage() {
                     )}
                   </div>
                   <div className="actions">
-                    <button
-                      className="btn"
-                      onClick={() => updateKnowledge(selected.id, { status: 'PROMOTED' }).then(() =>
-                        queryClient.invalidateQueries({ queryKey: ['knowledge'] }),
-                      )}
-                    >
+                    <button className="btn" onClick={() => setConfirmingPromote(true)}>
                       ⤴ Promote
                     </button>
                     <button
@@ -804,6 +816,20 @@ export function KnowledgePage() {
           </div>
         </div>
       )}
+
+      {/* ---------- Promote confirm dialog (shared, Task 10) ---------- */}
+      <ConfirmDialog
+        open={confirmingPromote && selected !== null}
+        title="Confirm Promote"
+        message={
+          <>
+            You are about to <strong>promote</strong> {selected?.name} ({formatVersion(selected?.currentVersion)}). It will
+            leave the approved library and move up the promotion path.
+          </>
+        }
+        onConfirm={handleConfirmPromote}
+        onCancel={() => setConfirmingPromote(false)}
+      />
 
       {/* ---------- Submit modal ---------- */}
       {showSubmit && (

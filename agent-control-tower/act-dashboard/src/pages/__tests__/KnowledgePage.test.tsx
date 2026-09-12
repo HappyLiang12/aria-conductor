@@ -108,6 +108,71 @@ describe('KnowledgePage review confirmation (#UI audit)', () => {
   });
 });
 
+describe('KnowledgePage promote confirmation (#UI audit Task 10)', () => {
+  function mockApprovedLibrary() {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'k-live', name: 'Live Playbook', status: 'APPROVED', currentVersion: 2 }),
+    ]);
+  }
+
+  async function selectApprovedItem() {
+    const title = await screen.findByText('Live Playbook');
+    fireEvent.click(title.closest('.kitem') as HTMLElement);
+    await screen.findByRole('button', { name: /Promote/ });
+  }
+
+  it('does not promote until the operator confirms', async () => {
+    mockApprovedLibrary();
+    ui();
+    await selectApprovedItem();
+
+    fireEvent.click(screen.getByRole('button', { name: /Promote/ }));
+
+    // Nothing may fire from the first click — the dialog only opens.
+    expect(updateKnowledge).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(updateKnowledge).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Promote/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(updateKnowledge).toHaveBeenCalledTimes(1));
+    expect(updateKnowledge).toHaveBeenCalledWith('k-live', { status: 'PROMOTED' });
+    // Completion clears the pending state.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('backdrop click clears the pending promote without mutating', async () => {
+    mockApprovedLibrary();
+    ui();
+    await selectApprovedItem();
+
+    fireEvent.click(screen.getByRole('button', { name: /Promote/ }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(document.querySelector('.modal-overlay') as HTMLElement);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(updateKnowledge).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a failure message instead of failing silently', async () => {
+    mockApprovedLibrary();
+    vi.mocked(updateKnowledge).mockRejectedValueOnce(new Error('boom'));
+    ui();
+    await selectApprovedItem();
+
+    fireEvent.click(screen.getByRole('button', { name: /Promote/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(await screen.findByText('Promote failed. Please retry.')).toBeInTheDocument();
+    expect(updateKnowledge).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('KnowledgePage version rendering (approved list render site)', () => {
   /** Reads the meta line ("<version> · <owner> · <date>") of a rendered item card. */
   function metaLineOf(name: string): string {

@@ -444,6 +444,9 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     try {
       await renderBoard([baseItem()]); // TODO card
       fireEvent.click(screen.getByTitle('Cancel task'));
+      // Task 10: the ✕ only opens the confirmation; the Confirm handler acts.
+      expect(transitionKanbanItem).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
       await waitFor(() =>
         expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'CANCELLED' }),
       );
@@ -505,6 +508,65 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
   it('non-review cards do not render the quick approval row', async () => {
     await renderBoard([baseItem()]); // TODO card
     expect(screen.queryByLabelText('Quick approve')).not.toBeInTheDocument();
+  });
+});
+
+describe('KanbanBoard destructive cancel confirmation (Task 10)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+  });
+
+  const renderBoard = async (data: KanbanItem[]) => {
+    kanbanData = data;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const utils = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return utils;
+  };
+
+  it('does not fire the destructive action until the operator confirms', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    const { container } = await renderBoard([baseItem()]); // TODO card k-1
+
+    // The ✕ is a request, not the action: it only opens the confirmation.
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel task' }));
+    expect(transitionKanbanItem).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+
+    // Only the confirm handler reaches the mutation, and only once.
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(transitionKanbanItem).toHaveBeenCalledTimes(1));
+    expect(transitionKanbanItem).toHaveBeenCalledWith('k-1', { status: 'CANCELLED' });
+
+    // Success clears the pending confirmation state.
+    await waitFor(() => expect(container.querySelector('.modal-dialog')).toBeNull());
+  });
+
+  it('dismissing with Cancel clears the pending state and mutates nothing', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    const { container } = await renderBoard([baseItem()]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel task' }));
+    expect(container.querySelector('.modal-dialog')).not.toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(container.querySelector('.modal-dialog')).toBeNull();
+    expect(transitionKanbanItem).not.toHaveBeenCalled();
+  });
+
+  it('clicking the backdrop clears the pending state and mutates nothing', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    const { container } = await renderBoard([baseItem()]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel task' }));
+    const overlay = container.querySelector('.modal-overlay') as HTMLElement;
+    expect(overlay).not.toBeNull();
+
+    fireEvent.click(overlay);
+    expect(container.querySelector('.modal-dialog')).toBeNull();
+    expect(transitionKanbanItem).not.toHaveBeenCalled();
   });
 });
 

@@ -120,6 +120,8 @@ test.describe('kanban HITL board', () => {
     await expect(card).toBeVisible();
     await card.hover();
     await card.getByTitle('Cancel task').click();
+    // Task 10: the ✕ only opens the confirmation; the transition fires on Confirm.
+    await page.getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect
       .poll(async () => {
         const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);

@@ -67,9 +67,23 @@ export function TopBar() {
   const runningRuns = summary?.runningRuns ?? 0;
   const pendingApprovals = summary?.pendingApprovals ?? 0;
   const tokensBurned = summary?.totalTokensBurned ?? 0;
-  const healthyProviders = healthResults.filter((r) => r.data?.healthy).length;
-  const providersKnown = providers !== undefined && providers.length > 0;
-  const isHealthy = providersKnown && healthyProviders > 0;
+  const healthyProviders = healthResults.filter((r) => r.data?.healthy === true).length;
+  // Honesty rule: the badge may only report a verdict it actually has evidence for.
+  // `data` is the only field that carries a verdict — a pending probe has none yet and
+  // an errored probe never produced one (an error is absence of evidence, not proof of
+  // unhealth). So evidence is: the provider list settled AND every probe has data.
+  const hasProviderEvidence =
+    providers !== undefined && healthResults.every((r) => r.data !== undefined);
+  const providerBadgeState: 'healthy' | 'unavailable' | 'unknown' =
+    healthyProviders > 0 ? 'healthy' : hasProviderEvidence ? 'unavailable' : 'unknown';
+  const providerBadgeClass =
+    providerBadgeState === 'healthy' ? 'live' : providerBadgeState === 'unavailable' ? 'afterhours' : '';
+  const providerBadgeText =
+    providerBadgeState === 'healthy'
+      ? `${healthyProviders} of ${providers?.length ?? 0} Providers Healthy`
+      : providerBadgeState === 'unavailable'
+        ? 'Providers Unavailable'
+        : 'Checking providers…';
 
   return (
     <header className="topbar">
@@ -86,9 +100,9 @@ export function TopBar() {
           <span className="dot" />
           {activeAgents} {activeAgents === 1 ? 'Agent' : 'Agents'}
         </span>
-        <span className={`badge ${isHealthy ? 'live' : 'afterhours'}`}>
+        <span className={`badge ${providerBadgeClass}`}>
           <span className="dot" />
-          {isHealthy ? `${healthyProviders} of ${providers?.length ?? 0} Providers Healthy` : 'Providers Unavailable'}
+          {providerBadgeText}
         </span>
       </div>
 

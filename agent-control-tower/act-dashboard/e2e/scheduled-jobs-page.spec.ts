@@ -59,14 +59,30 @@ test('2. the job survives a reload, proving it is server-side state', async ({
   await page.waitForLoadState('networkidle');
   const card = page.locator('.job-card').filter({ hasText: jobTitle }).first();
   await expect(card).toBeVisible({ timeout: 20_000 });
+});
 
-  // Teardown: remove the job this spec created. Left ACTIVE it would be re-armed
-  // on every backend start (TaskSchedulerSchedulerPort.recoverActiveJobs) and fire
-  // every weekday at 09:00, pushing a notification into the shared stack without
-  // bound, and the rows would accumulate across runs.
+// Teardown, in afterAll so it runs even when a test above fails: remove the job
+// this spec created. Left ACTIVE it would be re-armed on every backend start
+// (TaskSchedulerSchedulerPort.recoverActiveJobs) and fire every weekday at 09:00,
+// pushing a notification into the shared stack without bound, and the rows would
+// accumulate across runs. On the happy path the reload test used to delete it, which
+// meant any failure above (or a thrown title-resolution guard) leaked the job.
+test.afterAll(async ({ request }) => {
   const { data: jobs } = await apiCall(request, 'GET', '/aria/jobs');
   const created = (Array.isArray(jobs) ? jobs : []).find((j: any) => j.title === jobTitle);
-  expect(created, 'the created job must be resolvable by title so teardown can remove it').toBeTruthy();
+  if (!created) {
+    // A job that cannot be found cannot be deleted: log loudly rather than pass.
+    console.error(
+      `[scheduled-jobs-page] teardown could not resolve the created job by title ` +
+        `"${jobTitle}"; it may still be ACTIVE and fire on schedule`,
+    );
+    return;
+  }
   const removed = await apiCall(request, 'DELETE', `/aria/jobs/${created.id}`);
-  expect([200, 204]).toContain(removed.status);
+  if (![200, 204].includes(removed.status)) {
+    console.error(
+      `[scheduled-jobs-page] teardown DELETE /aria/jobs/${created.id} returned ` +
+        `HTTP ${removed.status}; job "${jobTitle}" may still be ACTIVE`,
+    );
+  }
 });

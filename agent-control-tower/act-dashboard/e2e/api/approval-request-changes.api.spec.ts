@@ -59,8 +59,8 @@ test.describe('request changes loop', () => {
     await expect
       .poll(
         async () => {
-          const { data } = await apiCall(request, 'GET', `/approvals/${firstAsk.id}`);
-          return data?.status;
+          const { status, data } = await apiCall(request, 'GET', `/approvals/${firstAsk.id}`);
+          return status === 200 ? data?.status : `HTTP_${status}`;
         },
         { timeout: 30_000 },
       )
@@ -77,7 +77,10 @@ test.describe('request changes loop', () => {
     );
     const newRun = (await apiCall(request, 'GET', `/runs/${relinked.linkedRunId}`)).data;
 
-    expect(newRun.id).not.toBe(firstRunId);
+    // Guards against the feedback leaking into the wrong run: the original
+    // attempt's prompt seed must be untouched.
+    const firstRun = (await apiCall(request, 'GET', `/runs/${firstRunId}`)).data;
+    expect(String(firstRun.promptSeed)).not.toContain(feedback);
     expect(String(newRun.promptSeed)).toContain('Operator feedback on the previous attempt');
     expect(String(newRun.promptSeed)).toContain(feedback);
 

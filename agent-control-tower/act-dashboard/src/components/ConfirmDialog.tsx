@@ -18,10 +18,6 @@ export interface ConfirmDialogProps {
   open: boolean;
   title: string;
   message: ReactNode;
-  /** Accessible name of the confirming control. Defaults to 'Confirm'. */
-  confirmLabel?: string;
-  /** Accessible name of the dismissing control. Defaults to 'Cancel'. */
-  cancelLabel?: string;
   /** Styles the confirm control as destructive (cancel / retire / reject). */
   danger?: boolean;
   onConfirm: () => void;
@@ -32,8 +28,6 @@ export function ConfirmDialog({
   open,
   title,
   message,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
   danger = false,
   onConfirm,
   onCancel,
@@ -67,19 +61,18 @@ export function ConfirmDialog({
         <p>{message}</p>
         <div className="modal-actions">
           <button
+            type="button"
             className={danger ? 'btn danger' : 'btn primary'}
             autoFocus
             onClick={onConfirm}
           >
-            {confirmLabel}
+            Confirm
           </button>
-          <button className="btn" onClick={onCancel}>
-            {cancelLabel}
+          <button type="button" className="btn" onClick={onCancel}>
+            Cancel
           </button>
         </div>
       </div>
     </div>
   );
 }
-
-export default ConfirmDialog;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import TemplatesPanel from '../TemplatesPanel';
@@ -113,5 +113,60 @@ describe('TemplatesPanel', () => {
     await waitFor(() => expect(screen.getAllByText('Duplicate')).toHaveLength(2));
     await userEvent.click(screen.getAllByText('Duplicate')[0]);
     expect(await screen.findByRole('alert')).toHaveTextContent('Duplicate failed: boom');
+  });
+});
+
+describe('TemplatesPanel retire confirmation (Task 10)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockList.mockResolvedValue(TEMPLATES);
+    mockRetire.mockResolvedValue(undefined);
+  });
+
+  async function clickFirstRetire() {
+    await waitFor(() => expect(screen.getAllByText('Retire')).toHaveLength(2));
+    await userEvent.click(screen.getAllByText('Retire')[0]);
+  }
+
+  it('retires only after the operator confirms in the shared dialog', async () => {
+    ui();
+    await clickFirstRetire();
+
+    // Nothing may be retired from the first click — the dialog only opens.
+    expect(mockRetire).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: /Retire/ })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mockRetire).not.toHaveBeenCalled();
+
+    await clickFirstRetire();
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(mockRetire).toHaveBeenCalledTimes(1));
+    expect(mockRetire).toHaveBeenCalledWith('t1');
+    // Completion clears the pending state.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('backdrop click dismisses the dialog without retiring', async () => {
+    ui();
+    await clickFirstRetire();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(document.querySelector('.modal-overlay') as HTMLElement);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mockRetire).not.toHaveBeenCalled();
+  });
+
+  it('clears the pending state and surfaces a retire failure', async () => {
+    mockRetire.mockRejectedValue(new Error('boom'));
+    ui();
+    await clickFirstRetire();
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Retire failed: boom');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(mockRetire).toHaveBeenCalledTimes(1);
   });
 });

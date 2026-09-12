@@ -4,13 +4,14 @@ import { test, expect } from '@playwright/test';
  * Phase 1 E2E contract anchor (RED) for the Spec-Driven Development workflow
  * (docs/superpowers/specs/2026-08-12-spec-driven-development-workflow-design.md).
  *
- * Drives the loop over the REST API and asserts the Approvals page renders the
- * SPEC_REVIEW card. Written FIRST — it must fail until the backend + frontend
- * wiring lands (later tasks):
+ * Drives the loop over the REST API and asserts the reachable approvals surface
+ * renders. The /approvals page and its SPEC_REVIEW card are gone: approvals live
+ * in the Kanban Review column on '/'. Written FIRST — it must fail until the
+ * backend + frontend wiring lands (later tasks):
  *   - POST /api/v1/knowledge/{id}/instantiate-workflow            (planned, Task 3)
  *   - GET /api/v1/approvals gains approvalType/content/knowledgeItemId (planned)
  *   - POST /api/v1/workflows/{id}/resubmit-approval               (planned)
- *   - Approvals page SPEC_REVIEW card with .spec-review-markdown   (planned, Task 10)
+ *   - Kanban Review column on '/' as the approvals surface        (planned, Task 10)
  *
  * Verified-real endpoints used unchanged: GET /api/v1/knowledge?type=WORKFLOW&status=APPROVED,
  * GET /api/v1/workflows, GET /api/v1/workflows/{id}, POST /api/v1/approvals/{id}/decide.

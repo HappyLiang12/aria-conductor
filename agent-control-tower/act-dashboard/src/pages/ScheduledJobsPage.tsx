@@ -4,6 +4,7 @@ import {
   listJobs, createJob, updateJob, deleteJob, pauseJob, resumeJob,
 } from '../api/ariaJobs';
 import type { ScheduledJob, CreateScheduledJobRequest, JobCategory, JobStatus } from '../types';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
 
 /** Parse a single cron field into an array of allowed values. */
@@ -79,6 +80,9 @@ export function ScheduledJobsPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatus | ''>('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null);
+  // Job awaiting delete confirmation. Deletion is irreversible, so the control
+  // only opens the shared dialog (Task 10).
+  const [deletingJob, setDeletingJob] = useState<ScheduledJob | null>(null);
   // Operation feedback — the page has no global toast, so keep a local notice
   // (replaces the previous blocking alert() calls).
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -97,7 +101,7 @@ export function ScheduledJobsPage() {
     queryFn: () => listJobs({ category: categoryParam, status: statusParam }),
   });
 
-  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
+  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setDeletingJob(null); }, onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); setDeletingJob(null); } });
   const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
   const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
 
@@ -230,7 +234,7 @@ export function ScheduledJobsPage() {
                 </button>
               )}
               <button className="btn sm" onClick={() => openEditModal(job)}>✏️ Edit</button>
-              <button className="btn sm danger" onClick={() => { if (confirm('Delete this job?')) deleteMut.mutate(job.id); }} disabled={deleteMut.isPending}>
+              <button className="btn sm danger" onClick={() => setDeletingJob(job)} disabled={deleteMut.isPending}>
                 {deleteMut.isPending ? 'Deleting…' : '🗑 Delete'}
               </button>
             </div>
@@ -314,6 +318,29 @@ export function ScheduledJobsPage() {
           </div>
         </div>
       )}
+
+      {/* Shared destructive-action confirmation (Task 10): the Delete control
+          only opens this dialog, and the deletion fires from onConfirm. */}
+      <ConfirmDialog
+        open={deletingJob !== null}
+        title="Delete this job?"
+        message={
+          <>
+            Delete <strong>{deletingJob?.title}</strong>? Its schedule stops
+            permanently and it cannot be restored from here.
+          </>
+        }
+        danger
+        onConfirm={() => {
+          if (!deletingJob) return;
+          const id = deletingJob.id;
+          // Closed immediately: onSuccess/onError re-clear (idempotent) so a
+          // rejection can never strand the dialog open.
+          setDeletingJob(null);
+          deleteMut.mutate(id);
+        }}
+        onCancel={() => setDeletingJob(null)}
+      />
 
       {/* ---------- Toast ---------- */}
       {toastMsg && (

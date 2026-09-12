@@ -107,19 +107,11 @@ describe('ConfirmDialog', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it('defaults the control labels to exactly Confirm and Cancel', () => {
+  it('labels the controls exactly Confirm and Cancel', () => {
     setup();
 
     expect(screen.getByRole('button', { name: 'Confirm' })).toHaveTextContent('Confirm');
     expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel');
-  });
-
-  it('honours confirmLabel / cancelLabel overrides', () => {
-    setup({ confirmLabel: 'Approve & execute', cancelLabel: 'Keep' });
-
-    expect(screen.getByRole('button', { name: 'Approve & execute' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Keep' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument();
   });
 
   it('autofocuses the confirm control so keyboard users land on the safe default', () => {
@@ -137,14 +129,22 @@ describe('ConfirmDialog', () => {
     expect(screen.getByRole('button', { name: 'Confirm' }).className).not.toContain('danger');
   });
 
-  it('never falls back to window.confirm', async () => {
-    const nativeConfirm = vi.spyOn(window, 'confirm');
+  // Replaces a vacuous "never falls back to window.confirm" case: ConfirmDialog
+  // has no code path that could reach window.confirm, so that assertion passed
+  // whatever the component did. The contract that CAN regress — and that is the
+  // one that matters for a destructive gate — is that opening the dialog never
+  // performs the action by itself; only a deliberate click on the rendered
+  // Confirm control may.
+  it('never fires onConfirm implicitly — opening the gate is not a confirmation', async () => {
     const user = userEvent.setup();
-    const { onConfirm } = setup();
+    const { onConfirm, onCancel, props, rerender } = setup({ open: false });
+
+    rerender(<ConfirmDialog {...props} open />);
+    expect(onConfirm).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(nativeConfirm).not.toHaveBeenCalled();
     expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });

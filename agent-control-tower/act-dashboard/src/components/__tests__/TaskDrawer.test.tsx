@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor, act } from '@testing-library/react';
+import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -492,5 +492,34 @@ describe('TaskDrawer reject confirmation (Task 10)', () => {
       }),
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  // Regression: the ConfirmDialog renders as a SIBLING of the drawer (fixed
+  // positioning must escape the drawer's transform), so the DrawerContext
+  // Escape guard does not see its overlay as "inside the drawer" and used to
+  // slam the drawer shut on the same Escape press that dismissed the
+  // confirmation. One press must dismiss ONLY the confirmation; a second then
+  // closes the drawer as before.
+  it('Escape dismisses only the reject confirmation, then a second Escape closes the drawer', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(screen.getByRole('dialog', { name: /Reject task/ })).toBeInTheDocument();
+    // A real Escape originates from the dialog's autofocused control, which
+    // sits in the overlay OUTSIDE the aside — the exact shape of the defect.
+    expect(screen.getByRole('button', { name: 'Confirm' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: /Reject task/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('task-open').textContent).toBe('true');
+    expect(mockedTransition).not.toHaveBeenCalled();
+
+    // The confirmation is gone, so Escape is back to its normal job.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByTestId('task-open').textContent).toBe('false');
   });
 });

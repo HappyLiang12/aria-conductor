@@ -132,11 +132,16 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
   // Close drawers on Escape for accessibility. Escape events that originate
   // INSIDE an open drawer (operator typing in the order console etc.) must not
   // slam it shut — only Escape pressed outside the drawers closes them.
+  // `.modal-overlay` is the shared confirmation surface (ConfirmDialog), which
+  // call sites render as a SIBLING of the drawer so its fixed overlay can
+  // escape the drawer's transform. It is therefore "inside the drawer" for the
+  // purpose of this guard: while a modal is on top it owns the Escape key —
+  // the press dismisses the modal, and the drawer underneath must stay put.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const target = e.target instanceof Element ? e.target : null;
-      if (target?.closest('.agent-drawer.open, .drawer.open')) return;
+      if (target?.closest('.agent-drawer.open, .drawer.open, .modal-overlay')) return;
       if (state.taskDrawer.open) closeTaskDrawer();
       if (state.agentDrawer.open) closeAgentDrawer();
     };

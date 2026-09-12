@@ -3,8 +3,9 @@ import { uniqueName } from './fixtures';
 
 /**
  * E2E: Git Pack Lifecycle — verifies the governed plugin system's git integration.
- * Flow: agent hits git_push (PUSH risk tier) -> approval page -> human approves -> run resumes.
- * Mirrors workflow-governance.spec.ts pattern; reuses ApprovalsPage.tsx.
+ * Flow: agent hits git_push (PUSH risk tier) -> kanban Review column -> human approves -> run resumes.
+ * Mirrors workflow-governance.spec.ts pattern; the approvals surface is the kanban Review column
+ * (the Approvals page and its /approvals route are deleted, so the old ApprovalsPage.tsx reuse is gone).
  *
  * Prerequisites: backend running with git pack seeded (V32), TOOLS_SHELL_ENABLED=true.
  */

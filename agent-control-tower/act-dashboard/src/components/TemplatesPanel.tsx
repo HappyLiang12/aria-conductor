@@ -5,6 +5,7 @@ import { instantiateWorkflowTemplate } from '../api/knowledge';
 import { extractTemplateParams } from '../utils/workflowTemplateParams';
 import TemplateEditorModal from './TemplateEditorModal';
 import RunTemplateModal from './RunTemplateModal';
+import { ConfirmDialog } from './ConfirmDialog';
 import type { KnowledgeItem } from '../types';
 
 interface Props {
@@ -16,6 +17,9 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<KnowledgeItem | null>(null);
   const [runTarget, setRunTarget] = useState<KnowledgeItem | null>(null);
+  // Template awaiting retire confirmation. Retiring is irreversible from the
+  // UI, so the control only opens the shared dialog (Task 10).
+  const [confirmingRetire, setConfirmingRetire] = useState<KnowledgeItem | null>(null);
   const [actionError, setActionError] = useState('');
 
   // Same surface convention as KanbanBoard: extract the server-provided message
@@ -46,8 +50,14 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
     onSuccess: () => {
       setActionError('');
       queryClient.invalidateQueries({ queryKey: ['knowledge'] });
+      // Task 10: the confirmed retire is done — drop the pending confirmation.
+      setConfirmingRetire(null);
     },
-    onError: (e) => setActionError(`Retire failed: ${describeActionError(e)}`),
+    onError: (e) => {
+      setActionError(`Retire failed: ${describeActionError(e)}`);
+      // The confirmed action is over (it failed) — never leave it stuck open.
+      setConfirmingRetire(null);
+    },
   });
 
   const duplicateMutation = useMutation({
@@ -140,7 +150,7 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
               </button>
               <button
                 className="btn danger"
-                onClick={() => { if (confirm('Retire this template? It will be hidden from the list (soft delete).')) retireMutation.mutate(t.id); }}
+                onClick={() => setConfirmingRetire(t)}
                 disabled={retireMutation.isPending}
               >
                 Retire
@@ -169,6 +179,29 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
           }}
         />
       )}
+
+      {/* Shared destructive-action confirmation (Task 10): the Retire control
+          only opens this dialog, and the retire fires from onConfirm. */}
+      <ConfirmDialog
+        open={confirmingRetire !== null}
+        title="Retire template?"
+        message={
+          <>
+            Retire <strong>{confirmingRetire?.name}</strong>? It will be hidden from the
+            list (soft delete).
+          </>
+        }
+        danger
+        onConfirm={() => {
+          if (!confirmingRetire) return;
+          const id = confirmingRetire.id;
+          // Closed immediately: onSuccess/onError re-clear (idempotent) so a
+          // rejection can never strand the dialog open.
+          setConfirmingRetire(null);
+          retireMutation.mutate(id);
+        }}
+        onCancel={() => setConfirmingRetire(null)}
+      />
     </div>
   );
 }

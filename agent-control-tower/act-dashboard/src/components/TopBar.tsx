@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
+import { getAdkProviderHealth, listAdkProviders } from '../api/adk';
 import type { DashboardSummary } from '../types';
 import { NotificationBell } from './NotificationBell';
 
@@ -37,6 +38,20 @@ export function TopBar() {
     refetchInterval: 15_000,
   });
 
+  const { data: providers } = useQuery({
+    queryKey: ['adk-providers'],
+    queryFn: listAdkProviders,
+    refetchInterval: 15_000,
+  });
+
+  const healthResults = useQueries({
+    queries: (providers ?? []).map((p) => ({
+      queryKey: ['adk-provider-health', p.id],
+      queryFn: () => getAdkProviderHealth(p.id),
+      refetchInterval: 15_000,
+    })),
+  });
+
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1_000);
     return () => window.clearInterval(id);
@@ -60,7 +75,9 @@ export function TopBar() {
   const runningRuns = summary?.runningRuns ?? 0;
   const pendingApprovals = summary?.pendingApprovals ?? 0;
   const tokensBurned = summary?.totalTokensBurned ?? 0;
-  const isHealthy = activeAgents > 0;
+  const healthyProviders = healthResults.filter((r) => r.data?.healthy).length;
+  const providersKnown = providers !== undefined && providers.length > 0;
+  const isHealthy = providersKnown && healthyProviders > 0;
 
   return (
     <header className="topbar">
@@ -75,11 +92,11 @@ export function TopBar() {
       <div className="badges">
         <span className="badge governed">
           <span className="dot" />
-          {activeAgents} {activeAgents === 1 ? 'Agent' : 'Agents'} Online
+          {activeAgents} {activeAgents === 1 ? 'Agent' : 'Agents'}
         </span>
         <span className={`badge ${isHealthy ? 'live' : 'afterhours'}`}>
           <span className="dot" />
-          {isHealthy ? 'System Healthy' : 'System Idle'}
+          {isHealthy ? `${healthyProviders} of ${providers?.length ?? 0} Providers Healthy` : 'Providers Unavailable'}
         </span>
       </div>
 

@@ -105,3 +105,31 @@ describe('ExecutiveSummary Waiting-on-you signal', () => {
     expect(stat.className).not.toContain('clickable');
   });
 });
+
+describe('ExecutiveSummary Active Agents honesty', () => {
+  it('reports degraded agents instead of claiming every agent is healthy', async () => {
+    mockedGetSummary.mockResolvedValue({
+      activeAgents: 2,
+      healthyAgents: 2,
+      degradedAgents: 1,
+      runningRuns: 0,
+      pendingApprovals: 0,
+      totalTokensBurned: 0,
+    });
+    renderSummary();
+
+    const detail = await screen.findByText('Healthy · 1 degraded');
+    const stat = detail.closest('.stat') as HTMLElement;
+    expect(stat).toHaveTextContent('2');
+    expect(stat.className).toContain('amber');
+    expect(screen.queryByText('Healthy & responsive')).not.toBeInTheDocument();
+  });
+
+  it('claims all healthy only when no agent is degraded', async () => {
+    renderSummary();
+
+    const detail = await screen.findByText('All healthy');
+    const stat = detail.closest('.stat') as HTMLElement;
+    expect(stat.className).not.toContain('amber');
+  });
+});

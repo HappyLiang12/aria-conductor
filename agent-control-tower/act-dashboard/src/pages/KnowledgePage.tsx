@@ -33,75 +33,6 @@ const FLOW_STEPS: FlowStep[] = [
   { num: '05', ttl: 'Unified Library', desc: 'Indexed in the shared knowledge fabric; reusable everywhere.' },
 ];
 
-interface AccessRow {
-  area: string;
-  hint: string;
-  cells: { label: 'EDIT' | 'USE' | 'VIEW' | 'NONE'; cls: 'edit' | 'use' | 'view' | 'none' }[];
-}
-const ACCESS_HEADERS = ['Coder', 'QA', 'Orchestrator', 'Reviewer', 'Reporter', 'Sentinel'];
-const ACCESS_ROWS: AccessRow[] = [
-  {
-    area: 'Skill Library',
-    hint: 'Reusable agent skills & playbooks',
-    cells: [
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'VIEW', cls: 'view' },
-      { label: 'USE',  cls: 'use'  },
-    ],
-  },
-  {
-    area: 'Prompt Templates',
-    hint: 'System prompts, role primers',
-    cells: [
-      { label: 'USE',  cls: 'use'  },
-      { label: 'VIEW', cls: 'view' },
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'VIEW', cls: 'view' },
-    ],
-  },
-  {
-    area: 'Scripts & Tools',
-    hint: 'Executable scripts, MCP tools',
-    cells: [
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'VIEW', cls: 'view' },
-      { label: 'NONE', cls: 'none' },
-      { label: 'EDIT', cls: 'edit' },
-    ],
-  },
-  {
-    area: 'Workflow Templates',
-    hint: 'Multi-agent orchestration recipes',
-    cells: [
-      { label: 'USE',  cls: 'use'  },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'USE',  cls: 'use'  },
-      { label: 'VIEW', cls: 'view' },
-      { label: 'NONE', cls: 'none' },
-    ],
-  },
-  {
-    area: 'Sensitive / Restricted',
-    hint: 'Customer data, secrets, audit trails',
-    cells: [
-      { label: 'NONE', cls: 'none' },
-      { label: 'NONE', cls: 'none' },
-      { label: 'VIEW', cls: 'view' },
-      { label: 'EDIT', cls: 'edit' },
-      { label: 'NONE', cls: 'none' },
-      { label: 'VIEW', cls: 'view' },
-    ],
-  },
-];
-
 // ---------- helpers ---------- //
 
 type ExtendedKnowledgeItem = KnowledgeItem & {
@@ -749,35 +680,6 @@ export function KnowledgePage() {
         </section>
       </div>
 
-      {/* ---------- 5. Access Control ---------- */}
-      <section className="panel knowledge-wide">
-        <h2>
-          Access Control <span className="accent">/ permission matrix</span>
-        </h2>
-        <div className="knowledge-access">
-          <div className="knowledge-access-table">
-            <div className="cell th first">
-              <b>Knowledge Area</b>
-              <span>by agent role</span>
-            </div>
-            {ACCESS_HEADERS.map((h) => (
-              <div className="cell th" key={h}>
-                {h}
-              </div>
-            ))}
-            {ACCESS_ROWS.map((row) => (
-              <RowFragment key={row.area} row={row} />
-            ))}
-          </div>
-        </div>
-        <div className="knowledge-permission-legend">
-          <span className="access-label edit">EDIT</span> read & write
-          <span className="access-label use">USE</span> invoke only
-          <span className="access-label view">VIEW</span> read-only
-          <span className="access-label none">NONE</span> denied
-        </div>
-      </section>
-
       {/* ---------- Review confirm dialog ---------- */}
       {confirmReview && (
         <div className="modal-overlay" onClick={() => setConfirmReview(null)}>
@@ -978,21 +880,5 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
       </span>
       {children}
     </label>
-  );
-}
-
-function RowFragment({ row }: { row: AccessRow }) {
-  return (
-    <>
-      <div className="cell first">
-        <b>{row.area}</b>
-        <span>{row.hint}</span>
-      </div>
-      {row.cells.map((c, i) => (
-        <div className="cell" key={i}>
-          <span className={`access-label ${c.cls}`}>{c.label}</span>
-        </div>
-      ))}
-    </>
   );
 }

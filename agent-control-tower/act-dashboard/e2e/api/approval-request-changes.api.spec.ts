@@ -55,12 +55,17 @@ test.describe('request changes loop', () => {
     });
     expect(changes.status).toBe(200);
 
-    // The stale ask must no longer be PENDING.
+    // The stale ask must no longer be PENDING. The callback must *throw* on a
+    // non-200 so the poll fails: returning a sentinel like `HTTP_404` would
+    // satisfy `.not.toBe('PENDING')` and let a 404/500 pass vacuously.
     await expect
       .poll(
         async () => {
           const { status, data } = await apiCall(request, 'GET', `/approvals/${firstAsk.id}`);
-          return status === 200 ? data?.status : `HTTP_${status}`;
+          if (status !== 200) {
+            throw new Error(`GET /approvals/${firstAsk.id} failed: HTTP ${status}`);
+          }
+          return data?.status;
         },
         { timeout: 30_000 },
       )
@@ -80,6 +85,7 @@ test.describe('request changes loop', () => {
     // Guards against the feedback leaking into the wrong run: the original
     // attempt's prompt seed must be untouched.
     const firstRun = (await apiCall(request, 'GET', `/runs/${firstRunId}`)).data;
+    expect(firstRun?.promptSeed).toBeTruthy();
     expect(String(firstRun.promptSeed)).not.toContain(feedback);
     expect(String(newRun.promptSeed)).toContain('Operator feedback on the previous attempt');
     expect(String(newRun.promptSeed)).toContain(feedback);

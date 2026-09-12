@@ -22,9 +22,26 @@ foreach ($name in @('backend', 'frontend')) {
     $pidFile = Join-Path $RunDir "$name.pid"
     if (-not (Test-Path $pidFile)) { continue }
     $processId = (Get-Content $pidFile -Raw).Trim()
-    if ($processId -match '^\d+$') {
-        & taskkill /PID $processId /T /F *> $null
+    if ($processId -notmatch '^\d+$') { continue }
+
+    $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if (-not $proc) {
+        Write-Host "  skipped $name (PID $processId is no longer running)" -ForegroundColor DarkGray
+        continue
+    }
+    # The pid file only records a number, and PIDs get recycled, so a stale file can point at
+    # an unrelated process. start.ps1 launches these children with pwsh, so anything else is
+    # not ours and must not be killed.
+    if ($proc.ProcessName -notin @('pwsh', 'powershell')) {
+        Write-Host "  skipping $name (PID $processId is not one of our processes)" -ForegroundColor Yellow
+        continue
+    }
+
+    & taskkill /PID $processId /T /F *> $null
+    if ($LASTEXITCODE -eq 0 -or -not (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
         Write-Host "  stopped $name (PID $processId)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  FAILED to stop $name (PID $processId, taskkill exit $LASTEXITCODE)" -ForegroundColor Yellow
     }
 }
 

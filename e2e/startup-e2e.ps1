@@ -199,6 +199,48 @@ function Start-FakeHangingServer {
     return [pscustomobject]@{ Port = $port; Job = $job; PortFile = $portFile }
 }
 
+# Holds a loopback port open in a *separate process* and returns @{ Port; Process; PortFile }.
+# Separate, and not a job, on purpose: the assertion these scenarios make is that a port
+# guard which never got consent leaves the holder alive, so the listener must be killable
+# and its PID addressable from here. The holder parks for 300s, far beyond any scenario.
+function Start-PortHolder {
+    $holder = Join-Path $StubDir ("port-holder-" + [guid]::NewGuid().ToString("N") + ".ps1")
+    $portFile = "$holder.port"
+    # -File with a generated path keeps the child command line free of quoting hazards.
+    Set-Content -Path $holder -Value @"
+`$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+`$listener.Start()
+Set-Content -Path '$portFile' -Value ([System.Net.IPEndPoint]`$listener.LocalEndpoint).Port
+Start-Sleep -Seconds 300
+"@
+    $proc = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', $holder) -NoNewWindow -PassThru
+    $port = $null
+    for ($i = 0; $i -lt 100 -and -not $port; $i++) {
+        Start-Sleep -Milliseconds 100
+        if (Test-Path $portFile) {
+            $raw = Get-Content $portFile -Raw
+            if ("$raw".Trim() -match '^\d+$') { $port = [int]"$raw".Trim() }
+        }
+    }
+    return [pscustomobject]@{ Port = $port; Process = $proc; PortFile = $portFile }
+}
+
+function Stop-PortHolder($Holder) {
+    Stop-Process -Id $Holder.Process.Id -Force -ErrorAction SilentlyContinue
+    Remove-Item $Holder.PortFile -Force -ErrorAction SilentlyContinue
+}
+
+# Returns a loopback port that nothing is listening on, by binding one and releasing it.
+# A released port can in theory be taken by a stranger before the scenario runs, but the
+# scenario only needs the launcher to see those ports free, and a taken one fails loudly.
+function Get-FreeLoopbackPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    $listener.Stop()
+    return $port
+}
+
 try {
     Write-Host "Test-LlmKeyValid scenarios:" -ForegroundColor Cyan
 
@@ -286,6 +328,24 @@ Load-DotEnv `$root
 Write-Output ("RESULT model=" + `$env:LLM_MODEL)
 "@
     Assert-True "a space-padded key is repaired rather than trusted" ($out -match "RESULT model=deepseek-v4-flash") $out
+
+    $out = Invoke-Snippet @"
+. '$EnvSetupLib'
+`$ErrorActionPreference = 'Stop'
+`$root = Join-Path '$StubDir' 'emptyenv'
+New-Item -ItemType Directory -Path `$root -Force | Out-Null
+Set-Content -Path (Join-Path `$root '.env') -Value '' -NoNewline
+`$r = Ensure-EnvFile -ProjectRoot `$root -SandboxSocket '/run/user/1000/podman/podman.sock' -NonInteractive -ApiKey 'sk-test-not-a-real-key-0000'
+`$text = Get-Content (Join-Path `$root '.env') -Raw
+Write-Output ("RESULT added=" + (`$r.AddedKeys -join ','))
+Write-Output ("RESULT hasKey=" + (`$text -match 'LLM_API_KEY=sk-test-not-a-real-key-0000'))
+"@
+    # `Get-Content -Raw` is $null for a 0-byte file, so calling .TrimEnd() on it is fatal - but
+    # only under the launcher's own $ErrorActionPreference = 'Stop' (set above). Left at the
+    # default the same call is merely reported and the script muddles through with $content
+    # still null, which would hide the defect behind a passing assertion.
+    Assert-True "a 0-byte .env is treated as having no keys" `
+        (($out -match "RESULT added=LLM_API_KEY,LLM_BASE_URL,LLM_MODEL,CONTAINER_RUNTIME,SANDBOX_SOCKET") -and ($out -match "RESULT hasKey=True")) $out
 
     Write-Host "Initialize-MavenShim scenarios:" -ForegroundColor Cyan
 
@@ -467,6 +527,187 @@ Write-Output ("RESULT exit=" + `$LASTEXITCODE)
     Assert-True "-DryRun prints the mode block" (($out -match "Topology\s*:\s*local-dev") -and ($out -match "Provider\s*:\s*opencode") -and ($out -match "Runtime\s*:\s*podman")) $out
     Assert-True "-DryRun leaves the existing .env untouched" ((Get-Content (Join-Path $dryRoot '.env') -Raw) -match 'LLM_API_KEY=sk-test1234567890') $out
     Assert-True "-DryRun writes no .run state" (-not (Test-Path (Join-Path $dryRoot '.run'))) $out
+
+    Write-Host "start.ps1 fresh-checkout -DryRun scenario:" -ForegroundColor Cyan
+
+    # The help text promises -DryRun mutates nothing, so on a checkout with no .env it must
+    # neither write one nor fail the key validation it cannot possibly pass.
+    $freshRoot = Join-Path $StubDir "dryrun-fresh"
+    New-Item -ItemType Directory -Path $freshRoot -Force | Out-Null
+    # A nested child, not `& start.ps1`: only a separate process reports the launcher's own
+    # exit code. Invoked in-process, a failure leaves $LASTEXITCODE at whatever the last
+    # native call set and the exit-code assertion would pass no matter what the run did.
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -ProjectRoot '$freshRoot' 2>&1 | Out-String)
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+    Assert-True "-DryRun succeeds on a checkout without .env" ($out -match "RESULT exit=0") $out
+    Assert-True "-DryRun says it would create .env" ($out -match 'would create \.env') $out
+    Assert-True "-DryRun on a fresh checkout writes no .env" (-not (Test-Path (Join-Path $freshRoot '.env'))) $out
+
+    Write-Host "start.ps1 -DryRun sparse .env scenario:" -ForegroundColor Cyan
+
+    # A sparse .env is what proves "Nothing is mutated": a real run appends the missing keys,
+    # so any write at all shows up as different bytes. Hashing the whole file also catches a
+    # rewrite that happens to keep every key readable.
+    $sparseRoot = Join-Path $StubDir "dryrun-sparse"
+    New-Item -ItemType Directory -Path $sparseRoot -Force | Out-Null
+    Set-Content -Path (Join-Path $sparseRoot '.env') -Value 'LLM_API_KEY=sk-test-not-a-real-key-0000' -NoNewline
+    $sparseEnv = Join-Path $sparseRoot '.env'
+    $before = (Get-FileHash $sparseEnv -Algorithm SHA256).Hash
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -ProjectRoot '$sparseRoot' 2>&1 | Out-String)
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+    $after = (Get-FileHash $sparseEnv -Algorithm SHA256).Hash
+    Assert-True "-DryRun exits 0 on a sparse .env" ($out -match "RESULT exit=0") $out
+    Assert-True "-DryRun reports the keys it would add" ($out -match 'would add to \.env:') $out
+    Assert-True "-DryRun leaves a sparse .env byte-identical" ($before -eq $after) "before=$before after=$after $out"
+
+    Write-Host "start.ps1 port-consent scenario:" -ForegroundColor Cyan
+
+    # Regression guard for the fail-open consent prompt. With stdin not connected the
+    # harness's child gets AutomationNull from Read-Host, and `AutomationNull -notmatch
+    # '^(?i)y'` evaluates to nothing at all (falsy), so a guard written that way falls
+    # through to taskkill without ever asking. Every port the launcher pre-checks is held
+    # here, by this harness, so whichever way the run goes it can only kill our own holders
+    # and can never touch a real backend, frontend or sandbox.
+    $consentRoot = Join-Path $StubDir "consent"
+    New-Item -ItemType Directory -Path $consentRoot -Force | Out-Null
+    $backendHolder = Start-PortHolder
+    $sandboxHolder = Start-PortHolder
+    $frontendHolder = Start-PortHolder
+    Assert-True "the harness holds a port for the consent scenario" `
+        ([bool]$backendHolder.Port -and [bool]$sandboxHolder.Port -and [bool]$frontendHolder.Port) "a holder published no port"
+    if ($backendHolder.Port -and $sandboxHolder.Port -and $frontendHolder.Port) {
+        Set-Content -Path (Join-Path $consentRoot '.env') -Value (@(
+                'LLM_API_KEY=sk-test-not-a-real-key-0000',
+                "BACKEND_PORT=$($backendHolder.Port)",
+                "OPENSANDBOX_PORT=$($sandboxHolder.Port)",
+                "VITE_PORT=$($frontendHolder.Port)",
+                ''
+            ) -join "`n")
+        # A FILE at .run makes the launcher abort at phase 5, because Start-Process cannot
+        # redirect into `<file>/backend.log`. That keeps a run whose guard failed open from
+        # starting a real backend/frontend on the host. It is inert once the guard works -
+        # the guard throws in phase 4, long before .run is touched.
+        Set-Content -Path (Join-Path $consentRoot '.run') -Value 'blocker'
+        $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+try { & '$ProjectRoot\scripts\start.ps1' -ProjectRoot '$consentRoot' } catch { Write-Output ("RESULT threw=" + `$_.Exception.Message) }
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+        Assert-True "an unanswered port prompt aborts instead of killing" ($out -match 'Aborted') $out
+        Assert-True "no port holder is killed without consent" `
+            (([bool](Get-Process -Id $backendHolder.Process.Id -ErrorAction SilentlyContinue)) -and
+            ([bool](Get-Process -Id $sandboxHolder.Process.Id -ErrorAction SilentlyContinue)) -and
+            ([bool](Get-Process -Id $frontendHolder.Process.Id -ErrorAction SilentlyContinue))) $out
+    }
+    Stop-PortHolder $backendHolder
+    Stop-PortHolder $sandboxHolder
+    Stop-PortHolder $frontendHolder
+
+    Write-Host "start.ps1 sandbox-port scenario:" -ForegroundColor Cyan
+
+    # Ensure-OpenSandboxServer owns the sandbox port, so the port pre-check must not report our
+    # own `aria-opensandbox` port forward as a conflict and offer to kill it. FAKE_PODMAN_SERVER
+    # reports the container as already running, which is the restart case that used to trip it.
+    $sandboxRoot = Join-Path $StubDir "sandboxport"
+    New-Item -ItemType Directory -Path $sandboxRoot -Force | Out-Null
+    $sandboxHolder2 = Start-PortHolder
+    Assert-True "the harness holds the sandbox port for the restart scenario" ([bool]$sandboxHolder2.Port) "holder published no port"
+    if ($sandboxHolder2.Port) {
+        Set-Content -Path (Join-Path $sandboxRoot '.env') -Value (@(
+                'LLM_API_KEY=sk-test-not-a-real-key-0000',
+                "BACKEND_PORT=$(Get-FreeLoopbackPort)",
+                "VITE_PORT=$(Get-FreeLoopbackPort)",
+                "OPENSANDBOX_PORT=$($sandboxHolder2.Port)",
+                ''
+            ) -join "`n")
+        # Same phase-5 blocker as the consent scenario: this run is supposed to get *past* the
+        # port pre-check, and it must not launch a real backend to prove that.
+        Set-Content -Path (Join-Path $sandboxRoot '.run') -Value 'blocker'
+        $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SERVER = 'running'
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+try { & '$ProjectRoot\scripts\start.ps1' -ProjectRoot '$sandboxRoot' } catch { Write-Output ("RESULT threw=" + `$_.Exception.Message) }
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+        Assert-True "the sandbox port is not treated as a conflict" `
+            (($out -notmatch "port $($sandboxHolder2.Port) is held by") -and ($out -match '\[5/8\]')) $out
+        Assert-True "the sandbox listener survives the port check" `
+            ([bool](Get-Process -Id $sandboxHolder2.Process.Id -ErrorAction SilentlyContinue)) $out
+    }
+    Stop-PortHolder $sandboxHolder2
+
+    Write-Host "start.ps1 docker-runtime socket scenario:" -ForegroundColor Cyan
+
+    # A podman socket must never be pinned next to CONTAINER_RUNTIME=docker. podman is on PATH
+    # here (and answers `info`), so a flow that resolves the socket unconditionally writes the
+    # podman path into .env - the mixed pair this scenario forbids. The placeholder key stops
+    # the run in phase 2, after .env has been written, which is the write under test.
+    $dockerRoot = Join-Path $StubDir "dockerruntime"
+    New-Item -ItemType Directory -Path $dockerRoot -Force | Out-Null
+    Set-Content -Path (Join-Path $dockerRoot '.env') -Value "LLM_API_KEY=your-api-key-here`nCONTAINER_RUNTIME=docker`n"
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+try { & '$ProjectRoot\scripts\start.ps1' -NonInteractive -ProjectRoot '$dockerRoot' } catch { Write-Output ("RESULT threw=" + `$_.Exception.Message) }
+`$text = Get-Content (Join-Path '$dockerRoot' '.env') -Raw
+Write-Output ("RESULT podmanSocket=" + (`$text -match 'podman\.sock'))
+Write-Output ("RESULT dockerSocket=" + (`$text -match 'SANDBOX_SOCKET=/var/run/docker\.sock'))
+"@ -Stubs @{ 'docker.ps1' = "exit 0`n" } -PathPrepend $FakePodmanDir
+    Assert-True "the docker path pins docker's socket, never a podman one" `
+        (($out -match "RESULT podmanSocket=False") -and ($out -match "RESULT dockerSocket=True")) $out
+
+    Write-Host "start.ps1 stopped-podman-machine scenario:" -ForegroundColor Cyan
+
+    # A stopped podman machine makes `podman info` fail, and the launcher used to read that as
+    # "podman is unusable", pick docker and write CONTAINER_RUNTIME=docker into .env, where it
+    # stuck. The stub below fails `info` until `machine start` has run, and a working docker
+    # stub is on PATH, so the wrong choice would resolve cleanly and be recorded silently
+    # instead of erroring out - which is what makes this scenario able to fail.
+    $stoppedMachinePodman = @'
+# No param() block, and $args rather than named parameters, for the same reason as the
+# shared fake podman: dash options would otherwise bind to PowerShell common parameters.
+$joined = ($args -join ' ')
+$marker = $env:FAKE_PODMAN_MARKER
+switch -Regex ($joined) {
+    '^info' {
+        # The engine is unreachable until the machine has been started.
+        if ($marker -and (Test-Path $marker)) { Write-Output $env:FAKE_PODMAN_SOCKET; exit 0 }
+        exit 1
+    }
+    '^machine list' { Write-Output 'podman-machine-default* wsl 1 day ago Never'; exit 0 }
+    'machine start' { if ($marker) { Set-Content -Path $marker -Value 'started' }; exit 0 }
+    default         { exit 0 }
+}
+'@
+    $stoppedRoot = Join-Path $StubDir "stoppedmachine"
+    New-Item -ItemType Directory -Path $stoppedRoot -Force | Out-Null
+    $machineMarker = Join-Path $StubDir "machine-started.txt"
+    Remove-Item $machineMarker -ErrorAction SilentlyContinue
+    Set-Content -Path (Join-Path $stoppedRoot '.env') -Value (@(
+            'LLM_API_KEY=sk-test-not-a-real-key-0000',
+            "BACKEND_PORT=$(Get-FreeLoopbackPort)",
+            "VITE_PORT=$(Get-FreeLoopbackPort)",
+            ''
+        ) -join "`n")
+    # Same phase-5 blocker: once the runtime is chosen correctly this run has nothing left to
+    # prove, and it must not launch a real backend on the host.
+    Set-Content -Path (Join-Path $stoppedRoot '.run') -Value 'blocker'
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+`$env:FAKE_PODMAN_MARKER = '$machineMarker'
+try { & '$ProjectRoot\scripts\start.ps1' -ProjectRoot '$stoppedRoot' } catch { Write-Output ("RESULT threw=" + `$_.Exception.Message) }
+`$text = Get-Content (Join-Path '$stoppedRoot' '.env') -Raw
+Write-Output ("RESULT podman=" + (`$text -match 'CONTAINER_RUNTIME=podman'))
+Write-Output ("RESULT docker=" + (`$text -match 'CONTAINER_RUNTIME=docker'))
+"@ -Stubs @{ 'podman.ps1' = $stoppedMachinePodman; 'docker.ps1' = "exit 0`n" }
+    Assert-True "a stopped podman machine is started, not swapped for docker" `
+        (($out -match "RESULT podman=True") -and ($out -match "RESULT docker=False")) $out
+    Assert-True "the machine start was issued before the runtime was chosen" (Test-Path $machineMarker) $out
 
     Write-Host "start.ps1 -Mode compose scenarios:" -ForegroundColor Cyan
 

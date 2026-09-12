@@ -23,6 +23,72 @@ $script:LlmPresets = @{
 
 <#
 .SYNOPSIS
+The key names .env already defines, using the exact grammar Load-DotEnv can read back.
+#>
+function Get-EnvKeyNames {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $names = @{}
+    foreach ($line in (Get-Content $Path)) {
+        # Mirror Load-DotEnv's grammar exactly: trim the line, then require the key name to be
+        # followed immediately by '='. The value may be empty, so a blank `KEY=` still counts as
+        # present. A space-padded `KEY = value` is NOT loadable - Load-DotEnv's `^(name)=(.*)$`
+        # cannot parse it - so it must not count as present, or the key would end up neither
+        # repaired nor readable while the launcher reported success.
+        $trimmed = $line.Trim()
+        if ($trimmed -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { $names[$Matches[1]] = $true }
+    }
+    return $names
+}
+
+<#
+.SYNOPSIS
+What Ensure-EnvFile would do for $ProjectRoot: @{ Exists; Wanted; Missing }.
+
+Pure read - nothing is written - so -DryRun can report the same decision a real run would
+make instead of mutating .env to find out. An empty existing file simply has no keys.
+#>
+function Get-EnvPlan {
+    param(
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [Parameter(Mandatory)][string]$SandboxSocket,
+        [string]$ContainerRuntime = 'podman',
+        [ValidateSet('deepseek', 'openai')][string]$Preset = 'deepseek',
+        [string]$ApiKey,
+        [string]$Model
+    )
+
+    $presetDef = $script:LlmPresets[$Preset]
+    if (-not $Model) { $Model = $presetDef.Model }
+    if (-not $ApiKey) { $ApiKey = '' }
+
+    $wanted = [ordered]@{
+        LLM_API_KEY      = $ApiKey
+        LLM_BASE_URL     = $presetDef.BaseUrl
+        LLM_MODEL        = $Model
+        CONTAINER_RUNTIME = $ContainerRuntime
+        SANDBOX_SOCKET   = $SandboxSocket
+    }
+
+    $envPath = Join-Path $ProjectRoot '.env'
+    if (-not (Test-Path $envPath)) {
+        # A missing file is written whole, not appended to.
+        return [pscustomobject]@{ Exists = $false; Wanted = $wanted; Missing = @($wanted.Keys) }
+    }
+
+    $present = Get-EnvKeyNames -Path $envPath
+    $missing = @()
+    foreach ($k in $wanted.Keys) {
+        if ($present.ContainsKey($k)) { continue }
+        # A blank placeholder must not be written for the key the user has to supply.
+        if ($k -eq 'LLM_API_KEY' -and -not $wanted[$k]) { continue }
+        $missing += $k
+    }
+    return [pscustomobject]@{ Exists = $true; Wanted = $wanted; Missing = $missing }
+}
+
+<#
+.SYNOPSIS
 Creates .env on first run, or adds only the keys that are missing.
 Returns @{ Created; AddedKeys; Path }.
 
@@ -44,26 +110,18 @@ function Ensure-EnvFile {
     )
 
     $envPath = Join-Path $ProjectRoot '.env'
-    $presetDef = $script:LlmPresets[$Preset]
 
     if (-not $ApiKey -and -not $NonInteractive) {
         $secure = Read-Host -Prompt "LLM API key ($Preset)" -AsSecureString
         $ApiKey = ConvertFrom-SecureString -SecureString $secure -AsPlainText
     }
-    if (-not $Model) { $Model = $presetDef.Model }
-    if (-not $ApiKey) { $ApiKey = '' }
 
-    $wanted = [ordered]@{
-        LLM_API_KEY      = $ApiKey
-        LLM_BASE_URL     = $presetDef.BaseUrl
-        LLM_MODEL        = $Model
-        CONTAINER_RUNTIME = $ContainerRuntime
-        SANDBOX_SOCKET   = $SandboxSocket
-    }
+    $plan = Get-EnvPlan -ProjectRoot $ProjectRoot -SandboxSocket $SandboxSocket `
+        -ContainerRuntime $ContainerRuntime -Preset $Preset -ApiKey $ApiKey -Model $Model
 
-    if (-not (Test-Path $envPath)) {
+    if (-not $plan.Exists) {
         $lines = @()
-        foreach ($k in $wanted.Keys) { $lines += "$k=$($wanted[$k])" }
+        foreach ($k in $plan.Wanted.Keys) { $lines += "$k=$($plan.Wanted[$k])" }
         $lines += ''
         $lines += '# --- Database (used by -Mode compose only) ---'
         $lines += 'DB_ROOT_PASSWORD=change-me-root'
@@ -76,35 +134,18 @@ function Ensure-EnvFile {
         $lines += '# FRONTEND_PORT=3000'
         $lines += '# VITE_PORT=5173'
         Set-Content -Path $envPath -Value ($lines -join "`n") -NoNewline
-        return [pscustomobject]@{ Created = $true; AddedKeys = @($wanted.Keys); Path = $envPath }
+        return [pscustomobject]@{ Created = $true; AddedKeys = @($plan.Wanted.Keys); Path = $envPath }
     }
 
-    $present = @{}
-    foreach ($line in (Get-Content $envPath)) {
-        # Mirror Load-DotEnv's grammar exactly: trim the line, then require the key name to be
-        # followed immediately by '='. The value may be empty, so a blank `KEY=` still counts as
-        # present. A space-padded `KEY = value` is NOT loadable - Load-DotEnv's `^(name)=(.*)$`
-        # cannot parse it - so it must not count as present, or the key would end up neither
-        # repaired nor readable while the launcher reported success.
-        $trimmed = $line.Trim()
-        if ($trimmed -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') { $present[$Matches[1]] = $true }
+    if ($plan.Missing.Count -gt 0) {
+        $append = @()
+        foreach ($k in $plan.Missing) { $append += "$k=$($plan.Wanted[$k])" }
+        # `-Raw` is $null for a 0-byte file, so go through [string]: an empty file has no keys
+        # to preserve and the appended lines become the whole content.
+        $content = [string](Get-Content $envPath -Raw)
+        if ($content) { $content = $content.TrimEnd() + "`n" }
+        Set-Content -Path $envPath -Value ($content + ($append -join "`n") + "`n") -NoNewline
     }
 
-    $added = @()
-    $append = @()
-    foreach ($k in $wanted.Keys) {
-        if (-not $present.ContainsKey($k)) {
-            $value = $wanted[$k]
-            # A blank placeholder must not be written for the key the user has to supply.
-            if ($k -eq 'LLM_API_KEY' -and -not $value) { continue }
-            $append += "$k=$value"
-            $added += $k
-        }
-    }
-    if ($append.Count -gt 0) {
-        $content = (Get-Content $envPath -Raw).TrimEnd() + "`n" + ($append -join "`n") + "`n"
-        Set-Content -Path $envPath -Value $content -NoNewline
-    }
-
-    return [pscustomobject]@{ Created = $false; AddedKeys = $added; Path = $envPath }
+    return [pscustomobject]@{ Created = $false; AddedKeys = $plan.Missing; Path = $envPath }
 }

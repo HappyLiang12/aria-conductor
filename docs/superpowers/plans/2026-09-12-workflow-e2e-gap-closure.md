@@ -104,7 +104,7 @@ Create `e2e/unknown-route.spec.ts`:
 import { test, expect } from '@playwright/test';
 
 /**
- * An unknown URL used to render the rail above an empty content area, because
+ * An unknown URL used to render blank, with no navigation rail and no content, because
  * App.tsx had no catch-all route. It now renders a not-found surface with the
  * navigation intact.
  */

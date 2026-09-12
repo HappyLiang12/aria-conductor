@@ -160,8 +160,8 @@ exercise the gate.
 
 ### D4 — Catch-all NotFound route
 
-`App.tsx:30-43` has no fallback, so any unrecognised URL renders the navigation rail above an
-empty content area. Add `src/pages/NotFoundPage.tsx` and register
+`App.tsx:30-43` has no fallback, so an unrecognised URL matched no leaf route at all, and the page
+rendered entirely blank — no navigation rail, no content. Add `src/pages/NotFoundPage.tsx` and register
 `<Route path="*" element={<NotFoundPage />} />` inside the `Layout` route so navigation remains
 available. The page states that the route does not exist and links back to Overview, using the
 existing design tokens.

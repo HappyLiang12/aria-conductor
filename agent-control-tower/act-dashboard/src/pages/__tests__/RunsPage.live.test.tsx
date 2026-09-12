@@ -84,6 +84,31 @@ const runningRun = (id: string, status: string) => ({
   createdAt: '2026-08-29T06:00:00Z', completedAt: null, conversationId: null,
 });
 
+describe('RunsPage run-row keys (S1)', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    runsData = [runningRun('r-1', 'RUNNING'), runningRun('r-2', 'COMPLETED')];
+  });
+
+  it('renders multiple run rows without a React key warning', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    // let React commit both rows so any key warning is actually emitted.
+    // This must be the first test in the file to render run rows: React caches
+    // the missing-key warning per owning component, so a later test would see
+    // an already-deduped console.error.
+    await waitFor(() => expect(screen.getAllByText('Details').length).toBe(2));
+
+    const keyWarnings = errorSpy.mock.calls.filter((call) =>
+      String(call[0]).includes('unique "key" prop'),
+    );
+    expect(keyWarnings).toHaveLength(0);
+    errorSpy.mockRestore();
+  });
+});
+
 describe('RunsPage live trajectory (S3)', () => {
   beforeEach(() => {
     mockCtx = { lastMessage: null, isConnected: false };

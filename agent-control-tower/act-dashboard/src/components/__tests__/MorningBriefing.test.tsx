@@ -76,7 +76,8 @@ describe('MorningBriefing briefing signals (single HITL signal, D7)', () => {
     // Non-zero pendingApprovals proves the second HITL signal is truly gone,
     // not just zero by coincidence.
     vi.mocked(getSummary).mockResolvedValue({
-      totalTokensBurned: 0, activeAgents: 0, pendingApprovals: 5, runningRuns: 3,
+      totalTokensBurned: 0, activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
+      pendingApprovals: 5, runningRuns: 3,
     });
     kanbanData = [
       { id: 'k-1', title: 'a', priority: 'MEDIUM', status: 'REVIEW' },

@@ -5,6 +5,7 @@ import { listRuns, getRunProgress, pauseRun, resumeRun, cancelRun, injectRunMess
 import { useDrawerContext } from './DrawerContext';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
+import { formatClock } from '../utils/formatTime';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import type { Agent, AgentHealthStatus, Run } from '../types';
 
@@ -51,7 +52,7 @@ function initials(name: string): string {
 
 function fmtTime(d: string | Date): string {
   const dt = typeof d === 'string' ? new Date(d) : d;
-  return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return formatClock(dt, true);
 }
 
 // Task 6: single mapping used by BOTH the REST backlog replay and the live

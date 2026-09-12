@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor, act } from '@testing-library/react';
+import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { TaskDrawer } from '../TaskDrawer';
 import { DrawerProvider, TASK_DRAWER_EVENT, useDrawerContext } from '../DrawerContext';
+import { formatTimestamp } from '../../utils/formatTime';
 import type { Approval, KanbanItem, Run } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
@@ -147,9 +148,10 @@ beforeEach(() => {
 // drawer instead of an inert truncated id under Artifacts.
 describe('TaskDrawer linked run result (D4)', () => {
   it('render_taskDrawer_showsLinkedRunResult', async () => {
+    const completedAt = '2026-09-08T00:10:00Z';
     mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
     mockedGetRun.mockResolvedValue(
-      mkRun({ finalOutput: 'Delivered the spec deliverable' }),
+      mkRun({ finalOutput: 'Delivered the spec deliverable', completedAt }),
     );
     renderDrawer();
     openTaskDrawerEvent();
@@ -165,7 +167,12 @@ describe('TaskDrawer linked run result (D4)', () => {
     expect(within(runSection).getByText('COMPLETED')).toBeInTheDocument();
     expect(within(runSection).getByText(/iter 4/i)).toBeInTheDocument();
     expect(within(runSection).getByText(/1,?234/)).toBeInTheDocument();
-    expect(within(runSection).getByText(/2026/)).toBeInTheDocument();
+    // Completion time must be rendered through the canonical formatter. Asserting
+    // the formatted value (not a year regex) keeps this date-independent: the
+    // formatter emits a bare HH:mm when the fixture falls on "today", so any
+    // literal like /2026/ would fail on that one calendar day. The format itself
+    // is covered by utils/__tests__/formatTime.test.ts; this pins the wiring.
+    expect(within(runSection).getByText(formatTimestamp(completedAt))).toBeInTheDocument();
     // The run output is rendered through MarkdownViewer, not as raw text.
     const output = runSection.querySelector('.spec-review-markdown') as HTMLElement;
     expect(output).not.toBeNull();
@@ -426,5 +433,93 @@ describe('TaskDrawer review decision zone', () => {
 
     act(() => resolveAsks([]));
     expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
+  });
+});
+
+// Task 10: Reject is destructive, so it must be confirmed before it fires. Only
+// the confirmation's Confirm handler may reach the transition (Approve is a
+// separate, untouched path).
+describe('TaskDrawer reject confirmation (Task 10)', () => {
+  it('does not fire the reject transition until the operator confirms', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(mockedTransition).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: /Reject task/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(mockedTransition).toHaveBeenCalledTimes(1));
+    expect(mockedTransition).toHaveBeenCalledWith('task-1', {
+      status: 'CANCELLED',
+      comment: undefined,
+    });
+    // Completion clears the pending state.
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Reject task/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('dismissing with Cancel clears the pending state and mutates nothing', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(mockedTransition).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: /Reject task/ })).not.toBeInTheDocument();
+  });
+
+  it('Approve stays ungated', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    // Scoped to the footer: the body's short approval view has its own Approve.
+    const footer = document.querySelector('.drawer footer') as HTMLElement;
+    await user.click(within(footer).getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() =>
+      expect(mockedTransition).toHaveBeenCalledWith('task-1', {
+        status: 'DONE',
+        comment: undefined,
+      }),
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  // Regression: the ConfirmDialog renders as a SIBLING of the drawer (fixed
+  // positioning must escape the drawer's transform), so the DrawerContext
+  // Escape guard does not see its overlay as "inside the drawer" and used to
+  // slam the drawer shut on the same Escape press that dismissed the
+  // confirmation. One press must dismiss ONLY the confirmation; a second then
+  // closes the drawer as before.
+  it('Escape dismisses only the reject confirmation, then a second Escape closes the drawer', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(screen.getByRole('dialog', { name: /Reject task/ })).toBeInTheDocument();
+    // A real Escape originates from the dialog's autofocused control, which
+    // sits in the overlay OUTSIDE the aside — the exact shape of the defect.
+    expect(screen.getByRole('button', { name: 'Confirm' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: /Reject task/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('task-open').textContent).toBe('true');
+    expect(mockedTransition).not.toHaveBeenCalled();
+
+    // The confirmation is gone, so Escape is back to its normal job.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByTestId('task-open').textContent).toBe('false');
   });
 });

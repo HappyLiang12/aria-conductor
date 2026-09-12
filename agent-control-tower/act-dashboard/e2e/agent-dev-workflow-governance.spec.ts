@@ -9,11 +9,14 @@ import { test, expect } from '@playwright/test';
  *  - #26/#23 git pack tools are registered with the correct governance risk tiers and the
  *        per-run workspace contract is in place.
  *  - #24 the Approvals API returns enriched fields (toolName/arguments/riskTier) and the
- *        Approvals UI renders (no hardcoded "Medium" risk badge).
+ *        kanban Review column renders them (no hardcoded "Medium" risk badge). The
+ *        Approvals page and its /approvals route are deleted — the Review column is the
+ *        single HITL surface.
  *
  * The full natural LLM-driven flow (clone→edit→commit→push→PR with UI-approved gates) is verified
  * manually; the circuit-breaker per-iteration latency semantics (#22) are covered by unit tests
- * (CircuitBreakerTest). Mirrors the git-pack-governance.spec.ts pattern; reuses ApprovalsPage.tsx.
+ * (CircuitBreakerTest). Mirrors the git-pack-governance.spec.ts pattern; the approvals surface is
+ * the kanban Review column (the ApprovalsPage it once reused no longer exists).
  *
  * Prerequisites: backend running with the h2 profile (V33+ seeds), frontend dev server up.
  */
@@ -85,8 +88,8 @@ test.describe('Agent Dev-Workflow Governance', () => {
       expect(a).toHaveProperty('arguments');
     }
 
-    await page.goto(`${BASE_URL}/approvals`);
-    await expect(page.locator('h1, h2').first()).toBeVisible();
+    await page.goto(`${BASE_URL}/`);
+    await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible();
     // The risk badge is data-driven now — it must never be a hardcoded "Medium" for every card.
     const hardcodedMedium = page.locator('.risk-badge', { hasText: 'Medium' });
     expect(await hardcodedMedium.count()).toBe(0);

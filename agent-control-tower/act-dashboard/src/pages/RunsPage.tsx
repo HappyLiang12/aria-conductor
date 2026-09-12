@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listRuns, createRun, cancelRun, pauseRun, resumeRun, getRunTrajectory, getRunToolCalls } from '../api/runs';
 import { formatTimestamp } from '../utils/formatTime';
@@ -202,8 +202,8 @@ export function RunsPage() {
             </thead>
             <tbody>
               {filteredRuns.map((run) => (
-                <>
-                  <tr key={run.id} className={expandedRun === run.id ? 'row-expanded' : ''}>
+                <Fragment key={run.id}>
+                  <tr className={expandedRun === run.id ? 'row-expanded' : ''}>
                     <td className="cell-mono">{run.id.slice(0, 8)}</td>
                     <td>{agentMap.get(run.agentId)?.name ?? run.agentId.slice(0, 8)}</td>
                     <td><StatusBadge status={run.status} /></td>
@@ -233,7 +233,7 @@ export function RunsPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>

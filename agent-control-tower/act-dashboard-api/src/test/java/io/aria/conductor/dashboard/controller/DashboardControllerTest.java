@@ -31,8 +31,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Standalone MockMvc tests for {@link DashboardController} wired with the production
  * {@link GlobalExceptionHandler}. Focuses on the controller's aggregation/mapping logic
- * (active-agent summing, token summing, activity mapping, telemetry {@code Number} coercion)
- * rather than the repositories, which are mocked.
+ * (healthy/degraded agent counting, token summing, activity mapping, telemetry
+ * {@code Number} coercion) rather than the repositories, which are mocked.
  */
 class DashboardControllerTest {
 
@@ -62,7 +62,7 @@ class DashboardControllerTest {
     }
 
     @Test
-    void getSummary_sumsHealthyAndDegradedAgentsAndTokens() throws Exception {
+    void getSummary_reportsHealthyAndDegradedAgentsSeparately() throws Exception {
         when(agentRepository.countByHealthStatus(HealthStatus.HEALTHY)).thenReturn(3L);
         when(agentRepository.countByHealthStatus(HealthStatus.DEGRADED)).thenReturn(2L);
         when(runRepository.countByStatus(RunStatus.RUNNING)).thenReturn(4L);
@@ -73,7 +73,10 @@ class DashboardControllerTest {
 
         mockMvc.perform(get("/api/v1/dashboard/summary"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.activeAgents").value(5))
+                // activeAgents is the healthy-only count, not HEALTHY + DEGRADED.
+                .andExpect(jsonPath("$.activeAgents").value(3))
+                .andExpect(jsonPath("$.healthyAgents").value(3))
+                .andExpect(jsonPath("$.degradedAgents").value(2))
                 .andExpect(jsonPath("$.runningRuns").value(4))
                 .andExpect(jsonPath("$.pendingApprovals").value(2))
                 .andExpect(jsonPath("$.totalTokensBurned").value(165));

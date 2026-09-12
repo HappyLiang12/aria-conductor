@@ -91,7 +91,19 @@ export function Toast() {
       } else {
         // Human-readable label only — never expose the raw event type.
         const message = toastMessage(eventToUse.type, eventToUse.payload);
-        setToasts((prev) => [...prev.slice(-4), { id, message, type: eventToUse.type }]);
+        // Not every noteworthy event has a destination (e.g. approval.decided,
+        // housekeeping audits); reuse the shared route map as the single source
+        // of truth and only offer View when it resolves.
+        const route = routeForNotificationType(eventToUse.type);
+        setToasts((prev) => [
+          ...prev.slice(-4),
+          {
+            id,
+            message,
+            type: eventToUse.type,
+            action: route ? { label: 'View', onClick: () => navigate(route) } : undefined,
+          },
+        ]);
       }
 
       const timer = setTimeout(() => {

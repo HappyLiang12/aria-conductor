@@ -6,6 +6,7 @@ import { getRun } from '../api/runs';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
+import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem } from '../types';
 
 /**
@@ -195,7 +196,7 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
             {item.linkedRunId && (
               <span className="owner cell-mono">run {item.linkedRunId.slice(0, 8)}</span>
             )}
-            <span className="owner">updated {new Date(item.updatedAt).toLocaleString()}</span>
+            <span className="owner">updated {formatTimestamp(item.updatedAt)}</span>
           </div>
           <MarkdownViewer content={pendingAsks[0]?.content ?? item.description ?? ''} />
 
@@ -220,7 +221,7 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
                     </span>
                     <span className="owner cell-mono">
                       {linkedRun.completedAt
-                        ? new Date(linkedRun.completedAt).toLocaleString()
+                        ? formatTimestamp(linkedRun.completedAt)
                         : 'not finished'}
                     </span>
                   </div>

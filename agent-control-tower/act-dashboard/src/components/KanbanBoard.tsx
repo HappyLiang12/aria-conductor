@@ -11,6 +11,7 @@ import type {
 } from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
+import { ConfirmDialog } from './ConfirmDialog';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
 // that sent { id } silently swallowed every card click (TaskDrawer never opened).
 import { dispatchOpenTaskDrawer, useDrawerContext } from './DrawerContext';
@@ -79,6 +80,8 @@ export default function KanbanBoard() {
   // Inline card composer: which REVIEW card is currently asking "what should change?".
   const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
   const [cardFeedback, setCardFeedback] = useState('');
+  // Task 10: the card ✕ requests a cancel; the confirmation modal owns it.
+  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
   const { openReviewMode } = useDrawerContext();
 
@@ -175,10 +178,15 @@ export default function KanbanBoard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
+      // Task 10: a confirmed cancel is done — drop the pending confirmation.
+      setConfirmCancelId(null);
       setError(null);
     },
     onError: (err: unknown) => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+      // Task 10: the confirmed action is over (it failed) — never leave the
+      // confirmation stuck open on a rejection.
+      setConfirmCancelId(null);
       // GlobalExceptionHandler puts the rejection reason in `message` (`error`
       // carries only the HTTP reason phrase); same axios shape as TaskDrawer.
       const data = (err as { response?: { data?: { message?: string; error?: string } } } | null)
@@ -448,8 +456,10 @@ export default function KanbanBoard() {
                           aria-label="Cancel task"
                           disabled={transitionMutation.isPending}
                           onClick={(e) => {
+                            // stopPropagation: asking to cancel must not also
+                            // open the card's drawer (Task 10).
                             e.stopPropagation();
-                            transitionMutation.mutate({ id: item.id, status: 'CANCELLED' });
+                            setConfirmCancelId(item.id);
                           }}
                         >
                           ✕
@@ -589,6 +599,28 @@ export default function KanbanBoard() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmCancelId !== null}
+        title="Cancel task — confirmation required"
+        message={
+          <>
+            This cancels card {confirmCancelId?.slice(0, 8)} and stops the work in progress on
+            it. The card leaves the board; only the housekeeping sweep removes it.
+          </>
+        }
+        danger
+        onConfirm={() => {
+          if (!confirmCancelId) return;
+          const id = confirmCancelId;
+          // Closed immediately: the mutation's onSuccess/onError clear the
+          // pending state again so a rejection can never strand the dialog.
+          setConfirmCancelId(null);
+          // The only place the cancel transition is fired (Task 10).
+          transitionMutation.mutate({ id, status: 'CANCELLED' });
+        }}
+        onCancel={() => setConfirmCancelId(null)}
+      />
     </section>
   );
 }

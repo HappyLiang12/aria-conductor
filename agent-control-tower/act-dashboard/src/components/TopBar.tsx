@@ -1,17 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
+import { getAdkProviderHealth, listAdkProviders } from '../api/adk';
 import type { DashboardSummary } from '../types';
+import { formatClock } from '../utils/formatTime';
 import { NotificationBell } from './NotificationBell';
-
-function formatClock(date: Date): string {
-  return date.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
 
 function formatTokens(tokens: number | undefined): string {
   if (!tokens || tokens <= 0) return '0';
@@ -37,6 +30,20 @@ export function TopBar() {
     refetchInterval: 15_000,
   });
 
+  const { data: providers } = useQuery({
+    queryKey: ['adk-providers'],
+    queryFn: listAdkProviders,
+    refetchInterval: 15_000,
+  });
+
+  const healthResults = useQueries({
+    queries: (providers ?? []).map((p) => ({
+      queryKey: ['adk-provider-health', p.id],
+      queryFn: () => getAdkProviderHealth(p.id),
+      refetchInterval: 15_000,
+    })),
+  });
+
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1_000);
     return () => window.clearInterval(id);
@@ -60,7 +67,23 @@ export function TopBar() {
   const runningRuns = summary?.runningRuns ?? 0;
   const pendingApprovals = summary?.pendingApprovals ?? 0;
   const tokensBurned = summary?.totalTokensBurned ?? 0;
-  const isHealthy = activeAgents > 0;
+  const healthyProviders = healthResults.filter((r) => r.data?.healthy === true).length;
+  // Honesty rule: the badge may only report a verdict it actually has evidence for.
+  // `data` is the only field that carries a verdict — a pending probe has none yet and
+  // an errored probe never produced one (an error is absence of evidence, not proof of
+  // unhealth). So evidence is: the provider list settled AND every probe has data.
+  const hasProviderEvidence =
+    providers !== undefined && healthResults.every((r) => r.data !== undefined);
+  const providerBadgeState: 'healthy' | 'unavailable' | 'unknown' =
+    healthyProviders > 0 ? 'healthy' : hasProviderEvidence ? 'unavailable' : 'unknown';
+  const providerBadgeClass =
+    providerBadgeState === 'healthy' ? 'live' : providerBadgeState === 'unavailable' ? 'afterhours' : '';
+  const providerBadgeText =
+    providerBadgeState === 'healthy'
+      ? `${healthyProviders} of ${providers?.length ?? 0} Providers Healthy`
+      : providerBadgeState === 'unavailable'
+        ? 'Providers Unavailable'
+        : 'Checking providers…';
 
   return (
     <header className="topbar">
@@ -75,11 +98,11 @@ export function TopBar() {
       <div className="badges">
         <span className="badge governed">
           <span className="dot" />
-          {activeAgents} {activeAgents === 1 ? 'Agent' : 'Agents'} Online
+          {activeAgents} {activeAgents === 1 ? 'Agent' : 'Agents'}
         </span>
-        <span className={`badge ${isHealthy ? 'live' : 'afterhours'}`}>
+        <span className={`badge ${providerBadgeClass}`}>
           <span className="dot" />
-          {isHealthy ? 'System Healthy' : 'System Idle'}
+          {providerBadgeText}
         </span>
       </div>
 
@@ -103,7 +126,7 @@ export function TopBar() {
       </div>
 
       <div className="clock" aria-label="Current time">
-        {formatClock(now)}
+        {formatClock(now, true)}
       </div>
 
       <div className="top-actions">

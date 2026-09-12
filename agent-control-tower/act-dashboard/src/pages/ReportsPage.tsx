@@ -11,6 +11,8 @@ import {
 } from '../api/reports';
 import { useWebSocketContext } from '../components/Layout';
 import { ReportContentViewer } from '../components/ReportContentViewer';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { formatTimestamp } from '../utils/formatTime';
 import type {
   GenerateReportRequest,
   ReportArtifact,
@@ -31,21 +33,6 @@ const EMPTY_FORM: NewReportForm = {
   owner: '',
   sensitivity: 'internal',
 };
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
-}
 
 function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
@@ -92,6 +79,9 @@ export function ReportsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [amendInstruction, setAmendInstruction] = useState('');
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  // Delete awaiting confirmation. Archiving is irreversible from the UI, so the
+  // Delete control only opens the shared dialog (Task 10).
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
 
   const { data: reports, isLoading, error } = useQuery({
     queryKey: ['reports'],
@@ -165,6 +155,16 @@ export function ReportsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['reports'] });
       setSelectedId(null);
+      // Task 10: the confirmed archive is done — drop the pending confirmation.
+      setConfirmingArchive(false);
+    },
+    onError: () => {
+      // The confirmed action is over (it failed) — never leave the confirmation
+      // stuck open. Failures reuse the toolbar notice this page already renders
+      // (no second toast); the state name predates this use.
+      setConfirmingArchive(false);
+      setCopyToast('Archive failed. Please retry.');
+      setTimeout(() => setCopyToast(null), 1800);
     },
   });
 
@@ -218,9 +218,8 @@ export function ReportsPage() {
 
   const handleDelete = () => {
     if (!selected) return;
-    if (confirm(`Delete "${selected.title}"? This archives the report.`)) {
-      archiveMutation.mutate(selected.id);
-    }
+    // Opens the shared confirmation only — the archive fires from onConfirm.
+    setConfirmingArchive(true);
   };
 
   const reportHtml = htmlQuery.data ?? '';
@@ -302,7 +301,7 @@ export function ReportsPage() {
                     >
                       <div className="ttl">{r.title}</div>
                       <div className="meta">
-                        {formatDate(r.createdAt)}
+                        {formatTimestamp(r.createdAt)}
                         {r.owner ? ` · ${r.owner}` : ''}
                       </div>
                       <div className="badge-row">
@@ -627,6 +626,29 @@ export function ReportsPage() {
           </button>
         </div>
       </div>
+
+      {/* Shared destructive-action confirmation (Task 10): the Delete control
+          only opens this dialog, and the archive fires from onConfirm. */}
+      <ConfirmDialog
+        open={confirmingArchive && selected !== null}
+        title="Delete this report?"
+        message={
+          <>
+            Delete <strong>{selected?.title}</strong>? This archives the report — it leaves
+            the workspace list and cannot be restored from here.
+          </>
+        }
+        danger
+        onConfirm={() => {
+          if (!selected) return;
+          const id = selected.id;
+          // Closed immediately: onSuccess/onError re-clear (idempotent) so a
+          // rejection can never strand the dialog open.
+          setConfirmingArchive(false);
+          archiveMutation.mutate(id);
+        }}
+        onCancel={() => setConfirmingArchive(false)}
+      />
     </div>
   );
 }

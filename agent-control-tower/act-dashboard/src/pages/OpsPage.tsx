@@ -10,6 +10,7 @@ import {
 } from '../api/ops';
 import { listAgents } from '../api/agents';
 import HousekeepingPanel from '../components/HousekeepingPanel';
+import { formatClock, formatTimestamp } from '../utils/formatTime';
 import type { Approval, Run, ActivityEvent, Agent, RunStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -45,7 +46,7 @@ function relativeTime(iso: string): string {
 function clockHHMM(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '--:--';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return formatClock(d);
 }
 
 function durationOf(run: Run): string {
@@ -349,7 +350,7 @@ export default function OpsPage() {
                             fontSize: 11, marginLeft: 'auto',
                             fontVariantNumeric: 'tabular-nums',
                           }}
-                          title={new Date(a.requestedAt).toLocaleString()}
+                          title={formatTimestamp(a.requestedAt)}
                         >
                           {relativeTime(a.requestedAt)}
                         </span>
@@ -503,7 +504,7 @@ export default function OpsPage() {
                             ...cellStyle, flex: '0 0 90px', justifyContent: 'flex-end',
                             color: 'var(--text-mute)', fontSize: 11,
                           }}
-                          title={new Date(r.createdAt).toLocaleString()}
+                          title={formatTimestamp(r.createdAt)}
                         >
                           {relativeTime(r.createdAt)}
                         </div>

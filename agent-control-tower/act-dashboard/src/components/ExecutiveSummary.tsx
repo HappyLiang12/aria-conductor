@@ -74,6 +74,7 @@ export default function ExecutiveSummary() {
   ).length;
   const totalRuns = runs?.length ?? 0;
   const knowledgeCount = knowledge?.length ?? 0;
+  const degraded = summary?.degradedAgents ?? 0;
 
   // Single HITL signal: every ask waiting on the operator, on cards in ANY
   // column (mid-run gate asks included); the click opens the first card
@@ -92,7 +93,8 @@ export default function ExecutiveSummary() {
         <StatCell
           label="Active Agents"
           value={summary?.activeAgents ?? '—'}
-          detail="Healthy & responsive"
+          detail={degraded > 0 ? `Healthy · ${degraded} degraded` : 'All healthy'}
+          variant={degraded > 0 ? 'amber' : undefined}
         />
         <StatCell
           label="Waiting on you"

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
 import { listKanbanItems } from '../api/kanban';
 import { useWebSocketContext } from './Layout';
+import { formatTimestamp } from '../utils/formatTime';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 
 function getTimeGreeting(): string {
@@ -13,12 +14,7 @@ function getTimeGreeting(): string {
 }
 
 function formatNow(): string {
-  return new Date().toLocaleString([], {
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  return formatTimestamp(new Date().toISOString());
 }
 
 export default function MorningBriefing() {

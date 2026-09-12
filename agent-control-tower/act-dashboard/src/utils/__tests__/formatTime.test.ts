@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatTimestamp } from '../formatTime';
+import { formatClock, formatTimestamp } from '../formatTime';
 
 /**
  * F7 regression: one shared formatter for every absolute timestamp surface.
@@ -35,5 +35,19 @@ describe('formatTimestamp', () => {
     const d = new Date();
     d.setHours(22, 19, 0, 0);
     expect(formatTimestamp(d.toISOString())).not.toMatch(/AM|PM/);
+  });
+});
+
+/**
+ * Live-clock sibling of formatTimestamp: time-of-day only, pinned to 24h
+ * regardless of OS locale (no `週六`/`Saturday` leaking into the TopBar clock).
+ */
+describe('formatClock', () => {
+  it('formats to zero-padded 24h minutes by default', () => {
+    expect(formatClock(new Date(2026, 8, 12, 9, 5))).toBe('09:05');
+  });
+
+  it('includes zero-padded seconds when asked', () => {
+    expect(formatClock(new Date(2026, 8, 12, 9, 5, 7), true)).toBe('09:05:07');
   });
 });

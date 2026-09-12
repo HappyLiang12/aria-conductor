@@ -67,27 +67,6 @@ export interface Approval {
   answer?: string | null;
 }
 
-// === Harness Profiles (customisable agent-loop tuning) ===
-export interface HarnessProfileSteering {
-  shellExecToGitPack: boolean;
-}
-
-export interface HarnessProfileSelfVerify {
-  enabled: boolean;
-  escalateTiers: string[];
-  maxResponseTokens: number;
-  promptOverride: string | null;
-}
-
-export interface HarnessProfile {
-  name: string;
-  toolDenylist: string[];
-  steering: HarnessProfileSteering;
-  selfVerify: HarnessProfileSelfVerify;
-  maxToolCallRounds: number;
-  maxToolOutputChars: number;
-}
-
 export interface WorkspaceDiff {
   runId: string;
   hasWorkspace: boolean;
@@ -101,7 +80,7 @@ export interface KnowledgeItem {
   name: string;
   type: KnowledgeType;
   description: string;
-  currentVersion: number;
+  currentVersion: string | number | null;
   status: KnowledgeStatus;
   sensitivity: string;
   createdAt: string;
@@ -168,6 +147,8 @@ export interface CreateRunRequest {
 
 export interface DashboardSummary {
   activeAgents: number;
+  healthyAgents: number;
+  degradedAgents: number;
   runningRuns: number;
   pendingApprovals: number;
   totalTokensBurned: number;
@@ -230,88 +211,6 @@ export interface WorkflowChain {
   isTemplate?: boolean;
   knowledgeItemId?: string | null;
   description?: string | null;
-}
-
-// === DoD / Evidence ===
-export type DoDOverallStatus = 'IN_PROGRESS' | 'PASSED' | 'FAILED';
-export type DoDStageRollupStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'SKIPPED';
-export type EvidenceType = 'LOG' | 'ARTIFACT' | 'TEST_RESULT' | 'SCREENSHOT' | 'COMMENT';
-
-export interface DoDStageReview {
-  id: string;
-  dodId: string;
-  stage: string;
-  reviewerId: string;
-  reviewerName: string | null;
-  passed: boolean;
-  evidence: string | null;
-  comment: string | null;
-  reviewedAt: string;
-}
-
-export interface DoDStageStatus {
-  stage: string;
-  required: boolean;
-  status: DoDStageRollupStatus;
-  reviewCount: number;
-  lastReviewedAt: string | null;
-}
-
-export interface DoDStatusResponse {
-  id: string;
-  taskId: string;
-  taskType: string | null;
-  currentStage: string;
-  overallStatus: DoDOverallStatus;
-  createdAt: string;
-  updatedAt: string;
-  stages: DoDStageStatus[];
-  reviews: DoDStageReview[];
-  evidenceCount: number;
-}
-
-export interface DoDRecord {
-  id: string;
-  taskId: string;
-  taskType: string | null;
-  currentStage: string;
-  overallStatus: DoDOverallStatus;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface EvidenceItem {
-  id: string;
-  dodId: string;
-  taskId: string;
-  type: EvidenceType;
-  title: string | null;
-  content: string | null;
-  artifactPath: string | null;
-  sourceRunId: string | null;
-  createdAt: string;
-}
-
-export interface InitDoDRequest {
-  taskId: string;
-  taskType?: string;
-}
-
-export interface SubmitReviewRequest {
-  taskId: string;
-  reviewerId: string;
-  reviewerName?: string;
-  passed: boolean;
-  evidence?: string;
-  comment?: string;
-}
-
-export interface CreateEvidenceRequest {
-  type: EvidenceType;
-  title?: string;
-  content?: string;
-  artifactPath?: string;
-  sourceRunId?: string;
 }
 
 // === Kanban ===

@@ -7,6 +7,7 @@ import type { Agent, CreateAgentRequest, AgentTemplate, AgentTelemetry, AdkProvi
 import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
 import { ManageToolsDialog } from '../components/ManageToolsDialog';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { estimateCost } from '../utils/pricing';
 
 interface CreateAgentError extends Error {
@@ -52,6 +53,9 @@ export default function CrewPage() {
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [retireBusy, setRetireBusy] = useState(false);
   const [retireNote, setRetireNote] = useState<string | null>(null);
+  // Bulk retire is destructive, so it is gated behind a confirmation: the
+  // Retire selected… control only opens this flag, never the retire itself.
+  const [confirmingRetire, setConfirmingRetire] = useState(false);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
 
@@ -212,6 +216,20 @@ export default function CrewPage() {
     queryClient.invalidateQueries({ queryKey: ['agents'] });
   };
 
+  // Retire runs only from the confirmation's Confirm handler. Clearing the gate
+  // first makes a double-fire impossible, and clearing again on completion
+  // (success or failure) guarantees the dialog is never left stuck open.
+  const confirmRetire = async () => {
+    setConfirmingRetire(false);
+    try {
+      await retireSelected();
+    } finally {
+      setConfirmingRetire(false);
+    }
+  };
+
+  const cancelRetire = () => setConfirmingRetire(false);
+
   const openDialog = () => {
     setForm(EMPTY_FORM);
     setError(null);
@@ -343,7 +361,11 @@ export default function CrewPage() {
             >
               <span>{selectedAgents.size} selected</span>
               <span style={{ flex: 1 }} />
-              <button className="btn danger" disabled={retireBusy} onClick={retireSelected}>
+              <button
+                className="btn danger"
+                disabled={retireBusy}
+                onClick={() => setConfirmingRetire(true)}
+              >
                 Retire selected…
               </button>
             </div>
@@ -489,6 +511,21 @@ export default function CrewPage() {
       </div>
 
       <ManageToolsDialog agent={toolsAgent} onClose={() => setToolsAgent(null)} />
+
+      {/* Bulk retire confirmation — shared destructive-action dialog (Task 10) */}
+      <ConfirmDialog
+        open={confirmingRetire}
+        title="Retire selected agents?"
+        message={
+          <>
+            You are about to retire <strong>{selectedAgents.size}</strong> agent(s). They will be
+            removed from the active crew.
+          </>
+        }
+        danger
+        onConfirm={confirmRetire}
+        onCancel={cancelRetire}
+      />
     </section>
   );
 }

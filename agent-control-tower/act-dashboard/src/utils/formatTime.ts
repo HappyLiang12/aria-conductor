@@ -22,3 +22,13 @@ export function formatTimestamp(iso: string | null | undefined): string {
 
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hh}:${mm}`;
 }
+
+/**
+ * Time-of-day only, pinned to 24h regardless of OS locale. `withSeconds` is for
+ * live clocks; prefer formatTimestamp for anything that may be on another day.
+ */
+export function formatClock(date: Date, withSeconds = false): string {
+  const hh = pad(date.getHours());
+  const mm = pad(date.getMinutes());
+  return withSeconds ? `${hh}:${mm}:${pad(date.getSeconds())}` : `${hh}:${mm}`;
+}

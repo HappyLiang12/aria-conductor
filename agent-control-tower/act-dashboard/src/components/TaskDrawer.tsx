@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -10,6 +10,8 @@ import { getRun } from '../api/runs';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
+import { ConfirmDialog } from './ConfirmDialog';
+import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -95,6 +97,16 @@ export function TaskDrawer() {
   const onOverview = useLocation().pathname === '/';
 
   const [comment, setComment] = useState('');
+  // Task 10: the footer Reject only opens the shared confirmation; the
+  // transition fires from its Confirm handler. Approve is untouched.
+  const [confirmingReject, setConfirmingReject] = useState(false);
+
+  // The dialog is a sibling of the drawer (fixed positioning needs to escape
+  // the drawer's transform). Closing the drawer must therefore drop the gate
+  // explicitly, or it would re-open over the next card.
+  useEffect(() => {
+    if (!open) setConfirmingReject(false);
+  }, [open]);
 
   const taskQuery = useQuery({
     queryKey: ['kanban', 'item', itemId],
@@ -165,6 +177,12 @@ export function TaskDrawer() {
 
   const handleApprove = () => handleTransition('DONE');
   const handleReject = () => handleTransition('CANCELLED');
+
+  // Only the confirmation's Confirm reaches the reject transition (Task 10).
+  const confirmReject = () => {
+    setConfirmingReject(false);
+    handleReject();
+  };
 
   const validTransitions = item ? TRANSITIONS[item.status] : [];
 
@@ -267,7 +285,7 @@ export function TaskDrawer() {
                   </span>
                 )}
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-mute)' }}>
-                  Updated {new Date(item.updatedAt).toLocaleString()}
+                  Updated {formatTimestamp(item.updatedAt)}
                 </span>
               </div>
 
@@ -352,7 +370,7 @@ export function TaskDrawer() {
                         </span>
                         <span className="cell-mono">
                           {linkedRun.completedAt
-                            ? new Date(linkedRun.completedAt).toLocaleString()
+                            ? formatTimestamp(linkedRun.completedAt)
                             : 'not finished'}
                         </span>
                       </div>
@@ -447,7 +465,7 @@ export function TaskDrawer() {
           <button
             className="btn danger"
             disabled={!item || transitionMutation.isPending || !validTransitions.includes('CANCELLED')}
-            onClick={handleReject}
+            onClick={() => setConfirmingReject(true)}
           >
             Reject
           </button>
@@ -456,6 +474,22 @@ export function TaskDrawer() {
           </button>
         </footer>
       </aside>
+
+      {/* Shared destructive-action confirmation (Task 10). Rendered outside the
+          transformed drawer so the fixed overlay covers the viewport. */}
+      <ConfirmDialog
+        open={open && confirmingReject}
+        title="Reject task — confirmation required"
+        message={
+          <>
+            This rejects card {item ? item.id.slice(0, 8) : ''} and cancels the work in progress on
+            it. It leaves the board as cancelled; only the housekeeping sweep removes it.
+          </>
+        }
+        danger
+        onConfirm={confirmReject}
+        onCancel={() => setConfirmingReject(false)}
+      />
     </>
   );
 }

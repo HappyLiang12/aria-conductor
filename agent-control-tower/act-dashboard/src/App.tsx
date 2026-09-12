@@ -10,7 +10,6 @@ import { ReportsPage } from './pages/ReportsPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { ScheduledJobsPage } from './pages/ScheduledJobsPage';
 import { RunsPage } from './pages/RunsPage';
-import { ApprovalsPage } from './pages/ApprovalsPage';
 import { ProvidersPage } from './pages/ProvidersPage';
 
 const queryClient = new QueryClient({
@@ -40,7 +39,6 @@ export default function App() {
               <Route path="/ops" element={<OpsPage />} />
               <Route path="/scheduled-jobs" element={<ScheduledJobsPage />} />
               <Route path="/runs" element={<RunsPage />} />
-              <Route path="/approvals" element={<ApprovalsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

@@ -3,8 +3,9 @@ import { uniqueName } from './fixtures';
 
 /**
  * E2E: Git Pack Lifecycle — verifies the governed plugin system's git integration.
- * Flow: agent hits git_push (PUSH risk tier) -> approval page -> human approves -> run resumes.
- * Mirrors workflow-governance.spec.ts pattern; reuses ApprovalsPage.tsx.
+ * Flow: agent hits git_push (PUSH risk tier) -> kanban Review column -> human approves -> run resumes.
+ * Mirrors workflow-governance.spec.ts pattern; the approvals surface is the kanban Review column
+ * (the Approvals page and its /approvals route are deleted, so the old ApprovalsPage.tsx reuse is gone).
  *
  * Prerequisites: backend running with git pack seeded (V32), TOOLS_SHELL_ENABLED=true.
  */
@@ -31,9 +32,9 @@ test.describe('Git Pack Governance Lifecycle', () => {
     const requestApproval = tools.find((t: any) => t.name === 'request_approval');
     expect(requestApproval).toBeDefined();
 
-    // 3. Navigate to Approvals page
-    await page.goto(`${BASE_URL}/approvals`);
-    await expect(page.locator('h1, h2, [data-testid="approvals-title"]').first()).toBeVisible();
+    // 3. The approvals surface is the kanban Review column on the overview.
+    await page.goto(`${BASE_URL}/`);
+    await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible();
 
     // 4. Verify pack management API
     const packsResp = await request.get(`${API_URL}/api/v1/packs`);

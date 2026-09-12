@@ -6,6 +6,7 @@ import { listAgents } from '../api/agents';
 import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import TemplatesPanel from '../components/TemplatesPanel';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import type { WorkflowChain, WorkflowStepInfo, WorkflowStatus, WorkflowStepStatus } from '../types';
 
 const statusColor = (s: WorkflowStatus): string => {
@@ -188,7 +189,7 @@ function WorkflowCard({ wf, agentMap, runStatusById, isSelected, onToggleSelect,
           </button>
         )}
         {wf.status !== 'RUNNING' && (
-          <button className="btn" onClick={() => { if (confirm('Delete this workflow?')) onDelete(wf.id); }}>
+          <button className="btn" onClick={() => onDelete(wf.id)}>
             Delete
           </button>
         )}
@@ -207,6 +208,12 @@ export function WorkflowsPage() {
   const [yamlModalOpen, setYamlModalOpen] = useState(false);
   const [mergeName, setMergeName] = useState('');
   const [yamlContent, setYamlContent] = useState('');
+  // Workflow awaiting delete confirmation. Deletion is irreversible, so the
+  // card's Delete control only opens the shared dialog (Task 10).
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Delete failure notice — the page has no toast, so a rejected delete reuses
+  // the same inline error banner the load error above renders (no second toast).
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: workflows, isLoading, error } = useQuery({
     queryKey: ['workflows'],
@@ -246,7 +253,20 @@ export function WorkflowsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteWorkflow(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      // Task 10: the confirmed delete is done — drop the pending confirmation
+      // and any failure notice left by an earlier attempt.
+      setDeletingId(null);
+      setDeleteError(null);
+    },
+    // The confirmed action is over (it failed) — never leave the confirmation
+    // stuck open, and never let a rejected delete pass silently: the failure is
+    // rendered in this page's existing inline error banner.
+    onError: (err: unknown) => {
+      setDeletingId(null);
+      setDeleteError(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`);
+    },
   });
 
   const mergeMutation = useMutation({
@@ -362,6 +382,9 @@ export function WorkflowsPage() {
       {activeTab === 'chains' && (<>
       {isLoading && <div style={{ color: 'var(--muted, #94a3b8)' }}>Loading workflows...</div>}
       {error && <div style={{ color: 'var(--err, #ef4444)' }}>Failed to load workflows</div>}
+      {deleteError && (
+        <div role="alert" style={{ color: 'var(--err, #ef4444)' }}>{deleteError}</div>
+      )}
 
       {sorted.length === 0 && !isLoading && (
         <div style={{
@@ -390,7 +413,7 @@ export function WorkflowsPage() {
           onCancel={(id) => cancelMutation.mutate(id)}
           onRetry={(id, stepIndex) => retryMutation.mutate({ id, stepIndex })}
           onResubmit={(id) => resubmitMutation.mutate(id)}
-          onDelete={(id) => deleteMutation.mutate(id)}
+          onDelete={(id) => setDeletingId(id)}
         />
       ))}
 
@@ -480,6 +503,31 @@ export function WorkflowsPage() {
         </>
       )}
       </>)}
+
+      {/* Shared destructive-action confirmation (Task 10): the card's Delete
+          control only opens this dialog, and the delete fires from onConfirm. */}
+      <ConfirmDialog
+        open={deletingId !== null}
+        title="Delete this workflow?"
+        message={
+          <>
+            Delete <strong>{workflows?.find(w => w.id === deletingId)?.name}</strong>?
+            Its chain history is removed and cannot be restored from here.
+          </>
+        }
+        danger
+        onConfirm={() => {
+          if (!deletingId) return;
+          const id = deletingId;
+          // Closed immediately: onSuccess/onError re-clear (idempotent) so a
+          // rejection can never strand the dialog open. The previous failure
+          // notice is dropped so a retry never shows a stale error.
+          setDeletingId(null);
+          setDeleteError(null);
+          deleteMutation.mutate(id);
+        }}
+        onCancel={() => setDeletingId(null)}
+      />
     </div>
   );
 }

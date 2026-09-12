@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { WsEvent } from '../../types';
+import { routeForNotificationType } from '../../utils/notificationRoutes';
 import { Toast } from '../Toast';
 
 // The Toast reads the shared WebSocket context from Layout; swap it for a
@@ -80,6 +81,39 @@ describe('Toast', () => {
 
     expect(screen.getByText('Build finished')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+  });
+
+  // Non-aria toasts (approval.requested, run.completed, ...) were appended with
+  // no action at all, so an approval toast could not be clicked through even
+  // though its event type maps to a route. It must offer the same View action
+  // as the aria.notification branch.
+  it('offers a View action on an approval.requested toast', () => {
+    setEvent({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
+    render(inRouter(<Toast />));
+
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+  });
+
+  // Rendering the button proves nothing about where it goes: a wrong-route
+  // regression (e.g. a resurrected '/approvals' page) would still pass the
+  // assertion above. Start away from the target route and click for real, so
+  // only an actual navigate() to the mapped route satisfies the assertion.
+  it('View on an approval.requested toast navigates to the route the map resolves', () => {
+    const paths: string[] = [];
+    setEvent({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
+    render(
+      <MemoryRouter initialEntries={['/runs']}>
+        <Toast />
+        <LocationTracker paths={paths} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+
+    // approval.requested => the overview, where the Kanban Review column is the
+    // single HITL surface (there is no approvals page anymore).
+    expect(routeForNotificationType('approval.requested')).toBe('/');
+    expect(paths[paths.length - 1]).toBe(routeForNotificationType('approval.requested'));
   });
 
   it('uses a default title when the notification payload has none', () => {

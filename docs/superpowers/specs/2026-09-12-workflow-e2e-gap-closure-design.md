@@ -44,9 +44,10 @@ navigation support". The tabs are plain `useState` buttons
 `http://localhost:5173/jobs`" and that the "route responds without errors", then attributed the
 resulting blank page to a screenshot-tooling limitation. `/jobs` is not a route: `App.tsx:40`
 defines `/scheduled-jobs`, and "Jobs" is only the `RailNav.tsx:19` label. `App.tsx:30-43` has no
-catch-all route, so an unmatched URL renders `Layout` (`Layout.tsx:45-47`, nav plus empty
-`Outlet`) with an empty content area — a blank dark page. The blank screenshot was the symptom of
-a wrong URL, and the real underlying defect (no 404 surface) was never noticed.
+catch-all route, so an unmatched URL matched no leaf route at all. React Router only forms a match
+branch from a leaf route, so the pathless `Layout` route (`Layout.tsx:45-47`) contributed nothing,
+and the page was entirely blank — no navigation rail, no content. The blank screenshot was the
+symptom of a wrong URL, and the real underlying defect (no 404 surface) was never noticed.
 
 Additionally, the reports' plan called for navigating to `/approvals` and testing RBAC there. That
 page and its route were deleted in PR #79; approvals now live in the kanban Review column with
@@ -106,6 +107,11 @@ Seven genuine gaps remain. They are split by whether they can be closed inside C
 | 4 | Scheduled jobs against the **real backend** | `scheduled-jobs-page.spec.ts:5-28` stubs `**/api/v1/aria/jobs**` to `[]` and asserts the header, empty state and modal open. Create, pause, resume and list are never exercised for real. |
 | 7 | One continuous **UI journey**: create agent on Crew, start a run, approve in the Review column | Agent creation and run start currently live in different specs, and the agent is REST-seeded (`journey-agent-run-report.spec.ts:24-49`). |
 
+Reach path (verified): an LLM-free PENDING run-gate approval is reachable in CI via kanban
+dispatch of an opencode ADK agent — `e2e/kanban-hitl.spec.ts:133-158` already does this. The
+task-level approval gate fires at `AgentLoopEngine.java:704`, before any provider call, so no LLM
+key and no OpenSandbox are required.
+
 **Group B — requires a feasibility spike, may end up local-only:**
 
 | # | Gap | Blocker |
@@ -130,7 +136,7 @@ implying a fix.
 
 | Gap | File | Assertion |
 |-----|------|-----------|
-| 1 | `e2e/approval-rejection-reason.spec.ts` (new) | Seed a run that reaches a PENDING approval; `POST /approvals/{id}/decide` with `approved:false` plus a reason; assert the approval is `REJECTED`, the reason is persisted and retrievable, and the run reaches its documented post-rejection state rather than a terminal success. |
+| 1 | `e2e/approval-rejection-reason.spec.ts` (new) | Seed a run that reaches a PENDING approval; `POST /approvals/{id}/decide` with `approved:false` plus a reason; assert the approval is `DENIED`, the reason is persisted and retrievable, and the run reaches `CANCELLED` (its documented post-rejection state) rather than a terminal success. |
 | 2 | `e2e/approval-reject-retry.spec.ts` (new) | After a rejection, assert the documented re-dispatch path produces a new attempt and that the prior rejection remains visible in the audit trail. If the product has no retry path after rejection, that is a product finding: record it and assert the actual behaviour, do not force a passing test. |
 | 3 | `kanban-hitl.spec.ts` (extend) | Drive the Review column decide controls through the UI (click, not API), for one approve and one reject, and assert the resulting card state. |
 | 4 | `scheduled-jobs-page.spec.ts` (rewrite) | Remove the `page.route` stubs. Create a job through the UI, assert it persists against the real backend, then pause and resume it and assert the state transitions. |

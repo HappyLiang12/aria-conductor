@@ -83,6 +83,18 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 - CI pipeline: [.github/workflows/ci.yml](.github/workflows/ci.yml)
 - Security notes: [SECURITY.md](SECURITY.md)
 
+## Evidence Discipline for Reports
+
+Applies to any E2E, audit or review deliverable.
+
+- Every factual claim cites either a committed artifact path or a runnable command together with
+  its captured output.
+- Anything not directly observed is labelled `INFERRED` and carries a `file:line` pointer.
+- Never reference a screenshot, log or HAR path that is not committed to the repository.
+- A PASS or readiness verdict is only permitted when every pass criterion in the governing test
+  plan was actually evaluated. Criteria that were not evaluated are reported as NOT VERIFIED.
+- Reports live in `docs/reviews/YYYY-MM-DD-<topic>.md`.
+
 ## Conventions
 
 - Java package root: `io.aria.conductor`

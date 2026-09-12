@@ -10,6 +10,7 @@ import {
 import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { formatTimestamp } from '../utils/formatTime';
 import type {
   Agent,
   CreateKnowledgeRequest,
@@ -142,12 +143,7 @@ function avatarStyle(seed: string): React.CSSProperties {
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatTimestamp(iso);
 }
 
 export function formatVersion(version: string | number | null | undefined): string {

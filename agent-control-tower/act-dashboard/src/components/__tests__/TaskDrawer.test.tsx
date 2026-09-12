@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { TaskDrawer } from '../TaskDrawer';
 import { DrawerProvider, TASK_DRAWER_EVENT, useDrawerContext } from '../DrawerContext';
+import { formatTimestamp } from '../../utils/formatTime';
 import type { Approval, KanbanItem, Run } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
@@ -147,9 +148,10 @@ beforeEach(() => {
 // drawer instead of an inert truncated id under Artifacts.
 describe('TaskDrawer linked run result (D4)', () => {
   it('render_taskDrawer_showsLinkedRunResult', async () => {
+    const completedAt = '2026-09-08T00:10:00Z';
     mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
     mockedGetRun.mockResolvedValue(
-      mkRun({ finalOutput: 'Delivered the spec deliverable' }),
+      mkRun({ finalOutput: 'Delivered the spec deliverable', completedAt }),
     );
     renderDrawer();
     openTaskDrawerEvent();
@@ -165,7 +167,12 @@ describe('TaskDrawer linked run result (D4)', () => {
     expect(within(runSection).getByText('COMPLETED')).toBeInTheDocument();
     expect(within(runSection).getByText(/iter 4/i)).toBeInTheDocument();
     expect(within(runSection).getByText(/1,?234/)).toBeInTheDocument();
-    expect(within(runSection).getByText(/2026/)).toBeInTheDocument();
+    // Completion time must be rendered through the canonical formatter. Asserting
+    // the formatted value (not a year regex) keeps this date-independent: the
+    // formatter emits a bare HH:mm when the fixture falls on "today", so any
+    // literal like /2026/ would fail on that one calendar day. The format itself
+    // is covered by utils/__tests__/formatTime.test.ts; this pins the wiring.
+    expect(within(runSection).getByText(formatTimestamp(completedAt))).toBeInTheDocument();
     // The run output is rendered through MarkdownViewer, not as raw text.
     const output = runSection.querySelector('.spec-review-markdown') as HTMLElement;
     expect(output).not.toBeNull();

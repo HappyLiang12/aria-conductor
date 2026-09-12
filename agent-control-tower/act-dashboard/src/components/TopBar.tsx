@@ -3,16 +3,8 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
 import { getAdkProviderHealth, listAdkProviders } from '../api/adk';
 import type { DashboardSummary } from '../types';
+import { formatClock } from '../utils/formatTime';
 import { NotificationBell } from './NotificationBell';
-
-function formatClock(date: Date): string {
-  return date.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
 
 function formatTokens(tokens: number | undefined): string {
   if (!tokens || tokens <= 0) return '0';
@@ -120,7 +112,7 @@ export function TopBar() {
       </div>
 
       <div className="clock" aria-label="Current time">
-        {formatClock(now)}
+        {formatClock(now, true)}
       </div>
 
       <div className="top-actions">

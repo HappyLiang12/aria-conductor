@@ -11,6 +11,7 @@ import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
+import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -284,7 +285,7 @@ export function TaskDrawer() {
                   </span>
                 )}
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-mute)' }}>
-                  Updated {new Date(item.updatedAt).toLocaleString()}
+                  Updated {formatTimestamp(item.updatedAt)}
                 </span>
               </div>
 
@@ -369,7 +370,7 @@ export function TaskDrawer() {
                         </span>
                         <span className="cell-mono">
                           {linkedRun.completedAt
-                            ? new Date(linkedRun.completedAt).toLocaleString()
+                            ? formatTimestamp(linkedRun.completedAt)
                             : 'not finished'}
                         </span>
                       </div>

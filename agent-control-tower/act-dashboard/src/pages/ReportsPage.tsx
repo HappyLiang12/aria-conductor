@@ -11,6 +11,7 @@ import {
 } from '../api/reports';
 import { useWebSocketContext } from '../components/Layout';
 import { ReportContentViewer } from '../components/ReportContentViewer';
+import { formatTimestamp } from '../utils/formatTime';
 import type {
   GenerateReportRequest,
   ReportArtifact,
@@ -31,21 +32,6 @@ const EMPTY_FORM: NewReportForm = {
   owner: '',
   sensitivity: 'internal',
 };
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
-}
 
 function shortId(id: string): string {
   return id.length > 8 ? id.slice(0, 8) : id;
@@ -302,7 +288,7 @@ export function ReportsPage() {
                     >
                       <div className="ttl">{r.title}</div>
                       <div className="meta">
-                        {formatDate(r.createdAt)}
+                        {formatTimestamp(r.createdAt)}
                         {r.owner ? ` · ${r.owner}` : ''}
                       </div>
                       <div className="badge-row">

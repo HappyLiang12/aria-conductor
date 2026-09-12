@@ -4,6 +4,7 @@ import {
   listJobs, createJob, updateJob, deleteJob, pauseJob, resumeJob,
 } from '../api/ariaJobs';
 import type { ScheduledJob, CreateScheduledJobRequest, JobCategory, JobStatus } from '../types';
+import { formatTimestamp } from '../utils/formatTime';
 
 /** Parse a single cron field into an array of allowed values. */
 function parseCronField(field: string, min: number, max: number): number[] {
@@ -101,11 +102,6 @@ export function ScheduledJobsPage() {
   const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
 
   const categoryEmoji: Record<string, string> = { REMINDER: '🔔', MONITOR: '📊', BRIEF: '📋' };
-
-  const fmtLocal = (iso: string | null): string => {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleString();
-  };
 
   const [form, setForm] = useState<CreateScheduledJobRequest>({
     scheduleType: 'RECURRING', category: 'REMINDER', title: '',
@@ -219,8 +215,8 @@ export function ScheduledJobsPage() {
             </div>
             <div className="job-card-cron">{job.scheduleExpression}</div>
             <div className="job-card-meta">
-              <span>Next: {fmtLocal(job.nextFireAt)}</span>
-              <span>Last: {fmtLocal(job.lastFiredAt)}</span>
+              <span>Next: {formatTimestamp(job.nextFireAt)}</span>
+              <span>Last: {formatTimestamp(job.lastFiredAt)}</span>
             </div>
             <div className="job-card-actions">
               {job.status === 'ACTIVE' && (
@@ -293,7 +289,7 @@ export function ScheduledJobsPage() {
                     <div className="cron-preview-item" style={{ color: 'var(--red)' }}>Invalid expression</div>
                   ) : (
                     cronPreview.map((d, i) => (
-                      <div key={i} className="cron-preview-item">{d.toLocaleString()}</div>
+                      <div key={i} className="cron-preview-item">{formatTimestamp(d.toISOString())}</div>
                     ))
                   )}
                 </div>

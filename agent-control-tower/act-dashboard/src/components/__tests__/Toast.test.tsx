@@ -82,6 +82,17 @@ describe('Toast', () => {
     expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
   });
 
+  // Non-aria toasts (approval.requested, run.completed, ...) were appended with
+  // no action at all, so an approval toast could not be clicked through even
+  // though its event type maps to a route. It must offer the same View action
+  // as the aria.notification branch.
+  it('offers a View action on an approval.requested toast', () => {
+    setEvent({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
+    render(inRouter(<Toast />));
+
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+  });
+
   it('uses a default title when the notification payload has none', () => {
     setEvent({ type: 'aria.notification', payload: { id: 'n-2' }, timestamp: 't1' });
     render(inRouter(<Toast />));

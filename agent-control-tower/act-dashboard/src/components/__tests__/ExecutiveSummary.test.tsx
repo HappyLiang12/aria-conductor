@@ -53,6 +53,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedGetSummary.mockResolvedValue({
     activeAgents: 0,
+    healthyAgents: 0,
+    degradedAgents: 0,
     runningRuns: 0,
     pendingApprovals: 0,
     totalTokensBurned: 0,

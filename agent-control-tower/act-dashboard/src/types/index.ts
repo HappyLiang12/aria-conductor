@@ -168,6 +168,8 @@ export interface CreateRunRequest {
 
 export interface DashboardSummary {
   activeAgents: number;
+  healthyAgents: number;
+  degradedAgents: number;
   runningRuns: number;
   pendingApprovals: number;
   totalTokensBurned: number;

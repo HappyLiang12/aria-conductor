@@ -46,8 +46,8 @@ public class DashboardController {
 
     @GetMapping("/summary")
     public DashboardSummary getSummary() {
-        long activeAgents = agentRepository.countByHealthStatus(HealthStatus.HEALTHY)
-                + agentRepository.countByHealthStatus(HealthStatus.DEGRADED);
+        long healthyAgents = agentRepository.countByHealthStatus(HealthStatus.HEALTHY);
+        long degradedAgents = agentRepository.countByHealthStatus(HealthStatus.DEGRADED);
         long runningRuns = runRepository.countByStatus(RunStatus.RUNNING);
         long pendingApprovals = approvalRepository.findByStatus(ApprovalStatus.PENDING).size();
         long totalTokensBurned = promptCallRepository.findAll()
@@ -55,7 +55,8 @@ public class DashboardController {
                 .mapToLong(p -> p.getInputTokens() + p.getOutputTokens())
                 .sum();
 
-        return new DashboardSummary(activeAgents, runningRuns, pendingApprovals, totalTokensBurned);
+        return new DashboardSummary(healthyAgents, healthyAgents, degradedAgents,
+                runningRuns, pendingApprovals, totalTokensBurned);
     }
 
     @GetMapping("/activity")

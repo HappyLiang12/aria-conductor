@@ -76,7 +76,7 @@ curl -X POST http://localhost:8080/api/v1/llm-providers \
 
 ### 5. Create an agent
 
-Agents default to the **opencode** (sandbox-isolated) provider. To use **langchain** (shared process), switch the provider in the Crew page or set the `ADK_PROVIDER=langchain` environment variable (`-AdkProvider langchain` on Windows) when starting the backend. In the Docker Compose stack the containerized backend cannot reach the opencode sandbox, so it runs the **langchain** provider (see the topology note under *Container Runtime Selection*).
+Agents default to the **opencode** (sandbox-isolated) provider. To use **langchain** (shared process), switch the provider in the Crew page or set the `ADK_PROVIDER=langchain` environment variable (`-AdkProvider langchain` on Windows) when starting the backend. In the Docker Compose stack the containerized backend cannot reach the opencode sandbox, so it runs the **langchain** provider (see the topology note under *Starting the stack*).
 
 ## Agent Providers
 
@@ -97,9 +97,25 @@ curl -X PUT http://localhost:8080/api/v1/agents/{id} \
   -d '{"adkProvider": "langchain"}'
 ```
 
+## Starting the stack
+
+```powershell
+.\scripts\start.ps1          # local-dev + opencode + podman (default)
+.\scripts\stop.ps1           # stop everything
+```
+
+`start.ps1` checks the environment, starts the podman machine when needed, creates or tops up
+`.env`, prepares the sandbox image and server, verifies health, then prints the running mode.
+The opencode provider requires the **local-dev topology** — backend and frontend on the host,
+OpenSandbox in a container. That is what this script starts.
+
+`-Mode compose` runs the legacy full-stack compose stack instead. That topology cannot run the
+opencode provider, so it uses langchain (the backend runs in a container, where the sandbox
+endpoints are unreachable; see the topology note in `opensandbox-config.toml`).
+
 ## Container Runtime Selection
 
-Startup scripts and the OpenSandbox server support **Docker** (default) and **podman**.
+Startup scripts and the OpenSandbox server support **podman** (the default for local dev) and **Docker**.
 
 - If `CONTAINER_RUNTIME` is unset, scripts auto-detect: docker (running) → podman (running).
 - Set `CONTAINER_RUNTIME=docker|podman` in `.env` to force one runtime (strict: hard error when unavailable).
@@ -120,15 +136,7 @@ Startup scripts and the OpenSandbox server support **Docker** (default) and **po
 5. Build the sandbox image into podman's store:
    `podman build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox`
 6. Start as usual (`docker compose` commands become `podman compose ...`):
-   `podman compose up -d` or `./scripts/quickstart.sh`
-
-> **podman + host backend + opencode**: the full-stack compose topology runs the
-> backend in a container, where the opencode provider is NOT usable (sandbox
-> endpoints are unreachable from inside the backend container; see the topology
-> note in `opensandbox-config.toml`). To run the backend on the host with podman
-> and the opencode provider, use the local-dev path:
-> `pwsh -NoProfile -File scripts/start-backend.ps1 -AdkProvider opencode`
-> (auto-starts the OpenSandbox server via podman) plus `scripts/start-frontend.ps1`.
+   `podman compose up -d`
 
 > Note: OpenSandbox has no native podman runtime; podman is served through its Docker-compatible socket. Sandbox support under podman is validated by the project's E2E suite (see `e2e/container-runtime-e2e.ps1`).
 
@@ -145,21 +153,20 @@ For local development without Docker:
 | Node.js | 20+ | `node --version` |
 | pnpm | 9+ | `pnpm --version` |
 | Python | 3.11+ | `python --version` |
-| Docker / Podman | 24+ / 4.9+ | `docker --version` or `podman --version` (required for opencode provider) |
+| Docker / Podman | 24+ / 4.9+ | podman is the default for local dev; docker is supported |
 
 ### Quick start with scripts
 
 ```bash
-# Docker available → full stack with OpenCode sandbox
-./scripts/quickstart.sh        # Linux/macOS
-.\scripts\quickstart.ps1       # Windows
+# Windows one-click (see "Starting the stack" above)
+.\scripts\start.ps1
 
 # Or start individual services:
 ./scripts/start-backend.sh     # Starts backend (OpenSandbox only for opencode provider)
 ./scripts/start-frontend.sh    # Vite dev server
 ```
 
-The `start-backend` script defaults to the **opencode** ADK provider. Pass `--provider=langchain` (Linux/macOS) or `-AdkProvider langchain` (Windows) to use **langchain**; with opencode the script also starts the OpenSandbox server (requires Docker) and passes the provider to the backend. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox startup.
+The `start-backend` script defaults to the **opencode** ADK provider. Pass `--provider=langchain` (Linux/macOS) or `-AdkProvider langchain` (Windows) to use **langchain**; with opencode the script also starts the OpenSandbox server (requires a container runtime) and passes the provider to the backend. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox startup.
 
 ### Backend
 
@@ -167,7 +174,7 @@ The `start-backend` script defaults to the **opencode** ADK provider. Pass `--pr
 cd agent-control-tower
 mvn clean install -DskipTests
 
-# With opencode provider (default; requires Docker for the OpenSandbox server):
+# With opencode provider (default; requires a container runtime for the OpenSandbox server):
 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2
 
 # With langchain provider (no sandbox needed):

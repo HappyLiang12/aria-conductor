@@ -42,10 +42,11 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 1. `act-knowledge/` → service/controller → 2. `act-common/model/KnowledgeItem.java` → 3. `act-dashboard/src/pages/` → UI
 
 ### Run full-stack locally
-1. OpenSandbox: `docker compose up -d opensandbox-server` (podman: `podman compose up -d opensandbox-server`; set `SANDBOX_SOCKET` in .env; required for opencode provider)
-2. Backend: `cd agent-control-tower && OPENCODE_SANDBOX_SERVER_URL=http://localhost:8090 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2`
-3. Frontend: `cd agent-control-tower/act-dashboard && pnpm dev`
-4. ADK (langchain only): `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
+1. One-click: `pwsh -NoProfile -File scripts/start.ps1` (local-dev + opencode + podman; checks the
+   environment, prepares the sandbox, verifies health, prints the mode)
+2. Stop: `pwsh -NoProfile -File scripts/stop.ps1`
+3. Legacy full-stack compose (langchain only): `pwsh -NoProfile -File scripts/start.ps1 -Mode compose`
+4. ADK without a sandbox (langchain only): `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
 
 ## High-Risk Areas
 

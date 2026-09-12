@@ -67,3 +67,87 @@ function Resolve-ContainerRuntime {
     if (Test-RuntimeCli "podman") { return @{ Runtime = "podman"; Mode = "auto" } }
     return @{ Runtime = $null; Mode = "auto" }
 }
+
+<#
+.SYNOPSIS
+Reads the engine's own socket path via `podman info`, e.g.
+unix:///run/user/1000/podman/podman.sock becomes /run/user/1000/podman/podman.sock.
+Returns $null when the engine cannot be queried.
+Never hardcode this value: the rootful machine uses a different path.
+#>
+function Get-SandboxSocketPath {
+    if (-not (Get-Command podman -ErrorAction SilentlyContinue)) { return $null }
+    try {
+        $raw = & podman info --format '{{.Host.RemoteSocket.Path}}' 2>$null
+    } catch {
+        return $null
+    }
+    if (-not $raw) { return $null }
+    $value = "$raw".Trim()
+    if ($value.StartsWith('unix://')) { return $value.Substring('unix://'.Length) }
+    return $value
+}
+
+<#
+.SYNOPSIS
+Starts the podman machine when it exists but is not running. Returns $true when a
+start was issued, $false when the machine was already running or podman is absent.
+#>
+function Start-PodmanMachineIfNeeded {
+    if (-not (Get-Command podman -ErrorAction SilentlyContinue)) { return $false }
+
+    $list = & podman machine list 2>$null
+    if (-not $list) { return $false }
+    if ("$list" -notmatch 'Currently running') {
+        & podman machine start | Out-Null
+        return $true
+    }
+    return $false
+}
+
+<#
+.SYNOPSIS
+Starts the OpenSandbox server when the aria-opensandbox container is not running.
+$Runtime is 'docker' or 'podman'. Returns $true when a start was issued.
+#>
+function Ensure-OpenSandboxServer {
+    param(
+        [Parameter(Mandatory)][string]$Runtime,
+        [Parameter(Mandatory)][string]$ProjectRoot
+    )
+
+    $running = & $Runtime ps --filter 'name=aria-opensandbox' --format '{{.Names}}' 2>$null
+    if ("$running" -match 'aria-opensandbox') { return $false }
+
+    Push-Location $ProjectRoot
+    try {
+        & $Runtime compose up -d opensandbox-server | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to start the OpenSandbox server ($Runtime compose up -d opensandbox-server, exit $LASTEXITCODE)"
+        }
+    } finally {
+        Pop-Location
+    }
+    return $true
+}
+
+<#
+.SYNOPSIS
+Builds the opencode sandbox image when it is not present in the engine's store.
+Returns $true when a build was issued.
+#>
+function Ensure-OpencodeSandboxImage {
+    param(
+        [Parameter(Mandatory)][string]$Runtime,
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [string]$Tag = 'aria-conductor/opencode-sandbox:1.1'
+    )
+
+    & $Runtime image exists $Tag 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { return $false }
+
+    $context = Join-Path $ProjectRoot 'agent-control-tower/opencode-sandbox'
+    & $Runtime build -t $Tag $context | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to build $Tag (exit $LASTEXITCODE)" }
+    return $true
+}

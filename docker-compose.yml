@@ -96,7 +96,8 @@ services:
     volumes:
       # Container-runtime socket used to create/kill sandbox containers. Defaults to
       # Docker; set SANDBOX_SOCKET for podman (rootless: /run/user/1000/podman/podman.sock,
-      # rootful: /run/podman/podman.sock).
+      # rootful: /run/podman/podman.sock). Under podman machine the source path is
+      # resolved inside the Linux VM, so it must be a VM-internal path (not an SSH URL).
       - ${SANDBOX_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       # Server config mounted as a volume (NOT compose `configs:` — podman-compose
       # 1.0.6+ does not support the configs: block and the server would fall back

@@ -47,9 +47,11 @@ const MODULE_DIR = path.resolve(SPEC_DIR, '../../..'); // agent-control-tower
  *   - TOOLS_FILE_WORKSPACE_DIR set (docker compose sets it to /workspaces)
  *   - CWD = agent-control-tower        → <module>/data/workspaces        (CI start-stack)
  *   - CWD = agent-control-tower/act-app → <module>/act-app/data/workspaces (local dev scripts)
- * The spec prepares its git repo in every candidate root; the assertion that the push
- * landed in the local bare remote identifies which one the run actually used. A wrong
- * guess cannot pass silently — the push would fail (as it does outside a prepared root).
+ * The spec prepares its git repo in every candidate root; the assertion that the sha the
+ * push landed in the local bare remote is a member of the set of prepared roots' shas
+ * proves that one of them was the root the run actually used (which one is not
+ * observable from the remote alone). A wrong guess cannot pass silently — the push
+ * would fail (as it does outside a prepared root).
  */
 function candidateWorkspaceRoots(): string[] {
   const roots: string[] = [];
@@ -183,12 +185,32 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(async ({ request }) => {
-  // Restore the shared configuration first — nothing below depends on it.
+  // Restore the shared configuration first — nothing below depends on it. Both calls are
+  // ASSERTED: the provider switch is global, so a teardown that fails silently would leave
+  // the mock ACTIVE and route every later LLM call on this stack into the dead loopback
+  // port, with no failure reported. (A hard-killed worker never runs afterAll at all — the
+  // describe has a 300s timeout — so the loud path guards exactly the recoverable case:
+  // an unhealthy stack at teardown.)
   if (previouslyActiveProviderId) {
-    await apiCall(request, 'POST', `/llm-providers/${previouslyActiveProviderId}/activate`);
+    const restored = await apiCall(request, 'POST', `/llm-providers/${previouslyActiveProviderId}/activate`);
+    // Activate is idempotent — activating an already-active provider returns 200
+    // (LlmProviderService.activate:85-89) — so a healthy restore passes whether or not
+    // the switch had actually happened.
+    expect(
+      restored.status,
+      `restore LLM provider ${previouslyActiveProviderId}: ${JSON.stringify(restored.data)}`,
+    ).toBe(200);
   }
   if (mockProviderId) {
-    await apiCall(request, 'DELETE', `/llm-providers/${mockProviderId}`);
+    const deleted = await apiCall(request, 'DELETE', `/llm-providers/${mockProviderId}`);
+    // A successful delete is 204 No Content (LlmProviderController.java:48-52; verified
+    // against the live stack: first delete 204, repeat 404), and 404 is accepted too: the
+    // row being gone already is the desired end state (a re-run's self-heal or an earlier
+    // teardown may have removed it). Only a surviving mock matters, not a missing one.
+    expect(
+      [200, 204, 404],
+      `delete mock LLM provider ${mockProviderId}: ${JSON.stringify(deleted.data)}`,
+    ).toContain(deleted.status);
   }
   if (mockServer) {
     await new Promise<void>((resolve) => mockServer.close(() => resolve()));
@@ -253,8 +275,10 @@ test('a run blocks on the git_push PUSH gate and resumes after approval, pushing
   // ── Prepare the local remote while the gate is open ──────────────────────────
   // The run workspace is <workspace-root>/<runId>; turning it into a git repo with a
   // local `origin` makes the approved push land in a bare repo the spec can read.
-  // Prepared in every candidate root, since the root follows the backend's CWD.
-  let workspaceSha = '';
+  // Prepared in every candidate root, since the root follows the backend's CWD. The
+  // remote only reveals that the push came from ONE of them, so collect each root's sha
+  // and assert membership below rather than equality with one (arbitrary) candidate.
+  const workspaceShas: string[] = [];
   for (const root of candidateWorkspaceRoots()) {
     const workspace = path.join(root, runId);
     try {
@@ -264,12 +288,13 @@ test('a run blocks on the git_push PUSH gate and resumes after approval, pushing
       git(['commit', '--allow-empty', '-m', 'e2e pack gate commit'], workspace);
       git(['remote', 'add', 'origin', path.join(tempRoot, 'remote.git')], workspace);
       createdWorkspaceDirs.push(workspace);
-      workspaceSha = git(['rev-parse', 'HEAD'], workspace);
+      workspaceShas.push(git(['rev-parse', 'HEAD'], workspace));
     } catch (e: any) {
       throw new Error(`could not prepare workspace candidate ${workspace}: ${e?.message}`);
     }
   }
   expect(createdWorkspaceDirs.length).toBeGreaterThan(0);
+  expect(workspaceShas.length).toBe(createdWorkspaceDirs.length);
 
   // ── RESUMED: approve and watch the governed push execute ────────────────────
   const decided = await apiCall(request, 'POST', `/approvals/${ask.id}/decide`, {
@@ -300,11 +325,16 @@ test('a run blocks on the git_push PUSH gate and resumes after approval, pushing
   expect(run.status).toBe('COMPLETED');
 
   // The push really happened against the local remote: the branch is there and points
-  // at the commit the spec created in the workspace.
+  // at a commit the spec created in one of the prepared workspace candidates. The sha is
+  // compared by membership, not equality, because the live root is whichever candidate
+  // the backend's CWD maps to and the remote cannot tell us which one that was.
   const remoteSha = git(
     ['--git-dir', path.join(tempRoot, 'remote.git'), 'rev-parse', `refs/heads/${branchName}`],
     tempRoot,
   );
-  expect(remoteSha).toBe(workspaceSha);
+  expect(
+    workspaceShas,
+    `remote sha ${remoteSha} must come from a prepared workspace candidate: ${JSON.stringify(workspaceShas)}`,
+  ).toContain(remoteSha);
   expect(mockRequests.length).toBeGreaterThan(0);
 });

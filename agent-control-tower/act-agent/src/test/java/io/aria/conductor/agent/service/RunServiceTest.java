@@ -138,6 +138,34 @@ class RunServiceTest {
         verify(eventPublisher, never()).publishEvent(any());
     }
 
+    @Test
+    void createRun_propagatesSuppressAutoCardFlagToStartedEvent() {
+        UUID agentId = UUID.randomUUID();
+        when(agentService.findAgentOrThrow(agentId)).thenReturn(healthyAgent(agentId));
+        stubSaveReturnsArgument();
+
+        service.createRun(CreateRunRequest.builder()
+                .agentId(agentId).promptSeed("p").suppressAutoCard(true).build());
+
+        ArgumentCaptor<RunStartedEvent> event = ArgumentCaptor.forClass(RunStartedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().isSuppressAutoCard()).isTrue();
+    }
+
+    @Test
+    void createRun_defaultSuppressAutoCardFlagIsFalse() {
+        UUID agentId = UUID.randomUUID();
+        when(agentService.findAgentOrThrow(agentId)).thenReturn(healthyAgent(agentId));
+        stubSaveReturnsArgument();
+
+        service.createRun(CreateRunRequest.builder()
+                .agentId(agentId).promptSeed("p").build());
+
+        ArgumentCaptor<RunStartedEvent> event = ArgumentCaptor.forClass(RunStartedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().isSuppressAutoCard()).isFalse();
+    }
+
     @ParameterizedTest
     @EnumSource(value = HealthStatus.class, names = {"HEALTHY", "DEGRADED"})
     void createRun_allowsHealthyAndDegradedAgents(HealthStatus status) {

@@ -1,12 +1,15 @@
 package io.aria.conductor.execution.engine;
 
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -86,6 +89,37 @@ class AgentLoopEngineTest {
         assertThat(parsed).hasSize(2);
         assertThat(parsed.get(0).id()).isEqualTo("id1");
         assertThat(parsed.get(1).id()).isEqualTo("id2");
+    }
+
+    // ── isBlockingGateApproval: kanban review asks never block resume ────
+
+    @Test
+    void pendingRunGateApprovalBlocksResume() {
+        Approval gate = Approval.builder().runId(UUID.randomUUID())
+                .status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.APPROVAL).build();
+        assertThat(AgentLoopEngine.isBlockingGateApproval(gate)).isTrue();
+    }
+
+    @Test
+    void pendingReviewRequestAskDoesNotBlockResume() {
+        // The auto REVIEW_REQUEST ask is a display-only HITL prompt created
+        // after run completion — resuming a paused run must ignore it.
+        Approval ask = Approval.builder().runId(UUID.randomUUID())
+                .status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.REVIEW_REQUEST).build();
+        assertThat(AgentLoopEngine.isBlockingGateApproval(ask)).isFalse();
+    }
+
+    @Test
+    void decidedApprovalsDoNotBlockResume() {
+        Approval decided = Approval.builder().runId(UUID.randomUUID())
+                .status(ApprovalStatus.APPROVED)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.APPROVAL).build();
+        assertThat(AgentLoopEngine.isBlockingGateApproval(decided)).isFalse();
     }
 
     // ── parseMaxIterationsFromConfig: run-level value is a hard cap ─────

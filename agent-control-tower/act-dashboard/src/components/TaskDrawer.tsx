@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getKanbanItem,
   transitionKanbanItem,
 } from '../api/kanban';
-import { useDrawerContext } from './DrawerContext';
+import { listAsksByKanbanItem } from '../api/approvals';
+import { getRun } from '../api/runs';
+import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
+import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { MarkdownViewer } from './MarkdownViewer';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
 /* -------------------------------------------------------------------------- */
@@ -12,6 +17,7 @@ import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 /* -------------------------------------------------------------------------- */
 
 const STATUS_LABEL: Record<KanbanStatus, string> = {
+  BACKLOG: 'Backlog',
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
   REVIEW: 'Review',
@@ -27,13 +33,18 @@ const PRIORITY_TONE: Record<KanbanPriority, string> = {
   CRITICAL: 'pill danger',
 };
 
+// Mirror of the backend ALLOWED_TRANSITIONS — drives the drawer's transition
+// buttons only (drop-target legality lives in KanbanBoard's LEGAL_DROPS).
+// BLOCKED is retired; CANCELLED/DONE are reachable only via footer actions.
 const TRANSITIONS: Record<KanbanStatus, KanbanStatus[]> = {
-  TODO: ['IN_PROGRESS', 'BLOCKED', 'CANCELLED'],
-  IN_PROGRESS: ['DONE', 'BLOCKED', 'TODO', 'CANCELLED'],
-  REVIEW: ['IN_PROGRESS', 'DONE', 'BLOCKED', 'CANCELLED'],
-  BLOCKED: ['IN_PROGRESS', 'CANCELLED'],
-  DONE: ['IN_PROGRESS'],
-  CANCELLED: ['TODO'],
+  BACKLOG: ['TODO', 'CANCELLED'],
+  TODO: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
+  IN_PROGRESS: ['TODO', 'BACKLOG', 'REVIEW', 'DONE', 'CANCELLED'],
+  REVIEW: ['IN_PROGRESS', 'TODO', 'DONE', 'CANCELLED'],
+  // Defect D3: a finished card can be sent back for redo (Backlog or Todo).
+  DONE: ['BACKLOG', 'TODO'],
+  CANCELLED: [],
+  BLOCKED: [],
 };
 
 interface ParsedLabels {
@@ -73,9 +84,15 @@ function parseLabels(item: KanbanItem | undefined): ParsedLabels {
 /* -------------------------------------------------------------------------- */
 
 export function TaskDrawer() {
-  const { state, closeTaskDrawer } = useDrawerContext();
+  const { state, closeTaskDrawer, openReviewMode } = useDrawerContext();
   const { open, itemId } = state.taskDrawer;
   const queryClient = useQueryClient();
+
+  // Spec 10.3: Expand swaps the drawer for the in-place ReviewWorkspace, which
+  // only exists inside the Overview layout ('/'). The drawer itself mounts on
+  // every route, so on any other route the affordance must not render —
+  // expanding there would create a workspace with nowhere to land.
+  const onOverview = useLocation().pathname === '/';
 
   const [comment, setComment] = useState('');
 
@@ -86,9 +103,40 @@ export function TaskDrawer() {
     retry: false,
   });
 
+  const item = taskQuery.data;
+
+  // HITL asks attached to this card — fetched whenever the drawer is open,
+  // because asks may sit on any column (mid-run gate approvals included).
+  const asksQuery = useQuery({
+    queryKey: ['kanban', 'asks', itemId],
+    queryFn: () => listAsksByKanbanItem(itemId as string),
+    enabled: open && Boolean(itemId),
+  });
+  const pendingAsks = (asksQuery.data ?? []).filter((a) => a.status === 'PENDING');
+
+  // Defect D4: the card's linked run is fetched on demand so the drawer can show
+  // the run's actual work output (status, effort, tokens, result) instead of an
+  // inert truncated id. Disabled when the card has no run link.
+  const runQuery = useQuery({
+    queryKey: ['runs', 'detail', item?.linkedRunId],
+    queryFn: () => getRun(item?.linkedRunId as string),
+    enabled: open && Boolean(item?.linkedRunId),
+    retry: false,
+  });
+  const linkedRun = runQuery.data;
+
   const transitionMutation = useMutation({
-    mutationFn: ({ id, status, comment: c }: { id: string; status: KanbanStatus; comment?: string }) =>
-      transitionKanbanItem(id, { status, comment: c }),
+    mutationFn: ({
+      id,
+      status,
+      comment: c,
+      feedback,
+    }: {
+      id: string;
+      status: KanbanStatus;
+      comment?: string;
+      feedback?: string;
+    }) => transitionKanbanItem(id, { status, comment: c, feedback }),
     onSuccess: (data) => {
       queryClient.setQueryData(['kanban', 'item', data.id], data);
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
@@ -96,7 +144,6 @@ export function TaskDrawer() {
     },
   });
 
-  const item = taskQuery.data;
   const parsed = useMemo(() => parseLabels(item), [item]);
 
   // Acceptance criteria: derive simple states from item labels OR a default checklist.
@@ -121,8 +168,11 @@ export function TaskDrawer() {
 
   const validTransitions = item ? TRANSITIONS[item.status] : [];
 
-  const errMsg = (transitionMutation.error as { response?: { data?: { error?: string } } } | null)
-    ?.response?.data?.error;
+  // GlobalExceptionHandler puts the human reason in `message` and the HTTP
+  // phrase in `error` (e.g. "Bad Request"); prefer the reason when present.
+  const errData = (transitionMutation.error as { response?: { data?: { message?: string; error?: string } } } | null)
+    ?.response?.data;
+  const errMsg = errData?.message ?? errData?.error;
 
   return (
     <>
@@ -148,6 +198,26 @@ export function TaskDrawer() {
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
+          {/* Defect D7: entry point into the linked agent's Live Activity
+              Stream — only meaningful when the card carries an agent. */}
+          {item?.linkedAgentId && (
+            <button
+              className="btn"
+              aria-label="Open live activity"
+              onClick={() => dispatchOpenAgentDrawer(item.linkedAgentId as string)}
+            >
+              ▶ Live activity
+            </button>
+          )}
+          {onOverview && item?.status === 'REVIEW' && (
+            <button
+              className="btn"
+              onClick={() => item && openReviewMode(item.id)}
+              aria-label="Expand review"
+            >
+              ⤢ Expand
+            </button>
+          )}
           <div className="close" onClick={closeTaskDrawer} role="button" aria-label="Close">
             ✕
           </div>
@@ -167,6 +237,18 @@ export function TaskDrawer() {
 
           {item && (
             <>
+              {/* Review decision zone: the first thing an operator sees on a
+                  card that is waiting on them — on any column (spec 10.1).
+                  While the in-place ReviewWorkspace is open the drawer is
+                  closed entirely, so no zone gate is needed here. Keyed by
+                  card so answer drafts reset on sibling navigation. */}
+              {pendingAsks.length > 0 && (
+                <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
+              )}
+              {item.status === 'REVIEW' && asksQuery.isSuccess && pendingAsks.length === 0 && (
+                <ShortApprovalView item={item} />
+              )}
+
               {/* Status row */}
               <div className="section-h">Status</div>
               <div
@@ -244,6 +326,59 @@ export function TaskDrawer() {
                   </div>
                 ))}
               </div>
+
+              {/* Linked run result (D4): the card detail must expose what the
+                  run actually produced, not just its id in Artifacts. */}
+              {item.linkedRunId && (
+                <div className="run-result">
+                  <div className="section-h">Run Result</div>
+                  {runQuery.isLoading && (
+                    <div
+                      style={{ fontSize: 11.5, color: 'var(--text-mute)', padding: '4px 2px' }}
+                    >
+                      Loading run…
+                    </div>
+                  )}
+                  {runQuery.isError && !runQuery.isLoading && (
+                    <div className="evidence-error">Failed to load run {item.linkedRunId.slice(0, 8)}.</div>
+                  )}
+                  {linkedRun && (
+                    <>
+                      <div className="run-meta">
+                        <span className="pill">{linkedRun.status}</span>
+                        <span className="cell-mono">Iter {linkedRun.iterationCount}</span>
+                        <span className="cell-mono">
+                          {linkedRun.totalTokensUsed.toLocaleString()} tokens
+                        </span>
+                        <span className="cell-mono">
+                          {linkedRun.completedAt
+                            ? new Date(linkedRun.completedAt).toLocaleString()
+                            : 'not finished'}
+                        </span>
+                      </div>
+                      {linkedRun.errorMessage && (
+                        <div
+                          className="evidence-error"
+                          style={{
+                            background: 'rgba(255,107,122,.06)',
+                            border: '1px solid rgba(255,107,122,.2)',
+                            borderRadius: 8,
+                            padding: '10px 12px',
+                            marginTop: 8,
+                          }}
+                        >
+                          {linkedRun.errorMessage}
+                        </div>
+                      )}
+                      {linkedRun.finalOutput && (
+                        <div className="artifact-result">
+                          <MarkdownViewer content={linkedRun.finalOutput} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               {/* Comments */}
               <div className="section-h">Comments</div>

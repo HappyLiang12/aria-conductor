@@ -39,7 +39,8 @@ class ApprovalToolsTest {
     private ApprovalDetail detail(UUID id, String type, String status) {
         return new ApprovalDetail(id, UUID.randomUUID(), null, ApprovalStatus.valueOf(status),
                 "Spec resubmitted", Instant.now(), null, Instant.now().plusSeconds(1800),
-                type, "## spec", "MARKDOWN", UUID.randomUUID(), null, null, null);
+                type, "## spec", "MARKDOWN", UUID.randomUUID(), null, null, null,
+                null, null, null, null, null);
     }
 
     @Test

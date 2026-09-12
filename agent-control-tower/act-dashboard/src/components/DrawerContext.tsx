@@ -21,12 +21,17 @@ export interface AgentDrawerSlot {
 export interface DrawerState {
   taskDrawer: DrawerSlot;
   agentDrawer: AgentDrawerSlot;
+  // In-place review workspace target (spec 10.3): the kanban card id whose
+  // ReviewWorkspace is rendered inside the Overview layout, or null.
+  reviewTargetId: string | null;
 }
 
 export interface DrawerContextValue {
   state: DrawerState;
   openTaskDrawer: (itemId: string) => void;
   closeTaskDrawer: () => void;
+  openReviewMode: (itemId: string) => void;
+  closeReviewMode: () => void;
   openAgentDrawer: (agentId: string) => void;
   closeAgentDrawer: () => void;
 }
@@ -34,6 +39,7 @@ export interface DrawerContextValue {
 const initialState: DrawerState = {
   taskDrawer: { open: false, itemId: null },
   agentDrawer: { open: false, agentId: null },
+  reviewTargetId: null,
 };
 
 const DrawerContext = createContext<DrawerContextValue | null>(null);
@@ -56,6 +62,10 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({
       ...prev,
       taskDrawer: { open: true, itemId },
+      // Surfaces are mutually exclusive (defense-in-depth): opening a task
+      // drawer while a review workspace target is set tears the workspace
+      // down so it can never linger behind an open drawer.
+      reviewTargetId: null,
     }));
   }, []);
 
@@ -63,6 +73,28 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({
       ...prev,
       taskDrawer: { open: false, itemId: prev.taskDrawer.itemId },
+      // Leaving the drawer must never leave a stale review workspace behind.
+      reviewTargetId: null,
+    }));
+  }, []);
+
+  // Spec 10.3 in-place expand: opening the review workspace collapses the
+  // drawer — the workspace replaces it inside the Overview layout (no overlay).
+  const openReviewMode = useCallback((itemId: string) => {
+    setState((prev) => ({
+      taskDrawer: { open: false, itemId: prev.taskDrawer.itemId },
+      agentDrawer: prev.agentDrawer,
+      reviewTargetId: itemId,
+    }));
+  }, []);
+
+  // Collapse: clear the target AND reopen the drawer on the card that was
+  // under review so the operator lands back exactly where they expanded.
+  const closeReviewMode = useCallback(() => {
+    setState((prev) => ({
+      taskDrawer: { open: true, itemId: prev.reviewTargetId ?? prev.taskDrawer.itemId },
+      agentDrawer: prev.agentDrawer,
+      reviewTargetId: null,
     }));
   }, []);
 
@@ -117,10 +149,12 @@ export function DrawerProvider({ children }: { children: ReactNode }) {
       state,
       openTaskDrawer,
       closeTaskDrawer,
+      openReviewMode,
+      closeReviewMode,
       openAgentDrawer,
       closeAgentDrawer,
     }),
-    [state, openTaskDrawer, closeTaskDrawer, openAgentDrawer, closeAgentDrawer]
+    [state, openTaskDrawer, closeTaskDrawer, openReviewMode, closeReviewMode, openAgentDrawer, closeAgentDrawer]
   );
 
   return <DrawerContext.Provider value={value}>{children}</DrawerContext.Provider>;

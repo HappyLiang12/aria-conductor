@@ -41,6 +41,13 @@ public class RunKanbanAutoCreator {
 
     @EventListener
     public void onRunStarted(RunStartedEvent event) {
+        // Kanban pickup owns card linkage for orchestrator-created runs: it sets
+        // linkedRunId on the card it just dispatched, so a duplicate auto-card
+        // here would race and double-card the board.
+        if (event.isSuppressAutoCard()) {
+            log.debug("Skipping auto-card for run {} (suppressAutoCard)", event.getRunId());
+            return;
+        }
         try {
             // Use the run's promptSeed as a meaningful title (truncated)
             String title = runRepository.findById(event.getRunId())
@@ -89,13 +96,17 @@ public class RunKanbanAutoCreator {
         try {
             List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
             KanbanStatus targetStatus = switch (event.getStatus()) {
-                case COMPLETED -> KanbanStatus.DONE;
+                // Defect D8: completed work always stops in REVIEW for human
+                // sign-off. Auto-DONE bypassed the review/approval loop (no
+                // REVIEW_REQUEST ask, no workspace, nothing to inspect).
+                case COMPLETED -> KanbanStatus.REVIEW;
                 case ABORTED -> KanbanStatus.CANCELLED;
                 case CANCELLED -> KanbanStatus.CANCELLED;
                 // F5: failed work stays visible in the attention column instead of
                 // silently vanishing into CANCELLED (rendered as "Archived").
-                case FAILED -> KanbanStatus.BLOCKED;
-                default -> KanbanStatus.DONE;
+                // BLOCKED is retired (V52); failed work surfaces in REVIEW for the operator.
+                case FAILED -> KanbanStatus.REVIEW;
+                default -> KanbanStatus.REVIEW;
             };
             for (KanbanItem item : items) {
                 if (item.getStatus() != KanbanStatus.DONE

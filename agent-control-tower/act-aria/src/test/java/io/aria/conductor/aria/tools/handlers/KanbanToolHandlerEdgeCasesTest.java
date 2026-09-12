@@ -5,6 +5,8 @@ import io.aria.conductor.execution.kanban.KanbanItem;
 import io.aria.conductor.execution.kanban.KanbanPriority;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.kanban.KanbanStatus;
+import io.aria.conductor.execution.kanban.KanbanTransitionService;
+import io.aria.conductor.execution.kanban.TransitionRequest;
 import io.aria.conductor.execution.kanban.UpdateKanbanItemRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +34,8 @@ class KanbanToolHandlerEdgeCasesTest {
 
     @Mock private KanbanService kanbanService;
 
+    @Mock private KanbanTransitionService kanbanTransitionService;
+
     @InjectMocks
     private KanbanToolHandler handler;
 
@@ -41,20 +45,25 @@ class KanbanToolHandlerEdgeCasesTest {
                 "toolName", "transition_kanban_item", "id", "k-1", "newStatus", "SHIPPED"));
 
         assertThat(result).startsWith("Error: Invalid status: SHIPPED")
-                .contains("TODO").contains("IN_PROGRESS").contains("DONE");
-        verifyNoInteractions(kanbanService);
+                .contains("BACKLOG").contains("TODO").contains("IN_PROGRESS").contains("DONE");
+        verifyNoInteractions(kanbanService, kanbanTransitionService);
     }
 
     @Test
     void transition_passesCommentThroughToService() {
-        when(kanbanService.transition("k-1", KanbanStatus.DONE, "verified by QA"))
+        when(kanbanService.get("k-1")).thenReturn(
+                KanbanItem.builder().id("k-1").title("T").status(KanbanStatus.REVIEW).build());
+        when(kanbanTransitionService.transition(eq("k-1"), any(TransitionRequest.class)))
                 .thenReturn(KanbanItem.builder().id("k-1").title("T").status(KanbanStatus.DONE).build());
 
         String result = handler.execute(Map.of(
                 "toolName", "transition_kanban_item", "id", "k-1",
                 "newStatus", "done", "comment", "verified by QA"));
 
-        verify(kanbanService).transition("k-1", KanbanStatus.DONE, "verified by QA");
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService).transition(eq("k-1"), captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(KanbanStatus.DONE);
+        assertThat(captor.getValue().getComment()).isEqualTo("verified by QA");
         assertThat(result).contains("transitioned to DONE");
     }
 
@@ -125,7 +134,9 @@ class KanbanToolHandlerEdgeCasesTest {
 
     @Test
     void serviceExceptionIsMappedToErrorString() {
-        when(kanbanService.transition("k-1", KanbanStatus.DONE, null))
+        when(kanbanService.get("k-1")).thenReturn(
+                KanbanItem.builder().id("k-1").title("T").status(KanbanStatus.IN_PROGRESS).build());
+        when(kanbanTransitionService.transition(eq("k-1"), any(TransitionRequest.class)))
                 .thenThrow(new IllegalStateException("illegal transition BLOCKED -> DONE"));
 
         String result = handler.execute(Map.of(

@@ -4,60 +4,40 @@ import { apiCall } from './fixtures';
 /**
  * Approvals decision-flow E2E.
  *
- * ADAPTATION NOTE (documented per task brief): approvals are only created as a
- * side effect of governed tool calls during real agent runs. The REST surface
- * (ApprovalController) exposes GET /approvals, GET /{id} and POST /{id}/decide
- * — there is NO create/seed endpoint, and without an LLM key no tool call ever
- * fires. Per the honesty rule this spec asserts page structure, the live empty
- * states and the API guards instead of faking a decision flow. (The h2-only
- * DevSqlController backdoor was deliberately not used: schema-coupled SQL
- * seeding would rot silently.)
+ * ADAPTATION NOTE (kanban HITL redesign): ApprovalsPage is RETIRED — /approvals
+ * renders <Navigate to="/" replace />, the sidebar has no Approvals entry, and
+ * the approvals SURFACE is now the kanban Review column with per-card asks
+ * (GET /approvals?kanbanItemId=). The full decision flow (ask surfacing on a
+ * Review card, decision zone, quick decisions) is covered live by
+ * kanban-hitl.spec.ts, so this spec stays a focused retirement smoke: the
+ * redirect contract and the surviving approvals API guard.
  */
 test.describe('Approvals decision flow', () => {
-  test('page renders header and queue tabs', async ({ page }) => {
+  test('/approvals redirects to the overview board', async ({ page }) => {
     await page.goto('/approvals');
+    // Client-side <Navigate to="/" replace /> lands stale deep links on the
+    // overview, next to the Review column.
+    await expect(page).toHaveURL(/\/$/);
     await page.waitForLoadState('networkidle');
-    await expect(page.locator('h2').filter({ hasText: 'Approvals' }).first()).toBeVisible();
-    await expect(page.locator('.tab-btn').filter({ hasText: 'Pending' })).toBeVisible();
-    await expect(page.locator('.tab-btn').filter({ hasText: 'History' })).toBeVisible();
+    // The landing surface is the governed board, not a retired approvals page.
+    await expect(page.locator('#panel-exec')).toBeVisible();
+    await expect(page.locator('h2').filter({ hasText: 'Kanban Board' }).first()).toBeVisible();
+    // The retired queue tabs never render anywhere on the redirected page.
+    await expect(page.locator('.tab-btn')).toHaveCount(0);
   });
 
-  test('pending tab mirrors the live queue', async ({ page, request }) => {
+  test('the approvals surface is the kanban Review column (sidebar entry retired)', async ({ page, request }) => {
+    // The approvals REST API remains the per-card ask source for the board.
     const { status, data } = await apiCall(request, 'GET', '/approvals');
     expect(status).toBe(200);
     expect(Array.isArray(data)).toBe(true);
 
-    await page.goto('/approvals');
+    await page.goto('/');
     await page.waitForLoadState('networkidle');
-
-    const pendingTab = page.locator('.tab-btn').filter({ hasText: 'Pending' });
-    await expect(pendingTab).toBeVisible({ timeout: 15_000 });
-
-    // Count-agnostic mirror check: the approvals queue is SHARED (live chains
-    // and other specs decide gates concurrently, and /approvals returns every
-    // status on a dirty DB), so no fixed total can be asserted. Re-read the
-    // API and the rendered tab count together until they agree — the tab must
-    // reflect the live PENDING queue at some moment within the window.
-    await expect
-      .poll(async () => {
-        const { data: now } = await apiCall(request, 'GET', '/approvals');
-        const apiPending = (Array.isArray(now) ? now : []).filter((a) => a?.status === 'PENDING').length;
-        const shown = Number(((await pendingTab.textContent()) ?? '').match(/Pending \((\d+)\)/)?.[1] ?? -1);
-        return shown === apiPending;
-      }, { timeout: 20_000 })
-      .toBe(true);
-  });
-
-  test('history tab switches and shows resolved list or empty state', async ({ page }) => {
-    await page.goto('/approvals');
-    await page.waitForLoadState('networkidle');
-    await page.locator('.tab-btn').filter({ hasText: 'History' }).click();
-
-    // Pending empty state must be gone; history renders its own content.
-    await expect(page.locator('.empty-state').filter({ hasText: 'No pending approvals' })).toHaveCount(0);
-    const historyEmpty = page.locator('.empty-state').filter({ hasText: 'No resolved approvals yet.' });
-    const anyContent = historyEmpty.or(page.locator('.empty-state, table, .approval-card').first());
-    await expect(anyContent.first()).toBeVisible();
+    // The Review column is the single HITL surface.
+    await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible();
+    // The sidebar has no Approvals entry anymore — the Review column is it.
+    await expect(page.locator('.rail-btn[data-view="approvals"]')).toHaveCount(0);
   });
 
   test('negative: deciding a non-existent approval is rejected', async ({ request }) => {

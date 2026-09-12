@@ -5,6 +5,7 @@ import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.HousekeepingProgressEvent;
+import io.aria.conductor.common.event.KanbanItemAssigningEvent;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.event.KnowledgeApprovedEvent;
@@ -241,6 +242,13 @@ public class EventBroadcastListener {
                 "itemId", event.getItemId(),
                 "fromStatus", event.getFromStatus(),
                 "toStatus", event.getToStatus()
+        ));
+    }
+
+    @EventListener
+    public void onKanbanItemAssigning(KanbanItemAssigningEvent event) {
+        broadcast("kanban.assigning", Map.of(
+                "itemId", event.getItemId()
         ));
     }
 

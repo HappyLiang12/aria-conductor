@@ -40,6 +40,16 @@ public class ApprovalQueryService {
                 ? approvalRepository.findByStatus(status)
                 : approvalRepository.findAll(
                         PageRequest.of(0, 200, Sort.by("requestedAt").descending())).getContent();
+        return toDetails(approvals);
+    }
+
+    /** Asks surfaced on a kanban card (Review column panel). */
+    @Transactional(readOnly = true)
+    public List<ApprovalController.ApprovalDetail> listByKanbanItem(String kanbanItemId) {
+        return toDetails(approvalRepository.findByKanbanItemId(kanbanItemId));
+    }
+
+    private List<ApprovalController.ApprovalDetail> toDetails(List<Approval> approvals) {
         // Batch-load tool calls to avoid N+1; risk tier comes from the cached ToolRiskResolver.
         List<UUID> toolCallIds = approvals.stream()
                 .map(Approval::getToolCallId)
@@ -63,6 +73,9 @@ public class ApprovalQueryService {
                 a.getContent(),
                 a.getContentKind() != null ? a.getContentKind().name() : null,
                 a.getKnowledgeItemId(),
-                toolName, tc != null ? tc.getArguments() : null, riskTier);
+                toolName, tc != null ? tc.getArguments() : null, riskTier,
+                a.getKanbanItemId(),
+                a.getAskType() != null ? a.getAskType().name() : null,
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
     }
 }

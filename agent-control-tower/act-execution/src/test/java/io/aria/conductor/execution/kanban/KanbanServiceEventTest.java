@@ -3,6 +3,7 @@ package io.aria.conductor.execution.kanban;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,6 +37,9 @@ class KanbanServiceEventTest {
 
     @Mock
     RunRepository runRepository;
+
+    @Mock
+    ApprovalRepository approvalRepository;
 
     @InjectMocks
     KanbanService service;

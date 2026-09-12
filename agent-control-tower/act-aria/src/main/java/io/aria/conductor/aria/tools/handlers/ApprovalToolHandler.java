@@ -57,10 +57,13 @@ public class ApprovalToolHandler implements ToolHandler {
         if (id.isEmpty()) return error("Missing required parameter: id");
         if (decision.isEmpty()) return error("Missing required parameter: decision");
         UUID approvalId = UUID.fromString(id);
-        // Governance: SPEC_REVIEW approvals require a human decision, not an agent's.
+        // Governance: human-gate approvals require a human decision, not an agent's.
+        // SPEC_REVIEW is the SDD spec gate; REVIEW_REQUEST is the kanban Review
+        // column ask (the single HITL entry of the HITL redesign).
         Approval target = approvalRepository.findById(approvalId).orElse(null);
-        if (target != null && target.getApprovalType() == Approval.ApprovalType.SPEC_REVIEW) {
-            return error("SPEC_REVIEW approvals must be decided by a human via the dashboard, not by an agent.");
+        if (target != null && (target.getApprovalType() == Approval.ApprovalType.SPEC_REVIEW
+                || target.getAskType() == Approval.AskType.REVIEW_REQUEST)) {
+            return error("This approval must be decided by a human via the dashboard, not by an agent.");
         }
         boolean approved = Set.of("approve","approved","yes","true").contains(decision.toLowerCase());
         approvalGate.decideApproval(approvalId, approved, reason);

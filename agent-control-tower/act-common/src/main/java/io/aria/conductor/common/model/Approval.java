@@ -18,6 +18,7 @@ import java.util.UUID;
 public class Approval {
 
     public enum ApprovalType { TOOL_CALL, SPEC_REVIEW }
+    public enum AskType { APPROVAL, QUESTION, REVIEW_REQUEST }
     public enum ContentKind { MARKDOWN, HTML }
 
     @Id
@@ -46,6 +47,25 @@ public class Approval {
     @Enumerated(EnumType.STRING)
     @Column(name = "content_kind", length = 20)
     private ContentKind contentKind;
+
+    /** HITL ask link: the kanban card this ask is surfaced on (nullable). */
+    @Column(name = "kanban_item_id", length = 36)
+    private String kanbanItemId;
+
+    /** Fine-grained ask kind; approvalType stays the governance category. */
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "ask_type", nullable = false, length = 20)
+    private AskType askType = AskType.APPROVAL;
+
+    @Column(name = "context_md", columnDefinition = "TEXT")
+    private String contextMd;
+
+    @Column(name = "options_json", columnDefinition = "TEXT")
+    private String optionsJson;
+
+    @Column(name = "answer", columnDefinition = "TEXT")
+    private String answer;
 
     @Column(name = "knowledge_item_id", columnDefinition = "UUID")
     private UUID knowledgeItemId;

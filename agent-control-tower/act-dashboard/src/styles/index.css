@@ -178,7 +178,7 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 /* ---------- Kanban ---------- */
 .kanban { padding: 10px; }
 .kanban-grid {
-  display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
   min-height: 460px; min-width: 0; overflow-x: auto;
 }
 .col-k {
@@ -196,19 +196,56 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 .col-k header .count { background: rgba(255,255,255,.04); border: 1px solid var(--line-2); padding: 1px 7px; border-radius: 999px; color: var(--text); font-size: 10px; }
 .col-k.gate header { color: #ffd884; }
 .col-k.gate { background: linear-gradient(180deg, rgba(246,196,83,.06), rgba(255,255,255,.02)); border-color: rgba(246,196,83,.25); }
-.col-k .lane { padding: 8px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.col-k .lane { padding: 8px; display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 60px; }
+/* Drop-target affordance while a card is being dragged: legal lanes light up,
+   illegal lanes dim. */
+.col-k .lane.drop-legal { outline: 1px dashed var(--brand-2); }
+.col-k .lane.drop-illegal { opacity: 0.4; }
 
 .card {
   background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
   border: 1px solid var(--line-2);
   border-radius: 9px;
   padding: 9px 10px;
-  cursor: pointer;
+  cursor: grab;
   position: relative;
   transition: transform .35s ease, box-shadow .25s ease, border-color .2s ease, opacity .35s ease;
   will-change: transform;
 }
 .card:hover { border-color: rgba(91,140,255,.45); box-shadow: 0 4px 18px rgba(0,0,0,.35); transform: translateY(-1px); }
+.card[data-dragging='true'] { opacity: .5; cursor: grabbing; }
+.card-cancel {
+  position: absolute; top: 6px; right: 6px;
+  background: transparent; border: none; color: var(--text-mute);
+  cursor: pointer; opacity: 0; padding: 0 2px; font: inherit; line-height: 1;
+}
+.card:hover .card-cancel { opacity: 1; }
+/* Keyboard users reach the cancel button via Tab — reveal it on focus too. */
+.card:focus-within .card-cancel { opacity: 1; }
+.card-cancel:hover { color: var(--red); }
+/* Review-card quick decision (operator feedback 2026-09-10: approve / request
+   changes / deny all happen on the card face, no drawer or expand detour). */
+.card-approve {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--line-2);
+}
+.cap-btn {
+  border: 1px solid var(--line-2); background: transparent; color: var(--text-mute);
+  border-radius: 5px; font-family: inherit; font-size: 10px; line-height: 1.5;
+  padding: 3px 7px; cursor: pointer; white-space: nowrap;
+}
+.cap-btn.ok { color: #4ade80; border-color: rgba(74, 222, 128, .45); font-weight: 600; }
+.cap-btn.danger { color: var(--red); border-color: rgba(255, 107, 122, .4); }
+.cap-btn:hover:not(:disabled) { border-color: var(--brand-2); color: var(--brand-2); }
+.cap-btn:disabled { opacity: .5; cursor: default; }
+.cap-compose { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+.cap-input {
+  width: 100%; box-sizing: border-box;
+  background: rgba(0, 0, 0, .28); border: 1px solid var(--line-2); border-radius: 5px;
+  color: var(--text); font-family: inherit; font-size: 10.5px; line-height: 1.5; padding: 4px 6px;
+}
+.cap-input:focus { outline: none; border-color: var(--brand-2); }
+.cap-row { display: flex; gap: 4px; }
 .card.moving { animation: cardMove 1.1s cubic-bezier(.4,.1,.2,1); }
 .card.moving-err { animation: cardMoveErr 1.2s cubic-bezier(.4,.1,.2,1); }
 @keyframes cardMoveErr {
@@ -250,6 +287,33 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 @keyframes gatePulse {
   0%,100% { box-shadow: 0 0 0 0 rgba(246,196,83,.0); }
   50% { box-shadow: 0 0 0 4px rgba(246,196,83,.18); }
+}
+
+/* ---------- New Task modal form (HITL redesign) ---------- */
+.kanban-form { display: flex; flex-direction: column; gap: 10px; }
+.kanban-form-row { display: flex; flex-direction: column; gap: 5px; }
+.kanban-form-row > span { font-size: 11px; color: var(--text-dim); letter-spacing: .5px; text-transform: uppercase; }
+.kanban-form-row input,
+.kanban-form-row select,
+.kanban-form-row textarea {
+  width: 100%; border: 1px solid var(--line-2); border-radius: 8px;
+  background: rgba(0,0,0,.22); color: var(--text);
+  padding: 8px 10px; font: inherit; font-size: 12.5px; outline: none; resize: vertical;
+}
+.kanban-form-row input:focus,
+.kanban-form-row select:focus,
+.kanban-form-row textarea:focus { border-color: var(--brand-2); }
+.kanban-form-row textarea::placeholder { color: var(--text-mute); }
+.kanban-form-error { color: var(--red); font-size: 12px; }
+.priority-seg { display: flex; gap: 4px; }
+.priority-seg button {
+  flex: 1; padding: 6px 0; border-radius: 6px;
+  border: 1px solid var(--line-2); background: transparent;
+  color: var(--text-mute); font-weight: 600; font-size: 11px; cursor: pointer;
+}
+.priority-seg button.on {
+  border-color: var(--brand-2); color: var(--brand-2);
+  background: rgba(77, 163, 255, 0.08);
 }
 
 /* ---------- Agent panel ---------- */
@@ -392,6 +456,17 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 .artifacts { display: grid; gap: 6px; }
 .artifact { display: flex; gap: 8px; align-items: center; padding: 7px 9px; border-radius: 8px; background: rgba(255,255,255,.025); border: 1px solid var(--line); font-size: 12px; }
 .artifact .ic { width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; background: rgba(91,140,255,.12); color: var(--brand-2); font-size: 11px; }
+/* Linked run result (defect D4): the card detail / review rail shows what the
+   run produced — status + effort meta row above the rendered output. */
+.run-result { display: grid; gap: 6px; }
+.run-result .run-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.run-result .run-meta .cell-mono { font-size: 11.5px; color: var(--text-dim); }
+.run-result .artifact-result {
+  padding: 9px 10px; border-radius: 8px; font-size: 12px;
+  background: rgba(77,216,138,.06); border: 1px solid rgba(77,216,138,.2);
+  max-height: 320px; overflow: auto;
+}
+.review-workspace .run-result { margin-top: 12px; }
 .comments { display: grid; gap: 8px; }
 .comment { font-size: 12px; padding: 8px; background: rgba(255,255,255,.025); border-radius: 8px; border: 1px solid var(--line); }
 .comment .who { font-weight: 600; font-size: 11px; color: var(--brand-2); }
@@ -2479,3 +2554,44 @@ body.light .error-text,
 body.light .error-state,
 body.light .btn-danger { color: #c2273a; }
 body.light .urgency-badge { color: #b3182b; background: rgba(255,107,122,.14); }
+
+/* === Kanban HITL: TaskDrawer decision zone + in-place review workspace === */
+.decision-zone { background: rgba(232,163,61,0.08); border: 1px solid rgba(232,163,61,0.4); border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.decision-zone.short-view { border-style: dashed; }
+.dz-title { color: #e8a33d; font-weight: 700; margin-bottom: 8px; }
+.ask-card { border-bottom: 1px dashed var(--line-2); padding: 8px 0; }
+.ask-card:last-of-type { border-bottom: none; }
+.ask-q { font-weight: 600; margin-bottom: 4px; }
+.ask-ctx { color: var(--text-mute); font-size: 12px; margin-bottom: 6px; }
+.ask-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.ask-actions .dod-textarea { width: 100%; }
+/* In-place expand (spec 10.3): the ReviewWorkspace renders INSIDE the Overview
+   layout while DrawerContext.reviewTargetId is set — no fixed positioning, no
+   z-index stack, no bottom-strip coupling. The grid-column transition gives
+   expand/collapse a smooth reflow; reviewIn fades + rises the workspace and
+   the reflowed widget strip in. */
+.layout { transition: grid-template-columns 280ms ease; }
+.review-workspace { animation: reviewIn 240ms ease; display: flex; flex-direction: column; }
+@keyframes reviewIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* Header sits on the panel's own padding grid (12px 14px) so the title and the
+   nav buttons never touch the rounded corners. */
+.review-workspace .rw-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+}
+.review-workspace .rw-head h3 { margin: 0; font-size: 15px; }
+.review-workspace .rw-nav { margin-left: auto; display: flex; gap: 8px; flex: none; }
+.review-workspace .rw-body { display: flex; gap: 14px; padding: 14px; align-items: flex-start; }
+.review-workspace .rf-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.review-workspace .rf-spec { flex: 1.4; min-width: 0; overflow-y: auto; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 14px; max-height: 56vh; }
+.review-workspace .rf-decisions { flex: 1; min-width: 320px; overflow-y: auto; max-height: 56vh; }
+/* Decision surfaces inside the workspace rail share the drawer's field metrics. */
+.review-workspace .dod-textarea, .drawer .dod-textarea { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12px; }
+.decision-zone .ask-actions .btn { padding: 5px 12px; font-size: 11px; }
+.expanded-strip { animation: reviewIn 240ms ease; }
+
+/* === Kanban HITL: clickable "Waiting on you" stat card (Task 15) === */
+.stat.clickable { cursor: pointer; transition: border-color .15s ease; }
+.stat.clickable:hover { border-color: var(--brand-2); }
+.stat.clickable:focus-visible { outline: 1px solid var(--brand-2); outline-offset: 1px; }

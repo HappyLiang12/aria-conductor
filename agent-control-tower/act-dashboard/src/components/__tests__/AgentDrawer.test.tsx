@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ReactElement } from 'react';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AgentDrawer } from '../AgentDrawer';
@@ -42,10 +43,13 @@ const mockCtx = {
 vi.mock('../Layout', () => ({
   useWebSocketContext: () => mockCtx,
 }));
+// Drawer open/agent state is mutable so D5 tests can close and reopen the
+// drawer (the real DrawerContext drives this through Layout).
+const drawerState = vi.hoisted(() => ({ open: true, agentId: 'a-1' }));
 vi.mock('../DrawerContext', () => ({
   useDrawerContext: () => ({
     state: {
-      agentDrawer: { open: true, agentId: 'a-1' },
+      agentDrawer: { open: drawerState.open, agentId: drawerState.agentId },
       taskDrawer: { open: false, itemId: null },
     },
     openTaskDrawer: vi.fn(),
@@ -57,7 +61,17 @@ vi.mock('../DrawerContext', () => ({
 
 function ui() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const utils = render(
+    <QueryClientProvider client={qc}>
+      <AgentDrawer />
+    </QueryClientProvider>,
+  );
+  return { ...utils, qc };
+}
+
+/** Re-render against the SAME QueryClient (react-query cache must persist). */
+function rerenderDrawer(rerender: (ui: ReactElement) => void, qc: QueryClient) {
+  rerender(
     <QueryClientProvider client={qc}>
       <AgentDrawer />
     </QueryClientProvider>,
@@ -300,5 +314,107 @@ describe('AgentDrawer backlog replay + stub removal (Task 6)', () => {
     await waitFor(() => expect(screen.getByText(/Idle — awaiting work/)).toBeInTheDocument());
     expect(screen.getByText(/thinking fragment/)).toBeInTheDocument();
     expect(screen.getByText(/shell_exec/)).toBeInTheDocument();
+  });
+});
+
+// Defect D5: the Live Activity Stream must keep — and re-seed — history for the
+// agent's latest run even when that run already COMPLETED between polls.
+describe('AgentDrawer completed-run history (D5)', () => {
+  const completedRun: Run = {
+    id: 'r-3', agentId: 'a-1', status: 'COMPLETED', promptSeed: 'Finished work',
+    maxIterations: 15, totalTokensUsed: 900, iterationCount: 5,
+    errorMessage: null, finalOutput: 'Delivered the thing',
+    createdAt: '2026-09-06T06:04:00Z', completedAt: '2026-09-06T06:05:00Z',
+  };
+  const failedRun: Run = {
+    id: 'r-4', agentId: 'a-1', status: 'FAILED', promptSeed: 'Broken work',
+    maxIterations: 15, totalTokensUsed: 40, iterationCount: 2,
+    errorMessage: 'provider exploded', finalOutput: null,
+    createdAt: '2026-09-06T06:00:00Z', completedAt: '2026-09-06T06:02:00Z',
+  };
+  const backlog: RunProgressEntry[] = [
+    { id: 'pc-1', runId: 'r-3', agentId: 'a-1', iteration: 1, kind: 'THINKING', seq: 1, content: 'historical thinking', toolName: null, createdAt: '2026-09-06T06:00:01Z' },
+    { id: 'pc-2', runId: 'r-3', agentId: 'a-1', iteration: 1, kind: 'TOOL_CALL', seq: 2, content: 'historical output', toolName: 'shell_exec', createdAt: '2026-09-06T06:00:02Z' },
+  ];
+
+  beforeEach(() => {
+    // Call history must not leak across tests: this describe asserts how many
+    // times the backlog fetch ran.
+    vi.clearAllMocks();
+    mockCtx.lastMessage = null;
+    mockCtx.isConnected = false;
+    wsHandlers = [];
+    drawerState.open = true;
+    drawerState.agentId = 'a-1';
+    vi.mocked(listRuns).mockResolvedValue([]);
+    vi.mocked(getRunProgress).mockResolvedValue([]);
+  });
+
+  it('agentDrawer_completedRun_replaysPersistedBacklog', async () => {
+    vi.mocked(listRuns).mockResolvedValue([completedRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(backlog);
+    const { container } = ui();
+
+    expect(await screen.findByText(/historical thinking/)).toBeInTheDocument();
+    expect(screen.getByText(/shell_exec/)).toBeInTheDocument();
+    expect(vi.mocked(getRunProgress)).toHaveBeenCalledWith('r-3');
+    expect(container.querySelectorAll('.stream .ln').length).toBe(2);
+  });
+
+  it('agentDrawer_reopen_keepsHistoryAndReseedsBacklog', async () => {
+    vi.mocked(listRuns).mockResolvedValue([completedRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(backlog);
+    const { container, qc, rerender } = ui();
+    expect(await screen.findByText(/historical thinking/)).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(2);
+
+    // Close the drawer: the agent target stays, only `open` flips.
+    drawerState.open = false;
+    await act(async () => {
+      rerenderDrawer(rerender, qc);
+    });
+    // Reopen: the buffer must survive the round-trip (it used to be wiped on
+    // close) and the persisted backlog must be re-seeded on open.
+    drawerState.open = true;
+    await act(async () => {
+      rerenderDrawer(rerender, qc);
+    });
+
+    expect(await screen.findByText(/historical thinking/)).toBeInTheDocument();
+    expect(screen.getByText(/shell_exec/)).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(2);
+    expect(vi.mocked(getRunProgress)).toHaveBeenCalledTimes(2);
+  });
+
+  it('agentDrawer_completedRun_showsFinalOutput', async () => {
+    vi.mocked(listRuns).mockResolvedValue([completedRun]);
+    ui();
+
+    // The old gate (activeRun.status === 'COMPLETED') was unreachable because
+    // activeRun only ever holds RUNNING/INITIALIZING/PAUSED.
+    expect(await screen.findByText('Run Result')).toBeInTheDocument();
+    expect(await screen.findByText('Delivered the thing')).toBeInTheDocument();
+  });
+
+  it('agentDrawer_failedRun_showsErrorMessage', async () => {
+    vi.mocked(listRuns).mockResolvedValue([failedRun]);
+    ui();
+
+    expect(await screen.findByText('Run Failed')).toBeInTheDocument();
+    expect(await screen.findByText('provider exploded')).toBeInTheDocument();
+  });
+
+  it('agentDrawer_replaysNewestRun_whenListIsUnsorted', async () => {
+    // GET /api/v1/runs returns rows unsorted: the OLDEST run (failed) comes
+    // first. The replay target must still be the newest run (completed).
+    vi.mocked(listRuns).mockResolvedValue([failedRun, completedRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(backlog);
+    const { container } = ui();
+
+    expect(await screen.findByText(/historical thinking/)).toBeInTheDocument();
+    expect(vi.mocked(getRunProgress)).toHaveBeenCalledWith('r-3');
+    expect(vi.mocked(getRunProgress)).not.toHaveBeenCalledWith('r-4');
+    expect(screen.queryByText('provider exploded')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .ln').length).toBe(2);
   });
 });

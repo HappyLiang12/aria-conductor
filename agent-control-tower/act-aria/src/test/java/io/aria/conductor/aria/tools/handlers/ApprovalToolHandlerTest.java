@@ -62,4 +62,18 @@ class ApprovalToolHandlerTest {
         verify(approvalGate).decideApproval(id, false, "");
         assertThat(result).contains("denied");
     }
+
+    @Test void decideOnReviewRequestAskIsRejectedForAgents() {
+        // HITL governance: the kanban Review column is the human entry point, so a
+        // REVIEW_REQUEST ask (even typed TOOL_CALL as the generic category) must be
+        // decided by a person, not by an agent.
+        UUID id = UUID.randomUUID();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(Approval.builder()
+                .id(id).runId(UUID.randomUUID()).status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.REVIEW_REQUEST).build()));
+        String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","approve"));
+        assertThat(result).contains("human");
+        verify(approvalGate, never()).decideApproval(any(), anyBoolean(), any());
+    }
 }

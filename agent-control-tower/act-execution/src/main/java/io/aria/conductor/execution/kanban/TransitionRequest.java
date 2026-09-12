@@ -16,4 +16,10 @@ public class TransitionRequest {
     private KanbanStatus status;
 
     private String comment;
+
+    /** Feedback included in the re-dispatch prompt (request changes, or pickup retries). */
+    private String feedback;
+
+    /** Optional agent template hint for pickup; overrides item value. */
+    private String agentTemplateId;
 }

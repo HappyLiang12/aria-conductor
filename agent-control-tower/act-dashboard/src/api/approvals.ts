@@ -31,3 +31,20 @@ export async function rejectApproval(id: string, reason?: string): Promise<Appro
     return decideApproval(id, { approved: false, reason });
   }
 }
+
+/** Per-card asks (HITL): approvals/questions attached to a kanban item. */
+export async function listAsksByKanbanItem(kanbanItemId: string): Promise<Approval[]> {
+  const { data } = await client.get<Approval[]>('/api/v1/approvals', {
+    params: { kanbanItemId },
+  });
+  return data;
+}
+
+/** Answer an ask: free-text answer and/or an approve/deny decision. */
+export async function answerAsk(
+  id: string,
+  payload: { answer?: string; approved?: boolean; reason?: string }
+): Promise<Approval> {
+  const { data } = await client.post<Approval>(`/api/v1/approvals/${id}/answer`, payload);
+  return data;
+}

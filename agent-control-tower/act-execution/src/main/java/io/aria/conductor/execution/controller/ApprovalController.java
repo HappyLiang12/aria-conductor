@@ -3,6 +3,7 @@ package io.aria.conductor.execution.controller;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.execution.approval.ApprovalAnswerService;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.ApprovalQueryService;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
@@ -28,6 +29,7 @@ public class ApprovalController {
     private final ToolCallRepository toolCallRepository;
     private final ToolRiskResolver toolRiskResolver;
     private final ApprovalQueryService approvalQueryService;
+    private final ApprovalAnswerService approvalAnswerService;
 
     /** Convenience constructor building its own query service (direct-instantiation tests). */
     public ApprovalController(ApprovalRepository approvalRepository,
@@ -35,7 +37,8 @@ public class ApprovalController {
                               ToolCallRepository toolCallRepository,
                               ToolRiskResolver toolRiskResolver) {
         this(approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
-                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver));
+                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver),
+                new ApprovalAnswerService(approvalRepository));
     }
 
     @Autowired
@@ -43,12 +46,14 @@ public class ApprovalController {
                               ApprovalGate approvalGate,
                               ToolCallRepository toolCallRepository,
                               ToolRiskResolver toolRiskResolver,
-                              ApprovalQueryService approvalQueryService) {
+                              ApprovalQueryService approvalQueryService,
+                              ApprovalAnswerService approvalAnswerService) {
         this.approvalRepository = approvalRepository;
         this.approvalGate = approvalGate;
         this.toolCallRepository = toolCallRepository;
         this.toolRiskResolver = toolRiskResolver;
         this.approvalQueryService = approvalQueryService;
+        this.approvalAnswerService = approvalAnswerService;
     }
 
     /**
@@ -71,18 +76,30 @@ public class ApprovalController {
             UUID knowledgeItemId,
             String toolName,
             String arguments,
-            String riskTier) {}
+            String riskTier,
+            // HITL ask fields: the Review panel renders the QUESTION prompt,
+            // options and recorded answer from these (kanban card surface).
+            String kanbanItemId,
+            String askType,
+            String contextMd,
+            String optionsJson,
+            String answer) {}
 
     /**
-     * List approvals, optionally filtered by {@link ApprovalStatus}. With no status the endpoint
-     * returns a bounded, most-recent-first page (F21) instead of an unbounded {@code findAll()},
-     * so the approvals/history UI keeps working against a large table. Assembly (entity ->
-     * {@link ApprovalDetail} enrichment) is shared with the MCP ApprovalTools via
-     * {@link ApprovalQueryService}.
+     * List approvals, optionally filtered by {@link ApprovalStatus} or by the kanban card the
+     * ask is surfaced on ({@code ?kanbanItemId=} takes precedence over {@code status}). With no
+     * filter the endpoint returns a bounded, most-recent-first page (F21) instead of an
+     * unbounded {@code findAll()}, so the approvals/history UI keeps working against a large
+     * table. Assembly (entity -> {@link ApprovalDetail} enrichment) is shared with the MCP
+     * ApprovalTools via {@link ApprovalQueryService}.
      */
     @GetMapping
     public ResponseEntity<List<ApprovalDetail>> listApprovals(
-            @RequestParam(required = false) ApprovalStatus status) {
+            @RequestParam(required = false) ApprovalStatus status,
+            @RequestParam(required = false) String kanbanItemId) {
+        if (kanbanItemId != null && !kanbanItemId.isBlank()) {
+            return ResponseEntity.ok(approvalQueryService.listByKanbanItem(kanbanItemId));
+        }
         return ResponseEntity.ok(approvalQueryService.list(status));
     }
 
@@ -128,8 +145,28 @@ public class ApprovalController {
                 a.getContent(),
                 a.getContentKind() != null ? a.getContentKind().name() : null,
                 a.getKnowledgeItemId(),
-                toolName, tc != null ? tc.getArguments() : null, riskTier);
+                toolName, tc != null ? tc.getArguments() : null, riskTier,
+                a.getKanbanItemId(),
+                a.getAskType() != null ? a.getAskType().name() : null,
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
     }
+
+    /**
+     * Records the operator's answer to a HITL QUESTION ask (spec 4.4): free-text
+     * answer, optionally marking the ask APPROVED/DENIED. Delegates to
+     * {@link ApprovalAnswerService} — lighter than the gate's decide flow (no
+     * run resume, no workflow side effects). Gate approvals (APPROVAL /
+     * REVIEW_REQUEST asks) must use {@code /decide} instead; only PENDING asks are
+     * answerable here and a decided ask is rejected.
+     */
+    @PostMapping("/{id}/answer")
+    public ResponseEntity<Approval> answer(@PathVariable UUID id,
+                                           @RequestBody AnswerRequest request) {
+        return ResponseEntity.ok(approvalAnswerService.answer(
+                id, request.answer(), request.approved(), request.reason()));
+    }
+
+    public record AnswerRequest(String answer, Boolean approved, String reason) {}
 
     public record DecideApprovalRequest(boolean approved, String reason) {}
 }

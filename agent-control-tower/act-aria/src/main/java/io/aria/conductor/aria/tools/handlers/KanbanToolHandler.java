@@ -12,9 +12,12 @@ import java.util.*;
 public class KanbanToolHandler implements ToolHandler {
 
     private final KanbanService kanbanService;
+    private final KanbanTransitionService kanbanTransitionService;
 
-    public KanbanToolHandler(KanbanService kanbanService) {
+    public KanbanToolHandler(KanbanService kanbanService,
+                             KanbanTransitionService kanbanTransitionService) {
         this.kanbanService = kanbanService;
+        this.kanbanTransitionService = kanbanTransitionService;
     }
 
     @Override
@@ -67,7 +70,7 @@ public class KanbanToolHandler implements ToolHandler {
             try {
                 status = KanbanStatus.valueOf(statusStr.toUpperCase());
             } catch (IllegalArgumentException e) {
-                return error("Invalid status: " + statusStr + ". Valid: TODO, IN_PROGRESS, DONE, BLOCKED, CANCELLED");
+                return error("Invalid status: " + statusStr + ". Valid: BACKLOG, TODO, IN_PROGRESS, REVIEW, DONE, CANCELLED");
             }
         }
 
@@ -80,7 +83,13 @@ public class KanbanToolHandler implements ToolHandler {
                     .append(" | Status: ").append(item.getStatus() != null ? item.getStatus().name() : "N/A")
                     .append(" | Priority: ").append(item.getPriority() != null ? item.getPriority().name() : "N/A")
                     .append(" | Assignee: ").append(item.getAssignee() != null ? item.getAssignee() : "N/A")
-                    .append("\n");
+                    // HITL signals: pending asks on Review cards (0 when none) and
+                    // the last pickup/transition failure (omitted when clean).
+                    .append(" | Asks: ").append(item.getPendingAskCount() != null ? item.getPendingAskCount() : 0);
+            if (item.getLastError() != null) {
+                sb.append(" | Error: ").append(item.getLastError());
+            }
+            sb.append("\n");
         }
         return sb.toString().trim();
     }
@@ -111,20 +120,39 @@ public class KanbanToolHandler implements ToolHandler {
 
     private String transitionKanbanItem(Map<String, Object> args) {
         String id = Objects.toString(args.get("id"), "");
-        String statusStr = Objects.toString(args.get("newStatus"), "");
         if (id.isEmpty()) return error("Missing required parameter: id");
-        if (statusStr.isEmpty()) return error("Missing required parameter: newStatus");
+        // TS MCP server sends "status"; the legacy Aria tool contract sends "newStatus".
+        String statusStr = firstNonBlank(Objects.toString(args.get("status"), ""),
+                Objects.toString(args.get("newStatus"), ""));
+        if (statusStr.isEmpty()) return error("Missing required parameter: status");
 
         KanbanStatus status;
         try {
             status = KanbanStatus.valueOf(statusStr.toUpperCase());
         } catch (IllegalArgumentException e) {
-            return error("Invalid status: " + statusStr + ". Valid: TODO, IN_PROGRESS, DONE, BLOCKED, CANCELLED");
+            return error("Invalid status: " + statusStr
+                    + ". Valid: BACKLOG, TODO, IN_PROGRESS, REVIEW, DONE, CANCELLED");
         }
 
-        String comment = Objects.toString(args.get("comment"), null);
-        KanbanItem item = kanbanService.transition(id, status, comment);
-        return "Kanban item " + id + " transitioned to " + status.name() + ".";
+        // Mirror the orchestrator's idempotent no-op guard: repeating the current
+        // status must not delegate (no run side effects) and must not claim a
+        // "transitioned to" that never happened.
+        if (kanbanService.get(id).getStatus() == status) {
+            return "Kanban item " + id + " already " + status.name() + ".";
+        }
+
+        TransitionRequest request = TransitionRequest.builder()
+                .status(status)
+                .comment(blankToNull(Objects.toString(args.get("comment"), "")))
+                .feedback(blankToNull(Objects.toString(args.get("feedback"), "")))
+                .agentTemplateId(blankToNull(Objects.toString(args.get("agentTemplateId"), "")))
+                .build();
+        KanbanItem item = kanbanTransitionService.transition(id, request);
+        return "Kanban item " + id + " transitioned to " + item.getStatus().name() + ".";
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return (a != null && !a.isBlank()) ? a : b;
     }
 
     private static String blankToNull(String s) {

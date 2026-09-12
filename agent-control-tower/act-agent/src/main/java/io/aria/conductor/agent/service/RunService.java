@@ -75,7 +75,8 @@ public class RunService {
         Run saved = runRepository.save(run);
         log.info("Run created: id={}", saved.getId());
 
-        eventPublisher.publishEvent(new RunStartedEvent(this, saved.getId(), saved.getAgentId()));
+        eventPublisher.publishEvent(new RunStartedEvent(this, saved.getId(), saved.getAgentId(),
+                request.isSuppressAutoCard()));
 
         return toResponse(saved);
     }

@@ -5,6 +5,7 @@ import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
+import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
@@ -110,9 +111,11 @@ public class RunToolHandler implements ToolHandler {
         if (id.isEmpty()) return error("Missing required parameter: id");
         UUID runId = UUID.fromString(id);
         // #28: the orchestrator must not resume past a pending human approval gate. Direct it to
-        // decide_approval instead of bypassing HITL.
+        // decide_approval instead of bypassing HITL. The kanban REVIEW_REQUEST ask is a
+        // display-only HITL prompt, not a gate — it must not block resuming.
         boolean pending = approvalRepository.findByRunId(runId).stream()
-                .anyMatch(a -> a.getStatus() == ApprovalStatus.PENDING);
+                .anyMatch(a -> a.getStatus() == ApprovalStatus.PENDING
+                        && a.getAskType() != Approval.AskType.REVIEW_REQUEST);
         if (pending) {
             return error("Run " + id + " is waiting for human approval. Use decide_approval to "
                     + "approve or reject the pending action; do not resume past the gate.");

@@ -53,13 +53,14 @@ export default function MorningBriefing() {
     const items = kanbanItems ?? [];
     return {
       done: items.filter((i) => i.status === 'DONE').length,
-      blocked: items.filter((i) => i.status === 'BLOCKED').length,
+      // Review cards are the waiting-on-review signal; BLOCKED was retired
+      // (V52 migration), so counting it always yielded 0.
+      review: items.filter((i) => i.status === 'REVIEW').length,
       inProgress: items.filter((i) => i.status === 'IN_PROGRESS').length,
     };
   }, [kanbanItems]);
 
   const generatedAt = formatNow();
-  const pending = summary?.pendingApprovals ?? 0;
   const running = summary?.runningRuns ?? 0;
 
   return (
@@ -80,11 +81,10 @@ export default function MorningBriefing() {
             <b style={{ color: '#6fe2b6' }}>{stats.done} task{stats.done === 1 ? '' : 's'} completed</b>{' '}
             on the kanban board
           </li>
+          {/* Single HITL signal (D7): only the Review cards count; the
+              pendingApprovals item was removed to avoid a second signal. */}
           <li>
-            <b style={{ color: '#ffd884' }}>{pending} item{pending === 1 ? '' : 's'}</b> queued for approval
-          </li>
-          <li>
-            <b style={{ color: '#ff97a3' }}>{stats.blocked} blocker{stats.blocked === 1 ? '' : 's'}</b> waiting on review
+            <b style={{ color: '#ff97a3' }}>{stats.review} card{stats.review === 1 ? '' : 's'}</b> waiting on review
           </li>
           <li>
             <b style={{ color: 'var(--brand-2)' }}>{running} run{running === 1 ? '' : 's'}</b> active right now

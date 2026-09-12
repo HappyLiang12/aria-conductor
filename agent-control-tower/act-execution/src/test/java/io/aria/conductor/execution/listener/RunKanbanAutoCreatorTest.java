@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -144,6 +145,14 @@ class RunKanbanAutoCreatorTest {
         assertThat(captor.getValue().getLinkedRunId()).isEqualTo(runId.toString());
     }
 
+    @Test
+    void onRunStarted_suppressAutoCard_skipsCardCreation() {
+        // Kanban pickup owns card linkage for orchestrator-created runs.
+        creator.onRunStarted(new RunStartedEvent(this, runId, agentId, true));
+
+        verifyNoInteractions(runRepository, kanbanService);
+    }
+
     // ---- onRunIteration ----
 
     @Test
@@ -181,13 +190,17 @@ class RunKanbanAutoCreatorTest {
 
     @ParameterizedTest(name = "run {0} → kanban {1}")
     @CsvSource({
-            "COMPLETED, DONE",
+            // Defect D8: completed work goes to REVIEW for human sign-off, not
+            // straight to DONE — otherwise the review/approval loop is bypassed
+            // and the operator only ever sees finished cards.
+            "COMPLETED, REVIEW",
             "ABORTED,   CANCELLED",
             "CANCELLED, CANCELLED",
             // F5: failed work must stay visible in the attention column
-            // (BLOCKED) instead of silently vanishing into CANCELLED/Archived.
-            "FAILED,    BLOCKED",
-            "PAUSED,    DONE"          // default branch of the status switch
+            // instead of silently vanishing into CANCELLED/Archived.
+            // BLOCKED is retired (V52); failed work surfaces in REVIEW for the operator.
+            "FAILED,    REVIEW",
+            "PAUSED,    REVIEW"        // default branch of the status switch
     })
     void onRunCompleted_transitionsActiveItemToMappedStatus(RunStatus runStatus, KanbanStatus expected) {
         KanbanItem activeItem = kanbanItem("item-active", KanbanStatus.IN_PROGRESS);

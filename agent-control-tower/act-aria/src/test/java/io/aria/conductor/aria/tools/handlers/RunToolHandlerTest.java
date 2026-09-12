@@ -104,6 +104,19 @@ class RunToolHandlerTest {
         verify(runService, never()).resumeRun(any(), any());
     }
 
+    @Test void resumeRunAllowedWhenOnlyReviewRequestAskPending() {
+        // The auto REVIEW_REQUEST ask is a display-only HITL prompt, not a run
+        // gate: it must not block resuming a paused run.
+        UUID id = UUID.randomUUID();
+        Approval ask = Approval.builder().runId(id).status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.REVIEW_REQUEST).build();
+        when(approvalRepository.findByRunId(id)).thenReturn(List.of(ask));
+        String result = handler.execute(Map.of("toolName","resume_run","id",id.toString()));
+        verify(runService).resumeRun(eq(id), any());
+        assertThat(result).contains("resumed");
+    }
+
     @Test void cancelRunShouldReturnText() {
         UUID id = UUID.randomUUID();
         String result = handler.execute(Map.of("toolName","cancel_run","id",id.toString()));

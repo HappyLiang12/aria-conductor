@@ -5,6 +5,7 @@ import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.context.ApplicationEventPublisher;
@@ -13,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,31 +35,34 @@ public class KanbanService {
 
     static {
         EnumMap<KanbanStatus, Set<KanbanStatus>> map = new EnumMap<>(KanbanStatus.class);
-        map.put(KanbanStatus.TODO,
-                EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.BLOCKED, KanbanStatus.CANCELLED));
-        map.put(KanbanStatus.IN_PROGRESS,
-                EnumSet.of(KanbanStatus.DONE, KanbanStatus.BLOCKED,
-                        KanbanStatus.CANCELLED, KanbanStatus.REVIEW));
-        map.put(KanbanStatus.BLOCKED,
-                EnumSet.of(KanbanStatus.TODO, KanbanStatus.IN_PROGRESS, KanbanStatus.CANCELLED));
-        map.put(KanbanStatus.REVIEW,
-                EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.DONE,
-                        KanbanStatus.BLOCKED, KanbanStatus.CANCELLED));
-        map.put(KanbanStatus.DONE, EnumSet.noneOf(KanbanStatus.class));
+        map.put(KanbanStatus.BACKLOG, EnumSet.of(KanbanStatus.TODO, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.TODO, EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.BACKLOG, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.IN_PROGRESS, EnumSet.of(KanbanStatus.TODO, KanbanStatus.BACKLOG,
+                KanbanStatus.REVIEW, KanbanStatus.DONE, KanbanStatus.CANCELLED));
+        map.put(KanbanStatus.REVIEW, EnumSet.of(KanbanStatus.IN_PROGRESS, KanbanStatus.TODO,
+                KanbanStatus.DONE, KanbanStatus.CANCELLED));
+        // DONE is re-doable (operator defect D3): redo re-enters the flow at
+        // Backlog or Todo and must be dispatched again explicitly — a finished
+        // card never jumps straight back into execution.
+        map.put(KanbanStatus.DONE, EnumSet.of(KanbanStatus.BACKLOG, KanbanStatus.TODO));
         map.put(KanbanStatus.CANCELLED, EnumSet.noneOf(KanbanStatus.class));
+        // BLOCKED is retired: no outgoing transitions; V52 migrated rows to REVIEW.
         ALLOWED_TRANSITIONS = map;
     }
 
     private final KanbanRepository repository;
     private final ApplicationEventPublisher eventPublisher;
     private final RunRepository runRepository;
+    private final ApprovalRepository approvalRepository;
 
     public KanbanService(KanbanRepository repository,
                          ApplicationEventPublisher eventPublisher,
-                         RunRepository runRepository) {
+                         RunRepository runRepository,
+                         ApprovalRepository approvalRepository) {
         this.repository = repository;
         this.eventPublisher = eventPublisher;
         this.runRepository = runRepository;
+        this.approvalRepository = approvalRepository;
     }
 
     @Transactional
@@ -68,12 +73,13 @@ public class KanbanService {
             KanbanItem item = KanbanItem.builder()
                     .title(request.getTitle())
                     .description(request.getDescription())
-                    .status(KanbanStatus.TODO)
+                    .status(request.getStatus() != null ? request.getStatus() : KanbanStatus.TODO)
                     .priority(request.getPriority() != null ? request.getPriority() : KanbanPriority.MEDIUM)
                     .assignee(request.getAssignee())
                     .labels(request.getLabels())
                     .linkedRunId(request.getLinkedRunId())
                     .linkedAgentId(request.getLinkedAgentId())
+                    .agentTemplateId(request.getAgentTemplateId())
                     .build();
 
             KanbanItem saved = repository.save(item);
@@ -112,7 +118,15 @@ public class KanbanService {
      */
     @Transactional(readOnly = true)
     public List<KanbanItem> list(KanbanStatus status) {
-        return status == null ? repository.findAll() : repository.findByStatus(status);
+        List<KanbanItem> items = status == null ? repository.findAll() : repository.findByStatus(status);
+        if (!items.isEmpty()) {
+            List<Object[]> counts = approvalRepository.countPendingByKanbanItemIds(
+                    items.stream().map(KanbanItem::getId).toList());
+            Map<String, Long> byItem = new HashMap<>();
+            counts.forEach(row -> byItem.put((String) row[0], (Long) row[1]));
+            items.forEach(item -> item.setPendingAskCount(byItem.getOrDefault(item.getId(), 0L).intValue()));
+        }
+        return items;
     }
 
     @Transactional

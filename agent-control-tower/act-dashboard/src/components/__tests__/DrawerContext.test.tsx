@@ -28,6 +28,85 @@ function esc(target: EventTarget = window) {
   });
 }
 
+/** Probe for the in-place review-mode state machine (spec 10.3). */
+function ReviewProbe() {
+  const { state, openTaskDrawer, openReviewMode, closeReviewMode, closeTaskDrawer } =
+    useDrawerContext();
+  return (
+    <div>
+      <span data-testid="task-open">{String(state.taskDrawer.open)}</span>
+      <span data-testid="task-item">{state.taskDrawer.itemId ?? ''}</span>
+      <span data-testid="review-target">{state.reviewTargetId ?? ''}</span>
+      <button data-testid="open-task" onClick={() => openTaskDrawer('k-prev')} />
+      <button data-testid="open-review" onClick={() => openReviewMode('k1')} />
+      <button data-testid="close-review" onClick={closeReviewMode} />
+      <button data-testid="close-task" onClick={closeTaskDrawer} />
+    </div>
+  );
+}
+
+describe('DrawerContext review mode (in-place expand, spec 10.3)', () => {
+  it('openReviewMode sets the review target AND collapses the drawer', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-task').click());
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-target').textContent).toBe('k1');
+    expect(getByTestId('task-open').textContent).toBe('false');
+  });
+
+  it('closeReviewMode clears the target AND reopens the drawer on that card', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-target').textContent).toBe('k1');
+
+    act(() => getByTestId('close-review').click());
+    expect(getByTestId('review-target').textContent).toBe('');
+    expect(getByTestId('task-open').textContent).toBe('true');
+    // Collapse reopens the drawer on the card that was under review.
+    expect(getByTestId('task-item').textContent).toBe('k1');
+  });
+
+  it('closing the task drawer also clears the review target', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-target').textContent).toBe('k1');
+
+    act(() => getByTestId('close-task').click());
+    expect(getByTestId('task-open').textContent).toBe('false');
+    expect(getByTestId('review-target').textContent).toBe('');
+  });
+
+  it('opening the task drawer while a review workspace target is set closes the workspace', () => {
+    const { getByTestId } = render(
+      <DrawerProvider>
+        <ReviewProbe />
+      </DrawerProvider>,
+    );
+    act(() => getByTestId('open-review').click());
+    expect(getByTestId('review-target').textContent).toBe('k1');
+
+    // Surfaces are mutually exclusive: opening a task drawer tears the
+    // in-place workspace down (defense-in-depth — the workspace must never
+    // linger behind an open drawer).
+    act(() => getByTestId('open-task').click());
+    expect(getByTestId('task-open').textContent).toBe('true');
+    expect(getByTestId('task-item').textContent).toBe('k-prev');
+    expect(getByTestId('review-target').textContent).toBe('');
+  });
+});
+
 describe('DrawerContext Escape handling (regression)', () => {
   it('Escape closes drawers when pressed outside them', () => {
     const { getByTestId } = render(

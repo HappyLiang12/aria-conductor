@@ -58,6 +58,13 @@ export interface Approval {
   toolName?: string;
   arguments?: string;
   riskTier?: string;
+  // HITL ask fields (Kanban redesign): an Approval can be attached to a kanban
+  // card as APPROVAL / QUESTION / REVIEW_REQUEST with rich context + answer.
+  kanbanItemId?: string | null;
+  askType?: 'APPROVAL' | 'QUESTION' | 'REVIEW_REQUEST';
+  contextMd?: string | null;
+  optionsJson?: string | null;
+  answer?: string | null;
 }
 
 // === Harness Profiles (customisable agent-loop tuning) ===
@@ -308,7 +315,10 @@ export interface CreateEvidenceRequest {
 }
 
 // === Kanban ===
-export type KanbanStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'BLOCKED' | 'CANCELLED' | 'REVIEW';
+// BLOCKED is retired in the backend enum but kept in the union until Task 14
+// removes the last TaskDrawer references (removing it now breaks the build).
+export type KanbanStatus =
+  | 'BACKLOG' | 'TODO' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED' | 'REVIEW' | 'BLOCKED';
 export type KanbanPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface KanbanItem {
@@ -321,6 +331,11 @@ export interface KanbanItem {
   labels: string | null;
   linkedRunId: string | null;
   linkedAgentId: string | null;
+  // HITL fields: assigned template, last pickup error, pending ask count
+  // (null/absent from the API when 0).
+  agentTemplateId?: string | null;
+  lastError?: string | null;
+  pendingAskCount?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -333,6 +348,9 @@ export interface CreateKanbanItemRequest {
   labels?: string;
   linkedRunId?: string;
   linkedAgentId?: string;
+  // New Task modal target column; backend defaults to TODO.
+  status?: 'TODO' | 'BACKLOG';
+  agentTemplateId?: string;
 }
 
 export interface UpdateKanbanItemRequest {
@@ -346,6 +364,10 @@ export interface UpdateKanbanItemRequest {
 export interface TransitionKanbanRequest {
   status: KanbanStatus;
   comment?: string;
+  // Request-changes payload: feedback lands in the re-run prompt.
+  feedback?: string;
+  // Optional template hint applied when the transition triggers a dispatch.
+  agentTemplateId?: string;
 }
 
 // === Report Artifacts (Generative UI) ===

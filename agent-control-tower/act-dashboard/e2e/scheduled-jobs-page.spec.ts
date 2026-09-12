@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { apiCall } from './fixtures';
 
 /**
  * Gaps 4: scheduled jobs driven against the REAL backend.
@@ -50,9 +51,22 @@ test('1. a created job persists and can be paused and resumed', async ({ page })
   }
 });
 
-test('2. the job survives a reload, proving it is server-side state', async ({ page }) => {
+test('2. the job survives a reload, proving it is server-side state', async ({
+  page,
+  request,
+}) => {
   await page.goto('/scheduled-jobs');
   await page.waitForLoadState('networkidle');
   const card = page.locator('.job-card').filter({ hasText: jobTitle }).first();
   await expect(card).toBeVisible({ timeout: 20_000 });
+
+  // Teardown: remove the job this spec created. Left ACTIVE it would be re-armed
+  // on every backend start (TaskSchedulerSchedulerPort.recoverActiveJobs) and fire
+  // every weekday at 09:00, pushing a notification into the shared stack without
+  // bound, and the rows would accumulate across runs.
+  const { data: jobs } = await apiCall(request, 'GET', '/aria/jobs');
+  const created = (Array.isArray(jobs) ? jobs : []).find((j: any) => j.title === jobTitle);
+  expect(created, 'the created job must be resolvable by title so teardown can remove it').toBeTruthy();
+  const removed = await apiCall(request, 'DELETE', `/aria/jobs/${created.id}`);
+  expect([200, 204]).toContain(removed.status);
 });

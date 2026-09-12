@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { KnowledgePage } from '../KnowledgePage';
+import { KnowledgePage, formatVersion } from '../KnowledgePage';
 import type { KnowledgeItem } from '../../types';
 
 vi.mock('../../api/knowledge', () => ({
@@ -105,5 +105,49 @@ describe('KnowledgePage review confirmation (#UI audit)', () => {
     await waitFor(() =>
       expect(batchReviewKnowledge).toHaveBeenCalledWith(['k-1'], true, 'Batch approved'),
     );
+  });
+});
+
+describe('KnowledgePage version rendering (approved list render site)', () => {
+  /** Reads the meta line ("<version> · <owner> · <date>") of a rendered item card. */
+  function metaLineOf(name: string): string {
+    const title = screen.getByText(name);
+    const card = title.closest('.kitem');
+    return (card?.querySelector('.desc')?.textContent ?? '').trim();
+  }
+
+  it('renders an em dash for a null version and exactly "v1.0.0" for an already-prefixed version', async () => {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'k-null', name: 'Unversioned Playbook', status: 'APPROVED', currentVersion: null }),
+      mkItem({ id: 'k-prefixed', name: 'Prefixed Playbook', status: 'APPROVED', currentVersion: 'v1.0.0' }),
+    ]);
+    ui();
+    await screen.findByText('Unversioned Playbook');
+
+    const nullMeta = metaLineOf('Unversioned Playbook');
+    const prefixedMeta = metaLineOf('Prefixed Playbook');
+
+    // A null version must render the em dash placeholder — never a bare "v".
+    expect(nullMeta).toMatch(/^—\s·/);
+    expect(nullMeta).not.toMatch(/^v\s*·/);
+
+    // An already-prefixed version must not be prefixed twice.
+    expect(prefixedMeta).toMatch(/^v1\.0\.0\s·/);
+    expect(prefixedMeta).not.toContain('vv1.0.0');
+  });
+});
+
+describe('formatVersion', () => {
+  it('returns an em dash when the backend sends null', () => {
+    expect(formatVersion(null)).toBe('—');
+  });
+  it('does not double the v prefix when the backend value already has one', () => {
+    expect(formatVersion('v1.0.0')).toBe('v1.0.0');
+  });
+  it('adds the v prefix to a bare number', () => {
+    expect(formatVersion(3)).toBe('v3');
+  });
+  it('returns an em dash when the backend sends a whitespace-only value', () => {
+    expect(formatVersion('   ')).toBe('—');
   });
 });

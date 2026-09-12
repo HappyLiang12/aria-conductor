@@ -149,6 +149,13 @@ function formatDate(iso: string): string {
   });
 }
 
+export function formatVersion(version: string | number | null | undefined): string {
+  if (version === null || version === undefined) return '—';
+  const text = String(version).trim();
+  if (text === '') return '—';
+  return text.startsWith('v') ? text : `v${text}`;
+}
+
 function ownerOf(item: ExtendedKnowledgeItem, agents: Agent[]): Agent | null {
   if (item.agentId) {
     const found = agents.find((a) => a.id === item.agentId);
@@ -662,7 +669,7 @@ export function KnowledgePage() {
                     <div>
                       <div className="ttl">{it.name}</div>
                       <div className="desc">
-                        v{it.currentVersion} · {owner ? owner.name : 'Shared'} · {formatDate(it.createdAt)}
+                        {formatVersion(it.currentVersion)} · {owner ? owner.name : 'Shared'} · {formatDate(it.createdAt)}
                       </div>
                     </div>
                     <span style={{ fontSize: 10, color: 'var(--text-mute)', letterSpacing: '.5px' }}>
@@ -690,7 +697,7 @@ export function KnowledgePage() {
                     <span className={`stage ${stageClass(selected)}`} style={{ marginRight: 6 }}>
                       {selected.type}
                     </span>
-                    v{selected.currentVersion} · {ownerOf(selected, agents)?.name ?? 'Shared'} · approved{' '}
+                    {formatVersion(selected.currentVersion)} · {ownerOf(selected, agents)?.name ?? 'Shared'} · approved{' '}
                     {formatDate(selected.createdAt)} · {selected.sensitivity}
                   </div>
                   {selected.type === 'WORKFLOW' && (

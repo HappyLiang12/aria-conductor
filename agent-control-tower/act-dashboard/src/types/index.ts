@@ -101,7 +101,7 @@ export interface KnowledgeItem {
   name: string;
   type: KnowledgeType;
   description: string;
-  currentVersion: number;
+  currentVersion: string | number | null;
   status: KnowledgeStatus;
   sensitivity: string;
   createdAt: string;

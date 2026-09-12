@@ -112,12 +112,12 @@ dispatch of an opencode ADK agent — `e2e/kanban-hitl.spec.ts:133-158` already 
 task-level approval gate fires at `AgentLoopEngine.java:704`, before any provider call, so no LLM
 key and no OpenSandbox are required.
 
-**Group B — requires a feasibility spike, may end up local-only:**
+**Group B — spiked 2026-09-12: gap 6 is CI-runnable, gap 5 is local-only:**
 
-| # | Gap | Blocker |
-|---|-----|---------|
-| 5 | **Branch governance** (create, protect) | `sdd-workflow.spec.ts:69` already notes branch creation is inert under CI. Needs a controllable git remote. |
-| 6 | **Git pack end-to-end gate**: a run blocked on the PUSH gate, then resumed | `git-pack-governance.spec.ts:21-47` inspects tool and pack metadata but never actually blocks a run. |
+| # | Gap | Spike verdict | Evidence |
+|---|-----|---------------|----------|
+| 5 | **Branch governance** (create, protect) | **Local-only.** Creation is a pure GitHub REST call against the hard-coded `https://api.github.com` (`GitBranchService.java:30`) wired by `GitBranchConfig.java:54` with no configurable base URL, so no hermetic substitute exists without a production change; CI has no `GH_TOKEN`, and without one the bean is a disabled no-op (`GitBranchConfig.java:23-53`). "Protect" has no implementation anywhere under `agent-control-tower`, so there is nothing to assert. `e2e/api/branch-governance.api.spec.ts` skips with the blocker and the local-only recipe in the skip message; its body is **NOT VERIFIED** (never executed). | `docs/reviews/2026-09-12-branch-and-pack-gate-spike.md` §Gap 5 |
+| 6 | **Git pack end-to-end gate**: a run blocked on the PUSH gate, then resumed | **Hermetically testable — verified.** A loopback mock LLM (the active DB `LlmProvider` row is what the langchain ADK reads, `LangChainAdkProvider.java:395-408`) drives a real `git_push` tool call into the PUSH-tier gate (`ToolRiskResolver.java:37-40` → `ActionExecutionPipeline.java:90-104`): the run is `PAUSED` on a PENDING ask, approval resumes it, and the push lands in a bare repo on disk. `e2e/api/git-pack-gate.api.spec.ts` was RED with a READ-tier tool call and GREEN with `git_push`. | `docs/reviews/2026-09-12-branch-and-pack-gate-spike.md` §Gap 6 |
 
 ## 4. Deliverables
 

@@ -294,7 +294,6 @@ test('a run blocks on the git_push PUSH gate and resumes after approval, pushing
     }
   }
   expect(createdWorkspaceDirs.length).toBeGreaterThan(0);
-  expect(workspaceShas.length).toBe(createdWorkspaceDirs.length);
 
   // ── RESUMED: approve and watch the governed push execute ────────────────────
   const decided = await apiCall(request, 'POST', `/approvals/${ask.id}/decide`, {

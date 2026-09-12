@@ -55,9 +55,11 @@ test.describe('request changes loop', () => {
     });
     expect(changes.status).toBe(200);
 
-    // The stale ask must no longer be PENDING. The callback must *throw* on a
+    // The stale ask must reach its observed terminal status EXPIRED (reason
+    // "superseded by request changes"), not merely leave PENDING — a loose
+    // negative would accept any other status. The callback must *throw* on a
     // non-200 so the poll fails: returning a sentinel like `HTTP_404` would
-    // satisfy `.not.toBe('PENDING')` and let a 404/500 pass vacuously.
+    // satisfy a status assertion and let a 404/500 pass vacuously.
     await expect
       .poll(
         async () => {
@@ -69,7 +71,7 @@ test.describe('request changes loop', () => {
         },
         { timeout: 30_000 },
       )
-      .not.toBe('PENDING');
+      .toBe('EXPIRED');
 
     // A new attempt is created: the card is picked up again with a new run, and
     // the operator feedback is embedded in that run's prompt seed.

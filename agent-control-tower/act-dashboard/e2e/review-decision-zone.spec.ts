@@ -83,20 +83,30 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
     )
     .toBe('DENIED');
 
-  // Cleanup (kanban-hitl.spec.ts:174-177): normally a no-op — the denial already
-  // cancelled the linked run and RunKanbanAutoCreator moved the card to
-  // CANCELLED — but the explicit transition guards the listener race and leaves
-  // no card mid-flight either way (same-status transitions are idempotent).
-  // Deliberately NOT asserted: this is housekeeping, not the behaviour under test.
-  // The transition is expected to succeed from any status this spec leaves the card
-  // in (REVIEW or CANCELLED; KanbanTransitionService.java:136-138 + the same-status
-  // no-op guard at :95-97), but a full-suite run saw it rejected with 409 after
-  // something else had already moved the card. Failing the spec for that would report
-  // housekeeping noise, and the card's terminal state is what matters here.
-  const cancelled = await transitionKanban(request, card.id, 'CANCELLED');
-  if (cancelled.status !== 200) {
-    console.log(`[review-decision-zone] cleanup CANCELLED transition returned ${cancelled.status}; ignored`);
-  }
+  // Card state, asserted. The denial cancelled the linked run (ApprovalGate.java:253),
+  // and RunKanbanAutoCreator.onRunCompleted maps a cancelled/aborted run to a
+  // CANCELLED card (listener/RunKanbanAutoCreator.java:103-104), so the eventual
+  // state is deterministic. Polled read-only via GET /kanban/items/{id}.
+  //
+  // This replaces a cleanup that wrote CANCELLED explicitly and merely logged a
+  // non-200. That write was redundant with the listener's move, so the two could
+  // interleave and the write could lose the optimistic-lock race (HTTP 409,
+  // GlobalExceptionHandler.java:62-70) or be rejected because the card had already
+  // moved somewhere the matrix forbids leaving (InvalidStateTransitionException ->
+  // 409, :35-38). Removing the write removes the race; the state claim stays.
+  // The transition itself is real: CANCELLED routes to cancel()
+  // (KanbanTransitionService.java:138), REVIEW -> CANCELLED is allowed
+  // (KanbanService.java:42-43), and CANCELLED is terminal, with no outgoing edges
+  // (:48). A card that does not reach CANCELLED is a genuine failure here.
+  await expect
+    .poll(
+      async () => {
+        const { data } = await apiCall(request, 'GET', `/kanban/items/${card.id}`);
+        return data?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('CANCELLED');
 });
 
 /**
@@ -129,10 +139,11 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
  *
  * Timing note: approving the task gate (AgentLoopEngine.java:704-722) lets the
  * run resume into the provider call, so with the healthy local opencode provider
- * the run may start executing. This test therefore asserts only that the ask
- * becomes APPROVED, then cancels the card, which cancels the linked run
- * (KanbanTransitionService.java:240-254). It deliberately makes no assertion
- * about the run's terminal state.
+ * the run may start executing. This test therefore asserts the ask becomes
+ * APPROVED, that the resumed run leaves PAUSED, and that the card ends in REVIEW
+ * — the sign-off column RunKanbanAutoCreator maps a finished run to. It makes no
+ * assertion about the run's TERMINAL status, which differs by environment
+ * (COMPLETED locally, FAILED in CI without a sandbox).
  */
 test('clicking Approve in the decision zone resolves the ask', async ({ page, request }) => {
   const agent = await seedAdkAgent(request, {
@@ -178,19 +189,48 @@ test('clicking Approve in the decision zone resolves the ask', async ({ page, re
     )
     .toBe('APPROVED');
 
-  // Cleanup (kanban-hitl.spec.ts:174-177): cancel the card, which cancels the
-  // linked run (KanbanTransitionService.java:240-254). Unlike the Deny path the
-  // approval itself does not cancel anything — it resumes the run — so this
-  // transition is the real teardown here, not a race guard; cancel() also denies
-  // any ask the resumed run left pending. The cleanup is expected to succeed from
-  // the status this spec leaves the card in (REVIEW; KanbanTransitionService.java:138
-  // routes CANCELLED to cancel(), and REVIEW -> CANCELLED is allowed by
-  // KanbanService.java:42-43; a card already CANCELLED hits the same-status no-op
-  // guard at :95-97). It is deliberately NOT asserted — this is housekeeping, not the
-  // behaviour under test, and a rejected cleanup must not fail the spec (see the Deny
-  // test above).
-  const cancelled = await transitionKanban(request, card.id, 'CANCELLED');
-  if (cancelled.status !== 200) {
-    console.log(`[review-decision-zone] cleanup CANCELLED transition returned ${cancelled.status}; ignored`);
-  }
+  // The approved decision let the run continue: the task gate pauses it
+  // (AgentLoopEngine.java:704) and an approved decide resumes it, so the linked
+  // run must leave PAUSED. Asserted first so the card claim below is not vacuous.
+  await expect
+    .poll(
+      async () => {
+        const { data } = await apiCall(request, 'GET', `/runs/${ask.runId}`);
+        return data?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBe('PAUSED');
+
+  // Resulting card state, asserted read-only via GET /kanban/items/{id}.
+  //
+  // Approving changes the RUN, not the card. The resumed run settles COMPLETED on
+  // the local stack (a real opencode provider; measured: ask APPROVED at
+  // 16:43:50, run COMPLETED at 16:44:16) or FAILED in CI (no sandbox —
+  // AgentLoopEngine.java:881 maps SANDBOX_UNAVAILABLE/PROVIDER_ERROR to FAILED),
+  // and RunKanbanAutoCreator.onRunCompleted maps both to REVIEW
+  // (listener/RunKanbanAutoCreator.java:102 for COMPLETED, :108 for FAILED).
+  // That is the same column this spec parked the card in, so the listener's move
+  // is a same-status no-op (KanbanTransitionService.java:95-97). CANCELLED is NOT
+  // reachable on this path: only ABORTED/CANCELLED runs map to a CANCELLED card
+  // (:103-104), and approval resumes the run rather than cancelling it. REVIEW is
+  // also the intended sign-off stop for finished work (the D8 rule at :99-101).
+  //
+  // The previous cleanup wrote CANCELLED explicitly and only logged a non-200 —
+  // that write, not the behaviour, is what put earlier cards in CANCELLED. It was
+  // removed because it raced the listener: the write duplicates the listener's
+  // move, so the two can interleave and the write can lose the optimistic-lock
+  // race (HTTP 409, GlobalExceptionHandler.java:62-70) or be rejected because the
+  // card has already left to somewhere the matrix forbids leaving
+  // (InvalidStateTransitionException -> 409, :35-38). Removing the write removes
+  // the race; the state claim stays.
+  await expect
+    .poll(
+      async () => {
+        const { data } = await apiCall(request, 'GET', `/kanban/items/${card.id}`);
+        return data?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('REVIEW');
 });

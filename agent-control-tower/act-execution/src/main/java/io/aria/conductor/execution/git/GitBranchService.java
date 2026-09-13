@@ -52,6 +52,15 @@ public class GitBranchService {
                 .build();
     }
 
+    /**
+     * True when a non-blank token was supplied, i.e. branch operations can be
+     * attempted. Callers use this to fail fast instead of catching
+     * {@link GitBranchException} from the first operation.
+     */
+    public boolean isAvailable() {
+        return ghToken != null && !ghToken.isBlank();
+    }
+
     /** Read the token from {@code GH_TOKEN} (used by Spring wiring / tests). */
     public static GitBranchService fromEnvironment() {
         return new GitBranchService(System.getenv("GH_TOKEN"));

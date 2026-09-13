@@ -196,4 +196,16 @@ class GitBranchServiceTest {
                     assertThat(ex.getMessage()).contains("401").contains("Bad credentials");
                 });
     }
+
+    @Test
+    void isAvailable_falseWhenTokenIsBlank() {
+        assertThat(new GitBranchService("").isAvailable()).isFalse();
+        assertThat(new GitBranchService(null).isAvailable()).isFalse();
+        assertThat(new GitBranchService("   ").isAvailable()).isFalse();
+    }
+
+    @Test
+    void isAvailable_trueWhenTokenIsPresent() {
+        assertThat(new GitBranchService("ghp_dummy_token").isAvailable()).isTrue();
+    }
 }

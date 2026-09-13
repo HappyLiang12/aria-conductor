@@ -91,17 +91,20 @@ try {
 CONTAINER_RUNTIME=podman
 SANDBOX_SOCKET=/run/user/1000/podman/podman.sock
 INVALID LINE WITHOUT EQUALS
+1BAD_NAME=should-be-skipped
 "@
     $s1 = @"
 . '$LibPath'
 `$env:CONTAINER_RUNTIME = "docker"
 Load-DotEnv '$dotenvDir'
 Write-Output "RESULT runtime=`$env:CONTAINER_RUNTIME socket=`$env:SANDBOX_SOCKET"
+Write-Output ("RESULT badname=[" + [Environment]::GetEnvironmentVariable('1BAD_NAME') + "]")
 "@
     $f1 = Join-Path $dotenvDir "s1.ps1"
     Set-Content -Path $f1 -Value $s1
     $out = pwsh -NoProfile -File $f1
-    Assert-True "Load-DotEnv parses KEY=VALUE, skips comments/invalid, preserves existing env" ($out -match "runtime=docker socket=/run/user/1000/podman/podman.sock") $out
+    Assert-True "Load-DotEnv parses KEY=VALUE, skips comments/invalid names, preserves existing env" `
+        (($out -match "runtime=docker socket=/run/user/1000/podman/podman.sock") -and ($out -match "RESULT badname=\[\]")) $out
 
     $emptyDir = Join-Path $StubDir "noenv"
     New-Item -ItemType Directory -Path $emptyDir | Out-Null
@@ -114,6 +117,31 @@ Write-Output "RESULT ok"
     Set-Content -Path $f2 -Value $s2
     $out = pwsh -NoProfile -File $f2
     Assert-True "Load-DotEnv missing .env is a no-op" ($out -match "RESULT ok") $out
+
+    $crlfDir = Join-Path $StubDir "crlf"
+    New-Item -ItemType Directory -Path $crlfDir | Out-Null
+    # -NoNewline: the CRLFs below are then the only line terminators in the file.
+    Set-Content -Path (Join-Path $crlfDir ".env") -NoNewline `
+        -Value "CONTAINER_RUNTIME=podman`r`nSANDBOX_SOCKET=/run/user/1000/podman/podman.sock`r`n"
+    $s3 = @"
+. '$LibPath'
+Remove-Item Env:CONTAINER_RUNTIME -ErrorAction SilentlyContinue
+Remove-Item Env:SANDBOX_SOCKET -ErrorAction SilentlyContinue
+Load-DotEnv '$crlfDir'
+`$raw = Get-Content '$crlfDir\.env' -Raw
+`$crlf = [string]([char]13) + [char]10
+`$socket = [Environment]::GetEnvironmentVariable('SANDBOX_SOCKET')
+Write-Output ("RESULT fixtureCrlf=" + `$raw.Contains(`$crlf))
+Write-Output ("RESULT runtime=" + [Environment]::GetEnvironmentVariable('CONTAINER_RUNTIME') + " socket=" + `$socket)
+Write-Output ("RESULT hasCr=" + `$socket.Contains([char]13))
+"@
+    $f3 = Join-Path $crlfDir "s3.ps1"
+    Set-Content -Path $f3 -Value $s3
+    $out = pwsh -NoProfile -File $f3
+    Assert-True "Load-DotEnv strips CRLF line endings" `
+        (($out -match "RESULT fixtureCrlf=True") -and
+        ($out -match "RESULT runtime=podman socket=/run/user/1000/podman/podman.sock") -and
+        ($out -match "RESULT hasCr=False")) $out
 } finally {
     Remove-Item $StubDir -Recurse -Force -ErrorAction SilentlyContinue
 }

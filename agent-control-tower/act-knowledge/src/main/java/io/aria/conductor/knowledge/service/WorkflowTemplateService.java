@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanService;
@@ -49,6 +50,7 @@ public class WorkflowTemplateService {
     private final DoDService dodService;
     private final KanbanService kanbanService;
     private final OpenCodeProperties openCodeProperties;
+    private final GitBranchService gitBranchService;
 
     public WorkflowTemplateService(KnowledgeItemRepository itemRepository,
                                    KnowledgeVersionRepository versionRepository,
@@ -58,7 +60,8 @@ public class WorkflowTemplateService {
                                    KnowledgeService knowledgeService,
                                    DoDService dodService,
                                    KanbanService kanbanService,
-                                   OpenCodeProperties openCodeProperties) {
+                                   OpenCodeProperties openCodeProperties,
+                                   GitBranchService gitBranchService) {
         this.itemRepository = itemRepository;
         this.versionRepository = versionRepository;
         this.templateConverter = templateConverter;
@@ -68,6 +71,7 @@ public class WorkflowTemplateService {
         this.dodService = dodService;
         this.kanbanService = kanbanService;
         this.openCodeProperties = openCodeProperties;
+        this.gitBranchService = gitBranchService;
     }
 
     /**
@@ -168,6 +172,18 @@ public class WorkflowTemplateService {
                             "Template requires repoUrl parameter; pass it or set opencode.repo-url");
                 }
             }
+        }
+
+        // TP1: a template that hands off to GitHub is unusable without a credential.
+        // Refuse it here, before a chain exists, instead of letting the spec approval
+        // fail mid-flight. Placed after the repoUrl check so the repoUrl error still
+        // wins when both preconditions are unmet.
+        if (declaredParams.contains(GitHandoffMetadata.KEY_REPO_URL)
+                && !gitBranchService.isAvailable()) {
+            throw new IllegalArgumentException(
+                    "This template hands off to GitHub, but no GitHub credential is configured. "
+                            + "Store a GITHUB_TOKEN in the git tool pack (Configure -> Skills & Tools), "
+                            + "or set the GITHUB_TOKEN environment variable.");
         }
 
         // Substitute parameters

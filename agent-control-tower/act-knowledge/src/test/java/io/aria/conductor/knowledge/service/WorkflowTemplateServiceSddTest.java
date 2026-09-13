@@ -12,6 +12,7 @@ import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.knowledge.converter.WorkflowTemplateConverter;
@@ -59,6 +60,7 @@ class WorkflowTemplateServiceSddTest {
     @Mock DoDService dodService;
     @Mock KanbanService kanbanService;
     @Mock OpenCodeProperties openCodeProperties;
+    @Mock GitBranchService gitBranchService;
 
     WorkflowTemplateService service;
 
@@ -66,7 +68,7 @@ class WorkflowTemplateServiceSddTest {
     void setUp() {
         service = new WorkflowTemplateService(itemRepository, versionRepository,
                 templateConverter, workflowService, chainRepository, knowledgeService,
-                dodService, kanbanService, openCodeProperties);
+                dodService, kanbanService, openCodeProperties, gitBranchService);
     }
 
     @Test
@@ -160,6 +162,65 @@ class WorkflowTemplateServiceSddTest {
 
         verify(dodService, never()).init(any(), any(), any());
         verify(kanbanService, never()).create(any());
+    }
+
+    @Test
+    void instantiateTemplate_gitDependentTemplateWithoutCredential_failsFast() {
+        UUID templateId = UUID.randomUUID();
+        KnowledgeItem item = approvedWorkflowTemplate("git-flow", "GitHub handoff");
+        item.setId(templateId);
+        item.setCurrentVersion("v1");
+        when(itemRepository.findById(templateId)).thenReturn(Optional.of(item));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(templateId, "v1"))
+                .thenReturn(Optional.of(KnowledgeVersion.builder()
+                        .yamlContent("steps: [ba, dev]")
+                        .build()));
+        WorkflowStep dev = step(WorkflowStep.StepKind.DEV, "Clone {repoUrl} and implement");
+        when(templateConverter.yamlToWorkflowSteps("steps: [ba, dev]"))
+                .thenReturn(List.of(dev));
+        when(templateConverter.extractParameterNames(anyList()))
+                .thenReturn(Set.of("issueRef", "repoUrl"));
+        when(gitBranchService.isAvailable()).thenReturn(false);
+
+        assertThatThrownBy(() -> service.instantiateTemplate(
+                templateId, Map.of("issueRef", "42", "repoUrl", "https://github.com/o/r.git")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("GITHUB_TOKEN");
+    }
+
+    @Test
+    void instantiateTemplate_gitDependentTemplateWithCredential_passesTheGate() {
+        UUID templateId = UUID.randomUUID();
+        KnowledgeItem item = approvedWorkflowTemplate("git-flow", "GitHub handoff");
+        item.setId(templateId);
+        item.setCurrentVersion("v1");
+        when(itemRepository.findById(templateId)).thenReturn(Optional.of(item));
+        when(versionRepository.findByKnowledgeItemIdAndVersion(templateId, "v1"))
+                .thenReturn(Optional.of(KnowledgeVersion.builder()
+                        .yamlContent("steps: [ba, dev]")
+                        .build()));
+        WorkflowStep dev = step(WorkflowStep.StepKind.DEV, "Clone {repoUrl} and implement");
+        when(templateConverter.yamlToWorkflowSteps("steps: [ba, dev]"))
+                .thenReturn(List.of(dev));
+        when(templateConverter.extractParameterNames(anyList()))
+                .thenReturn(Set.of("issueRef", "repoUrl"));
+        when(gitBranchService.isAvailable()).thenReturn(true);
+
+        UUID chainId = UUID.randomUUID();
+        when(workflowService.createAndStart(any(CreateWorkflowRequest.class)))
+                .thenReturn(WorkflowResponse.builder()
+                        .id(chainId)
+                        .name("git-flow-instance")
+                        .build());
+        WorkflowChain chain = aWorkflowChain().withId(chainId).build();
+        when(chainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(chainRepository.save(any(WorkflowChain.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        WorkflowResponse response = service.instantiateTemplate(
+                templateId, Map.of("issueRef", "42", "repoUrl", "https://github.com/o/r.git"));
+
+        assertThat(response.getId()).isEqualTo(chainId);
     }
 
     // ---- helpers -------------------------------------------------------------

@@ -52,7 +52,7 @@ opencode:
   sandbox-env:
     DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:}
     LLM_API_KEY: ${LLM_API_KEY:${DEEPSEEK_API_KEY:}}
-    GH_TOKEN: ${GH_TOKEN:}
+    GH_TOKEN: ${GITHUB_TOKEN:${GH_TOKEN:}}
 
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:

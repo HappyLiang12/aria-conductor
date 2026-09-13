@@ -175,6 +175,18 @@ export interface ApprovalDecision {
   reason?: string;
 }
 
+/**
+ * Response body of `POST /api/v1/approvals/{id}/decide`. The endpoint returns a
+ * decision receipt rather than the updated {@link Approval}:
+ * `{ approvalId, approved, status: "processed" }`. Read the Approval back from
+ * `GET /api/v1/approvals/{id}` for its resulting status.
+ */
+export interface ApprovalDecisionReceipt {
+  approvalId: string;
+  approved: boolean;
+  status: string;
+}
+
 export interface CreateKnowledgeRequest {
   name: string;
   type: KnowledgeType;

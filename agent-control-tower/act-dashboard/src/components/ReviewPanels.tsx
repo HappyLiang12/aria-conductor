@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, rejectApproval } from '../api/approvals';
-import type { Approval, KanbanItem, KanbanStatus } from '../types';
+import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus } from '../types';
 
 interface PanelProps {
   item: KanbanItem;
@@ -16,7 +16,15 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const [requestFeedback, setRequestFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
   const resolveAsk = useMutation({
-    mutationFn: ({ ask, approved, answer }: { ask: Approval; approved: boolean; answer?: string }) =>
+    mutationFn: ({
+      ask,
+      approved,
+      answer,
+    }: {
+      ask: Approval;
+      approved: boolean;
+      answer?: string;
+    }): Promise<Approval | ApprovalDecisionReceipt> =>
       ask.askType === 'QUESTION'
         ? answerAsk(ask.id, { approved, answer })
         : approved

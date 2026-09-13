@@ -10,16 +10,18 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  * Why:
  *  - The only reachable branch-creation mechanism is `GitBranchService`, a pure GitHub
  *    REST client (act-execution/.../execution/git/GitBranchService.java:30,70-100) wired by
- *    `GitBranchConfig.java:22-55`. The API base URL is the compile-time constant
+ *    `GitBranchConfig.java:41-76`. The API base URL is the compile-time constant
  *    `https://api.github.com` (GitBranchService.java:30): the override constructor is
  *    package-private and test-only (:46, used by the WireMock unit test
  *    GitBranchServiceTest.java:43), and no Spring property or env var can redirect it.
  *    There is therefore no local substitute (a bare repo on disk speaks the git protocol,
  *    not the GitHub REST API) short of changing production code.
- *  - With GH_TOKEN unset the bean is a disabled no-op that throws GitBranchException on
- *    every call (GitBranchConfig.java:23-53). That is the observed state of the running
- *    local stack (.run/backend.log:101, "GH_TOKEN is not configured: GitBranchService is
- *    disabled") and of CI, where no GitHub credentials exist.
+ *  - With no GitHub credential resolvable, the bean is a disabled no-op that throws
+ *    GitBranchException on every call (GitBranchConfig.java:83-110). That is the observed
+ *    state of the running local stack and of CI, where no GitHub credentials exist. The
+ *    exception now carries the canonical operator guidance
+ *    (GitCredentialGuidance.REQUIRED_MESSAGE: "No GitHub credential is configured. Set the
+ *    GITHUB_TOKEN environment variable and restart the backend; ...").
  *  - The gate itself is `SpecReviewCoordinator.createBranchAndCommitSpec`
  *    (act-knowledge/.../knowledge/sdd/SpecReviewCoordinator.java:345-363), called from
  *    the SPEC_REVIEW approval handler (:168-175). A GitBranchException propagates and the
@@ -29,7 +31,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  *    main source file), so there is nothing to assert.
  *
  * Local-only recipe (must be run against a stack started with both values exported):
- *   export GH_TOKEN=<token with repo scope>
+ *   export GITHUB_TOKEN=<token with repo scope>   # canonical; GH_TOKEN is a deprecated fallback
  *   export SDD_REPO_URL=https://github.com/<owner>/<repo>.git
  *   # ...start backend + frontend with the same environment, plus an LLM key for the BA run
  *   cd agent-control-tower/act-dashboard
@@ -37,7 +39,9 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  */
 
 const API_URL = process.env.API_URL || 'http://127.0.0.1:8080';
-const GH_TOKEN = process.env.GH_TOKEN || '';
+// Canonical name first, deprecated alias second — the precondition must agree with the
+// product's own resolution order (GitBranchConfig resolves GITHUB_TOKEN, then GH_TOKEN).
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
 const SDD_REPO_URL = process.env.SDD_REPO_URL || '';
 
 test.describe.configure({ mode: 'serial', timeout: 600_000 });
@@ -72,7 +76,7 @@ async function branchExists(request: APIRequestContext, repoUrl: string, branch:
     `https://api.github.com/repos/${ownerRepo(repoUrl)}/git/ref/heads/${branch}`,
     {
       headers: {
-        Authorization: `Bearer ${GH_TOKEN}`,
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
       },
@@ -86,10 +90,12 @@ test('SDD branch handoff creates the chain branch on a real GitHub remote (local
   request,
 }) => {
   test.skip(
-    !GH_TOKEN || !SDD_REPO_URL,
+    !GITHUB_TOKEN || !SDD_REPO_URL,
     'local-only: branch creation is a pure GitHub REST call against the hardcoded '
       + 'https://api.github.com (GitBranchService.java:30) with no configurable base URL, and '
-      + 'GitBranchConfig.java:23-53 disables it without GH_TOKEN. Run locally with GH_TOKEN and '
+      + 'GitBranchConfig.java:83-110 installs a no-op variant when no GitHub credential '
+      + 'resolves (GITHUB_TOKEN is canonical, GH_TOKEN is accepted as a deprecated alias). '
+      + 'Run locally with GITHUB_TOKEN (or the legacy GH_TOKEN) and '
       + 'SDD_REPO_URL exported against a stack started with the same environment '
       + '(see the recipe at the top of this file).',
   );

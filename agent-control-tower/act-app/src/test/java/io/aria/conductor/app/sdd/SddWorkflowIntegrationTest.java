@@ -12,6 +12,7 @@ import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -86,6 +87,22 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     @MockBean
     private AdkProviderRegistry adkProviderRegistry;
 
+    /**
+     * Mocked so the WorkflowTemplateService credential pre-flight gate sees a usable git
+     * credential deterministically. The real bean's {@code isAvailable()} depends on an
+     * ambient GITHUB_TOKEN or a stored credential, which would make the {@code {repoUrl}}
+     * fixtures below flip between pass and fail by machine. No branch handoff runs in this
+     * class (its SDD chains carry no repoUrl), so only {@code isAvailable()} is consulted.
+     *
+     * <p>The cost of that determinism: any future test in this class that drives a
+     * {@code {repoUrl}} chain as far as spec approval will have the handoff silently
+     * no-op'd against this stub (a mocked {@code createBranch}/{@code putFile} does
+     * nothing) instead of failing loudly, so such a test must configure the mock's
+     * handoff methods explicitly rather than trust the default.
+     */
+    @MockBean
+    private GitBranchService gitBranchService;
+
     /** Shared agent IDs created in setUp. */
     private UUID baAgentId;
     private UUID devAgentId;
@@ -104,6 +121,9 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     void setUp() {
         // Isolate each test from cross-test config leakage (R8-F1 repoUrl fallback).
         openCodeProperties.setRepoUrl("");
+        // Deterministic credential for the {repoUrl} templates: a usable git credential
+        // must be declared rather than resolved from the ambient environment.
+        when(gitBranchService.isAvailable()).thenReturn(true);
         baAgentId = createAgent("BA-Agent-" + shortUuid());
         devAgentId = createAgent("DEV-Agent-" + shortUuid());
         qaAgentId = createAgent("QA-Agent-" + shortUuid());

@@ -1,13 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  listApprovalsByStatus,
-  approveApproval,
-  rejectApproval,
   listRecentRuns,
   getOpsSummary,
   getOpsActivity,
 } from '../api/ops';
+import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
 import HousekeepingPanel from '../components/HousekeepingPanel';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
@@ -124,7 +122,7 @@ export default function OpsPage() {
   /* ---------- Data ---------- */
   const pendingQ = useQuery<Approval[]>({
     queryKey: ['ops', 'approvals', 'pending'],
-    queryFn: () => listApprovalsByStatus('PENDING'),
+    queryFn: () => listApprovals('PENDING'),
     refetchInterval: 8_000,
   });
 
@@ -341,7 +339,11 @@ export default function OpsPage() {
                   const stale = ageMs > 5 * 60_000;
                   const busy = approveM.isPending || rejectM.isPending;
                   return (
-                    <div key={a.id} className={`qitem ${idx === 0 ? 'highlight' : ''}`}>
+                    <div
+                      key={a.id}
+                      data-approval-id={a.id}
+                      className={`qitem ${idx === 0 ? 'highlight' : ''}`}
+                    >
                       <div className="h">
                         <span className={kind.pill}>{kind.label}</span>
                         <span

@@ -5,7 +5,9 @@
 ## Project Positioning
 
 Aria Conductor is an open-source AI Agent orchestration and governance platform (modular monolith).
-Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCode sandbox (default) + Python 3.11 LangChain ADK runtime, Node.js MCP server.
+Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCode sandbox (the
+default and recommended provider) + Python 3.11 LangChain ADK runtime (legacy; compose-only or an
+explicit opt-out), Node.js MCP server.
 
 ## Module Responsibility Table
 
@@ -43,10 +45,13 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 
 ### Run full-stack locally
 1. One-click: `pwsh -NoProfile -File scripts/start.ps1` (local-dev + opencode + podman; checks the
-   environment, prepares the sandbox, verifies health, prints the mode)
+   environment, prepares the sandbox, verifies health, prints the mode). opencode is the default
+   and recommended provider; `start.ps1` pins it and has no langchain path.
 2. Stop: `pwsh -NoProfile -File scripts/stop.ps1`
-3. Legacy full-stack compose (langchain only): `pwsh -NoProfile -File scripts/start.ps1 -Mode compose`
-4. ADK without a sandbox (langchain only): `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
+3. Legacy full-stack compose (langchain only; the containerized backend cannot reach the
+   OpenSandbox endpoints): `pwsh -NoProfile -File scripts/start.ps1 -Mode compose`
+4. Explicit opt-out to the legacy langchain ADK, without a sandbox (never needed by a normal
+   local-dev start): `cd langchain-adk && python -m uvicorn src.server:app --port 9300`
 
 ## High-Risk Areas
 

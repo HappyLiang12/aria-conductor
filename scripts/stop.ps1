@@ -78,7 +78,7 @@ if (-not $SkipContainers) {
         try {
             & $runtime compose stop opensandbox-server *> $null
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "  stopped aria-opensandbox" -ForegroundColor DarkGray
+                Write-Host "  stopped OpenSandbox" -ForegroundColor DarkGray
             } else {
                 Write-Host "  WARNING: $runtime compose stop opensandbox-server failed (exit $LASTEXITCODE)" -ForegroundColor Yellow
             }

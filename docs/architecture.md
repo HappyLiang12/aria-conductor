@@ -7,13 +7,13 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
 ## System Architecture
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
-│   Dashboard   │────▶│   Backend    │────▶│  LangChain ADK   │
-│  (React/Vite) │◀────│ (Spring Boot)│◀────│  (Python/FastAPI) │
-│   Port 3000   │     │   Port 8080  │     │    Port 9300     │
-└──────────────┘     └──────┬───────┘     └──────────────────┘
-                            │
-                     ┌──────▼───────┐
+┌───────────────┐     ┌──────────────┐     ┌──────────────────────────────┐
+│   Dashboard   │────▶│   Backend    │────▶│   Agent Runtime              │
+│  (React/Vite) │◀────│ (Spring Boot)│◀────│  OpenCode sandbox (default)  │
+│   Port 3000   │     │   Port 8080  │     │    via OpenSandbox           │
+└───────────────┘     └──────┬───────┘     │  LangChain ADK: legacy,      │
+                            │              │    compose only (Port 9300)  │
+                     ┌──────▼───────┐      └──────────────────────────────┘
                      │   Database   │
                      │ H2 / MariaDB │
                      └──────────────┘
@@ -36,7 +36,7 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
 
 ### Agent
 
-An autonomous AI entity with a defined role (Business Analyst, Developer, QA). Each agent runs on the LangChain ADK runtime and can execute tools, participate in workflows, and respond to conversations.
+An autonomous AI entity with a defined role (Business Analyst, Developer, QA). Each agent runs on the OpenCode sandbox (via OpenSandbox, the default provider) or, when explicitly opted out, on the legacy LangChain ADK runtime — and can execute tools, participate in workflows, and respond to conversations.
 
 ### Run
 
@@ -59,7 +59,7 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 1. **User** submits a task via the Dashboard
 2. **Dashboard API** creates a Kanban item and assigns it to an agent
 3. **Execution Engine** starts a Run on the agent''s ADK instance
-4. **ADK Runtime** (Python) processes the task using LLM + tools
+4. **ADK provider** processes the task using LLM + tools — the OpenCode sandbox by default, or the Python LangChain ADK runtime for langchain agents
 5. **Agent** iterates: LLM call → tool execution → LLM call → ...
 6. **Run** completes and results are stored
 7. **Approval gates** may pause the workflow for human review
@@ -74,17 +74,19 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 
 ## ADK (Agent Development Kit)
 
-- Python-based runtime using LangChain + FastAPI
-- Each agent can run as a subprocess (local dev) or connect to a standalone container (Docker)
+The ADK provider an agent runs on is selected by `adk.default-provider` (default: `opencode`).
+
+- **opencode** (default, recommended): the OpenCode CLI runs in a dedicated sandbox container per agent, managed through an OpenSandbox server (podman is the local-dev container runtime default; Docker is also supported)
+- **langchain** (legacy): Python-based runtime using LangChain + FastAPI; correct only for the full-stack compose topology, where the containerized backend cannot reach the OpenSandbox endpoints, or as an explicit opt-out
+- The langchain runtime can run as a subprocess (local dev) or connect to a standalone container (compose); it uses port range allocation 9300-9400 (the compose topology pins 9300) and is only needed when a langchain agent runs
 - Health monitoring with automatic restart on failure
-- Port range allocation: 9300-9400
 
 ## Configuration Profiles
 
 | Profile | Use Case | Database |
 |---------|----------|----------|
 | `h2` | Local development | H2 file database |
-| `mariadb` | Docker / Production | MariaDB |
+| `mariadb` | Container (podman / Docker) / Production | MariaDB |
 
 ## Technology Stack
 
@@ -92,9 +94,9 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 |-------|-----------|
 | Backend | Java 21, Spring Boot 3.3, Spring Data JPA, Flyway |
 | Frontend | React 19, Vite, TypeScript, Playwright (E2E) |
-| Agent Runtime | Python 3.11, LangChain, FastAPI, Uvicorn |
+| Agent Runtime | OpenCode sandbox via OpenSandbox (default) / Python 3.11, LangChain, FastAPI, Uvicorn (legacy, compose or opt-out) |
 | Database | H2 (dev) / MariaDB (production) |
 | MCP | Node.js, TypeScript |
 | Build | Maven 3.9+, pnpm 9+ |
 | CI/CD | GitHub Actions |
-| Containerization | Docker, Docker Compose |
+| Containerization | Podman (local-dev default) / Docker, `podman compose` / `docker compose` |

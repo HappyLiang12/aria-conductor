@@ -49,7 +49,7 @@ function Get-EnvValue([string]$Name, [string]$Default) {
 }
 
 function Write-ModeSummary([string]$Topology, [string]$Provider, [string]$RuntimeLine,
-                          [string]$SandboxLine, [hashtable]$Checks) {
+                          [string]$OpenSandboxUrl, [hashtable]$Checks) {
     Write-Host ""
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host "  Aria Conductor - READY" -ForegroundColor Green
@@ -57,11 +57,11 @@ function Write-ModeSummary([string]$Topology, [string]$Provider, [string]$Runtim
     Write-Host "  Topology : $Topology"
     Write-Host "  Provider : $Provider"
     Write-Host "  Runtime  : $RuntimeLine"
-    if ($SandboxLine) { Write-Host "  Sandbox  : $SandboxLine" }
+    if ($OpenSandboxUrl) { Write-Host "  OpenSandbox: $OpenSandboxUrl" }
     Write-Host "  Database : h2 (file)"
     Write-Host "---------------------------------------------------------"
     foreach ($k in $Checks.Keys) {
-        Write-Host ("  {0,-10}: {1,-40} [{2}]" -f $k, $Checks[$k].Url, $Checks[$k].Result)
+        Write-Host ("  {0,-11}: {1,-40} [{2}]" -f $k, $Checks[$k].Url, $Checks[$k].Result)
     }
     Write-Host "  Swagger  : http://localhost:8080/swagger-ui.html"
     Write-Host "---------------------------------------------------------"
@@ -195,8 +195,8 @@ if ($Mode -eq 'compose') {
     Write-Host "  Backend  : http://localhost:$composeBackendPort"
     Write-Host "---------------------------------------------------------"
     Write-Host "  NOTE: the opencode provider is NOT usable in this topology - the" -ForegroundColor Yellow
-    Write-Host "  containerized backend cannot reach the sandbox endpoints. This stack" -ForegroundColor Yellow
-    Write-Host "  runs the langchain provider. Run without -Mode for opencode." -ForegroundColor Yellow
+    Write-Host "  containerized backend cannot reach the OpenSandbox endpoints. This" -ForegroundColor Yellow
+    Write-Host "  stack runs the langchain provider. Run without -Mode for opencode." -ForegroundColor Yellow
     Write-Host "---------------------------------------------------------"
     Write-Host "  Logs : $runtime compose logs -f"
     Write-Host "  Stop : $runtime compose down"
@@ -213,7 +213,7 @@ $sandboxPort = [int](Get-EnvValue 'OPENSANDBOX_PORT' '8090')
 if ($DryRun) {
     Write-ModeSummary -Topology $topology -Provider $provider `
         -RuntimeLine "$runtime ($($runtimeInfo.Mode))" `
-        -SandboxLine "aria-opensandbox  http://localhost:$sandboxPort" -Checks @{}
+        -OpenSandboxUrl "http://localhost:$sandboxPort" -Checks @{}
     Write-Host ""
     Write-Host "-DryRun: environment OK, nothing started." -ForegroundColor Yellow
     exit 0
@@ -226,11 +226,11 @@ Ensure-OpenSandboxServer -Runtime $runtime -ProjectRoot $ProjectRoot | Out-Null
 
 # ── Phase 4: port pre-check ──────────────────────────────────────────────────
 Write-Phase 4 $phaseTotal "Checking ports"
-# Only the ports this script starts on the host. The sandbox port is deliberately excluded:
+# Only the ports this script starts on the host. The OpenSandbox port is deliberately excluded:
 # `aria-opensandbox` publishes 127.0.0.1:${OPENSANDBOX_PORT:-8090} and Ensure-OpenSandboxServer
 # (phase 3) owns it. On any restart where the server is already up that helper no-ops, so
 # checking the port here would find our own container's port forward and ask the user to
-# kill the sandbox this launcher just ensured.
+# kill the OpenSandbox server this launcher just ensured.
 foreach ($port in @($backendPort, $frontendPort)) {
     $holder = Get-PortHolder -Port $port
     if ($holder) {
@@ -278,14 +278,14 @@ $dashboardOk = Wait-HttpHealthy -Url "http://localhost:$frontendPort" -TimeoutSe
 $sandboxOk = Wait-HttpHealthy -Url "http://localhost:$sandboxPort/health" -TimeoutSeconds 120
 $checks['Dashboard'] = @{ Url = "http://localhost:$frontendPort"; Result = $(if ($dashboardOk) { 'OK' } else { 'FAIL' }) }
 $checks['Backend'] = @{ Url = "http://localhost:$backendPort"; Result = $(if ($backendOk) { 'OK' } else { 'FAIL' }) }
-$checks['Sandbox'] = @{ Url = "http://localhost:$sandboxPort"; Result = $(if ($sandboxOk) { 'OK' } else { 'FAIL' }) }
+$checks['OpenSandbox'] = @{ Url = "http://localhost:$sandboxPort"; Result = $(if ($sandboxOk) { 'OK' } else { 'FAIL' }) }
 $allOk = $backendOk -and $dashboardOk -and $sandboxOk
 
 # ── Phase 7: mode confirmation ───────────────────────────────────────────────
 Write-Phase 7 $phaseTotal "Reporting"
 Write-ModeSummary -Topology $topology -Provider $provider `
     -RuntimeLine "$runtime ($($runtimeInfo.Mode))" `
-    -SandboxLine "aria-opensandbox  http://localhost:$sandboxPort" -Checks $checks
+    -OpenSandboxUrl "http://localhost:$sandboxPort" -Checks $checks
 if ($allOk) {
     Start-Process "http://localhost:$frontendPort" | Out-Null
 }

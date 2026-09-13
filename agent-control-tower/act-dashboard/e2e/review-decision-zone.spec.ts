@@ -69,8 +69,8 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
   await zone.getByRole('button', { name: 'Deny', exact: true }).click();
 
   // The UI Deny routes DecisionPanel -> rejectApproval -> POST
-  // /approvals/{id}/reject, which the backend does not expose (404), so the
-  // client falls back to POST /approvals/{id}/decide {approved:false}. That is
+  // /approvals/{id}/decide {approved:false}, the only decision endpoint the
+  // backend exposes (ApprovalController: list, get, decide, answer). That is
   // the same path the API denial spec covers: ApprovalGate sets DENIED
   // (ApprovalGate.java:253) and the engine cancels the linked run.
   await expect
@@ -132,10 +132,9 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
  *
  * Product limitation recorded, not worked around: like the Deny path, the UI
  * Approve routes DecisionPanel -> approveApproval -> POST
- * /approvals/{id}/approve, which the backend does not expose (404 —
- * ApprovalController has only list, get, decide, answer), so the client falls
- * back to POST /approvals/{id}/decide {approved:true}. That fallback is the path
- * under test.
+ * /approvals/{id}/decide {approved:true}. The backend exposes no
+ * /approvals/{id}/approve route (ApprovalController has only list, get, decide,
+ * answer); calling one directly is a 404.
  *
  * Timing note: approving the task gate (AgentLoopEngine.java:704-722) lets the
  * run resume into the provider call, so with the healthy local opencode provider

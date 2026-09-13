@@ -14,22 +14,11 @@ export async function decideApproval(id: string, decision: ApprovalDecision): Pr
 }
 
 export async function approveApproval(id: string, reason?: string): Promise<Approval> {
-  try {
-    const { data } = await client.post<Approval>(`/api/v1/approvals/${id}/approve`, { reason });
-    return data;
-  } catch (err) {
-    // Fallback to /decide endpoint if /approve is not available
-    return decideApproval(id, { approved: true, reason });
-  }
+  return decideApproval(id, { approved: true, reason });
 }
 
 export async function rejectApproval(id: string, reason?: string): Promise<Approval> {
-  try {
-    const { data } = await client.post<Approval>(`/api/v1/approvals/${id}/reject`, { reason });
-    return data;
-  } catch (err) {
-    return decideApproval(id, { approved: false, reason });
-  }
+  return decideApproval(id, { approved: false, reason });
 }
 
 /** Per-card asks (HITL): approvals/questions attached to a kanban item. */

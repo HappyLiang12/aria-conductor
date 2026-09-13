@@ -12,16 +12,6 @@ export async function listApprovalsByStatus(status?: ApprovalStatus): Promise<Ap
   return data;
 }
 
-export async function approveApproval(id: string, reason?: string): Promise<Approval> {
-  const { data } = await client.post<Approval>(`/api/v1/approvals/${id}/approve`, { reason });
-  return data;
-}
-
-export async function rejectApproval(id: string, reason?: string): Promise<Approval> {
-  const { data } = await client.post<Approval>(`/api/v1/approvals/${id}/reject`, { reason });
-  return data;
-}
-
 export async function listRecentRuns(): Promise<Run[]> {
   const { data } = await client.get<Run[]>('/api/v1/runs');
   return data;

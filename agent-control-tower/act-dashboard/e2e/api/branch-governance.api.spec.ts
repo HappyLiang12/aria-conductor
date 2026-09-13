@@ -16,10 +16,12 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  *    GitBranchServiceTest.java:43), and no Spring property or env var can redirect it.
  *    There is therefore no local substitute (a bare repo on disk speaks the git protocol,
  *    not the GitHub REST API) short of changing production code.
- *  - With GH_TOKEN unset the bean is a disabled no-op that throws GitBranchException on
- *    every call (GitBranchConfig.java:23-53). That is the observed state of the running
- *    local stack (.run/backend.log:101, "GH_TOKEN is not configured: GitBranchService is
- *    disabled") and of CI, where no GitHub credentials exist.
+ *  - With no GitHub credential resolvable, the bean is a disabled no-op that throws
+ *    GitBranchException on every call (GitBranchConfig.java:23-53). That is the observed
+ *    state of the running local stack and of CI, where no GitHub credentials exist. The
+ *    exception now carries the canonical operator guidance
+ *    (GitCredentialGuidance.REQUIRED_MESSAGE: "No GitHub credential is configured. Set the
+ *    GITHUB_TOKEN environment variable and restart the backend; ...").
  *  - The gate itself is `SpecReviewCoordinator.createBranchAndCommitSpec`
  *    (act-knowledge/.../knowledge/sdd/SpecReviewCoordinator.java:345-363), called from
  *    the SPEC_REVIEW approval handler (:168-175). A GitBranchException propagates and the
@@ -29,7 +31,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  *    main source file), so there is nothing to assert.
  *
  * Local-only recipe (must be run against a stack started with both values exported):
- *   export GH_TOKEN=<token with repo scope>
+ *   export GH_TOKEN=<token with repo scope>   # deprecated alias; GITHUB_TOKEN is canonical
  *   export SDD_REPO_URL=https://github.com/<owner>/<repo>.git
  *   # ...start backend + frontend with the same environment, plus an LLM key for the BA run
  *   cd agent-control-tower/act-dashboard
@@ -89,7 +91,8 @@ test('SDD branch handoff creates the chain branch on a real GitHub remote (local
     !GH_TOKEN || !SDD_REPO_URL,
     'local-only: branch creation is a pure GitHub REST call against the hardcoded '
       + 'https://api.github.com (GitBranchService.java:30) with no configurable base URL, and '
-      + 'GitBranchConfig.java:23-53 disables it without GH_TOKEN. Run locally with GH_TOKEN and '
+      + 'GitBranchConfig.java:23-53 installs a no-op variant when no GITHUB_TOKEN credential '
+      + 'resolves (GH_TOKEN is accepted as a deprecated alias). Run locally with GH_TOKEN and '
       + 'SDD_REPO_URL exported against a stack started with the same environment '
       + '(see the recipe at the top of this file).',
   );

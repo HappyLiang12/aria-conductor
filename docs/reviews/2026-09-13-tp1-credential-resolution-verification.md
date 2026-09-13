@@ -47,7 +47,8 @@ $ find . -maxdepth 3 -name ".env*" -not -path "./node_modules/*" -not -path "*/n
 ./.env.example
 ```
 
-`.env.example` is untracked-by-intent and was not consulted as a source of truth. The Step 4 proof is
+`.env.example` is **tracked** — `git ls-files` lists it and `.gitignore:4` un-ignores it
+(`!.env.example`) — and it was not consulted as a source of truth. The Step 4 proof is
 therefore valid.
 
 Credential encryption runs in dev mode in this environment, so `enc_value` is Base64, not AES-GCM:
@@ -235,7 +236,8 @@ and before the step could have produced anything.
 
 `INFERRED`, not observed: `recoverOrphanedRuns()` reclaimed run `e85503f4` and marked it `FAILED`
 with `Run orphaned by backend restart`. The recovery log line does not name a run id, and no query
-of the `runs` row appears anywhere in this file, so the attribution rests on code and timing:
+of run `e85503f4`'s own row appears in this file (the only runs read here is run `f8852776`'s, in
+Step 4's re-run), so the attribution rests on code and timing:
 
 - `recoverOrphanedRuns()` marks every run found in `RUNNING`/`INITIALIZING` as `FAILED`, sets the
   message text, and publishes a `RunCompletedEvent` for each —
@@ -263,9 +265,9 @@ leaving the run `COMPLETED` with `totalTokensUsed: 474` and `iterationCount: 1`,
 
 `status=COMPLETED`, `iterations=1` and `tokens=474` are read directly from the completion line
 above, and the chain's `FAILED` status from the auto-chainer line above. The stale `errorMessage` is
-`INFERRED`, not observed: no query of the `runs` row appears in this file, so whether the message
-was overwritten by completion is unproven here. `AgentLoopEngine.java:1487-1493` writes `status`,
-`iterationCount` and `totalTokensUsed` on completion and only *sets* `errorMessage` when
+`INFERRED`, not observed: no query of run `e85503f4`'s own row appears in this file, so whether the
+message was overwritten by completion is unproven here. `AgentLoopEngine.java:1487-1493` writes
+`status`, `iterationCount` and `totalTokensUsed` on completion and only *sets* `errorMessage` when
 `ctx.getErrors()` is non-empty, so a message written earlier can survive a successful completion —
 which is why the stale value is expected on a run that terminated `COMPLETED`.
 
@@ -359,6 +361,24 @@ which GitHub would reject. What was proven is the credential precondition and th
 that a stored pack credential clears the gate and a cleared one restores it. Branch creation,
 `getFile`/`putFile`, and the spec-approval handoff were never exercised.
 
+### Scope note: the sandbox environment is a second consumer of the credential
+
+TP1 feeds the credential store into the `GitBranchService` bean only.
+`application.yml`'s `sandbox-env.GH_TOKEN` still sources from the process environment alone, and is
+never read from the credential store, so an in-sandbox `gh`/`git` step runs without a token even
+when this gate is open. This file verifies nothing about in-sandbox credential availability, and
+the open gate proven in Step 4 must not be read as in-sandbox GitHub access. The gap is deliberate
+and recorded in the design spec §15; TP2's "one resolution point" work owns closing it.
+
+### Scope note: the quoted message text is the pre-fix wording
+
+The HTTP 400 bodies quoted verbatim in Step 2 and Step 5 are captures of the code under
+verification (`c62b468`). The branch's final fix round replaced that wording with
+`io.aria.conductor.common.git.GitCredentialGuidance.REQUIRED_MESSAGE`, which names the same
+`GITHUB_TOKEN` variable and adds the restart requirement. The transcript is left unedited as
+observed; only the wording changed, and the message still contains `GITHUB_TOKEN`, which is what
+the PASS criteria above assert.
+
 ## Environment facts
 
 1. The backend holds an H2 file lock on `agent-control-tower/act-app/data/act_db.mv.db` while it
@@ -379,7 +399,7 @@ that a stored pack credential clears the gate and a cleared one restores it. Bra
   `15353770-...` FAILED (Step 4 attempt 1), `284c393f-...` CANCELLED (Step 4 attempt 2).
 - `runs`: `e85503f4-...` COMPLETED / 474 tokens / 1 iteration (observed in the completion log line);
   `f8852776-...` CANCELLED / 0 tokens (observed in the run query above). `INFERRED`, not observed —
-  no `runs` row query appears in this file: `e85503f4-...` still carries the stale
+  no query of run `e85503f4`'s own row appears in this file: `e85503f4-...` still carries the stale
   `errorMessage: "Run orphaned by backend restart"` (`AgentLoopEngine.java:1487-1493`).
 - No source file was modified by this task.
 

@@ -5,6 +5,7 @@ import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.git.GitCredentialGuidance;
 import io.aria.conductor.common.model.KnowledgeItem;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
@@ -180,10 +181,7 @@ public class WorkflowTemplateService {
         // wins when both preconditions are unmet.
         if (declaredParams.contains(GitHandoffMetadata.KEY_REPO_URL)
                 && !gitBranchService.isAvailable()) {
-            throw new IllegalArgumentException(
-                    "This template hands off to GitHub, but no GitHub credential is configured. "
-                            + "Store a GITHUB_TOKEN in the git tool pack (Configure -> Skills & Tools), "
-                            + "or set the GITHUB_TOKEN environment variable.");
+            throw new IllegalArgumentException(GitCredentialGuidance.REQUIRED_MESSAGE);
         }
 
         // Substitute parameters

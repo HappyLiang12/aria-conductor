@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.git;
 
+import io.aria.conductor.common.git.GitCredentialGuidance;
 import io.aria.conductor.execution.credential.PackCredentialService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
@@ -46,10 +47,7 @@ public class GitBranchConfig {
                     + "GitBranchException when invoked", GIT_PACK_ID);
             return new GitBranchService("") {
                 private GitBranchException disabled() {
-                    return new GitBranchException(0,
-                            "No GitHub credential configured; Git branch operations are disabled. "
-                                    + "Store a GITHUB_TOKEN in the git tool pack or set the "
-                                    + "GITHUB_TOKEN environment variable.");
+                    return new GitBranchException(0, GitCredentialGuidance.REQUIRED_MESSAGE);
                 }
 
                 @Override

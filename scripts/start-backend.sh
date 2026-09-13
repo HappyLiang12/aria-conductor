@@ -107,7 +107,7 @@ if [ -z "${DEEPSEEK_API_KEY:-}" ] && [ -n "${LLM_API_KEY:-}" ]; then
 fi
 
 if [ -z "${GITHUB_TOKEN:-}" ]; then
-    echo "WARN: GITHUB_TOKEN is not set; BA/Dev agents cannot read issues or clone repos in the sandbox. Store it in the git tool pack (Configure -> Skills & Tools) or set the GITHUB_TOKEN environment variable."
+    echo "WARN: GITHUB_TOKEN is not set; BA/Dev agents cannot read issues or clone repos in the sandbox. Set GITHUB_TOKEN and restart the backend: the credential is resolved once at startup. The dashboard has no credential editor yet; an operator with API access can store it via POST /api/v1/packs/pack-git-0001/credentials and restart."
 fi
 
 echo "Starting Aria Conductor backend..."

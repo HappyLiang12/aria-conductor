@@ -84,6 +84,27 @@ class PackCredentialServiceTest {
         assertThat(service.resolve(PACK, null, phantomKey)).isNull();
     }
 
+    /**
+     * Spec §7.5: a stored credential must win over the host environment. {@code System.getenv}
+     * is not stubbable here (no mockito-inline mock-maker in this module), so the test uses a key
+     * that certainly exists in the JVM environment — {@code PATH} — and asserts the STORED value
+     * comes back. A resolver that consulted the environment before the store returns the host
+     * PATH instead and fails this assertion.
+     */
+    @Test
+    void resolve_prefersStoredCredential_overHostEnvironment() {
+        String hostPath = System.getenv("PATH");
+        assertThat(hostPath).as("PATH must exist for this precedence test to be meaningful").isNotNull();
+
+        when(credentialRepo.findByPackIdAndAgentIdIsNullAndCredKey(PACK, "PATH"))
+                .thenReturn(Optional.of(cred("enc-stored-path")));
+        when(cipher.decrypt("enc-stored-path")).thenReturn("stored-wins");
+
+        assertThat(service.resolve(PACK, null, "PATH")).isEqualTo("stored-wins");
+        // Guards against a vacuous pass: the environment value is genuinely a different value.
+        assertThat(hostPath).isNotEqualTo("stored-wins");
+    }
+
     @Test
     void store_encryptsValueBeforePersisting_forNewCredential() {
         when(credentialRepo.findByPackIdAndAgentIdIsNullAndCredKey(PACK, "GITHUB_TOKEN"))

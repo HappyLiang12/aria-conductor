@@ -36,16 +36,25 @@ async function connectMcp(): Promise<Client> {
 
 type Json = Record<string, any>;
 
-/** Calls a tool and parses our uniform JSON envelope {"ok":bool,"data"|error fields}. */
-async function callJson(client: Client, name: string, args: Json): Promise<Json> {
+/**
+ * Calls a tool and parses our uniform JSON envelope {"ok":bool,"data"|error fields}
+ * WITHOUT asserting ok — for probes that must inspect a refusal (e.g. the TP1 credential
+ * gate) instead of failing on it.
+ */
+async function callJsonRaw(client: Client, name: string, args: Json): Promise<Json> {
   const result = await client.callTool({ name, arguments: args });
   const text = (result.content as Array<{ type: string; text: string }>)
     .filter((c) => c.type === 'text')
     .map((c) => c.text)
     .join('');
   if (!text) throw new Error(`${name} returned no content`);
-  const parsed = JSON.parse(text) as Json;
-  expect(parsed.ok, `${name} -> ${text.slice(0, 300)}`).toBe(true);
+  return JSON.parse(text) as Json;
+}
+
+/** Calls a tool and parses our uniform JSON envelope {"ok":bool,"data"|error fields}. */
+async function callJson(client: Client, name: string, args: Json): Promise<Json> {
+  const parsed = await callJsonRaw(client, name, args);
+  expect(parsed.ok, `${name} -> ${JSON.stringify(parsed).slice(0, 300)}`).toBe(true);
   return parsed;
 }
 
@@ -75,10 +84,17 @@ test('mcp: external client instantiates development-workflow, approves the gate,
     expect(tpl, 'V40 seed development-workflow must exist').toBeTruthy();
 
     // 2. Instantiate via MCP (same path as the Templates-tab Run button).
-    const inst = await callJson(client, 'instantiate_workflow_template', {
+    //    TP1 gate: a {repoUrl} template without a resolvable GitHub credential is refused
+    //    with the GITHUB_TOKEN guidance. CI has no credential, so that refusal is the
+    //    expected CI outcome, not a defect — skip rather than assert success.
+    const inst = await callJsonRaw(client, 'instantiate_workflow_template', {
       templateId: tpl.id,
       parameters: { issueRef: '#1-test', repoUrl: 'https://github.com/HappyLiang12/aria-conductor.git' },
     });
+    if (inst.ok !== true && String(inst.message ?? '').includes('GITHUB_TOKEN')) {
+      test.skip(true, 'no git credential configured in this environment');
+    }
+    expect(inst.ok, `instantiate_workflow_template -> ${JSON.stringify(inst).slice(0, 300)}`).toBe(true);
     const chain = inst.data;
     expect(chain.id).toBeTruthy();
 

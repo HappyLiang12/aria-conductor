@@ -21,5 +21,9 @@ if (-not (Test-Path "node_modules")) {
     pnpm install --frozen-lockfile
 }
 
-Write-Host "  Dev server: http://localhost:5173" -ForegroundColor Green
+# Vite binds VITE_PORT (see act-dashboard/vite.config.ts). start.ps1 loads .env into its
+# environment and this child inherits VITE_PORT from it, so a hardcoded 5173 would lie
+# whenever the port is overridden.
+$vitePort = if ($env:VITE_PORT) { $env:VITE_PORT } else { '5173' }
+Write-Host "  Dev server: http://localhost:$vitePort" -ForegroundColor Green
 pnpm dev

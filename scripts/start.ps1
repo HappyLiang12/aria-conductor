@@ -12,9 +12,10 @@ which is langchain-only.
 local (default) or compose.
 
 .PARAMETER DryRun
-Run the environment checks, print the mode block, then exit. Nothing is mutated:
-no containers are started, no ports are freed, no processes are launched and no
-`.run/` state is written.
+Run the environment checks, print the mode block, then exit. No services are started,
+no containers and no ports are touched, and no `.run/` state is written. The one
+exception is that the environment check may start a stopped podman machine - that is
+the repair this script exists to make, and without it the sandbox socket cannot be read.
 #>
 param(
     [ValidateSet('local', 'compose')][string]$Mode = 'local',
@@ -34,9 +35,11 @@ $RunDir = Join-Path $ProjectRoot ".run"
 
 $provider = if ($Mode -eq 'local') { 'opencode' } else { 'langchain' }
 $topology = if ($Mode -eq 'local') { 'local-dev (backend + frontend on host)' } else { 'full-stack compose (backend in a container)' }
+# Compose runs three phases (environment, stack bring-up, report); the local-dev flow runs eight.
+$phaseTotal = if ($Mode -eq 'compose') { 3 } else { 8 }
 
-function Write-Phase([int]$Number, [string]$Text) {
-    Write-Host ("[{0}/8] {1}" -f $Number, $Text) -ForegroundColor Cyan
+function Write-Phase([int]$Number, [int]$Total, [string]$Text) {
+    Write-Host ("[{0}/{1}] {2}" -f $Number, $Total, $Text) -ForegroundColor Cyan
 }
 
 function Get-EnvValue([string]$Name, [string]$Default) {
@@ -69,7 +72,7 @@ function Write-ModeSummary([string]$Topology, [string]$Provider, [string]$Runtim
 
 # ── Phase 1: environment check ───────────────────────────────────────────────
 Write-Host "Aria Conductor - one-click start ($Mode)" -ForegroundColor Cyan
-Write-Phase 1 "Checking environment"
+Write-Phase 1 $phaseTotal "Checking environment"
 
 Load-DotEnv $ProjectRoot
 
@@ -118,7 +121,9 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 }
 
 # ── Phase 2: env guidance ────────────────────────────────────────────────────
-Write-Phase 2 "Checking .env"
+# Only local-dev numbers this as a phase of its own: compose's second phase is the stack
+# bring-up, so there the .env check is part of the environment phase.
+if ($Mode -eq 'local') { Write-Phase 2 $phaseTotal "Checking .env" }
 # Only the podman path can read a podman socket: Get-SandboxSocketPath shells out to
 # `podman info`, so asking it on the docker fallback would pin a podman socket in .env next
 # to CONTAINER_RUNTIME=docker. Docker's own socket lives at a fixed path.
@@ -162,7 +167,12 @@ if (Test-Path $envPath) {
 
 # ── Compose mode: the runtime owns the whole stack ───────────────────────────
 if ($Mode -eq 'compose') {
-    Write-Phase 3 "Starting the full-stack compose stack"
+    if ($DryRun) {
+        Write-Host ""
+        Write-Host "-DryRun: environment OK, nothing started (compose mode would run: $runtime compose up -d --build)." -ForegroundColor Yellow
+        exit 0
+    }
+    Write-Phase 2 $phaseTotal "Starting the full-stack compose stack"
     Push-Location $ProjectRoot
     try {
         & $runtime compose up -d --build
@@ -173,7 +183,7 @@ if ($Mode -eq 'compose') {
 
     $composeBackendPort = Get-EnvValue 'BACKEND_PORT' '8080'
     $composeDashboardPort = Get-EnvValue 'FRONTEND_PORT' '3000'
-    Write-Phase 7 "Reporting"
+    Write-Phase 3 $phaseTotal "Reporting"
     Write-Host ""
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host "  Aria Conductor - COMPOSE STACK STARTING" -ForegroundColor Green
@@ -191,7 +201,6 @@ if ($Mode -eq 'compose') {
     Write-Host "  Logs : $runtime compose logs -f"
     Write-Host "  Stop : $runtime compose down"
     Write-Host "=========================================================" -ForegroundColor Green
-    Write-Phase 8 "Done"
     exit 0
 }
 
@@ -211,12 +220,12 @@ if ($DryRun) {
 }
 
 # ── Phase 3: resource preparation ────────────────────────────────────────────
-Write-Phase 3 "Preparing container resources"
+Write-Phase 3 $phaseTotal "Preparing container resources"
 Ensure-OpencodeSandboxImage -Runtime $runtime -ProjectRoot $ProjectRoot | Out-Null
 Ensure-OpenSandboxServer -Runtime $runtime -ProjectRoot $ProjectRoot | Out-Null
 
 # ── Phase 4: port pre-check ──────────────────────────────────────────────────
-Write-Phase 4 "Checking ports"
+Write-Phase 4 $phaseTotal "Checking ports"
 # Only the ports this script starts on the host. The sandbox port is deliberately excluded:
 # `aria-opensandbox` publishes 127.0.0.1:${OPENSANDBOX_PORT:-8090} and Ensure-OpenSandboxServer
 # (phase 3) owns it. On any restart where the server is already up that helper no-ops, so
@@ -239,7 +248,7 @@ foreach ($port in @($backendPort, $frontendPort)) {
 }
 
 # ── Phase 5: start ───────────────────────────────────────────────────────────
-Write-Phase 5 "Starting services"
+Write-Phase 5 $phaseTotal "Starting services"
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
 $env:VITE_BACKEND_PORT = "$backendPort"
 
@@ -259,7 +268,7 @@ $frontend = Start-Process pwsh -ArgumentList @(
 Set-Content -Path (Join-Path $RunDir 'frontend.pid') -Value $frontend.Id
 
 # ── Phase 6: health verification ─────────────────────────────────────────────
-Write-Phase 6 "Waiting for health"
+Write-Phase 6 $phaseTotal "Waiting for health"
 $checks = [ordered]@{}
 # 900s, not 300s: start-backend.ps1 runs `mvn install -DskipTests` on a cold checkout before
 # Spring Boot can even start, and that build has to fit inside this budget.
@@ -273,7 +282,7 @@ $checks['Sandbox'] = @{ Url = "http://localhost:$sandboxPort"; Result = $(if ($s
 $allOk = $backendOk -and $dashboardOk -and $sandboxOk
 
 # ── Phase 7: mode confirmation ───────────────────────────────────────────────
-Write-Phase 7 "Reporting"
+Write-Phase 7 $phaseTotal "Reporting"
 Write-ModeSummary -Topology $topology -Provider $provider `
     -RuntimeLine "$runtime ($($runtimeInfo.Mode))" `
     -SandboxLine "aria-opensandbox  http://localhost:$sandboxPort" -Checks $checks
@@ -282,7 +291,7 @@ if ($allOk) {
 }
 
 # ── Phase 8: exit ────────────────────────────────────────────────────────────
-Write-Phase 8 "Done"
+Write-Phase 8 $phaseTotal "Done"
 if (-not $allOk) {
     Write-Host "One or more services did not become healthy. Tail of the backend log:" -ForegroundColor Red
     Get-Content (Join-Path $RunDir 'backend.log') -Tail 25 -ErrorAction SilentlyContinue

@@ -11,7 +11,7 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 - **Aria Assistant** — AI-powered operator assistant for managing your agent fleet
 - **LLM Provider Agnostic** — Works with OpenAI, DeepSeek, or any OpenAI-compatible API
 - **Exchangeable Agent Provider** — Choose between **OpenCode** (sandbox-isolated, default) or **LangChain ADK** (Python runtime) per agent
-- **OpenCode Sandbox** — Agent code execution in isolated Docker containers via OpenSandbox
+- **OpenCode Sandbox** — Agent code execution in an isolated container per agent via OpenSandbox
 - **MCP Server** — Model Context Protocol server for tool integration
 - **Real-time Dashboard** — React-based dashboard with live agent status, kanban board, and activity timeline
 
@@ -22,16 +22,16 @@ Aria Conductor provides a complete control tower for managing fleets of AI agent
 | Backend | Java 21, Spring Boot 3.3, Spring Data JPA |
 | Frontend | React 19, Vite, TypeScript |
 | Agent Runtime | OpenCode (sandbox) / Python 3.11 LangChain (ADK) |
-| Sandbox | OpenSandbox (Docker-based isolation) |
+| Sandbox | OpenSandbox (one container per agent, via a Docker-compatible socket) |
 | Database | H2 (dev) / MariaDB (production) |
 | MCP Server | Node.js, TypeScript |
 | Containerization | Docker / Podman, Docker Compose / Podman Compose |
 
-## Quick Start (Docker)
+## Quick Start
 
 ### Prerequisites
 
-- Docker (or podman) and Docker Compose v2 (or podman compose)
+- Podman (default) or Docker, plus a compose provider (`podman compose` / `docker compose`)
 - An LLM API key (OpenAI, DeepSeek, etc.)
 
 ### 1. Clone and configure
@@ -47,17 +47,40 @@ Edit `.env` and set your LLM API key:
 LLM_API_KEY=your-api-key-here
 ```
 
-### 2. Start all services
+### 2. Start all services (Windows)
 
-```bash
-docker compose up -d
+```powershell
+.\scripts\start.ps1
 ```
 
-This starts the backend, frontend, LangChain ADK, and **OpenSandbox server** (for OpenCode agent runtime). Wait ~60 seconds for all services to be healthy.
+This is the single Windows entrypoint. It defaults to the **local-dev topology on podman**:
+backend and frontend on the host, OpenSandbox in a container. It checks the environment,
+creates or tops up `.env`, prepares the sandbox image and server, verifies health, then
+prints the running mode. Wait until it reports every service healthy.
+
+On Linux/macOS the equivalent is to start the services individually
+(`./scripts/start-backend.sh` and `./scripts/start-frontend.sh`); see *Development Setup*.
+
+The legacy full-stack compose stack remains available as an opt-in, container-only
+alternative:
+
+```powershell
+.\scripts\start.ps1 -Mode compose
+# raw equivalent:
+docker compose up -d        # or: podman compose up -d
+```
+
+It starts MariaDB, the backend, the frontend, the LangChain ADK, and the OpenSandbox
+server. That topology is **langchain-only** — the containerized backend cannot reach the
+sandbox endpoints, so the opencode provider cannot be used there (see the topology note
+under *Starting the stack*). Wait ~60 seconds for all services to be healthy.
 
 ### 3. Open the dashboard
 
-Navigate to [http://localhost:3000](http://localhost:3000)
+The dashboard port depends on the topology you started:
+
+- **local-dev** (`.\scripts\start.ps1`, the default): [http://localhost:5173](http://localhost:5173) — Vite serves the dashboard on the host.
+- **compose** (`-Mode compose` / `docker compose up -d`): [http://localhost:3000](http://localhost:3000) — the dashboard is published on `FRONTEND_PORT` (default 3000).
 
 ### 4. Configure LLM provider
 
@@ -82,7 +105,7 @@ Agents default to the **opencode** (sandbox-isolated) provider. To use **langcha
 
 | Provider | Description | Isolation |
 |----------|-------------|-----------|
-| **opencode** (default) | OpenCode CLI in Docker sandbox via OpenSandbox | Container per agent |
+| **opencode** (default) | OpenCode CLI in a sandbox container via OpenSandbox | Container per agent |
 | **langchain** | Python LangChain ADK runtime | Shared process |
 
 > **Approvals**: Task-level runs (opencode provider) require human approval by
@@ -101,13 +124,18 @@ curl -X PUT http://localhost:8080/api/v1/agents/{id} \
 
 ```powershell
 .\scripts\start.ps1          # local-dev + opencode + podman (default)
-.\scripts\stop.ps1           # stop everything
+.\scripts\stop.ps1           # stop what start.ps1 started (local-dev)
 ```
 
 `start.ps1` checks the environment, starts the podman machine when needed, creates or tops up
 `.env`, prepares the sandbox image and server, verifies health, then prints the running mode.
 The opencode provider requires the **local-dev topology** — backend and frontend on the host,
 OpenSandbox in a container. That is what this script starts.
+
+`stop.ps1` stops the backend and frontend processes and the OpenSandbox container that
+`start.ps1` started (`-All` also stops leftover sandbox containers and the podman machine).
+A `-Mode compose` stack is not torn down by `stop.ps1`; stop it with `podman compose down`
+(use `docker compose down` if you started the raw compose command with docker instead).
 
 `-Mode compose` runs the legacy full-stack compose stack instead. That topology cannot run the
 opencode provider, so it uses langchain (the backend runs in a container, where the sandbox
@@ -117,8 +145,12 @@ endpoints are unreachable; see the topology note in `opensandbox-config.toml`).
 
 Startup scripts and the OpenSandbox server support **podman** (the default for local dev) and **Docker**.
 
-- If `CONTAINER_RUNTIME` is unset, scripts auto-detect: docker (running) → podman (running).
-- Set `CONTAINER_RUNTIME=docker|podman` in `.env` to force one runtime (strict: hard error when unavailable).
+- `scripts/start.ps1` (Windows) **prefers podman**: whenever the podman CLI is present it pins
+  `CONTAINER_RUNTIME=podman` and only falls back to docker, with a warning, when podman is absent.
+- The Linux/macOS `.sh` scripts auto-detect only when `CONTAINER_RUNTIME` is unset: docker
+  (running) → podman (running).
+- Set `CONTAINER_RUNTIME=docker|podman` in `.env` to force one runtime (strict: hard error when
+  unavailable). An explicit value always wins over the two behaviours above.
 - The OpenSandbox server mounts the container socket from `SANDBOX_SOCKET` (default `/var/run/docker.sock`).
 
 ### podman machine (Windows)
@@ -142,7 +174,7 @@ Startup scripts and the OpenSandbox server support **podman** (the default for l
 
 ## Development Setup
 
-For local development without Docker:
+For local development without a container runtime:
 
 ### Prerequisites
 
@@ -194,7 +226,9 @@ pnpm install
 pnpm dev
 ```
 
-Dashboard starts at `http://localhost:5173`
+Dashboard starts at `http://localhost:5173` — the Vite dev-server port of the **local-dev**
+topology (backend and frontend on the host). The **compose** topology publishes the dashboard
+on `FRONTEND_PORT` instead, which defaults to `3000`.
 
 ### Python ADK Runtime (langchain provider)
 
@@ -210,7 +244,7 @@ python -m uvicorn src.server:app --port 9300
 
 ### OpenSandbox Server (opencode provider)
 
-Required for the **opencode** ADK provider. Start via Docker Compose:
+Required for the **opencode** ADK provider. Start it with the compose provider of your container runtime — `podman compose` for the local-dev default, `docker compose` is equivalent:
 
 ```bash
 docker compose up -d opensandbox-server
@@ -239,7 +273,7 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `act-test-support` | Shared test utilities |
 | `act-dashboard` | React frontend dashboard |
 | `langchain-adk` | Python LangChain agent runtime |
-| `opencode-sandbox` | Docker image for OpenCode sandbox |
+| `opencode-sandbox` | Container image for the OpenCode sandbox (podman or docker) |
 | `packages/mcp-server` | MCP protocol server |
 
 ## Configuration
@@ -257,7 +291,7 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `DB_HOST` | `mariadb` | Database host (Docker) |
 | `DB_PORT` | `3306` | Database port |
 | `DB_NAME` | `aria_conductor` | Database name |
-| `CONTAINER_RUNTIME` | auto-detect | Container runtime: `docker` or `podman` (auto-detect: docker preferred) |
+| `CONTAINER_RUNTIME` | auto-detect | Container runtime: `docker` or `podman`. Unset: `scripts/start.ps1` prefers podman, the Linux/macOS `.sh` scripts auto-detect docker first; an explicit value always wins |
 | `SANDBOX_SOCKET` | `/var/run/docker.sock` | Host container-engine socket mounted into the OpenSandbox server |
 
 ### Spring Profiles

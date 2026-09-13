@@ -101,19 +101,21 @@ if ($AdkProvider -eq "opencode" -and -not $SkipSandbox) {
         exit 1
     }
 
-    $sandboxRunning = & $rt ps --filter "name=aria-opensandbox" --format "{{.Names}}" 2>$null
-    if (-not $sandboxRunning) {
-        Write-Host "Starting OpenSandbox server ($rt compose)..." -ForegroundColor Yellow
-        Push-Location $ProjectRoot
-        & $rt compose up -d opensandbox-server
-        if ($LASTEXITCODE -ne 0) {
-            if ($rt -eq "podman") {
-                Write-Host "podman hint: verify the socket is enabled (podman machine ssh 'systemctl --user is-active podman.socket') and SANDBOX_SOCKET in .env matches its VM path." -ForegroundColor Yellow
-            }
-            Write-Error "Failed to start OpenSandbox server"
-            Pop-Location; exit 1
+    $startedSandbox = $false
+    try {
+        # Shared helper: no-ops when aria-opensandbox already runs, else `compose up -d`.
+        $startedSandbox = Ensure-OpenSandboxServer -Runtime $rt -ProjectRoot $ProjectRoot
+    } catch {
+        if ($rt -eq "podman") {
+            Write-Host "podman hint: verify the socket is enabled (podman machine ssh 'systemctl --user is-active podman.socket') and SANDBOX_SOCKET in .env matches its VM path." -ForegroundColor Yellow
         }
-        Pop-Location
+        Write-Error "Failed to start OpenSandbox server: $($_.Exception.Message)"
+        exit 1
+    }
+    if ($startedSandbox) {
+        Write-Host "Started OpenSandbox server ($rt compose)" -ForegroundColor DarkGray
+        # `compose up -d` returns before the server accepts connections; the backend warms the
+        # sandbox shortly after this, so give it a moment rather than racing it.
         Start-Sleep -Seconds 3
     }
 

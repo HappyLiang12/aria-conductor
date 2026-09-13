@@ -73,7 +73,7 @@ Tech stack: Java 21 / Spring Boot 3.3 backend, React 19 / Vite frontend, OpenCod
 | Python ADK tests | `cd langchain-adk && python -m pytest tests/` |
 | MCP server tests | `cd packages/mcp-server && npx vitest run` |
 | Full build (skip tests) | `cd agent-control-tower && mvn install -DskipTests` |
-| Docker full-stack | `docker compose up -d` |
+| Full-stack compose (legacy; langchain only) | `pwsh -NoProfile -File scripts/start.ps1 -Mode compose` |
 | Container runtime scenario tests | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |
 
 ## Quick Reference

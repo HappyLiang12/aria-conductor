@@ -19,6 +19,10 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
                      └──────────────┘
 ```
 
+> The Dashboard port above is the **compose** topology's (`FRONTEND_PORT`, default `3000`). In the
+> default local-dev topology the Dashboard is the Vite dev server on `5173`, with the backend and
+> frontend both running on the host — see *Starting the stack* in [README.md](README.md).
+
 ## Module Structure
 
 | Module | Responsibility |
@@ -58,7 +62,7 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 
 1. **User** submits a task via the Dashboard
 2. **Dashboard API** creates a Kanban item and assigns it to an agent
-3. **Execution Engine** starts a Run on the agent''s ADK instance
+3. **Execution Engine** starts a Run on the agent's ADK instance
 4. **ADK provider** processes the task using LLM + tools — the OpenCode sandbox by default, or the Python LangChain ADK runtime for langchain agents
 5. **Agent** iterates: LLM call → tool execution → LLM call → ...
 6. **Run** completes and results are stored

@@ -127,7 +127,12 @@ Bounded. Ships independently and unblocks the SDD flow for anyone who configures
    of catching.
 3. `WorkflowTemplateService.instantiateTemplate` gains a capability check beside the existing R8-F1
    `repoUrl` check: a template declaring `{repoUrl}` while git is unavailable fails fast with a
-   message that names the missing credential and points at Configure.
+   message that names the missing credential and states the step that actually works today — set
+   `GITHUB_TOKEN` and restart the backend. The message must not point at a dashboard credential
+   editor, because none exists until TP2 (§8.2) and a dead-end instruction is worse than a
+   configuration hint. It lives in one shared constant (`GitCredentialGuidance.REQUIRED_MESSAGE` in
+   `act-common`) so the gate message and the disabled-stub message cannot drift, and a restart
+   because the credential resolves once at context startup (see §15).
 4. The token key is normalised on `GITHUB_TOKEN`; `scripts/start-backend.ps1:84` changes its warning
    from `GH_TOKEN` to `GITHUB_TOKEN`, matching `.env.example` and the resolver.
 5. Tests: resolution precedence (store over env, per-agent over pack), and instantiation failing with

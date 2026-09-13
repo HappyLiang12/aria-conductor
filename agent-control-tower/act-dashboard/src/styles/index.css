@@ -1354,7 +1354,6 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
    ============================================================ */
 .knowledge-grid { display: grid; grid-template-columns: minmax(420px, .95fr) minmax(480px, 1.05fr); gap: 16px; align-items: start; }
 .knowledge-stack { display: grid; gap: 16px; }
-.knowledge-wide { margin-top: 16px; }
 @media (max-width: 1180px) { .knowledge-grid, .kb-layout { grid-template-columns: 1fr !important; } }
 .knowledge-flow {
   display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
@@ -1437,34 +1436,6 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
 .kb-detail .meta { color: var(--text-dim); font-size: 11.5px; margin: 5px 0 10px; line-height: 1.45; }
 .kb-detail .content { white-space: pre-wrap; color: var(--text); font-size: 12px; line-height: 1.55; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.025); padding: 10px; max-height: 160px; overflow: auto; }
 .kb-detail .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.knowledge-access { padding: 12px 14px 14px; overflow-x: auto; }
-.knowledge-access-table { display: grid; grid-template-columns: minmax(260px, 1.7fr) repeat(6, minmax(68px, 1fr)); gap: 1px; min-width: 820px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--line); }
-.knowledge-access-table .cell { background: rgba(12,18,36,.96); padding: 8px; min-height: 42px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-dim); }
-body.light .knowledge-access-table .cell { background: #fff; }
-.knowledge-access-table .th { color: var(--text); font-weight: 700; text-align: center; }
-.knowledge-access-table .first { justify-content: flex-start; align-items: flex-start; flex-direction: column; }
-.knowledge-access-table .first b { color: var(--text); font-size: 12px; }
-.knowledge-access-table .first span { color: var(--text-mute); font-size: 10px; margin-top: 2px; }
-.knowledge-access-table .route { color: #ffd884 !important; }
-.knowledge-access-table .lvl {
-  display: inline-flex; align-items: center; justify-content: center; min-width: 34px;
-  border: 1px solid rgba(91,140,255,.30); border-radius: 999px; padding: 2px 7px;
-  background: rgba(91,140,255,.12); color: var(--brand-2); font-size: 10px; font-weight: 700;
-}
-.knowledge-access-table .lvl.rw { background: rgba(54,211,153,.15); color: #6fe2b6; border-color: rgba(54,211,153,.30); }
-.knowledge-access-table .lvl.ro { background: rgba(255,255,255,.06); color: var(--text-dim); border-color: var(--line-2); }
-.knowledge-access-table .access-label,
-.knowledge-permission-legend .access-label {
-  display: inline-flex; align-items: center; justify-content: center; text-align: center;
-  min-width: 82px; padding: 4px 8px; border-radius: 999px;
-  border: 1px solid rgba(91,140,255,.30); background: rgba(91,140,255,.12);
-  color: var(--brand-2); font-size: 10.5px; font-weight: 700; line-height: 1.2;
-}
-.knowledge-access-table .access-label.none, .knowledge-permission-legend .access-label.none { color: var(--text-mute); background: rgba(255,255,255,.04); border-color: var(--line); }
-.knowledge-access-table .access-label.view, .knowledge-permission-legend .access-label.view { color: var(--text-dim); background: rgba(255,255,255,.06); border-color: var(--line-2); }
-.knowledge-access-table .access-label.use, .knowledge-permission-legend .access-label.use { color: #ffd884; background: rgba(246,196,83,.12); border-color: rgba(246,196,83,.30); }
-.knowledge-access-table .access-label.edit, .knowledge-permission-legend .access-label.edit { color: #6fe2b6; background: rgba(54,211,153,.15); border-color: rgba(54,211,153,.30); }
-.knowledge-permission-legend { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 10px; color: var(--text-dim); font-size: 11px; }
 .reuse-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
 .reuse-tags span { font-size: 9.5px; padding: 1px 6px; border-radius: 999px; background: rgba(54,211,153,.10); border: 1px solid rgba(54,211,153,.25); color: #6fe2b6; }
 .knowledge-note { margin: 12px 14px 14px; padding: 10px; border: 1px dashed rgba(138,107,255,.35); border-radius: 10px; color: var(--text-dim); background: rgba(138,107,255,.06); font-size: 12px; }

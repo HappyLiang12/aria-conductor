@@ -41,7 +41,7 @@ function renderPanel(ui: ReactElement, qc: QueryClient = makeClient()) {
 
 describe('DecisionPanel', () => {
   it('renders each pending ask and routes gate asks to /decide endpoints', async () => {
-    mockedApprove.mockResolvedValue({} as Approval);
+    mockedApprove.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
     renderPanel(<DecisionPanel item={item} pendingAsks={[
       { id: 'a1', askType: 'APPROVAL', content: 'spec v2', status: 'PENDING' } as Approval,
       { id: 'a2', askType: 'QUESTION', content: 'BOM?', status: 'PENDING' } as Approval,
@@ -94,7 +94,7 @@ describe('DecisionPanel', () => {
   });
 
   it('resolving an ask also invalidates the kanban-items cache', async () => {
-    mockedApprove.mockResolvedValue({} as Approval);
+    mockedApprove.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
     const qc = makeClient();
     const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
     renderPanel(<DecisionPanel item={item} pendingAsks={[

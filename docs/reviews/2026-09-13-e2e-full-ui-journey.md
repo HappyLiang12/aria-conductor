@@ -332,7 +332,7 @@ Here is a clean, professional HTML report summarizing the top 3 AI agent orchest
 ```
 
 The report itself is otherwise correct (864 words, 12 sections, sandboxed iframe). Evidence:
-`docs/reviews/shots/2026-09-13-e2e/47-report-clean.png`.
+`docs/reviews/shots/2026-09-13-e2e/47-report-clean.png` (WORDS 864 / SECTIONS 12 tiles).
 
 ### E2E-009 — Example-valued placeholders look like real values and block submit
 
@@ -397,7 +397,9 @@ Also observed, lower confidence, listed for follow-up rather than asserted as de
 - One-click startup brought up all three subsystems healthy on a clean checkout of `main`.
 - Agent creation persists and is reflected in Crew, Providers (Per-Agent Backends) and the run
   dialog's agent list with a `(HEALTHY)` suffix; role selection correctly re-scopes the recommended
-  toolset (28 → 16 tools when switching to Business Analyst Agent).
+  toolset (28 → 16 tools when switching to Business Analyst Agent). The 28 is captured in
+  `docs/reviews/shots/2026-09-13-e2e/03-add-agent.png` (`RECOMMENDED TOOLS · 28 selected`); the 16
+  was observed in session but not captured in a committed screenshot.
 - End-to-end agent execution in the opencode sandbox with a real LLM, producing a real file, verified
   inside the container.
 - Aria answers from live data and is honest about the empty queue.

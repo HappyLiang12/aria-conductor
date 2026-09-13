@@ -93,6 +93,12 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
      * ambient GITHUB_TOKEN or a stored credential, which would make the {@code {repoUrl}}
      * fixtures below flip between pass and fail by machine. No branch handoff runs in this
      * class (its SDD chains carry no repoUrl), so only {@code isAvailable()} is consulted.
+     *
+     * <p>The cost of that determinism: any future test in this class that drives a
+     * {@code {repoUrl}} chain as far as spec approval will have the handoff silently
+     * no-op'd against this stub (a mocked {@code createBranch}/{@code putFile} does
+     * nothing) instead of failing loudly, so such a test must configure the mock's
+     * handoff methods explicitly rather than trust the default.
      */
     @MockBean
     private GitBranchService gitBranchService;

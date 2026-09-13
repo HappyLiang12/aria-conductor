@@ -36,24 +36,26 @@ describe('approvals api', () => {
     expect(get).toHaveBeenCalledWith('/api/v1/approvals', { params: { status: 'PENDING' } });
   });
 
-  it('decideApproval POSTs the decision body to /decide', async () => {
-    post.mockResolvedValue({ data: { id: 'ap-1', status: 'APPROVED' } });
+  it('decideApproval POSTs the decision body to /decide and returns the receipt', async () => {
+    post.mockResolvedValue({ data: { approvalId: 'ap-1', approved: true, status: 'processed' } });
 
     const decision = { approved: true, reason: 'looks safe' };
     await expect(decideApproval('ap-1', decision)).resolves.toEqual({
-      id: 'ap-1',
-      status: 'APPROVED',
+      approvalId: 'ap-1',
+      approved: true,
+      status: 'processed',
     });
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith('/api/v1/approvals/ap-1/decide', decision);
   });
 
   it('approveApproval POSTs approved=true to /decide exactly once', async () => {
-    post.mockResolvedValue({ data: { id: 'ap-2', status: 'APPROVED' } });
+    post.mockResolvedValue({ data: { approvalId: 'ap-2', approved: true, status: 'processed' } });
 
     await expect(approveApproval('ap-2', 'ok')).resolves.toEqual({
-      id: 'ap-2',
-      status: 'APPROVED',
+      approvalId: 'ap-2',
+      approved: true,
+      status: 'processed',
     });
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith('/api/v1/approvals/ap-2/decide', {
@@ -70,11 +72,12 @@ describe('approvals api', () => {
   });
 
   it('rejectApproval POSTs approved=false to /decide exactly once', async () => {
-    post.mockResolvedValue({ data: { id: 'ap-4', status: 'DENIED' } });
+    post.mockResolvedValue({ data: { approvalId: 'ap-4', approved: false, status: 'processed' } });
 
     await expect(rejectApproval('ap-4', 'too risky')).resolves.toEqual({
-      id: 'ap-4',
-      status: 'DENIED',
+      approvalId: 'ap-4',
+      approved: false,
+      status: 'processed',
     });
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith('/api/v1/approvals/ap-4/decide', {
@@ -84,9 +87,13 @@ describe('approvals api', () => {
   });
 
   it('rejectApproval omits the reason when none is given', async () => {
-    post.mockResolvedValue({ data: { id: 'ap-5', status: 'DENIED' } });
+    post.mockResolvedValue({ data: { approvalId: 'ap-5', approved: false, status: 'processed' } });
 
-    await expect(rejectApproval('ap-5')).resolves.toEqual({ id: 'ap-5', status: 'DENIED' });
+    await expect(rejectApproval('ap-5')).resolves.toEqual({
+      approvalId: 'ap-5',
+      approved: false,
+      status: 'processed',
+    });
     expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith('/api/v1/approvals/ap-5/decide', {
       approved: false,

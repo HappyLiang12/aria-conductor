@@ -19,6 +19,16 @@
 - Module test commands follow `AGENTS.md`: `cd agent-control-tower && mvn test -pl <module>`.
 - Only the files listed in each task may change. `WorkflowChain`, `ToolDefinition`, `ToolPack` and `PackCredential` need no schema change in TP1.
 
+## Corrections applied during implementation
+
+This plan is committed and reads as executable, but a few of its instructions were superseded while it was being implemented. Following them literally would reintroduce a defect the spec now forbids.
+
+- **Do not use the "Configure -> Skills & Tools" wording.** Tasks 2 and 3 specify an operator message pointing at *Configure -> Skills & Tools*, but no dashboard credential editor exists until the later phase, so that step is a dead end today. Commit `399379c` replaced it with one shared constant, `GitCredentialGuidance.REQUIRED_MESSAGE` in `act-common`, naming the step that actually works. Use that constant; do not reintroduce the old wording.
+- **Task 4 Step 7 is task-local, not a standing rule.** That step commits only the evidence file and not `docs/`, which was correct for Task 4. The branch does later commit the plan and the design spec deliberately, so this is not a blanket prohibition on committing documentation.
+- **Task 3 Step 5's module-scoped run does not prove "no regression".** The gate's blast radius was wider than `act-knowledge`: it also broke two `act-app` integration fixtures and two Playwright specs, fixed in `c62b468` and `399379c`. A module-scoped run cannot see the Failsafe lane.
+- **`mvn test -pl act-app` never runs the `*IntegrationTest` classes.** Surefire excludes them and Failsafe runs them, so use `mvn verify -pl act-app` to exercise that lane.
+- **The gate is temporary.** `TODO(TP4)` markers now sit next to it (in `WorkflowTemplateService`) and next to the two E2E skips that depend on it (`e2e/sdd-workflow.spec.ts` and `e2e/api/mcp-sdd-workflow.api.spec.ts`); TP4 replaces the refusal with a review-gate decision.
+
 ---
 
 ### Task 1: `GitBranchService.isAvailable()`

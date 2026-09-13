@@ -31,7 +31,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  *    main source file), so there is nothing to assert.
  *
  * Local-only recipe (must be run against a stack started with both values exported):
- *   export GH_TOKEN=<token with repo scope>   # deprecated alias; GITHUB_TOKEN is canonical
+ *   export GITHUB_TOKEN=<token with repo scope>   # canonical; GH_TOKEN is a deprecated fallback
  *   export SDD_REPO_URL=https://github.com/<owner>/<repo>.git
  *   # ...start backend + frontend with the same environment, plus an LLM key for the BA run
  *   cd agent-control-tower/act-dashboard

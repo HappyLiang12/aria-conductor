@@ -138,8 +138,8 @@ beforeEach(() => {
   );
   mockedListAsks.mockResolvedValue([]);
   mockedAnswerAsk.mockResolvedValue(mkAsk());
-  mockedApproveApproval.mockResolvedValue(mkAsk({ status: 'APPROVED' }));
-  mockedRejectApproval.mockResolvedValue(mkAsk({ status: 'DENIED' }));
+  mockedApproveApproval.mockResolvedValue({ approvalId: 'a1', approved: true, status: 'processed' });
+  mockedRejectApproval.mockResolvedValue({ approvalId: 'a1', approved: false, status: 'processed' });
   mockedGetRun.mockResolvedValue(mkRun());
 });
 

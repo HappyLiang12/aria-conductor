@@ -35,6 +35,12 @@ public class GitBranchConfig {
      * are as likely to export {@code GH_TOKEN} as {@code GITHUB_TOKEN}. Resolving the
      * alias through the same service keeps one resolution path while those setups
      * migrate. Remove once nothing exports the old name.
+     *
+     * <p>Precedence is per key, not global: {@link #GITHUB_TOKEN_KEY} is resolved first
+     * <em>including its own {@code GITHUB_TOKEN} environment fallback</em>, and the alias is
+     * consulted only when that canonical lookup yields nothing. A legacy credential stored in
+     * the pack under {@code GH_TOKEN} therefore loses to an exported {@code GITHUB_TOKEN}, so
+     * the spec's store-over-env guarantee holds only within a given key name.
      */
     static final String DEPRECATED_GH_TOKEN_KEY = "GH_TOKEN";
 

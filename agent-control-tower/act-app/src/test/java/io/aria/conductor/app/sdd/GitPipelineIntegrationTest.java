@@ -126,6 +126,11 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         // returned after Dev completes -> branch did NOT advance -> backend-push fallback runs.
         when(gitBranchService.branchHeadSha(anyString(), anyString()))
                 .thenReturn(Optional.of("spec-sha-abc"));
+
+        // Every fixture here instantiates a template that declares {repoUrl}, so the
+        // credential pre-flight gate in WorkflowTemplateService must see a usable git
+        // credential. Mockito returns false for an unstubbed primitive boolean.
+        when(gitBranchService.isAvailable()).thenReturn(true);
     }
 
     // ================================================================

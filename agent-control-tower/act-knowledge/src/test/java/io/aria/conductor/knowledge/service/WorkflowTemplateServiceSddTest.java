@@ -186,6 +186,9 @@ class WorkflowTemplateServiceSddTest {
                 templateId, Map.of("issueRef", "42", "repoUrl", "https://github.com/o/r.git")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("GITHUB_TOKEN");
+
+        // The gate's purpose: refuse before a chain exists, not after.
+        verify(workflowService, never()).createAndStart(any());
     }
 
     @Test

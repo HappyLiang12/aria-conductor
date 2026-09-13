@@ -17,9 +17,13 @@ must refuse a `{repoUrl}`-declaring template before a chain exists when no crede
 |---|-------|--------|
 | 1 | With no credential stored, instantiation is refused with an actionable `GITHUB_TOKEN` error | PASS |
 | 2 | A credential stored through `POST /api/v1/packs/{id}/credentials` opens that gate | PASS |
-| 3 | The store wins over the environment when neither `GITHUB_TOKEN` nor `GH_TOKEN` is set | PASS |
+| 3 | A credential present only in the store is sufficient and is consulted (both `GITHUB_TOKEN` and `GH_TOKEN` unset) | PASS |
 | 4 | Functionally clearing the credential closes the gate again | PASS |
 | 5 | Full SDD handoff through to a real GitHub push | NOT VERIFIED |
+
+Claim 3 is deliberately scoped to what this evidence measures. Both `GITHUB_TOKEN` and `GH_TOKEN`
+were unset, so store-before-env and store-after-env are indistinguishable here: the file proves a
+store-only credential is consulted and is sufficient, not precedence over a populated environment.
 
 ## Precondition (checked, not assumed)
 
@@ -34,8 +38,17 @@ PASS: neither name is in the process environment
 ```
 
 Both checks pass. The backend was launched from this same shell via `scripts/start.ps1`, so it
-inherits that clean environment. Only `./.env` and `./.env.example` exist; `.env.example` is
-untracked-by-intent and was not consulted as a source of truth. The Step 4 proof is therefore valid.
+inherits that clean environment. The claim that only `./.env` and `./.env.example` exist is
+supported by this command and its output, run as part of the same precondition check:
+
+```
+$ find . -maxdepth 3 -name ".env*" -not -path "./node_modules/*" -not -path "*/node_modules/*"
+./.env
+./.env.example
+```
+
+`.env.example` is untracked-by-intent and was not consulted as a source of truth. The Step 4 proof is
+therefore valid.
 
 Credential encryption runs in dev mode in this environment, so `enc_value` is Base64, not AES-GCM:
 
@@ -196,11 +209,17 @@ $ curl -s -X POST http://localhost:8080/api/v1/workflows/15353770-423e-4be7-a6df
 HTTP 400
 ```
 
-The cause is unrelated to credentials. Spring Boot publishes `ApplicationReadyEvent` only after all
-`ApplicationRunner`/`CommandLineRunner` beans have finished, and `AriaDefaultAgentInitializer` blocks
-the `main` thread for ~18 seconds provisioning the Aria sandbox. `scripts/start.ps1` reports READY as
-soon as Tomcat answers on 8080, so there is a window in which the API accepts work but
-`recoverOrphanedRuns()` has not yet run. The request landed inside that window:
+The cause is unrelated to credentials. The timestamps below are observed; the mechanism that links
+them, and the identity of the run that was reclaimed, are `INFERRED` from the pointers given. Spring
+Boot publishes `ApplicationReadyEvent` only after all `ApplicationRunner`/`CommandLineRunner` beans
+have finished, and `AriaDefaultAgentInitializer` — `@Order(Ordered.HIGHEST_PRECEDENCE)`, an
+`ApplicationRunner` whose `run` method ends by logging `ADK instance for Aria is ready` after the
+pre-warm — blocks the `main` thread for ~18 seconds
+(`agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/init/AriaDefaultAgentInitializer.java:45-46,263,409`,
+`INFERRED`; the ~18 s gap itself is observed below: `Started ActApplication` at 20.281 s, Aria ADK
+ready at 17:22:51.739). `scripts/start.ps1` reports READY as soon as Tomcat answers on 8080, so
+there is a window in which the API accepts work but `recoverOrphanedRuns()` has not yet run. The
+request landed inside that window:
 
 ```
 2026-09-13T17:22:33.022+08:00  INFO 18408 --- [aria-conductor] [           main] io.aria.conductor.ActApplication         : Started ActApplication in 20.281 seconds (process running for 20.977)
@@ -210,11 +229,27 @@ soon as Tomcat answers on 8080, so there is a window in which the API accepts wo
 2026-09-13T17:22:51.806+08:00  INFO 18408 --- [aria-conductor] [           main] i.a.c.agent.service.WorkflowService      : Workflow chain failed: id=15353770-423e-4be7-a6df-379f8504ace8, step=0
 ```
 
-`recoverOrphanedRuns()` fired 2.5 s after the chain was created and marked a genuinely live run
-(`e85503f4`) as `FAILED` with `Run orphaned by backend restart`. `recoverOrphanedRuns()` is called
-only from `AgentLoopEngine.onApplicationReady()`, so it runs once per context start; a second
-instantiate after the event has fired is unaffected. This is a pre-existing startup race in
-`AgentLoopEngine`, independent of TP1, and is reported here rather than worked around.
+Observed in the block above: the chain created for the request (`15353770-...`) is logged `FAILED`
+at step 0 at 17:22:51.800, 2.5 s after creation, immediately after `Recovering 1 orphaned run(s)`
+and before the step could have produced anything.
+
+`INFERRED`, not observed: `recoverOrphanedRuns()` reclaimed run `e85503f4` and marked it `FAILED`
+with `Run orphaned by backend restart`. The recovery log line does not name a run id, and no query
+of the `runs` row appears anywhere in this file, so the attribution rests on code and timing:
+
+- `recoverOrphanedRuns()` marks every run found in `RUNNING`/`INITIALIZING` as `FAILED`, sets the
+  message text, and publishes a `RunCompletedEvent` for each —
+  `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/engine/AgentLoopEngine.java:363-370`,
+  with the message text at `AgentLoopEngine.java:366`.
+- The recovery line reports exactly 1 orphaned run, and the request had just created exactly 1 live
+  run, `e85503f4` (step 0 of chain `15353770-...`), per the instantiate response above.
+- In production code `recoverOrphanedRuns()` is invoked only from
+  `AgentLoopEngine.onApplicationReady()`, itself bound to `ApplicationReadyEvent`
+  (`AgentLoopEngine.java:350-353`), so it runs once per context start; a second instantiate after
+  the event has fired is unaffected.
+
+This is a pre-existing startup race in `AgentLoopEngine`, independent of TP1, and is reported here
+rather than worked around.
 
 **The race killed the database row but not the run.** The run thread continued and finished:
 
@@ -222,10 +257,20 @@ instantiate after the event has fired is unaffected. This is a pre-existing star
 2026-09-13T17:24:25.337+08:00  INFO 18408 --- [aria-conductor] [    virtual-162] i.a.c.execution.engine.AgentLoopEngine   : Completing run: runId=e85503f4-e5b5-4a3e-b042-1cf567c2934a, status=COMPLETED, iterations=1, tokens=474
 ```
 
-leaving the run `COMPLETED` with `totalTokensUsed: 474` and `iterationCount: 1` while still carrying
-the stale `errorMessage: "Run orphaned by backend restart"`, and its chain `FAILED`. Real LLM cost was
-incurred (474 tokens) — stated plainly rather than hidden. No GitHub push occurred; the BA step only
-writes `/workspace/spec.md`.
+leaving the run `COMPLETED` with `totalTokensUsed: 474` and `iterationCount: 1`, and — `INFERRED`
+(see below) — still carrying the stale `errorMessage: "Run orphaned by backend restart"`; its chain
+`FAILED`.
+
+`status=COMPLETED`, `iterations=1` and `tokens=474` are read directly from the completion line
+above, and the chain's `FAILED` status from the auto-chainer line above. The stale `errorMessage` is
+`INFERRED`, not observed: no query of the `runs` row appears in this file, so whether the message
+was overwritten by completion is unproven here. `AgentLoopEngine.java:1487-1493` writes `status`,
+`iterationCount` and `totalTokensUsed` on completion and only *sets* `errorMessage` when
+`ctx.getErrors()` is non-empty, so a message written earlier can survive a successful completion —
+which is why the stale value is expected on a run that terminated `COMPLETED`.
+
+Real LLM cost was incurred (474 tokens) — stated plainly rather than hidden. No GitHub push
+occurred; the BA step only writes `/workspace/spec.md`.
 
 ### Step 4 re-run outside the race window
 
@@ -332,8 +377,10 @@ that a stored pack credential clears the gate and a cleared one restores it. Bra
   agent NULL, key `GITHUB_TOKEN`, `enc_value` blank.
 - `workflow_chains`: 3 rows — `11584a7c-...` WAITING_APPROVAL (pre-existing, untouched),
   `15353770-...` FAILED (Step 4 attempt 1), `284c393f-...` CANCELLED (Step 4 attempt 2).
-- `runs`: `e85503f4-...` COMPLETED / 474 tokens / 1 iteration, with a stale
-  `errorMessage: "Run orphaned by backend restart"`; `f8852776-...` CANCELLED / 0 tokens.
+- `runs`: `e85503f4-...` COMPLETED / 474 tokens / 1 iteration (observed in the completion log line);
+  `f8852776-...` CANCELLED / 0 tokens (observed in the run query above). `INFERRED`, not observed —
+  no `runs` row query appears in this file: `e85503f4-...` still carries the stale
+  `errorMessage: "Run orphaned by backend restart"` (`AgentLoopEngine.java:1487-1493`).
 - No source file was modified by this task.
 
 ## Commands to reproduce

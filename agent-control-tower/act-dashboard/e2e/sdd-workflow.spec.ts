@@ -70,12 +70,16 @@ test('development-workflow: spec approval then PASS verdict completes the chain'
   // resolves (WorkflowTemplateService's pre-flight gate, HTTP 400 + GITHUB_TOKEN guidance).
   // CI has no credential - fresh H2 DB, data/ is gitignored, nothing seeds pack_credentials -
   // so that refusal is the expected CI outcome, not a defect: skip instead of asserting.
+  // The predicate demands the status AND the message, so a regression that refused every
+  // instantiation with credential-shaped guidance fails loudly here instead of skipping.
+  // TODO(TP4): this gate is temporary - TP4 replaces the refusal with a review-gate
+  // decision. Remove this skip together with the gate so the SDD path regains live coverage.
   const inst = await request.post(`${API_URL}/api/v1/knowledge/${tpl.id}/instantiate-workflow`, {
     data: { parameters: { issueRef: '#1-test', repoUrl: 'https://github.com/HappyLiang12/aria-conductor.git' } },
   });
   const instBody = await inst.text();
-  if (!inst.ok() && instBody.includes('GITHUB_TOKEN')) {
-    test.skip(true, 'no git credential configured in this environment');
+  if (inst.status() === 400 && instBody.includes('GITHUB_TOKEN')) {
+    test.skip(true, 'no git credential configured in this environment (TP1 credential gate)');
   }
   expect(inst.ok(), `instantiate -> HTTP ${inst.status()}: ${instBody.slice(0, 300)}`).toBeTruthy();
   const chain = await inst.json();

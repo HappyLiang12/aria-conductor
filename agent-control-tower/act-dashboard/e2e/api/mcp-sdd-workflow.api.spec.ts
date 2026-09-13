@@ -87,12 +87,18 @@ test('mcp: external client instantiates development-workflow, approves the gate,
     //    TP1 gate: a {repoUrl} template without a resolvable GitHub credential is refused
     //    with the GITHUB_TOKEN guidance. CI has no credential, so that refusal is the
     //    expected CI outcome, not a defect — skip rather than assert success.
+    //    The predicate demands the envelope type AND the message, so a regression that
+    //    refused every instantiation with credential-shaped guidance fails loudly here
+    //    instead of skipping.
+    //    TODO(TP4): this gate is temporary — TP4 replaces the refusal with a review-gate
+    //    decision. Remove this skip together with the gate so the SDD path regains live coverage.
     const inst = await callJsonRaw(client, 'instantiate_workflow_template', {
       templateId: tpl.id,
       parameters: { issueRef: '#1-test', repoUrl: 'https://github.com/HappyLiang12/aria-conductor.git' },
     });
-    if (inst.ok !== true && String(inst.message ?? '').includes('GITHUB_TOKEN')) {
-      test.skip(true, 'no git credential configured in this environment');
+    if (inst.ok !== true && inst.errorType === 'VALIDATION'
+        && String(inst.message ?? '').includes('GITHUB_TOKEN')) {
+      test.skip(true, 'no git credential configured in this environment (TP1 credential gate)');
     }
     expect(inst.ok, `instantiate_workflow_template -> ${JSON.stringify(inst).slice(0, 300)}`).toBe(true);
     const chain = inst.data;

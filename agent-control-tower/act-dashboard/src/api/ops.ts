@@ -1,16 +1,13 @@
 import client from './client';
-import type { Approval, ApprovalStatus, Run, DashboardSummary, ActivityEvent } from '../types';
+import type { Run, DashboardSummary, ActivityEvent } from '../types';
 
 /**
- * Ops-surface API helpers — composes approvals, runs, and dashboard
- * summary endpoints into a single command-center module.
+ * Ops-surface API helpers — composes runs and dashboard summary endpoints into
+ * a single command-center module. Approvals are deliberately NOT wrapped here:
+ * this module used to carry its own `listApprovalsByStatus`/`approveApproval`
+ * copies, and the drift between those copies and the canonical helpers is what
+ * produced the Operations-page 404. Import them from ./approvals instead.
  */
-
-export async function listApprovalsByStatus(status?: ApprovalStatus): Promise<Approval[]> {
-  const params = status ? { status } : undefined;
-  const { data } = await client.get<Approval[]>('/api/v1/approvals', { params });
-  return data;
-}
 
 export async function listRecentRuns(): Promise<Run[]> {
   const { data } = await client.get<Run[]>('/api/v1/runs');

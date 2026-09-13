@@ -1,12 +1,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  listApprovalsByStatus,
   listRecentRuns,
   getOpsSummary,
   getOpsActivity,
 } from '../api/ops';
-import { approveApproval, rejectApproval } from '../api/approvals';
+import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
 import HousekeepingPanel from '../components/HousekeepingPanel';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
@@ -123,7 +122,7 @@ export default function OpsPage() {
   /* ---------- Data ---------- */
   const pendingQ = useQuery<Approval[]>({
     queryKey: ['ops', 'approvals', 'pending'],
-    queryFn: () => listApprovalsByStatus('PENDING'),
+    queryFn: () => listApprovals('PENDING'),
     refetchInterval: 8_000,
   });
 

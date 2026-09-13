@@ -115,11 +115,29 @@ scope rather than failed. Evidence:
 
 ### E2E-001 — The Operations page cannot approve or deny anything (HTTP 404)
 
-> **Status: FIXED** (uncommitted, in the working tree). Root cause confirmed as helper drift and
-> resolved by collapsing both surfaces onto `/decide`; guarded by
+> **Status: FIXED — committed in this branch as `ef9d5dc`**
+> (`fix(dashboard): route Operations approval decisions through /decide`). Root cause confirmed as
+> helper drift and resolved by collapsing both surfaces onto `/decide`; guarded by
 > `act-dashboard/e2e/ops-approval-surface.spec.ts`, which was verified to fail on the old
-> `/approve` path. Verification: 376/376 unit tests, `pnpm build`, and
-> `npx playwright test ops-approval-surface.spec.ts review-decision-zone.spec.ts` → 3 passed.
+> `/approve` path. The verification below was re-run on this branch on 2026-09-13; the equivalent
+> session-time run produced the same counts, but no output was captured for it, so only the re-run
+> is quoted.
+>
+> ```
+> $ npx vitest run
+>  Test Files  47 passed (47)
+>       Tests  376 passed (376)
+>
+> $ pnpm build
+> ✓ 216 modules transformed.
+> ✓ built in 2.63s
+>
+> $ npx playwright test ops-approval-surface.spec.ts review-decision-zone.spec.ts
+>   ok 1 [chromium] › e2e\ops-approval-surface.spec.ts:25:1 › approving from the Operations surface resolves the ask (14.3s)
+>   ok 2 [chromium] › e2e\review-decision-zone.spec.ts:37:1 › clicking Deny in the decision zone resolves the ask (20.2s)
+>   ok 3 [chromium] › e2e\review-decision-zone.spec.ts:147:1 › clicking Approve in the decision zone resolves the ask (6.8s)
+>   3 passed (31.2s)
+> ```
 
 The Approve button on the Operations command surface posts to an endpoint that does not exist.
 Selecting it surfaced a `Approve failed` toast and the item stayed pending.
@@ -135,14 +153,17 @@ $ curl -s -X POST http://localhost:8080/api/v1/approvals/67219615-.../reject
 {"status":404,"error":"Not Found", ...}
 ```
 
-Root cause, traced after the fact: the frontend has two copies of the same helper that have drifted.
-`src/api/approvals.ts` implements `approveApproval`/`rejectApproval` as a call to `/approve`/`/reject`
-that falls back to `decideApproval(...)` on any error, and its unit tests assert that fallback.
-`src/api/ops.ts` re-implements both without the fallback. `ReviewQueue.tsx` (the Overview queue)
-imports the first, so it works for tool-call approvals; `OpsPage.tsx` imports the second, so every
-decision on the Operations surface dies as a 404. The backend only ever served `/decide` and
-`/answer`, so the primary `/approve` and `/reject` calls in both files are dead code that only the
-`approvals.ts` fallback masks.
+Root cause, traced after the fact. The paragraph below describes the pre-fix state that produced
+the 404; commit `ef9d5dc` removed the fallback and the `ops.ts` copies, so `approvals.ts` now posts
+to `/decide` directly and its unit tests assert that single call. The frontend had two copies of the
+same helper that had drifted.
+`src/api/approvals.ts` implemented `approveApproval`/`rejectApproval` as a call to `/approve`/`/reject`
+that fell back to `decideApproval(...)` on any error, and its unit tests asserted that fallback.
+`src/api/ops.ts` re-implemented both without the fallback. `ReviewQueue.tsx` (the Overview queue)
+imported the first, so it worked for tool-call approvals; `OpsPage.tsx` imported the second, so every
+decision on the Operations surface died as a 404. The backend only ever served `/decide` and
+`/answer`, so the primary `/approve` and `/reject` calls in both files were dead code that only the
+`approvals.ts` fallback masked.
 
 The contract that actually exists, read from the served OpenAPI document:
 
@@ -193,6 +214,9 @@ $ grep -nE "GitBranchException|ERROR" .run/backend.log | tail
 4527: io.aria.conductor.execution.git.GitBranchException: GH_TOKEN is not configured; Git branch operations are disabled
 6100: ... ERROR ... GlobalExceptionHandler : Unhandled exception: GitBranchException - GH_TOKEN is not configured; Git branch operations are disabled
 ```
+
+`.run/backend.log` is a runtime log (not committed); the log lines quoted above are inlined verbatim
+so the evidence does not depend on that file.
 
 Root cause, traced after the fact: `ApprovalGate.decideApproval` publishes `ApprovalDecidedEvent`
 from inside its own `@Transactional` method, and `SpecReviewCoordinator.onApprovalDecided` is a
@@ -392,9 +416,11 @@ Also observed, lower confidence, listed for follow-up rather than asserted as de
 `Morning agenda reminder`, kanban items `48f2a361` / `dedd5906` / `fb8646f7`, report
 `AI Orchestration Trends Brief`, and one pending `SPEC_REVIEW` approval. They were deliberately not
 cleaned up so the findings above can be re-inspected. All of it lives in the H2 file database and is
-untracked; the only tracked change in this branch is this document plus its evidence images under
-`docs/reviews/`. A `.env` was copied into the worktree from the main checkout to supply the existing
-LLM key; it is gitignored.
+untracked; within the E2E session this document reports on, the only tracked change it produced was
+this document plus its evidence images under `docs/reviews/`. The branch itself carries more than
+that — the SDD git-credential work, its plan and design spec, and the TP1 verification document —
+all of which landed after this session. A `.env` was copied into the worktree from the main checkout
+to supply the existing LLM key; it is gitignored.
 
 ## Coverage and NOT VERIFIED
 

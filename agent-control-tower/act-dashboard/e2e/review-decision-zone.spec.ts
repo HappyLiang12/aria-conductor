@@ -29,7 +29,7 @@ import {
  *
  * Product limitation recorded, not worked around: there is no dedicated denial
  * reason field. The per-ask box is `aria-label="Answer for ask <id>"` (its text
- * is forwarded as `reason` on the fallback decide call), the card-face Deny
+ * is forwarded as `reason` on the ask's own decide call), the card-face Deny
  * sends {status:'CANCELLED'} (KanbanBoard.tsx:436), and the drawer's comment box
  * is a transition note (TaskDrawer.tsx:424-430). This spec therefore asserts the
  * ask's terminal status only — never a reason.

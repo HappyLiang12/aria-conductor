@@ -155,8 +155,8 @@ $ curl -s -X POST http://localhost:8080/api/v1/approvals/67219615-.../reject
 
 Root cause, traced after the fact. The paragraph below describes the pre-fix state that produced
 the 404; commit `ef9d5dc` removed the fallback and the `ops.ts` copies, so `approvals.ts` now posts
-to `/decide` directly and its unit tests assert that single call. The frontend had two copies of the
-same helper that had drifted.
+to `/decide` directly and its unit tests assert that single call. At the time, the frontend had two
+copies of the same helper that had drifted.
 `src/api/approvals.ts` implemented `approveApproval`/`rejectApproval` as a call to `/approve`/`/reject`
 that fell back to `decideApproval(...)` on any error, and its unit tests asserted that fallback.
 `src/api/ops.ts` re-implemented both without the fallback. `ReviewQueue.tsx` (the Overview queue)

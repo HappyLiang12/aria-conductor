@@ -10,7 +10,7 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  * Why:
  *  - The only reachable branch-creation mechanism is `GitBranchService`, a pure GitHub
  *    REST client (act-execution/.../execution/git/GitBranchService.java:30,70-100) wired by
- *    `GitBranchConfig.java:41-81`. The API base URL is the compile-time constant
+ *    `GitBranchConfig.java:41-76`. The API base URL is the compile-time constant
  *    `https://api.github.com` (GitBranchService.java:30): the override constructor is
  *    package-private and test-only (:46, used by the WireMock unit test
  *    GitBranchServiceTest.java:43), and no Spring property or env var can redirect it.
@@ -93,7 +93,7 @@ test('SDD branch handoff creates the chain branch on a real GitHub remote (local
     !GITHUB_TOKEN || !SDD_REPO_URL,
     'local-only: branch creation is a pure GitHub REST call against the hardcoded '
       + 'https://api.github.com (GitBranchService.java:30) with no configurable base URL, and '
-      + 'GitBranchConfig.java:36-93 installs a no-op variant when no GitHub credential '
+      + 'GitBranchConfig.java:83-110 installs a no-op variant when no GitHub credential '
       + 'resolves (GITHUB_TOKEN is canonical, GH_TOKEN is accepted as a deprecated alias). '
       + 'Run locally with GITHUB_TOKEN (or the legacy GH_TOKEN) and '
       + 'SDD_REPO_URL exported against a stack started with the same environment '

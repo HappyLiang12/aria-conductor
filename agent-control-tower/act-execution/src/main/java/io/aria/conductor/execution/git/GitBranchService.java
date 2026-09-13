@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Deterministic backend channel for the SDD branch handoff, backed purely by
- * the GitHub REST API (no local git binary). The {@code GH_TOKEN} is injected
+ * the GitHub REST API (no local git binary). The GitHub token is injected
  * through the constructor (never read from the environment inside the class)
  * so the service is testable against a WireMock server.
  *
@@ -59,11 +59,6 @@ public class GitBranchService {
      */
     public boolean isAvailable() {
         return ghToken != null && !ghToken.isBlank();
-    }
-
-    /** Read the token from {@code GH_TOKEN} (used by Spring wiring / tests). */
-    public static GitBranchService fromEnvironment() {
-        return new GitBranchService(System.getenv("GH_TOKEN"));
     }
 
     /**

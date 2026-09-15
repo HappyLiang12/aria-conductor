@@ -1,7 +1,10 @@
 package io.aria.conductor.execution.kanban;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.model.Run;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +17,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,6 +40,12 @@ class KanbanServiceTest {
 
     @Mock
     ApprovalRepository approvalRepository;
+
+    @Mock
+    AgentRepository agentRepository;
+
+    @Mock
+    AgentPickupEligibility pickupEligibility;
 
     @InjectMocks
     KanbanService service;
@@ -75,18 +85,21 @@ class KanbanServiceTest {
 
     @Test
     void create_withLinkedRunId_persistsLink() {
-        String runId = "22222222-2222-2222-2222-222222222222";
+        // A card that observes an existing run: the create path validates the
+        // link resolves, and skips eligibility entirely.
+        UUID runId = UUID.fromString("22222222-2222-2222-2222-222222222222");
         CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
                 .title("Linked")
-                .linkedRunId(runId)
+                .linkedRunId(runId.toString())
                 .priority(KanbanPriority.HIGH)
                 .build();
 
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder().id(runId).build()));
         when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
         KanbanItem result = service.create(request);
 
-        assertThat(result.getLinkedRunId()).isEqualTo(runId);
+        assertThat(result.getLinkedRunId()).isEqualTo(runId.toString());
         assertThat(result.getPriority()).isEqualTo(KanbanPriority.HIGH);
     }
 

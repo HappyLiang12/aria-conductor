@@ -10,7 +10,7 @@ class KanbanTransitionTableTest {
 
     // Null collaborators are safe here: isValidTransition only reads the static
     // transition table, so none of the injected beans are ever touched.
-    private final KanbanService service = new KanbanService(null, null, null, null);
+    private final KanbanService service = new KanbanService(null, null, null, null, null, null);
 
     @ParameterizedTest
     @CsvSource({

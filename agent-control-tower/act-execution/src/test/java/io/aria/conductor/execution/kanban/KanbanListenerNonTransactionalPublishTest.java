@@ -6,6 +6,7 @@ import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.listener.RunKanbanAutoCreator;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -59,6 +60,7 @@ class KanbanListenerNonTransactionalPublishTest {
     @Autowired private ApplicationEventPublisher eventPublisher;
     @Autowired private KanbanRepository kanbanRepository;
     @Autowired private ApprovalRepository approvalRepository;
+    @Autowired private RunRepository runRepository;
 
     @Test
     void runCompletedPublishedWithoutATransactionStillReachesReview() {
@@ -85,6 +87,10 @@ class KanbanListenerNonTransactionalPublishTest {
     @Test
     void approvalRequestedPublishedWithoutATransactionStillGetsAReviewCard() {
         UUID runId = UUID.randomUUID();
+        // The run is the durable anchor the review card links to: create refuses
+        // a link that resolves to nothing.
+        runRepository.save(Run.builder().id(runId).agentId(UUID.randomUUID())
+                .promptSeed("delete the branch").status(RunStatus.RUNNING).build());
         Approval approval = approvalRepository.save(Approval.builder()
                 .runId(runId)
                 .status(ApprovalStatus.PENDING)

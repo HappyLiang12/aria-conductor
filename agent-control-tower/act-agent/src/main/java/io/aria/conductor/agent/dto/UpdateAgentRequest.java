@@ -26,4 +26,6 @@ public class UpdateAgentRequest {
     private String adkProvider;
 
     private Map<String, Object> config;
+
+    private Boolean pickupEnabled;
 }

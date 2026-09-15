@@ -18,7 +18,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>Runs after the requesting transaction commits, in its own transaction: the
  * approval is recorded before the board is touched, and a failure here must
  * neither roll back the approval that triggered it nor surface to the caller
- * that recorded it.
+ * that recorded it. ApprovalGate raises asks outside any transaction, so the
+ * listener must fall back to running immediately for those; without it the ask
+ * would silently get no card.
  */
 @Slf4j
 @Component
@@ -36,7 +38,7 @@ public class KanbanReviewCardListener {
         this.kanbanService = kanbanService;
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onApprovalRequested(ApprovalRequestedEvent event) {
         // Defensive mirroring of RunKanbanAutoCreator: a listener must never

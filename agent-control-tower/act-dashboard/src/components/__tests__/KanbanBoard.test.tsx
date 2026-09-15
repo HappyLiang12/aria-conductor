@@ -435,6 +435,45 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     expect(screen.getByText('Invalid kanban transition')).toBeInTheDocument();
   });
 
+  it('renders the structured rejection reason when a move is refused', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    // 409 shape from GlobalExceptionHandler: code + message + structured details.
+    vi.mocked(transitionKanbanItem).mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: {
+          status: 409,
+          message: 'No pickup-eligible agent: 1 agent(s) evaluated and all excluded',
+          code: 'NO_ELIGIBLE_AGENT',
+          details: { evaluated: 1, excluded: [{ name: 'Aria', reasons: ['RESERVED_OPERATOR_AGENT'] }] },
+        },
+      },
+    });
+    const { container } = await renderBoard([baseItem()]); // TODO card
+    const card = container.querySelector('[data-card="k-1"]') as HTMLElement;
+    await dropOn(card, screen.getByTestId('lane-IN_PROGRESS'));
+
+    expect(await screen.findByText(/NO_ELIGIBLE_AGENT/)).toBeVisible();
+    expect(screen.getByText(/Aria \(RESERVED_OPERATOR_AGENT\)/)).toBeVisible();
+  });
+
+  it('degrades to the bare message when a rejection carries no code', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    // Malformed input stays a plain 400 whose body has only `message` — the
+    // board must fall back to it instead of rendering an absent code/details.
+    vi.mocked(transitionKanbanItem).mockRejectedValueOnce({
+      message: 'Request failed with status code 400',
+      response: { status: 400, data: { message: 'Invalid birth status: nonsense' } },
+    });
+    const { container } = await renderBoard([baseItem()]);
+    const card = container.querySelector('[data-card="k-1"]') as HTMLElement;
+    await dropOn(card, screen.getByTestId('lane-IN_PROGRESS'));
+
+    expect(await screen.findByText('Invalid birth status: nonsense')).toBeVisible();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
   it('cancel button transitions to CANCELLED without opening the drawer', async () => {
     const { transitionKanbanItem } = await import('../../api/kanban');
     vi.mocked(transitionKanbanItem).mockResolvedValueOnce(baseItem({ status: 'CANCELLED' }));

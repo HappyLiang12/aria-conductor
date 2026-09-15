@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/kanban';
+import type { KanbanRejection } from '../api/kanban';
 import { executeHousekeeping } from '../api/housekeeping';
 import { listAgentTemplates, listAgents } from '../api/agents';
 import type {
@@ -187,11 +188,18 @@ export default function KanbanBoard() {
       // Task 10: the confirmed action is over (it failed) — never leave the
       // confirmation stuck open on a rejection.
       setConfirmCancelId(null);
-      // GlobalExceptionHandler puts the rejection reason in `message` (`error`
-      // carries only the HTTP reason phrase); same axios shape as TaskDrawer.
-      const data = (err as { response?: { data?: { message?: string; error?: string } } } | null)
+      // A refused move answers 409 with {code, message, details}; malformed input
+      // stays a 400 whose body carries only `message` (or the HTTP reason phrase
+      // in `error`), so a missing code must degrade to the message.
+      const data = (err as { response?: { data?: KanbanRejection & { error?: string } } } | null)
         ?.response?.data;
-      setError(data?.message ?? data?.error ?? 'Move rejected — the card is back in its column.');
+      const excluded = data?.details?.excluded
+        ?.map((e) => `${e.name} (${e.reasons.join(', ')})`)
+        .join('; ');
+      const reason = [data?.code, data?.message ?? data?.error, excluded]
+        .filter(Boolean)
+        .join(' — ');
+      setError(reason || 'Move rejected — the card is back in its column.');
     },
   });
 

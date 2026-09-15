@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, act, waitFor } from '@testing-library/react';
+import { render, act, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import MorningBriefing from '../MorningBriefing';
 import type { WsEvent } from '../../types';
@@ -91,15 +91,45 @@ describe('MorningBriefing briefing signals (single HITL signal, D7)', () => {
     // waitFor (not a bare act flush): under full-suite load the React Query
     // resolution needs more microtask turns than one act gives it.
     await waitFor(() => {
-      expect(container.textContent).toContain('2 cards waiting on review');
+      expect(container.textContent).toContain('2 cards in review');
     });
 
     // Review cards are the real waiting-on-review signal (BLOCKED was retired
     // in V52, so the old count was always 0).
-    expect(container.textContent).toContain('2 cards waiting on review');
+    expect(container.textContent).toContain('2 cards in review');
     expect(container.textContent).not.toContain('blocker');
     // Second HITL signal removed: D7 wants exactly one "Waiting on you" signal.
     expect(container.textContent).not.toContain('queued for approval');
     expect(container.textContent).not.toContain('approval');
+  });
+});
+
+describe('MorningBriefing briefing wording (each count names its source)', () => {
+  beforeEach(async () => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    const { getSummary } = await import('../../api/dashboard');
+    vi.mocked(getSummary).mockResolvedValue({
+      totalTokensBurned: 0, activeAgents: 0, healthyAgents: 0, degradedAgents: 0,
+      pendingApprovals: 0, runningRuns: 0,
+    });
+    kanbanData = [
+      { id: 'k-1', title: 'a', priority: 'MEDIUM', status: 'IN_PROGRESS' },
+    ];
+  });
+
+  it('names each count source instead of implying runs and cards are the same thing', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}><MorningBriefing /></QueryClientProvider>,
+    );
+
+    // One card in IN_PROGRESS with no run, and zero RUNNING runs: legal, and the
+    // old wording ("1 task in flight" beside "0 runs active right now") read as a
+    // contradiction. Each label must now name what it counts.
+    expect(await screen.findByText(/cards in progress/i)).toBeVisible();
+    expect(screen.getByText(/runs running/i)).toBeVisible();
+    expect(screen.getByText(/cards in review/i)).toBeVisible();
+    expect(screen.getByText(/cards done/i)).toBeVisible();
+    expect(screen.queryByText(/in flight/i)).toBeNull();
   });
 });

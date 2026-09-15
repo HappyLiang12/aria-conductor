@@ -203,11 +203,31 @@ public class KanbanTransitionService {
     }
 
     private KanbanItem resume(KanbanItem item) {
-        findRun(item).ifPresent(run -> {
-            if (run.getStatus() == RunStatus.PAUSED) {
-                runService.resumeRun(UUID.fromString(item.getLinkedRunId()));
-            }
-        });
+        String link = item.getLinkedRunId();
+        if (link == null || link.isBlank()) {
+            throw new PickupRejectedException("RUN_NOT_FOUND",
+                    "Card has no linked run to resume. Use request-changes to dispatch a new run.",
+                    Map.of("kanbanItemId", item.getId()));
+        }
+        UUID runId;
+        try {
+            runId = UUID.fromString(link);
+        } catch (IllegalArgumentException e) {
+            throw new PickupRejectedException("CORRUPT_RUN_LINK",
+                    "Linked run id is not a UUID: " + link, Map.of("linkedRunId", link));
+        }
+        Run run = runRepository.findById(runId).orElseThrow(() -> new PickupRejectedException("RUN_NOT_FOUND",
+                "No run with id " + runId, Map.of("runId", runId.toString())));
+        if (run.getStatus() != RunStatus.PAUSED) {
+            // A finished run cannot be continued. The honest alternatives are the
+            // card's own vocabulary: request-changes re-enters Todo and dispatches
+            // a new run; Done closes it out.
+            throw new PickupRejectedException("RUN_ALREADY_FINISHED",
+                    "Linked run is " + run.getStatus()
+                            + " — use request-changes to dispatch a new run, or move the card to Done.",
+                    Map.of("runId", runId.toString(), "runStatus", run.getStatus().name()));
+        }
+        runService.resumeRun(runId);
         return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, null);
     }
 

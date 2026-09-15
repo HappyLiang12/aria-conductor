@@ -7,6 +7,7 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
@@ -25,6 +26,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,11 +52,6 @@ class KanbanListenerTransactionTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class ListenerConfig {
-
-        @Bean
-        AgentPickupEligibility agentPickupEligibility() {
-            return new AgentPickupEligibility();
-        }
 
         @Bean
         AgentPickerService agentPickerService() {
@@ -98,6 +95,7 @@ class KanbanListenerTransactionTest {
 
     @Autowired private KanbanService kanbanService;
     @Autowired private RunService runService;
+    @Autowired private AgentPickerService agentPicker;
     @Autowired private KanbanRepository kanbanRepository;
     @Autowired private AgentRepository agentRepository;
     @Autowired private RunRepository runRepository;
@@ -106,15 +104,18 @@ class KanbanListenerTransactionTest {
 
     @Test
     void rejectedPickupStillCreatesTheCardAndRecordsTheReason() {
-        Agent ineligible = agentRepository.save(agent(false));
+        // An empty eligible pool is the asynchronous rejection the create path
+        // cannot foresee: creation is the operator action that must succeed, and
+        // the card face — not a 4xx — carries the reason.
+        when(agentPicker.pick(any(), any(), any())).thenThrow(new PickupRejectedException(
+                "NO_ELIGIBLE_AGENT", "No pickup-eligible agent: every candidate is excluded",
+                Map.of("evaluated", 1)));
 
-        // Creating the card is the operator action that must succeed; the pickup
-        // it triggers is the asynchronous part that may fail.
-        KanbanItem card = createTodoCardFor(ineligible);
+        KanbanItem card = createTodoCard();
 
         KanbanItem reloaded = kanbanRepository.findById(card.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(KanbanStatus.TODO);
-        assertThat(reloaded.getLastError()).contains("PICKUP_DISABLED");
+        assertThat(reloaded.getLastError()).contains("NO_ELIGIBLE_AGENT");
     }
 
     @Test
@@ -160,6 +161,14 @@ class KanbanListenerTransactionTest {
         });
 
         assertThat(kanbanRepository.findByLinkedRunId(runId.toString())).hasSize(1);
+    }
+
+    private KanbanItem createTodoCard() {
+        return new TransactionTemplate(transactionManager).execute(status ->
+                kanbanService.create(CreateKanbanItemRequest.builder()
+                        .title("unassigned card")
+                        .status(KanbanStatus.TODO)
+                        .build()));
     }
 
     private KanbanItem createTodoCardFor(Agent agent) {

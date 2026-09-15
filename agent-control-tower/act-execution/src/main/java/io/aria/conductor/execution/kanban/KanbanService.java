@@ -1,9 +1,13 @@
 package io.aria.conductor.execution.kanban;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,7 +30,9 @@ import java.util.UUID;
  *
  * <p>Status transitions are validated via {@link #isValidTransition}; invalid
  * transitions throw {@link IllegalArgumentException} (mapped to HTTP 400 by
- * the global exception handler).
+ * the global exception handler). {@link #create} validates its birth state and
+ * its links the same way: an ineligible dispatch target is the one rejection
+ * that answers with 409 instead.
  */
 @Slf4j
 @Service
@@ -54,15 +61,21 @@ public class KanbanService {
     private final ApplicationEventPublisher eventPublisher;
     private final RunRepository runRepository;
     private final ApprovalRepository approvalRepository;
+    private final AgentRepository agentRepository;
+    private final AgentPickupEligibility eligibility;
 
     public KanbanService(KanbanRepository repository,
                          ApplicationEventPublisher eventPublisher,
                          RunRepository runRepository,
-                         ApprovalRepository approvalRepository) {
+                         ApprovalRepository approvalRepository,
+                         AgentRepository agentRepository,
+                         AgentPickupEligibility eligibility) {
         this.repository = repository;
         this.eventPublisher = eventPublisher;
         this.runRepository = runRepository;
         this.approvalRepository = approvalRepository;
+        this.agentRepository = agentRepository;
+        this.eligibility = eligibility;
     }
 
     @Transactional
@@ -70,6 +83,7 @@ public class KanbanService {
         MDC.put("operation", "kanban.create");
         long start = System.currentTimeMillis();
         try {
+            validateCreate(request);
             KanbanItem item = KanbanItem.builder()
                     .title(request.getTitle())
                     .description(request.getDescription())
@@ -166,6 +180,67 @@ public class KanbanService {
         KanbanItem item = findOrThrow(id);
         repository.delete(item);
         log.info("Kanban item deleted: id={}", id);
+    }
+
+    /**
+     * Create-path validation. A malformed or terminal birth state is a bad
+     * request (400); an ineligible dispatch target is a state conflict (409).
+     * A rejection stages nothing: no card is saved and no {@code lastError} is
+     * written — the 409 body carries the reason for a synchronous caller.
+     */
+    private void validateCreate(CreateKanbanItemRequest request) {
+        KanbanStatus status = request.getStatus();
+        if (status == KanbanStatus.DONE || status == KanbanStatus.CANCELLED) {
+            throw new IllegalArgumentException("INVALID_BIRTH_STATUS: a card cannot be created in " + status);
+        }
+        if (isDispatchIntent(request)) {
+            validateDispatchTarget(request.getLinkedAgentId());
+        } else {
+            validateRunLink(request.getLinkedRunId());
+        }
+    }
+
+    /**
+     * A dispatch intent is a create that requests work rather than describing an
+     * existing run: only a blank linkedRunId qualifies. It matters because
+     * {@code RunKanbanAutoCreator.onRunStarted} creates a card for EVERY run,
+     * Aria's own included — applying eligibility there would reject Aria's run
+     * cards, since Aria is a RESERVED_OPERATOR_AGENT.
+     */
+    private static boolean isDispatchIntent(CreateKanbanItemRequest request) {
+        String runLink = request.getLinkedRunId();
+        return runLink == null || runLink.isBlank();
+    }
+
+    private void validateRunLink(String runLink) {
+        UUID runId;
+        try {
+            runId = UUID.fromString(runLink);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("INVALID_RUN_LINK: linkedRunId is not a UUID: " + runLink);
+        }
+        if (runRepository.findById(runId).isEmpty()) {
+            throw new IllegalArgumentException("INVALID_RUN_LINK: no run with id " + runId);
+        }
+    }
+
+    private void validateDispatchTarget(String agentLink) {
+        if (agentLink == null || agentLink.isBlank()) {
+            return; // Aria auto-assigns at pickup time.
+        }
+        Agent agent = agentRepository.findById(UUID.fromString(agentLink)).orElse(null);
+        if (agent == null) {
+            throw new PickupRejectedException("AGENT_NOT_ELIGIBLE",
+                    "Agent not found with id: " + agentLink, Map.of("agentId", agentLink));
+        }
+        AgentPickupEligibility.Evaluation evaluation = eligibility.evaluate(agent);
+        if (!evaluation.eligible()) {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("agentId", agentLink);
+            details.put("reasons", evaluation.reasons().stream().map(Enum::name).toList());
+            throw new PickupRejectedException("AGENT_NOT_ELIGIBLE",
+                    "Agent " + agent.getName() + " cannot receive a card: " + evaluation.reasons(), details);
+        }
     }
 
     private void guardLinkedRunNotActive(String linkedRunId) {

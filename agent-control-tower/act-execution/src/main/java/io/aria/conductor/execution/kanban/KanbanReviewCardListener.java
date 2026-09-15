@@ -4,14 +4,21 @@ import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Surfaces every approval as a Review-column card (spec 4.3): links the ask to
  * the card already associated with the run, or creates a REVIEW card for
  * orphan approvals.
+ *
+ * <p>Runs after the requesting transaction commits, in its own transaction: the
+ * approval is recorded before the board is touched, and a failure here must
+ * neither roll back the approval that triggered it nor surface to the caller
+ * that recorded it.
  */
 @Slf4j
 @Component
@@ -29,8 +36,8 @@ public class KanbanReviewCardListener {
         this.kanbanService = kanbanService;
     }
 
-    @EventListener
-    @Transactional
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onApprovalRequested(ApprovalRequestedEvent event) {
         // Defensive mirroring of RunKanbanAutoCreator: a listener must never
         // break the publisher's transaction.

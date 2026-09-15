@@ -3,6 +3,8 @@ package io.aria.conductor.execution.kanban;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.Optional;
 
@@ -24,7 +26,15 @@ class KanbanAutoDispatchListenerTest {
     void setUp() {
         kanbanRepository = mock(KanbanRepository.class);
         kanbanTransitionService = mock(KanbanTransitionService.class);
-        listener = new KanbanAutoDispatchListener(kanbanRepository, kanbanTransitionService);
+        listener = new KanbanAutoDispatchListener(kanbanRepository, kanbanTransitionService,
+                transactionManager());
+    }
+
+    /** The attempt's own transaction boundary is covered end to end by KanbanListenerTransactionTest. */
+    private static PlatformTransactionManager transactionManager() {
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        return transactionManager;
     }
 
     private KanbanItemCreatedEvent created(String itemId) {
@@ -82,11 +92,35 @@ class KanbanAutoDispatchListenerTest {
                 .status(KanbanStatus.TODO).build();
         when(kanbanRepository.findById("c4")).thenReturn(Optional.of(card));
         when(kanbanTransitionService.dispatch("c4", null))
-                .thenThrow(new IllegalStateException("No healthy agent available for kanban pickup"));
+                .thenThrow(new io.aria.conductor.common.exception.PickupRejectedException(
+                        "NO_ELIGIBLE_AGENT", "none", java.util.Map.of()));
 
-        // The card creation must never fail because the pickup could not start —
-        // dispatch() records lastError on the card instead.
+        // The card creation must never fail because the pickup could not start.
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(
                 () -> listener.onKanbanItemCreated(created("c4")));
+    }
+
+    @Test
+    void dispatchFailureRecordsLastErrorInsteadOfFailingTheCreate() {
+        // The card is already committed when the listener runs, so a dispatch
+        // failure must be recorded on the card — never propagated back into the
+        // creator's transaction, where it would either roll the card back or
+        // poison the transaction and surface as a 500.
+        when(kanbanRepository.findById(itemId)).thenReturn(java.util.Optional.of(todoCard()));
+        when(kanbanTransitionService.dispatch(anyString(), any())).thenThrow(
+                new io.aria.conductor.common.exception.PickupRejectedException(
+                        "NO_ELIGIBLE_AGENT", "none", java.util.Map.of()));
+
+        listener.onKanbanItemCreated(new KanbanItemCreatedEvent(this, itemId, "title", "MEDIUM"));
+
+        verify(kanbanRepository).save(argThat(item ->
+                item.getLastError() != null && item.getLastError().contains("NO_ELIGIBLE_AGENT")));
+    }
+
+    private static final String itemId = "c6";
+
+    private KanbanItem todoCard() {
+        return KanbanItem.builder().id(itemId).title("t")
+                .status(KanbanStatus.TODO).build();
     }
 }

@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,14 +25,15 @@ import java.util.UUID;
 
 /**
  * Orchestrates kanban transitions with their run side effects (spec section 4):
- * Todo entry is a dispatch intent (two-phase pickup), dragging to TODO or
- * BACKLOG pauses the linked run, request-changes re-dispatches with feedback,
- * cancel denies open asks and cancels the run.
+ * Todo entry is a dispatch intent (two-phase pickup), leaving In Progress for
+ * TODO or BACKLOG stops the linked run and detaches the card, request-changes
+ * re-dispatches with feedback, cancel denies open asks and cancels the run.
  *
  * <p>Pickup asks the single eligibility authority before crossing the run
  * creation proxy: an ineligible or unknown agent is a synchronous operator
  * conflict, answered with a 4xx rejection instead of being recorded on the card.
  */
+@Slf4j
 @Service
 public class KanbanTransitionService {
 
@@ -101,14 +103,17 @@ public class KanbanTransitionService {
 
         return switch (to) {
             case BACKLOG -> {
-                pauseIfRunning(item);
+                stopLinkedRun(item);
+                detachLinkOnStop(item);
                 yield kanbanService.transition(id, KanbanStatus.BACKLOG, request.getComment());
             }
             case TODO -> switch (item.getStatus()) {
                 case REVIEW -> requestChanges(item, request);
-                // Dragging an in-flight card back to TODO pauses the run; no re-dispatch.
+                // Dragging an in-flight card back to TODO stops the run and
+                // detaches the card; no re-dispatch.
                 case IN_PROGRESS -> {
-                    pauseIfRunning(item);
+                    stopLinkedRun(item);
+                    detachLinkOnStop(item);
                     yield kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                 }
                 // Normalize BACKLOG/DONE -> TODO first, then the pickup's
@@ -248,21 +253,61 @@ public class KanbanTransitionService {
         return item;
     }
 
-    private void pauseIfRunning(KanbanItem item) {
-        findRun(item).ifPresent(run -> {
-            if (run.getStatus() == RunStatus.RUNNING) {
-                runService.pauseRun(UUID.fromString(item.getLinkedRunId()));
-            }
-        });
+    /**
+     * Stop the linked run because the operator moved the card out of In Progress.
+     *
+     * <p>RunStatus allows PAUSED only from RUNNING, so a run that has not started
+     * yet is cancelled instead — it cannot be paused, and cancelling loses nothing
+     * since no work has been produced. Not stopping it would leave a live run whose
+     * iterations keep dragging the card back (RunKanbanAutoCreator.onRunIteration
+     * finds cards by linkedRunId).
+     */
+    private void stopLinkedRun(KanbanItem item) {
+        UUID runId = parseLinkOrNull(item);
+        if (runId == null) {
+            return;
+        }
+        Run run = runRepository.findById(runId).orElse(null);
+        if (run == null) {
+            return;
+        }
+        switch (run.getStatus()) {
+            case RUNNING -> runService.pauseRun(runId);
+            case PENDING, INITIALIZING -> runService.cancelRun(runId);
+            default -> { }
+        }
+    }
+
+    /**
+     * The link is the card's ownership credential: RunKanbanAutoCreator.onRunIteration
+     * finds cards by linkedRunId, so a parked card must drop it or the run's own
+     * iterations drag it straight back to In Progress.
+     */
+    private void detachLinkOnStop(KanbanItem item) {
+        if (item.getStatus() != KanbanStatus.IN_PROGRESS) {
+            return;
+        }
+        item.setLinkedRunId(null);
+        kanbanRepository.save(item);
+    }
+
+    /** Null for a blank or unparseable link: a corrupt link is history, not a run to operate on. */
+    private UUID parseLinkOrNull(KanbanItem item) {
+        String link = item.getLinkedRunId();
+        if (link == null || link.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(link);
+        } catch (IllegalArgumentException e) {
+            log.warn("Clearing corrupt linkedRunId {} on kanban item {}", link, item.getId());
+            return null;
+        }
     }
 
     private Optional<Run> findRun(KanbanItem item) {
-        if (isBlank(item.getLinkedRunId())) return Optional.empty();
-        try {
-            return runRepository.findById(UUID.fromString(item.getLinkedRunId()));
-        } catch (IllegalArgumentException e) {
-            return Optional.empty();
-        }
+        UUID runId = parseLinkOrNull(item);
+        return runId == null ? Optional.empty() : runRepository.findById(runId);
     }
 
     private String buildPromptSeed(KanbanItem item, String feedback) {

@@ -57,6 +57,16 @@ public class KanbanService {
         ALLOWED_TRANSITIONS = map;
     }
 
+    /**
+     * Statuses a card may be BORN in: exactly the ones the state machine can
+     * leave and the board can display. CANCELLED is terminal and DONE is a
+     * completion, not an origin; BLOCKED is retired (V52 migrated its rows to
+     * REVIEW), has no {@link #ALLOWED_TRANSITIONS} entry and no board column, so
+     * a card born there would be invisible and permanently stuck.
+     */
+    private static final Set<KanbanStatus> CREATABLE_STATUSES = EnumSet.of(
+            KanbanStatus.BACKLOG, KanbanStatus.TODO, KanbanStatus.IN_PROGRESS, KanbanStatus.REVIEW);
+
     private final KanbanRepository repository;
     private final ApplicationEventPublisher eventPublisher;
     private final RunRepository runRepository;
@@ -183,14 +193,14 @@ public class KanbanService {
     }
 
     /**
-     * Create-path validation. A malformed or terminal birth state is a bad
+     * Create-path validation. A malformed or non-creatable birth state is a bad
      * request (400); an ineligible dispatch target is a state conflict (409).
      * A rejection stages nothing: no card is saved and no {@code lastError} is
      * written — the 409 body carries the reason for a synchronous caller.
      */
     private void validateCreate(CreateKanbanItemRequest request) {
         KanbanStatus status = request.getStatus();
-        if (status == KanbanStatus.DONE || status == KanbanStatus.CANCELLED) {
+        if (status != null && !CREATABLE_STATUSES.contains(status)) {
             throw new IllegalArgumentException("INVALID_BIRTH_STATUS: a card cannot be created in " + status);
         }
         if (isDispatchIntent(request)) {

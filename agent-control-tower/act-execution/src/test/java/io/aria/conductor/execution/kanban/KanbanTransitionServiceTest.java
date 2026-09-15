@@ -377,6 +377,72 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
+    void leavingInProgressTowardsTodoPausesARunningRunAndDetaches() {
+        inProgressCard("00000000-0000-0000-0000-0000000000ad");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000ad")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000ad"))
+                        .status(RunStatus.RUNNING).build()));
+
+        KanbanItem moved = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        verify(runService).pauseRun(UUID.fromString("00000000-0000-0000-0000-0000000000ad"));
+        // The cleared link is persisted before the card moves: a parked card must
+        // not keep looking like the owner of a live run.
+        verify(kanbanRepository).save(card);
+        assertThat(moved.getLinkedRunId()).isNull();
+    }
+
+    @Test
+    void leavingInProgressTowardsTodoCancelsANotYetRunningRun() {
+        inProgressCard("00000000-0000-0000-0000-0000000000ae");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000ae")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000ae"))
+                        .status(RunStatus.INITIALIZING).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).build());
+
+        // PENDING and INITIALIZING cannot be paused (RunStatus forbids it); cancelling
+        // is the only legal stop and nothing has been produced yet.
+        verify(runService).cancelRun(UUID.fromString("00000000-0000-0000-0000-0000000000ae"));
+        verify(runService, never()).pauseRun(any());
+        assertThat(card.getLinkedRunId()).isNull();
+    }
+
+    @Test
+    void detachClearsTheLinkEvenWhenTheRunIsGone() {
+        inProgressCard("00000000-0000-0000-0000-0000000000af");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000af")))
+                .thenReturn(Optional.empty());
+
+        KanbanItem moved = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        assertThat(moved.getLinkedRunId()).isNull();
+        verify(runService, never()).pauseRun(any());
+        verify(runService, never()).cancelRun(any());
+    }
+
+    @Test
+    void leavingInProgressTowardsTodoLeavesAPausedRunAlone() {
+        inProgressCard("00000000-0000-0000-0000-0000000000b0");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000b0")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000b0"))
+                        .status(RunStatus.PAUSED).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        verify(runService, never()).pauseRun(any());
+        verify(runService, never()).cancelRun(any());
+        assertThat(card.getLinkedRunId()).isNull();
+    }
+
+    @Test
     void doneToTodo_redoesWithAFreshRun() {
         // Defect D3: a finished card is re-doable. Redo normalizes DONE -> TODO
         // and then behaves exactly like a normal dispatch (fresh run).

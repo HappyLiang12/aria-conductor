@@ -124,13 +124,18 @@ class KanbanReviewAskCreatorTest {
     }
 
     @Test
-    void toleratesMalformedLinkedRunIdWithoutSave() {
-        // Documents the contract: UUID parsing failures are swallowed by the
-        // event listener guard, so a malformed id neither throws nor saves.
+    void corruptLinkLeavesTheCardWhereItWasAndCreatesNoAsk() {
+        // The link is parsed before anything is written, so an unreadable one
+        // skips the ask instead of being hidden by the catch around the save.
+        card.setStatus(KanbanStatus.IN_PROGRESS);
         card.setLinkedRunId("not-a-uuid");
+
         assertThatCode(() -> creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW")))
                 .doesNotThrowAnyException();
+
         verify(approvalRepository, never()).save(any());
+        verifyNoInteractions(runRepository);
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
     }
 
     @Test

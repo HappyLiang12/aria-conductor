@@ -15,7 +15,8 @@ import java.util.UUID;
 
 /**
  * Spec 10.2: every run-completed card entering REVIEW carries a REVIEW_REQUEST
- * ask so the Review column always surfaces a structured decision surface.
+ * ask so the Review column always surfaces a structured decision surface. The ask
+ * is keyed on the card's linked run, so a blank or unparseable link gets none.
  * Idempotent: skipped when a PENDING ask already exists on the card. In-listener
  * failures are swallowed (a display ask must never break the transition);
  * only DB-constraint failures at flush time reach the caller's transaction.
@@ -51,7 +52,17 @@ public class KanbanReviewAskCreator {
                 if (item.getLinkedRunId() == null || item.getLinkedRunId().isBlank()) {
                     return; // Approval.runId is NOT NULL - nothing to attach to
                 }
-                UUID runId = UUID.fromString(item.getLinkedRunId());
+                UUID runId;
+                try {
+                    runId = UUID.fromString(item.getLinkedRunId());
+                } catch (IllegalArgumentException e) {
+                    // Parsed before the ask is written, not inside the catch that
+                    // protects the save: a link this listener cannot read has no run
+                    // to attach an ask to, and must not be reported as a save failure.
+                    log.warn("Skipping review ask for {} - corrupt linkedRunId: {}",
+                            item.getId(), item.getLinkedRunId());
+                    return;
+                }
                 Run run = runRepository.findById(runId).orElse(null);
 
                 String status = run != null && run.getStatus() != null ? run.getStatus().name() : "UNKNOWN";

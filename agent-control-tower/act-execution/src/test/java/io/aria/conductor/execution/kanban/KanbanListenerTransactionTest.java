@@ -10,6 +10,7 @@ import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -99,6 +101,7 @@ class KanbanListenerTransactionTest {
     @Autowired private KanbanRepository kanbanRepository;
     @Autowired private AgentRepository agentRepository;
     @Autowired private RunRepository runRepository;
+    @Autowired private ApprovalRepository approvalRepository;
     @Autowired private ApplicationEventPublisher eventPublisher;
     @Autowired private PlatformTransactionManager transactionManager;
 
@@ -116,6 +119,30 @@ class KanbanListenerTransactionTest {
         KanbanItem reloaded = kanbanRepository.findById(card.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(KanbanStatus.TODO);
         assertThat(reloaded.getLastError()).contains("NO_ELIGIBLE_AGENT");
+    }
+
+    @Test
+    void aCorruptRunLinkLeavesTheCardOutOfReviewAndCreatesNoAsk() {
+        // Real transaction, real review-ask listener: the parse precedes the move,
+        // so a blemished card neither lands in Review nor gains an ask there.
+        KanbanItem card = kanbanRepository.save(KanbanItem.builder()
+                .title("blemished card")
+                .status(KanbanStatus.IN_PROGRESS)
+                .priority(KanbanPriority.MEDIUM)
+                .linkedRunId("not-a-uuid")
+                .build());
+
+        assertThatThrownBy(() -> kanbanService.transition(card.getId(), KanbanStatus.REVIEW, null))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("CORRUPT_RUN_LINK"));
+
+        KanbanItem untouched = kanbanRepository.findById(card.getId()).orElseThrow();
+        assertThat(untouched.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
+        // The rejection is answered by the response, never recorded on the card.
+        assertThat(untouched.getLastError()).isNull();
+        assertThat(approvalRepository.findByStatusAndKanbanItemId(
+                ApprovalStatus.PENDING, card.getId())).isEmpty();
     }
 
     @Test

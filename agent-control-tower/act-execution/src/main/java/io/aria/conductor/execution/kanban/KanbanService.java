@@ -31,8 +31,10 @@ import java.util.UUID;
  * <p>Status transitions are validated via {@link #isValidTransition}; invalid
  * transitions throw {@link IllegalArgumentException} (mapped to HTTP 400 by
  * the global exception handler). {@link #create} validates its birth state and
- * its links the same way: an ineligible dispatch target is the one rejection
- * that answers with 409 instead.
+ * its links the same way. Two move targets reject with a structured 409 instead:
+ * DONE while the linked run is still active, and REVIEW while the link cannot be
+ * parsed — the review ask is keyed on it. Create answers 409 for an ineligible
+ * dispatch target.
  */
 @Slf4j
 @Service
@@ -167,9 +169,13 @@ public class KanbanService {
                         "Invalid kanban transition: " + from + " -> " + toStatus);
             }
 
-            // Guard against premature DONE when a linked run is still active.
+            // Both guards run BEFORE the status changes, so a rejection always
+            // leaves the card where it was.
             if (toStatus == KanbanStatus.DONE && item.getLinkedRunId() != null) {
                 guardLinkedRunNotActive(item.getLinkedRunId());
+            }
+            if (toStatus == KanbanStatus.REVIEW) {
+                guardReviewLinkParseable(item.getLinkedRunId());
             }
 
             item.setStatus(toStatus);
@@ -253,31 +259,56 @@ public class KanbanService {
         }
     }
 
-    private void guardLinkedRunNotActive(String linkedRunId) {
+    /**
+     * Refuse DONE while the linked run is still active. Active includes PAUSED:
+     * a paused run has not finished, and letting the card reach Done would orphan
+     * it (cancel is the only path that terminates a paused run, and Done skips it).
+     *
+     * <p>An unparseable link is history, not an active run — allowing DONE keeps a
+     * blemished card closable rather than permanently stuck. A missing run is
+     * likewise nothing to guard. A repository failure is NOT swallowed: silently
+     * permitting DONE on an unreadable link is how an active run gets orphaned.
+     */
+    void guardLinkedRunNotActive(String linkedRunId) {
         UUID runId;
         try {
             runId = UUID.fromString(linkedRunId);
         } catch (IllegalArgumentException e) {
             log.warn("Could not verify linked run status: {}", e.getMessage());
-            return; // graceful degradation when linkedRunId is not a UUID
+            return;
+        }
+        runRepository.findById(runId).ifPresent(run -> {
+            RunStatus status = run.getStatus();
+            if (status == RunStatus.PENDING
+                    || status == RunStatus.INITIALIZING
+                    || status == RunStatus.RUNNING
+                    || status == RunStatus.PAUSED) {
+                throw new PickupRejectedException("LINKED_RUN_ACTIVE",
+                        "Cannot move to Done: linked run " + runId + " is still " + status
+                                + ". Complete or cancel the run first.",
+                        Map.of("runId", runId.toString(), "runStatus", status.name()));
+            }
+        });
+    }
+
+    /**
+     * Refuse REVIEW while the link cannot be parsed: the review ask is keyed on the
+     * linked run, so moving a blemished card here would leave its status changed with
+     * no decision surface. The link is therefore parsed before the move. A blank link
+     * is not guarded — it is legitimately "no run", and no ask is expected for it.
+     */
+    private void guardReviewLinkParseable(String linkedRunId) {
+        if (linkedRunId == null || linkedRunId.isBlank()) {
+            return;
         }
         try {
-            runRepository.findById(runId).ifPresent(run -> {
-                RunStatus status = run.getStatus();
-                if (status == RunStatus.PENDING
-                        || status == RunStatus.INITIALIZING
-                        || status == RunStatus.RUNNING) {
-                    throw new IllegalArgumentException(
-                            "Cannot transition to DONE: linked run " + runId
-                                    + " is still " + status
-                                    + ". Complete or cancel the run first.");
-                }
-            });
+            UUID.fromString(linkedRunId);
         } catch (IllegalArgumentException e) {
-            throw e; // re-throw our own exception
-        } catch (Exception e) {
-            log.warn("Could not verify linked run status: {}", e.getMessage());
-            // Allow transition if we can't verify (graceful degradation).
+            throw new PickupRejectedException("CORRUPT_RUN_LINK",
+                    "Cannot move to Review: linked run id " + linkedRunId
+                            + " is not a UUID, so no review ask can attach to the card."
+                            + " Send the card back to Todo for a fresh run, or close it.",
+                    Map.of("linkedRunId", linkedRunId));
         }
     }
 

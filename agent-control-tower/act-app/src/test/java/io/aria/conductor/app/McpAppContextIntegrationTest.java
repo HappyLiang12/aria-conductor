@@ -62,7 +62,21 @@ class McpAppContextIntegrationTest {
             assertThat(tools.tools())
                     .extracting(McpSchema.Tool::name)
                     .contains("list_workflow_templates", "instantiate_workflow_template", "get_workflow",
-                            "list_knowledge", "list_approvals", "decide_approval");
+                            "list_knowledge", "store_knowledge", "query_knowledge",
+                            "review_knowledge", "retire_knowledge",
+                            "list_approvals", "decide_approval",
+                            // Phase 3 domains
+                            "list_agents", "create_agent", "run_agent", "list_runs", "get_run", "resume_run",
+                            "list_kanban_items", "transition_kanban_item",
+                            "get_dashboard_summary",
+                            "init_dod", "submit_dod_review", "get_dod_status",
+                            "generate_report", "list_reports", "amend_report",
+                            "housekeeping_scan", "housekeeping_execute",
+                            "list_skills", "toggle_skill", "assign_skill",
+                            "list_llm_providers", "activate_llm_provider",
+                            "list_notifications", "get_unread_notification_count",
+                            "list_scheduled_jobs", "cancel_scheduled_job",
+                            "get_latest_conversation", "get_conversation_timeline");
         }
     }
 }

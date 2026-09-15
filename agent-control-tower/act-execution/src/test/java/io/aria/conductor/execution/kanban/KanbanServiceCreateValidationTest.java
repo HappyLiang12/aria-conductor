@@ -56,14 +56,28 @@ class KanbanServiceCreateValidationTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = KanbanStatus.class, names = {"DONE", "CANCELLED"})
-    void rejectsTerminalBirthStatus(KanbanStatus status) {
+    @EnumSource(value = KanbanStatus.class, names = {"DONE", "CANCELLED", "BLOCKED"})
+    void rejectsNonCreatableBirthStatus(KanbanStatus status) {
         assertThatThrownBy(() -> service.create(CreateKanbanItemRequest.builder()
                 .title("born done").status(status).build()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("INVALID_BIRTH_STATUS");
 
         verify(repository, never()).save(any());
+    }
+
+    /**
+     * Positive control for the birth allow-list: every status the board has a
+     * column for and the state machine can leave is still creatable.
+     */
+    @ParameterizedTest
+    @EnumSource(value = KanbanStatus.class, names = {"BACKLOG", "TODO", "IN_PROGRESS", "REVIEW"})
+    void acceptsCreatableBirthStatus(KanbanStatus status) {
+        KanbanItem item = service.create(CreateKanbanItemRequest.builder()
+                .title("born " + status).status(status).build());
+
+        assertThat(item.getStatus()).isEqualTo(status);
+        verify(repository).save(any());
     }
 
     @Test

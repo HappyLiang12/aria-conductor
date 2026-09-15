@@ -280,6 +280,23 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     }
 
     @Override
+    public RuntimeHealth probeRuntimeHealth(UUID agentId) {
+        OpenCodeInstance inst = instances.get(agentId);
+        if (inst == null) {
+            return RuntimeHealth.NOT_STARTED;
+        }
+        try {
+            // Deliberately the no-argument client probe, NOT this class's own
+            // isHealthy(UUID): that one counts consecutive failures and destroys the
+            // sandbox at the threshold, so a periodic reconciler reading through it
+            // would let transient network blips tear a live runtime down.
+            return inst.client().isHealthy() ? RuntimeHealth.REACHABLE : RuntimeHealth.UNREACHABLE;
+        } catch (Exception e) {
+            return RuntimeHealth.UNREACHABLE;
+        }
+    }
+
+    @Override
     public boolean isServiceHealthy() {
         // Service-level probe: the OpenSandbox lifecycle server itself (no agent /
         // sandbox context). Never throws — an unreachable server reports false.

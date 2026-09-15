@@ -61,6 +61,21 @@ public interface AdkProvider {
     boolean isHealthy(UUID agentId);
 
     /**
+     * Whether the agent's runtime is currently reachable, judged WITHOUT side
+     * effects. Distinct from {@link #isHealthy(UUID)}, which in the OpenCode
+     * provider counts failures and destroys the sandbox at the threshold — so it
+     * must never be called from a read path.
+     *
+     * @return {@code NOT_STARTED} when the agent has no live runtime to judge
+     *         (never run yet, or already torn down)
+     */
+    enum RuntimeHealth { REACHABLE, UNREACHABLE, NOT_STARTED }
+
+    default RuntimeHealth probeRuntimeHealth(UUID agentId) {
+        return RuntimeHealth.NOT_STARTED;
+    }
+
+    /**
      * Service-level health probe that needs no agent context (used by the
      * provider inventory / health API, {@code GET /api/v1/adk/providers/{id}/health}).
      *

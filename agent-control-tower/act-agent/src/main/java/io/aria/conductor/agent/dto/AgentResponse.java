@@ -30,6 +30,8 @@ public class AgentResponse {
     private Instant createdAt;
     private Instant updatedAt;
     private Instant retiredAt;
+    private boolean pickupEligible;
+    private List<String> pickupIneligibleReasons;
     private List<String> skills;
     private List<String> tools;
 }

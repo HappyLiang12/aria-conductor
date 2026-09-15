@@ -1,9 +1,15 @@
 package io.aria.conductor.agent.service;
 
+import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
+import io.aria.conductor.agent.dto.UpdateAgentRequest;
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSkillId;
+import io.aria.conductor.common.model.AgentType;
+import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.SkillContext;
 import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentSkillRepository;
@@ -17,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -27,6 +34,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,10 +51,19 @@ class AgentServiceTest {
     @Mock AgentSkillRepository agentSkillRepository;
     @Mock RoleToolTemplateRepository roleToolTemplateRepository;
     @Mock RoleSkillTemplateRepository roleSkillTemplateRepository;
+    @Spy AgentPickupEligibility eligibility = new AgentPickupEligibility();
     @InjectMocks AgentService service;
+
+    private final UUID agentId = UUID.randomUUID();
 
     private Agent agentWith(UUID id) {
         return Agent.builder().id(id).role("dev").build();
+    }
+
+    private Agent existingWorker() {
+        return Agent.builder().id(agentId).name("worker").role("dev")
+                .agentType(AgentType.NATIVE).healthStatus(HealthStatus.HEALTHY)
+                .pickupEnabled(Boolean.TRUE).build();
     }
 
     @Test
@@ -100,5 +117,39 @@ class AgentServiceTest {
         assertThat(defaults.tools()).hasSize(1);
         assertThat(defaults.tools().get(0).getName()).isEqualTo("read_file");
         assertThat(defaults.skills()).isEmpty();
+    }
+
+    @Test
+    void responseReportsEligibilityAndReasons() {
+        Agent aria = Agent.builder().id(AriaConstants.ARIA_AGENT_ID).name("Aria")
+                .agentType(AgentType.NATIVE).healthStatus(HealthStatus.HEALTHY)
+                .pickupEnabled(Boolean.TRUE).build();
+
+        AgentResponse response = service.toResponse(aria);
+
+        assertThat(response.isPickupEligible()).isFalse();
+        assertThat(response.getPickupIneligibleReasons()).containsExactly("RESERVED_OPERATOR_AGENT");
+    }
+
+    @Test
+    void updateAppliesPickupEnabled() {
+        when(agentRepository.findById(agentId)).thenReturn(Optional.of(existingWorker()));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.updateAgent(agentId, UpdateAgentRequest.builder()
+                .pickupEnabled(Boolean.FALSE).build());
+
+        assertThat(response.isPickupEligible()).isFalse();
+        assertThat(response.getPickupIneligibleReasons()).containsExactly("PICKUP_DISABLED");
+    }
+
+    @Test
+    void updateLeavesPickupEnabledUntouchedWhenNull() {
+        when(agentRepository.findById(agentId)).thenReturn(Optional.of(existingWorker()));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAgent(agentId, UpdateAgentRequest.builder().name("renamed").build());
+
+        verify(agentRepository).save(argThat(a -> Boolean.TRUE.equals(a.getPickupEnabled())));
     }
 }

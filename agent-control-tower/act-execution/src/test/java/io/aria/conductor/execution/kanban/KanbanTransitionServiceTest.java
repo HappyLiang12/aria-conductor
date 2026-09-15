@@ -7,11 +7,13 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
+import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.execution.listener.RunKanbanAutoCreator;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -440,6 +442,70 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).pauseRun(any());
         verify(runService, never()).cancelRun(any());
         assertThat(card.getLinkedRunId()).isNull();
+    }
+
+    /**
+     * The chain a parked card must break: RunService.createRun publishes
+     * RunStartedEvent while the run is still PENDING, so RunKanbanAutoCreator
+     * auto-creates a TODO card linked to it. Parking that card to BACKLOG
+     * cancels the PENDING run, and cancelRun publishes
+     * RunCompletedEvent(CANCELLED); should the link survive, the cancellation
+     * the stop itself caused drags the parked card into CANCELLED/Archived.
+     */
+    @Test
+    void parkingATodoCardDetachesTheRunItsStopCancelled() {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-0000000000b3");
+        card.setStatus(KanbanStatus.TODO);
+        card.setLinkedRunId(runId.toString());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).status(RunStatus.PENDING).build()));
+        // The listener finds exactly the cards the run link still points at:
+        // this one while the link lives, nothing once the stop detaches it.
+        when(kanbanRepository.findByLinkedRunId(anyString())).thenAnswer(inv ->
+                runId.toString().equals(card.getLinkedRunId()) ? List.of(card) : List.of());
+        RunKanbanAutoCreator autoCreator =
+                new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).comment("park it").build());
+
+        // The stop cancelled the not-yet-running run — that cancellation is the
+        // event the card would be re-targeted by.
+        verify(runService).cancelRun(runId);
+        assertThat(card.getLinkedRunId()).isNull();
+
+        autoCreator.onRunCompleted(new RunCompletedEvent(this, runId, AGENT_ID, RunStatus.CANCELLED));
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.BACKLOG);
+        verify(kanbanService, never()).transition(eq("c1"), eq(KanbanStatus.CANCELLED), anyString());
+    }
+
+    /**
+     * Same chain from REVIEW: the stop pauses a RUNNING run (no event) and must
+     * not leave a claim on it, or an out-of-band resume can complete the run and
+     * drag the parked card to REVIEW.
+     */
+    @Test
+    void parkingAReviewCardDetachesTheRunItsStopPaused() {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-0000000000b4");
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setLinkedRunId(runId.toString());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).status(RunStatus.RUNNING).build()));
+        when(kanbanRepository.findByLinkedRunId(anyString())).thenAnswer(inv ->
+                runId.toString().equals(card.getLinkedRunId()) ? List.of(card) : List.of());
+        RunKanbanAutoCreator autoCreator =
+                new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).build());
+
+        verify(runService).pauseRun(runId);
+        assertThat(card.getLinkedRunId()).isNull();
+
+        autoCreator.onRunCompleted(new RunCompletedEvent(this, runId, AGENT_ID, RunStatus.COMPLETED));
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.BACKLOG);
     }
 
     @Test

@@ -452,6 +452,10 @@ class KanbanTransitionServiceTest {
         card.setLinkedRunId(RUN_ID.toString());
         when(runRepository.findById(RUN_ID))
                 .thenReturn(Optional.of(Run.builder().status(RunStatus.COMPLETED).build()));
+        // The re-open drops the finished run and the agent that ran it, so the
+        // pickup re-assigns before dispatching.
+        when(agentPicker.pick(any(), anyString(), any()))
+                .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
 
         service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.TODO).comment("redo after demo").build());
@@ -460,6 +464,7 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).pauseRun(any());
         verify(runService, never()).resumeRun(any());
         verify(runService).createRun(any(CreateRunRequest.class));
+        assertThat(card.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
         verify(kanbanService).transition("c1", KanbanStatus.TODO, "redo after demo");
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "redo after demo");
     }
@@ -477,6 +482,20 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).createRun(any(CreateRunRequest.class));
         verify(runService, never()).pauseRun(any());
         verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, "park it");
+    }
+
+    @Test
+    void reopeningDoneClearsStaleRunAndAgentLinksBeforeDispatch() {
+        doneCard("00000000-0000-0000-0000-0000000000b1", "00000000-0000-0000-0000-0000000000b2");
+        when(agentPicker.pick(any(), anyString(), any())).thenThrow(
+                new PickupRejectedException("NO_ELIGIBLE_AGENT", "none", Map.of()));
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build()))
+                .isInstanceOf(PickupRejectedException.class);
+
+        assertThat(card.getLinkedRunId()).isNull();
+        assertThat(card.getLinkedAgentId()).isNull();
     }
 
     @Test

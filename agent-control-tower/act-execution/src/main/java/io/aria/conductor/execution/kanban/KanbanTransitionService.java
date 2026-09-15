@@ -25,8 +25,8 @@ import java.util.UUID;
 
 /**
  * Orchestrates kanban transitions with their run side effects (spec section 4):
- * Todo entry is a dispatch intent (two-phase pickup), leaving In Progress for
- * TODO or BACKLOG stops the linked run and detaches the card, request-changes
+ * Todo entry is a dispatch intent (two-phase pickup), parking a card in TODO or
+ * BACKLOG stops the linked run and detaches the card, request-changes
  * re-dispatches with feedback, cancel denies open asks and cancels the run.
  *
  * <p>Pickup asks the single eligibility authority before crossing the run
@@ -281,12 +281,15 @@ public class KanbanTransitionService {
     }
 
     /**
-     * The link is the card's ownership credential: RunKanbanAutoCreator.onRunIteration
-     * finds cards by linkedRunId, so a parked card must drop it or the run's own
-     * iterations drag it straight back to In Progress.
+     * The link is the card's ownership credential: RunKanbanAutoCreator resolves
+     * cards by linkedRunId, so a parked card must drop it or the run the stop
+     * just cancelled (cancelRun publishes RunCompletedEvent(CANCELLED)) comes
+     * back through onRunCompleted and drags it to CANCELLED. Called by the
+     * TODO/BACKLOG stops only: the REVIEW destination keeps the link because the
+     * review ask is keyed on it, and a CANCELLED card keeps it as inert history.
      */
     private void detachLinkOnStop(KanbanItem item) {
-        if (item.getStatus() != KanbanStatus.IN_PROGRESS) {
+        if (item.getLinkedRunId() == null) {
             return;
         }
         item.setLinkedRunId(null);

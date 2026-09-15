@@ -1,15 +1,24 @@
 package io.aria.conductor.execution.kanban;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Rule-based agent selection for kanban pickup (spec 4.2): template-id or
- * label containment match against healthy agents, falling back to the first
- * healthy agent. No LLM call in v1.
+ * Rule-based agent selection for kanban pickup (spec 4.2): template-id or label
+ * containment match against the eligible pool, falling back to the first
+ * eligible agent. No LLM call in v1.
+ *
+ * <p>The pool comes from {@link Candidates}, which derives both the pool and the
+ * excluded reasons from {@link AgentPickupEligibility} — this class never
+ * decides eligibility itself.
  */
 @Service
 public class AgentPickerService {
@@ -19,8 +28,13 @@ public class AgentPickerService {
 
     public record Choice(UUID agentId, String agentName) {}
 
+    /** @param reasons every reason this agent was excluded; never empty. */
+    public record Excluded(String name, List<AgentPickupEligibility.Reason> reasons) {}
+
     public interface Candidates {
-        List<Candidate> healthy();
+        List<Candidate> eligible();
+
+        List<Excluded> excluded();
     }
 
     private final Candidates candidates;
@@ -30,9 +44,9 @@ public class AgentPickerService {
     }
 
     public Choice pick(String agentTemplateId, String title, String description) {
-        List<Candidate> pool = candidates.healthy();
+        List<Candidate> pool = candidates.eligible();
         if (pool.isEmpty()) {
-            throw new IllegalStateException("No healthy agent available for kanban pickup");
+            throw rejectEmptyPool();
         }
         Optional<Candidate> matched = Optional.empty();
         if (agentTemplateId != null && !agentTemplateId.isBlank()) {
@@ -57,5 +71,30 @@ public class AgentPickerService {
         }
         Candidate chosen = matched.orElse(pool.get(0));
         return new Choice(chosen.agentId(), chosen.name());
+    }
+
+    private PickupRejectedException rejectEmptyPool() {
+        List<Map<String, Object>> excluded = new ArrayList<>();
+        for (Excluded e : candidates.excluded()) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("name", e.name());
+            entry.put("reasons", e.reasons().stream().map(Enum::name).toList());
+            excluded.add(entry);
+        }
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("evaluated", excluded.size());
+        details.put("excluded", excluded);
+        return new PickupRejectedException("NO_ELIGIBLE_AGENT",
+                "No pickup-eligible agent: " + excluded.size() + " agent(s) evaluated and all excluded"
+                        + (excluded.isEmpty() ? "" : " (" + summarize(excluded) + ")"),
+                details);
+    }
+
+    private static String summarize(List<Map<String, Object>> excluded) {
+        List<String> parts = new ArrayList<>();
+        for (Map<String, Object> e : excluded) {
+            parts.add(e.get("name") + ": " + String.join("/", (List<String>) e.get("reasons")));
+        }
+        return String.join(", ", parts);
     }
 }

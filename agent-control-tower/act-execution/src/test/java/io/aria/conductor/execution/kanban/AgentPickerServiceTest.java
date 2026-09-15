@@ -1,20 +1,24 @@
 package io.aria.conductor.execution.kanban;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class AgentPickerServiceTest {
 
     private AgentPickerService.Candidates pool(AgentPickerService.Candidate... candidates) {
-        AgentPickerService.Candidates candidates1 = mock(AgentPickerService.Candidates.class);
-        when(candidates1.healthy()).thenReturn(List.of(candidates));
-        return candidates1;
+        AgentPickerService.Candidates pool = mock(AgentPickerService.Candidates.class);
+        when(pool.eligible()).thenReturn(List.of(candidates));
+        when(pool.excluded()).thenReturn(List.of());
+        return pool;
     }
 
     @Test
@@ -56,7 +60,7 @@ class AgentPickerServiceTest {
     }
 
     @Test
-    void fallsBackToFirstHealthyAgent() {
+    void fallsBackToFirstEligibleAgent() {
         AgentPickerService.Choice choice = new AgentPickerService(pool(
                 new AgentPickerService.Candidate(UUID.randomUUID(), "dev-worker", null)))
                 .pick(null, "anything", null);
@@ -74,11 +78,28 @@ class AgentPickerServiceTest {
     }
 
     @Test
-    void emptyPoolThrows() {
-        AgentPickerService.Candidates candidates = mock(AgentPickerService.Candidates.class);
-        when(candidates.healthy()).thenReturn(List.of());
-        org.assertj.core.api.Assertions.assertThatThrownBy(
-                () -> new AgentPickerService(candidates).pick(null, "t", null))
-                .isInstanceOf(IllegalStateException.class);
+    void emptyPoolRejectsWithNoEligibleAgentAndNamesTheExcluded() {
+        AgentPickerService service = new AgentPickerService(new AgentPickerService.Candidates() {
+            @Override
+            public List<AgentPickerService.Candidate> eligible() {
+                return List.of();
+            }
+
+            @Override
+            public List<AgentPickerService.Excluded> excluded() {
+                return List.of(new AgentPickerService.Excluded("Aria",
+                        List.of(AgentPickupEligibility.Reason.RESERVED_OPERATOR_AGENT)));
+            }
+        });
+
+        assertThatThrownBy(() -> service.pick(null, "title", "desc"))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> {
+                    PickupRejectedException rejected = (PickupRejectedException) e;
+                    assertThat(rejected.code()).isEqualTo("NO_ELIGIBLE_AGENT");
+                    assertThat(rejected.details()).containsEntry("evaluated", 1);
+                    assertThat(rejected.details().get("excluded").toString())
+                            .contains("RESERVED_OPERATOR_AGENT");
+                });
     }
 }

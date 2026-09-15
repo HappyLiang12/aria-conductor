@@ -1,25 +1,26 @@
 package io.aria.conductor.execution.kanban;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Defect D2: the pickup pool must contain real workers only. Handing a card to
- * the operator assistant (Aria, identified by its reserved id, not by its null
- * model) or to a mock-model test agent makes the run "complete" instantly with
- * no real work — the operator sees a card jump to done and no agent activity.
- * Model-less agents that are NOT the assistant stay eligible: NATIVE agents
- * resolve the platform default LLM provider at run time.
+ * The pool is whatever the single eligibility authority says is eligible, and
+ * the excluded agents are reported with their reason so a rejection can name
+ * them. The former model='mock' heuristic is gone: it rested on the false
+ * premise that a mock model produces canned responses.
  */
 class AgentRepositoryCandidatesTest {
 
@@ -29,48 +30,48 @@ class AgentRepositoryCandidatesTest {
     @BeforeEach
     void setUp() {
         agentRepository = mock(AgentRepository.class);
-        candidates = new AgentRepositoryCandidates(agentRepository);
+        candidates = new AgentRepositoryCandidates(agentRepository, new AgentPickupEligibility());
     }
 
-    private Agent agent(String id, String name, String model, HealthStatus health) {
-        return Agent.builder().id(java.util.UUID.fromString(id)).name(name)
-                .model(model).healthStatus(health).build();
+    private static Agent agent(UUID id, String name, String model, HealthStatus health, Boolean pickupEnabled) {
+        return Agent.builder().id(id).name(name).agentType(AgentType.NATIVE).model(model)
+                .healthStatus(health).pickupEnabled(pickupEnabled).build();
+    }
+
+    private static final UUID SEEDED_BA = UUID.fromString("ba000000-0000-0000-0000-000000000001");
+    private static final UUID WORKER = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
+
+    @Test
+    void excludedAgentsAreReportedWithTheirReason() {
+        when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(
+                agent(AriaConstants.ARIA_AGENT_ID, "Aria", null, HealthStatus.HEALTHY, Boolean.TRUE),
+                agent(WORKER, "Disabled Worker", "ali-copilot", HealthStatus.HEALTHY, Boolean.FALSE)));
+
+        assertThat(candidates.eligible()).isEmpty();
+        assertThat(candidates.excluded()).extracting(AgentPickerService.Excluded::name)
+                .containsExactlyInAnyOrder("Aria", "Disabled Worker");
+        assertThat(candidates.excluded()).extracting(AgentPickerService.Excluded::reasons)
+                .containsExactlyInAnyOrder(
+                        List.of(AgentPickupEligibility.Reason.RESERVED_OPERATOR_AGENT),
+                        List.of(AgentPickupEligibility.Reason.PICKUP_DISABLED));
     }
 
     @Test
-    void excludesAssistantByIdentityAndMockAgents() {
+    void seededMockModelAgentsAreNowEligible() {
         when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(
-                agent(AriaConstants.ARIA_AGENT_ID.toString(), "Aria", null, HealthStatus.HEALTHY),
-                agent("00000000-0000-0000-0000-0000000000aa", "SDD BA Agent", "mock", HealthStatus.HEALTHY),
-                agent("00000000-0000-0000-0000-0000000000bb", "SDD DEV Agent", "MOCK", HealthStatus.HEALTHY),
-                agent("00000000-0000-0000-0000-0000000000cc", "Developer Agent", "ali-copilot", HealthStatus.HEALTHY)));
+                agent(SEEDED_BA, "SDD BA Agent", "mock", HealthStatus.HEALTHY, Boolean.TRUE)));
 
-        List<AgentPickerService.Candidate> pool = candidates.healthy();
-
-        assertThat(pool).extracting(AgentPickerService.Candidate::name)
-                .containsExactly("Developer Agent");
+        assertThat(candidates.eligible()).extracting(AgentPickerService.Candidate::name)
+                .containsExactly("SDD BA Agent");
     }
 
     @Test
-    void keepsModelLessWorkersThatAreNotTheAssistant() {
-        // Regression guard (CI E2E shard 2): NATIVE agents are created without a
-        // model and resolve the platform default LLM provider at run time, so a
-        // model-less worker must stay pickable. Only the reserved assistant is
-        // excluded by identity.
+    void poolIsOrderedByName() {
         when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(
-                agent("00000000-0000-0000-0000-0000000000ff", "e2e-agent-123", null, HealthStatus.HEALTHY)));
+                agent(WORKER, "Zeta", null, HealthStatus.HEALTHY, Boolean.TRUE),
+                agent(SEEDED_BA, "Alpha", null, HealthStatus.HEALTHY, Boolean.TRUE)));
 
-        assertThat(candidates.healthy()).extracting(AgentPickerService.Candidate::name)
-                .containsExactly("e2e-agent-123");
-    }
-
-    @Test
-    void keepsDegradedWorkersButDropsUnhealthyOnes() {
-        when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(
-                agent("00000000-0000-0000-0000-0000000000dd", "Degraded Worker", "ali-copilot", HealthStatus.DEGRADED),
-                agent("00000000-0000-0000-0000-0000000000ee", "Unhealthy Worker", "ali-copilot", HealthStatus.UNHEALTHY)));
-
-        assertThat(candidates.healthy()).extracting(AgentPickerService.Candidate::name)
-                .containsExactly("Degraded Worker");
+        assertThat(candidates.eligible()).extracting(AgentPickerService.Candidate::name)
+                .containsExactly("Alpha", "Zeta");
     }
 }

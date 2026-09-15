@@ -1,5 +1,6 @@
 package io.aria.conductor.mcp.tools;
 
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanItem;
@@ -18,9 +19,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
@@ -143,6 +146,18 @@ class KanbanToolsTest {
         String json = tools.transitionKanbanItem("k1", "todo", "pick it up", "retry", "tpl-1");
 
         assertThat(json).contains("\"ok\":true").contains("TODO");
+    }
+
+    @Test
+    void transitionRejectionSurfacesTheStructuredCode() {
+        when(kanbanService.get("item-1")).thenReturn(item("item-1", KanbanStatus.TODO));
+        when(kanbanTransitionService.transition(anyString(), any())).thenThrow(
+                new PickupRejectedException("NO_ELIGIBLE_AGENT", "none eligible", Map.of("evaluated", 1)));
+
+        String result = tools.transitionKanbanItem("item-1", "IN_PROGRESS", null, null, null);
+
+        assertThat(result).contains("\"ok\":false");
+        assertThat(result).contains("\"errorType\":\"NO_ELIGIBLE_AGENT\"");
     }
 
     @Test

@@ -1,6 +1,7 @@
 package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanItem;
@@ -121,7 +122,7 @@ public class KanbanTools implements McpTool {
      * HITL ask, BACKLOG/TODO can pause the linked run and CANCELLED cancels it.
      */
     @Tool(name = "transition_kanban_item",
-            description = "Move a kanban item to a new status. WARNING: this has side effects — it can spawn an agent run (TODO/IN_PROGRESS), resume or pause a linked run (REVIEW/BACKLOG/TODO), create HITL review asks (REVIEW) or cancel a run (CANCELLED). Repeating the current status is a no-op.")
+            description = "Move a kanban item to a new status. WARNING: this has side effects — it can spawn an agent run (TODO/IN_PROGRESS), resume or pause a linked run (REVIEW/BACKLOG/TODO), create HITL review asks (REVIEW) or cancel a run (CANCELLED). Repeating the current status is a no-op. A refused move answers an error envelope carrying the rejection code in errorType (NO_ELIGIBLE_AGENT, AGENT_NOT_ELIGIBLE, RUN_ALREADY_FINISHED, RUN_NOT_FOUND, CORRUPT_RUN_LINK, LINKED_RUN_ACTIVE) and the reason in message: a tool error here is a governance refusal, not a transport failure.")
     public String transitionKanbanItem(
             @ToolParam(description = "Kanban item id") String id,
             @ToolParam(description = "Target KanbanStatus name (BACKLOG/TODO/IN_PROGRESS/REVIEW/DONE/CANCELLED)") String status,
@@ -162,6 +163,8 @@ public class KanbanTools implements McpTool {
             return ToolResponses.error("VALIDATION", e.getMessage(), e, mcpProperties.isDebug());
         } catch (InvalidStateTransitionException | IllegalStateException e) {
             return ToolResponses.error("CONFLICT", e.getMessage(), e, mcpProperties.isDebug());
+        } catch (PickupRejectedException e) {
+            return ToolResponses.error(e.code(), e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("KANBAN_TRANSITION_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }

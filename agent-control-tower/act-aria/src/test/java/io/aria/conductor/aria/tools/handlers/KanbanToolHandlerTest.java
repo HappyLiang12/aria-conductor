@@ -1,5 +1,6 @@
 package io.aria.conductor.aria.tools.handlers;
 
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.execution.kanban.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -250,6 +251,25 @@ class KanbanToolHandlerTest {
         assertEquals("Kanban item c1 already REVIEW.", result);
         verify(kanbanService).get("c1");
         verifyNoInteractions(kanbanTransitionService);
+    }
+
+    @Test
+    void transitionRejectionSurfacesTheStructuredCode() {
+        when(kanbanService.get("c1")).thenReturn(
+                KanbanItem.builder().id("c1").title("Card").status(KanbanStatus.TODO).build());
+        when(kanbanTransitionService.transition(eq("c1"), any(TransitionRequest.class)))
+                .thenThrow(new PickupRejectedException("NO_ELIGIBLE_AGENT",
+                        "No pickup-eligible agent: 1 agent(s) evaluated and all excluded",
+                        Map.of("evaluated", 1)));
+
+        String result = handler.execute(Map.of(
+                "toolName", "transition_kanban_item",
+                "id", "c1",
+                "status", "IN_PROGRESS"
+        ));
+
+        assertTrue(result.startsWith("Error: NO_ELIGIBLE_AGENT:"));
+        assertTrue(result.contains("No pickup-eligible agent: 1 agent(s) evaluated and all excluded"));
     }
 
     @Test

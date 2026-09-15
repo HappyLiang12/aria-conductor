@@ -105,6 +105,7 @@ public class KanbanTransitionService {
             case BACKLOG -> {
                 stopLinkedRun(item);
                 detachLinkOnStop(item);
+                clearStaleLinksOnReopen(item);
                 yield kanbanService.transition(id, KanbanStatus.BACKLOG, request.getComment());
             }
             case TODO -> switch (item.getStatus()) {
@@ -121,6 +122,7 @@ public class KanbanTransitionService {
                 // "redo": the completed run stays as history and the pickup
                 // creates a fresh run for the new attempt (defect D3).
                 case BACKLOG, DONE -> {
+                    clearStaleLinksOnReopen(item);
                     kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                     yield pickup(item, request);
                 }
@@ -288,6 +290,22 @@ public class KanbanTransitionService {
             return;
         }
         item.setLinkedRunId(null);
+        kanbanRepository.save(item);
+    }
+
+    /**
+     * Re-opening a finished card must not carry the finished run forward: the
+     * old run's approval can still arrive and re-attach to a card whose linked
+     * run is that same finished run (KanbanReviewCardListener matches by
+     * linkedRunId). Clearing both links makes the card a fresh dispatch intent.
+     */
+    private void clearStaleLinksOnReopen(KanbanItem item) {
+        if (item.getStatus() != KanbanStatus.DONE) {
+            return;
+        }
+        item.setLinkedRunId(null);
+        item.setLinkedAgentId(null);
+        item.setAssignee(null);
         kanbanRepository.save(item);
     }
 

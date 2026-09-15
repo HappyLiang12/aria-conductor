@@ -31,7 +31,9 @@ import java.util.List;
  * <p>Every method runs AFTER the publisher's transaction commits, in its own
  * transaction: a card mirroring a run is only written once the run row is
  * durable, and a kanban failure can no longer reach back into the run's
- * transaction.
+ * transaction. Publishers with no transaction of their own (the loop engine,
+ * the zombie reaper) must still be mirrored, so every method also falls back to
+ * running immediately when no transaction is active.
  */
 @Slf4j
 @Component
@@ -47,7 +49,7 @@ public class RunKanbanAutoCreator {
         this.runRepository = runRepository;
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunStarted(RunStartedEvent event) {
         // Kanban pickup owns card linkage for orchestrator-created runs: it sets
@@ -83,7 +85,7 @@ public class RunKanbanAutoCreator {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunIteration(RunIterationEvent event) {
         try {
@@ -101,7 +103,7 @@ public class RunKanbanAutoCreator {
         }
     }
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunCompleted(RunCompletedEvent event) {
         try {

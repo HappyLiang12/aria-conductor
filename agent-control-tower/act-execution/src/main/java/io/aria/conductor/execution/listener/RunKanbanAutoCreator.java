@@ -12,8 +12,11 @@ import io.aria.conductor.execution.kanban.KanbanRepository;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.kanban.KanbanStatus;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.List;
 
@@ -24,6 +27,11 @@ import java.util.List;
  *   <li>{@link RunIterationEvent}   → transitions TODO → IN_PROGRESS</li>
  *   <li>{@link RunCompletedEvent}   → transitions to DONE (or CANCELLED)</li>
  * </ul>
+ *
+ * <p>Every method runs AFTER the publisher's transaction commits, in its own
+ * transaction: a card mirroring a run is only written once the run row is
+ * durable, and a kanban failure can no longer reach back into the run's
+ * transaction.
  */
 @Slf4j
 @Component
@@ -39,7 +47,8 @@ public class RunKanbanAutoCreator {
         this.runRepository = runRepository;
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunStarted(RunStartedEvent event) {
         // Kanban pickup owns card linkage for orchestrator-created runs: it sets
         // linkedRunId on the card it just dispatched, so a duplicate auto-card
@@ -74,7 +83,8 @@ public class RunKanbanAutoCreator {
         }
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunIteration(RunIterationEvent event) {
         try {
             List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
@@ -91,7 +101,8 @@ public class RunKanbanAutoCreator {
         }
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onRunCompleted(RunCompletedEvent event) {
         try {
             List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());

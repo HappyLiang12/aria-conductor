@@ -42,6 +42,8 @@ public class Agent {
     @Column(nullable = false)
     private Boolean pickupEnabled;
 
+    private Instant lastProbedAt;
+
     @Column(columnDefinition = "TEXT")
     private String config;
 

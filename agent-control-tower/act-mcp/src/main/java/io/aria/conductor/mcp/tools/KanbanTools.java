@@ -18,7 +18,9 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Kanban board tools. Thin wrappers over the same services the REST controller
@@ -71,7 +73,7 @@ public class KanbanTools implements McpTool {
     public String listKanbanItems(
             @ToolParam(description = "KanbanStatus name (BACKLOG/TODO/IN_PROGRESS/REVIEW/DONE/CANCELLED/BLOCKED), or blank for all", required = false) String status) {
         try {
-            KanbanStatus filter = status == null || status.isBlank() ? null : parseStatus(status);
+            KanbanStatus filter = status == null || status.isBlank() ? null : parseFilterStatus(status);
             return ToolResponses.ok(kanbanService.list(filter));
         } catch (ResourceNotFoundException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
@@ -136,7 +138,7 @@ public class KanbanTools implements McpTool {
             if (status == null || status.isBlank()) {
                 throw new IllegalArgumentException("status is required");
             }
-            KanbanStatus target = parseStatus(status);
+            KanbanStatus target = parseTransitionStatus(status);
 
             // Idempotent no-op guard: repeating the current status must never reach
             // the transition service, so run side effects cannot re-fire.
@@ -170,13 +172,51 @@ public class KanbanTools implements McpTool {
         }
     }
 
-    private static KanbanStatus parseStatus(String raw) {
+    /**
+     * The six statuses a card may be moved to; exactly the targets the state
+     * machine accepts. BLOCKED is retired (V52 migrated its rows to REVIEW) and
+     * is rejected as a target, so it is deliberately absent here — this surface
+     * must not advertise it as a legal move.
+     */
+    private static final List<KanbanStatus> TRANSITION_TARGETS = List.of(
+            KanbanStatus.BACKLOG,
+            KanbanStatus.TODO,
+            KanbanStatus.IN_PROGRESS,
+            KanbanStatus.REVIEW,
+            KanbanStatus.DONE,
+            KanbanStatus.CANCELLED);
+
+    private static final String TRANSITION_TARGETS_TEXT = TRANSITION_TARGETS.stream()
+            .map(Enum::name)
+            .collect(Collectors.joining(", "));
+
+    /**
+     * Filter surface: every value a persisted card may carry. BLOCKED is retired
+     * but legacy rows still hold it, and the board filter must keep finding them.
+     */
+    private static KanbanStatus parseFilterStatus(String raw) {
         try {
             return KanbanStatus.valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Invalid status '" + raw
                     + "'. Valid: BACKLOG, TODO, IN_PROGRESS, REVIEW, DONE, CANCELLED, BLOCKED");
         }
+    }
+
+    /**
+     * Transition surface: only the six state-machine targets are moves. The raw
+     * value is not echoed and BLOCKED is not listed — a client that asks for the
+     * retired status must not read it back inside a "Valid: ..." list and take it
+     * for an accepted target (the state machine answers "Unsupported target
+     * status", and this message must state the same truth).
+     */
+    private static KanbanStatus parseTransitionStatus(String raw) {
+        String normalized = raw.trim().toUpperCase();
+        return TRANSITION_TARGETS.stream()
+                .filter(target -> target.name().equals(normalized))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Invalid transition target status. Valid: " + TRANSITION_TARGETS_TEXT));
     }
 
     private static KanbanPriority parsePriority(String raw) {

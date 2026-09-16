@@ -319,7 +319,7 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 /* ---------- Agent panel ---------- */
 .agents { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; }
 .agent {
-  display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px;
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px;
   padding: 9px 10px; border-radius: 10px;
   background: rgba(255,255,255,.025); border: 1px solid var(--line);
   cursor: pointer; transition: background .15s ease, border-color .15s ease;
@@ -341,7 +341,10 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 .avatar.sm { background: linear-gradient(135deg, #f6c453, #c98e1d); }
 
 .agent .name { font-size: 12.5px; font-weight: 600; }
-.agent .task { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.agent .task {
+  font-size: 11px; color: var(--text-dim); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .agent .right { text-align: right; }
 .agent .status {
   font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 600;
@@ -1645,6 +1648,7 @@ body.light .knowledge-pop { background: linear-gradient(180deg, #ffffff, #f4f7ff
 .crew-card .head .role-tag {
   margin-top: 2px; font-size: 10.5px; color: var(--text-dim);
   letter-spacing: .8px; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .crew-card .head .status {
   font-size: 10px; padding: 3px 8px; border-radius: 999px; font-weight: 600;

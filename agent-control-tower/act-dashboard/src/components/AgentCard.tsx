@@ -122,7 +122,7 @@ export function AgentCard({ agent, telemetry, onManageTools, selected, onSelect 
         <div className={`avatar ${avatarKind}`}>{initialsOf(agent.name)}</div>
         <div className="who">
           <span className="nm" title={agent.name}>{agent.name}</span>
-          <span className="role-tag">{role || 'agent'}</span>
+          <span className="role-tag" title={role || 'agent'}>{role || 'agent'}</span>
         </div>
         {onSelect && (
           <input

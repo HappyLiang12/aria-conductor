@@ -26,12 +26,22 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class KanbanToolsTest {
+
+    /** The six statuses the state machine lets a card move to (BLOCKED is retired). */
+    private static final List<KanbanStatus> TRANSITION_TARGETS = List.of(
+            KanbanStatus.BACKLOG,
+            KanbanStatus.TODO,
+            KanbanStatus.IN_PROGRESS,
+            KanbanStatus.REVIEW,
+            KanbanStatus.DONE,
+            KanbanStatus.CANCELLED);
 
     @Mock KanbanService kanbanService;
     @Mock KanbanTransitionService kanbanTransitionService;
@@ -107,6 +117,17 @@ class KanbanToolsTest {
 
         assertThat(json).contains("\"errorType\":\"VALIDATION\"");
         assertThat(json).doesNotContain("stackTrace");
+        // The filter surface must keep offering BLOCKED: legacy rows still carry it.
+        assertThat(json).contains("BLOCKED");
+    }
+
+    @Test
+    void listKanbanItems_filterStillAcceptsBlocked() {
+        when(kanbanService.list(KanbanStatus.BLOCKED)).thenReturn(List.of(item("legacy", KanbanStatus.BLOCKED)));
+
+        String json = tools.listKanbanItems("blocked");
+
+        assertThat(json).contains("\"ok\":true").contains("legacy");
     }
 
     @Test
@@ -167,5 +188,46 @@ class KanbanToolsTest {
         String json = tools.transitionKanbanItem("missing", "DONE", null, null, null);
 
         assertThat(json).contains("\"errorType\":\"NOT_FOUND\"");
+    }
+
+    @Test
+    void transitionKanbanItem_retiredBlockedIsNotOfferedAsATarget() {
+        String json = tools.transitionKanbanItem("k1", "BLOCKED", null, null, null);
+
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"");
+        // The rejection must not read back as a suggestion that BLOCKED is a move.
+        assertThat(json).doesNotContain("BLOCKED");
+        TRANSITION_TARGETS.forEach(target -> assertThat(json).contains(target.name()));
+        // Rejected at parse time: no card is read and no transition is attempted.
+        verifyNoInteractions(kanbanService, kanbanTransitionService);
+    }
+
+    @Test
+    void transitionKanbanItem_typoNamesTheSixValidTargets() {
+        String json = tools.transitionKanbanItem("k1", "IN-PROGRESS", null, null, null);
+
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"");
+        assertThat(json).doesNotContain("BLOCKED");
+        TRANSITION_TARGETS.forEach(target -> assertThat(json).contains(target.name()));
+        verifyNoInteractions(kanbanService, kanbanTransitionService);
+    }
+
+    @Test
+    void transitionKanbanItem_acceptsEveryStateMachineTarget() {
+        // A legacy BLOCKED row is the one status outside the six, so no iteration
+        // can be swallowed by the same-status no-op guard.
+        when(kanbanService.get("k1")).thenReturn(item("k1", KanbanStatus.BLOCKED));
+        when(kanbanTransitionService.transition(eq("k1"), any(TransitionRequest.class)))
+                .thenReturn(item("k1", KanbanStatus.TODO));
+
+        TRANSITION_TARGETS.forEach(target ->
+                assertThat(tools.transitionKanbanItem("k1", target.name(), null, null, null))
+                        .as("target %s must parse", target)
+                        .contains("\"ok\":true"));
+
+        ArgumentCaptor<TransitionRequest> captor = ArgumentCaptor.forClass(TransitionRequest.class);
+        verify(kanbanTransitionService, times(TRANSITION_TARGETS.size())).transition(eq("k1"), captor.capture());
+        assertThat(captor.getAllValues().stream().map(TransitionRequest::getStatus).toList())
+                .containsExactlyElementsOf(TRANSITION_TARGETS);
     }
 }

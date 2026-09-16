@@ -104,6 +104,16 @@ export default function AgentTeam() {
               </div>
               <div className="right">
                 <div className={info.pillClass}>{info.label}</div>
+                {agent.pickupEligible === false && (
+                  <span
+                    className="status wait"
+                    title={`Cannot receive kanban cards: ${(agent.pickupIneligibleReasons ?? []).join(', ') || 'no reason reported'}${
+                      agent.lastProbedAt ? ` · last probed ${agent.lastProbedAt}` : ''
+                    }`}
+                  >
+                    No pickup
+                  </span>
+                )}
                 <ActivityBars filled={info.filledBars} warn={info.warnBars} />
               </div>
             </div>

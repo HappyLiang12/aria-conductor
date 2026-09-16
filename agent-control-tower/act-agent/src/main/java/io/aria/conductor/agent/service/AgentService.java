@@ -389,6 +389,7 @@ public class AgentService {
                 .retiredAt(agent.getRetiredAt())
                 .pickupEligible(pickup.eligible())
                 .pickupIneligibleReasons(pickup.reasons().stream().map(Enum::name).toList())
+                .lastProbedAt(agent.getLastProbedAt())
                 .build();
 
         // Populate skills via SkillContextProvider (cycle-safe seam in act-common)

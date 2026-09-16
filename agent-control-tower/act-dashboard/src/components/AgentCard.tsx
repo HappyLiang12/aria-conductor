@@ -137,6 +137,16 @@ export function AgentCard({ agent, telemetry, onManageTools, selected, onSelect 
         <span className={`status ${status === 'online' ? '' : status}`}>
           {statusLabel(status)}
         </span>
+        {agent.pickupEligible === false && (
+          <span
+            className="status wait"
+            title={`Cannot receive kanban cards: ${(agent.pickupIneligibleReasons ?? []).join(', ') || 'no reason reported'}${
+              agent.lastProbedAt ? ` · last probed ${agent.lastProbedAt}` : ''
+            }`}
+          >
+            No pickup
+          </span>
+        )}
       </div>
 
       <div className="activity">

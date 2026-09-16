@@ -346,6 +346,7 @@ body.afterhours .badge.afterhours { display: inline-flex; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .agent .right { text-align: right; }
+.agent .right .status { display: inline-block; margin-left: 4px; }
 .agent .status {
   font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 600;
   background: rgba(54,211,153,.10); color: #6fe2b6; border: 1px solid rgba(54,211,153,.30);

@@ -42,4 +42,39 @@ describe('AgentCard pickup eligibility', () => {
 
     expect(screen.queryByText('No pickup')).toBeNull();
   });
+
+  it('names the last-probed stamp in the title alongside the reason', () => {
+    render(
+      <AgentCard
+        agent={{
+          ...baseAgent,
+          pickupEligible: false,
+          pickupIneligibleReasons: ['PICKUP_DISABLED'],
+          lastProbedAt: '2026-09-16T00:00:00Z',
+        }}
+        {...cardProps}
+      />,
+    );
+
+    const title = screen.getByText('No pickup').getAttribute('title') ?? '';
+    expect(title).toContain('PICKUP_DISABLED');
+    expect(title).toContain('last probed');
+    expect(title).toContain('2026-09-16T00:00:00Z');
+  });
+
+  it('falls back to a placeholder when the backend reports no reasons', () => {
+    render(
+      <AgentCard
+        agent={{
+          ...baseAgent,
+          pickupEligible: false,
+          pickupIneligibleReasons: [],
+          lastProbedAt: null,
+        }}
+        {...cardProps}
+      />,
+    );
+
+    expect(screen.getByText('No pickup').getAttribute('title')).toContain('no reason reported');
+  });
 });

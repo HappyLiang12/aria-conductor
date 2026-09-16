@@ -26,6 +26,11 @@ export interface Agent {
   createdAt: string;
   skills?: string[];
   tools?: string[];
+  /** Optional: absent on responses from an older backend. */
+  pickupEligible?: boolean;
+  pickupIneligibleReasons?: string[];
+  /** Null until the health reconciler has probed the runtime; absent on an older backend. */
+  lastProbedAt?: string | null;
 }
 
 export interface Run {

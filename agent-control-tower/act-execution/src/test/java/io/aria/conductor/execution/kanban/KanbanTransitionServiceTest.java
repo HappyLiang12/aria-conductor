@@ -21,6 +21,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -119,6 +121,18 @@ class KanbanTransitionServiceTest {
         card.setStatus(KanbanStatus.DONE);
         card.setLinkedRunId(linkedRunId);
         card.setLinkedAgentId(linkedAgentId);
+    }
+
+    /**
+     * Creator wired to a no-op transaction manager. {@link RunKanbanAutoCreator}
+     * runs its mirroring inside a TransactionTemplate so a failed transition can
+     * be caught outside the transaction boundary; these tests only care that the
+     * mirror still runs, not what the transaction does.
+     */
+    private RunKanbanAutoCreator newAutoCreator() {
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager);
     }
 
     // ---- behavior 1: TODO pickup ----
@@ -463,8 +477,7 @@ class KanbanTransitionServiceTest {
         // this one while the link lives, nothing once the stop detaches it.
         when(kanbanRepository.findByLinkedRunId(anyString())).thenAnswer(inv ->
                 runId.toString().equals(card.getLinkedRunId()) ? List.of(card) : List.of());
-        RunKanbanAutoCreator autoCreator =
-                new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+        RunKanbanAutoCreator autoCreator = newAutoCreator();
 
         service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.BACKLOG).comment("park it").build());
@@ -494,8 +507,7 @@ class KanbanTransitionServiceTest {
                 .id(runId).status(RunStatus.RUNNING).build()));
         when(kanbanRepository.findByLinkedRunId(anyString())).thenAnswer(inv ->
                 runId.toString().equals(card.getLinkedRunId()) ? List.of(card) : List.of());
-        RunKanbanAutoCreator autoCreator =
-                new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+        RunKanbanAutoCreator autoCreator = newAutoCreator();
 
         service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.BACKLOG).build());

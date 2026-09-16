@@ -23,6 +23,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.List;
 import java.util.Optional;
@@ -32,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -57,7 +61,13 @@ class RunKanbanAutoCreatorTest {
 
     @BeforeEach
     void setUp() {
-        creator = new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+        // Lenient stub: onRunStarted_suppressAutoCard_skipsCardCreation deliberately
+        // short-circuits before a transaction is ever opened, so the stub is
+        // unused in that one test.
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        creator = new RunKanbanAutoCreator(
+                kanbanService, kanbanRepository, runRepository, transactionManager);
     }
 
     // ---- onRunStarted ----

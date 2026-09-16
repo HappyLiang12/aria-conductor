@@ -90,8 +90,9 @@ class KanbanListenerTransactionTest {
         @Bean
         RunKanbanAutoCreator runKanbanAutoCreator(KanbanService kanbanService,
                                                   KanbanRepository kanbanRepository,
-                                                  RunRepository runRepository) {
-            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+                                                  RunRepository runRepository,
+                                                  PlatformTransactionManager transactionManager) {
+            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager);
         }
     }
 

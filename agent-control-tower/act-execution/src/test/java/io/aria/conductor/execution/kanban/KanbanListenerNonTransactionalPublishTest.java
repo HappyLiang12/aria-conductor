@@ -16,12 +16,17 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.event.EventListener;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * Some production publishers run with no active transaction: {@code AgentLoopEngine}
@@ -45,15 +50,51 @@ class KanbanListenerNonTransactionalPublishTest {
         @Bean
         RunKanbanAutoCreator runKanbanAutoCreator(KanbanService kanbanService,
                                                   KanbanRepository kanbanRepository,
-                                                  RunRepository runRepository) {
-            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository);
+                                                  RunRepository runRepository,
+                                                  PlatformTransactionManager transactionManager) {
+            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager);
         }
 
         @Bean
         KanbanReviewCardListener kanbanReviewCardListener(ApprovalRepository approvalRepository,
                                                          KanbanRepository kanbanRepository,
-                                                         KanbanService kanbanService) {
-            return new KanbanReviewCardListener(approvalRepository, kanbanRepository, kanbanService);
+                                                         KanbanService kanbanService,
+                                                         PlatformTransactionManager transactionManager) {
+            return new KanbanReviewCardListener(
+                    approvalRepository, kanbanRepository, kanbanService, transactionManager);
+        }
+
+        /**
+         * Declared last, so it is registered after {@link RunKanbanAutoCreator} in
+         * every test context and the multicaster invokes it after that listener: it
+         * observes whether the chain survived a listener that failed.
+         */
+        @Bean
+        CompletedRunProbe completedRunProbe() {
+            return new CompletedRunProbe();
+        }
+    }
+
+    static class CompletedRunProbe {
+        private final List<UUID> completedRunIds = new CopyOnWriteArrayList<>();
+        private final List<UUID> askedRunIds = new CopyOnWriteArrayList<>();
+
+        @EventListener
+        void onRunCompleted(RunCompletedEvent event) {
+            completedRunIds.add(event.getRunId());
+        }
+
+        @EventListener
+        void onApprovalRequested(ApprovalRequestedEvent event) {
+            askedRunIds.add(event.getRunId());
+        }
+
+        List<UUID> completedRunIds() {
+            return completedRunIds;
+        }
+
+        List<UUID> askedRunIds() {
+            return askedRunIds;
         }
     }
 
@@ -61,6 +102,7 @@ class KanbanListenerNonTransactionalPublishTest {
     @Autowired private KanbanRepository kanbanRepository;
     @Autowired private ApprovalRepository approvalRepository;
     @Autowired private RunRepository runRepository;
+    @Autowired private CompletedRunProbe completedRunProbe;
 
     @Test
     void runCompletedPublishedWithoutATransactionStillReachesReview() {
@@ -104,6 +146,52 @@ class KanbanListenerNonTransactionalPublishTest {
                 .singleElement()
                 .satisfies(card -> assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW));
         assertThat(approvalRepository.findById(approval.getId()).orElseThrow().getKanbanItemId()).isNotNull();
+    }
+
+    @Test
+    void aFailedCardMirrorDoesNotAbortTheListenerChain() {
+        UUID runId = UUID.randomUUID();
+        // The engine's auto-card for a run that fails before its first iteration:
+        // still TODO when the completion mirror runs, and TODO → REVIEW is not a
+        // legal move, so the mirror genuinely fails (the card stays behind).
+        String cardId = saveCard(runId, KanbanStatus.TODO);
+        assertNoActiveTransaction();
+
+        // The failure must stay inside the creator. If it escapes, the multicaster
+        // stops dispatching and every listener after it is skipped — the dashboard
+        // never hears run.completed and workflow chains never advance (observed in
+        // CI as an UnexpectedRollbackException at the publisher).
+        assertThatCode(() -> eventPublisher.publishEvent(
+                new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.FAILED)))
+                .doesNotThrowAnyException();
+
+        assertThat(statusOf(cardId)).isEqualTo(KanbanStatus.TODO);
+        assertThat(completedRunProbe.completedRunIds()).contains(runId);
+    }
+
+    @Test
+    void aFailedReviewCardMirrorDoesNotAbortTheListenerChain() {
+        // The ask names a run the board cannot anchor, so the mirror's create is
+        // refused (INVALID_RUN_LINK) — the forced failure stands in for any
+        // rejection raised by the real services inside the mirror.
+        UUID askedRunId = UUID.randomUUID();
+        UUID approvalRunId = UUID.randomUUID();
+        runRepository.save(Run.builder().id(approvalRunId).agentId(UUID.randomUUID())
+                .promptSeed("delete the branch").status(RunStatus.RUNNING).build());
+        Approval approval = approvalRepository.save(Approval.builder()
+                .runId(approvalRunId)
+                .status(ApprovalStatus.PENDING)
+                .content("Agent wants to delete the branch")
+                .build());
+        assertNoActiveTransaction();
+
+        assertThatCode(() -> eventPublisher.publishEvent(
+                new ApprovalRequestedEvent(this, approval.getId(), askedRunId, null, "TOOL_CALL")))
+                .doesNotThrowAnyException();
+
+        assertThat(approvalRepository.findById(approval.getId()).orElseThrow().getKanbanItemId())
+                .isNull();
+        assertThat(completedRunProbe.askedRunIds()).contains(askedRunId);
     }
 
     private String saveCard(UUID runId, KanbanStatus status) {

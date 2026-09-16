@@ -1,10 +1,13 @@
 package io.aria.conductor.app;
 
 import io.aria.conductor.ActApplication;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
+import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.adk.AdkProvider;
@@ -41,7 +44,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * Phase 2 of the kanban pickup-eligibility plan: a card must not be able to
- * enter a state that contradicts reality. The three gestures are driven against
+ * enter a state that contradicts reality. Each gesture is driven against
  * the real install layout (the class carries its own in-memory database, no
  * cleanup script, so Flyway runs V1..V57 on an empty schema and
  * {@code AriaDefaultAgentInitializer} creates the Aria row) — the same wiring
@@ -73,6 +76,8 @@ class KanbanTransitionIntegrityIntegrationTest {
     @Autowired
     KanbanRepository kanbanRepository;
     @Autowired
+    AgentRepository agentRepository;
+    @Autowired
     ApplicationEventPublisher eventPublisher;
 
     @MockBean
@@ -96,6 +101,11 @@ class KanbanTransitionIntegrityIntegrationTest {
     @AfterEach
     void releaseRunExecution() {
         holdExecution.countDown();
+        // The class shares one agent pool across its tests: a test that made the
+        // pool ineligible must leave it eligible again for the others.
+        List<Agent> agents = agentRepository.findByHealthStatusNot(HealthStatus.RETIRED);
+        agents.forEach(agent -> agent.setPickupEnabled(Boolean.TRUE));
+        agentRepository.saveAll(agents);
     }
 
     @Test
@@ -178,6 +188,84 @@ class KanbanTransitionIntegrityIntegrationTest {
                 .isNotEqualTo(AriaConstants.ARIA_AGENT_ID.toString());
         assertThat(runRepository.findById(staleRunId).orElseThrow().getStatus())
                 .isEqualTo(RunStatus.COMPLETED);
+    }
+
+    @Test
+    void rejectedReopenRollsBackTheDoneCardAndItsLinks() {
+        KanbanItem card = kanbanService.create(CreateKanbanItemRequest.builder().title("redo rollback").build());
+        KanbanItem running = kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+        UUID finishedRunId = UUID.fromString(running.getLinkedRunId());
+        awaitRunning(finishedRunId);
+        Run finishedRun = runRepository.findById(finishedRunId).orElseThrow();
+        finishedRun.setStatus(RunStatus.COMPLETED);
+        runRepository.save(finishedRun);
+        kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.DONE).build());
+
+        KanbanItem done = kanbanRepository.findById(card.getId()).orElseThrow();
+        assertThat(done.getStatus()).isEqualTo(KanbanStatus.DONE);
+        assertThat(done.getLinkedRunId()).isEqualTo(finishedRunId.toString());
+        String doneAgentId = done.getLinkedAgentId();
+        assertThat(doneAgentId).isNotBlank();
+
+        disablePickupEligibility();
+        assertThatThrownBy(() -> kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isIn("NO_ELIGIBLE_AGENT", "AGENT_NOT_ELIGIBLE"));
+
+        // A synchronous rejection must answer 4xx with the state unchanged: the
+        // re-open clears the links and moves the card to TODO before it dispatches,
+        // so a rollback regression that committed would leave a half-moved card
+        // here. Re-read through the repository, never the instance held above.
+        KanbanItem after = kanbanRepository.findById(card.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(KanbanStatus.DONE);
+        assertThat(after.getLinkedRunId()).isEqualTo(finishedRunId.toString());
+        assertThat(after.getLinkedAgentId()).isEqualTo(doneAgentId);
+    }
+
+    @Test
+    void rejectedRequestChangesRollsBackTheReviewCardAndItsLinks() {
+        KanbanItem card = kanbanService.create(CreateKanbanItemRequest.builder().title("changes rollback").build());
+        KanbanItem running = kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+        UUID runId = UUID.fromString(running.getLinkedRunId());
+        awaitRunning(runId);
+        kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.REVIEW).build());
+
+        KanbanItem review = kanbanRepository.findById(card.getId()).orElseThrow();
+        assertThat(review.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        assertThat(review.getLinkedRunId()).isEqualTo(runId.toString());
+        String reviewAgentId = review.getLinkedAgentId();
+        assertThat(reviewAgentId).isNotBlank();
+
+        disablePickupEligibility();
+        assertThatThrownBy(() -> kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.TODO)
+                .feedback("redo with the review notes")
+                .build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isIn("NO_ELIGIBLE_AGENT", "AGENT_NOT_ELIGIBLE"));
+
+        KanbanItem after = kanbanRepository.findById(card.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        assertThat(after.getLinkedRunId()).isEqualTo(runId.toString());
+        assertThat(after.getLinkedAgentId()).isEqualTo(reviewAgentId);
+    }
+
+    /**
+     * Make the pickup pool deterministically unable to serve — every non-retired
+     * agent loses pickup eligibility — so the dispatch inside a re-open rejects
+     * through the real eligibility path instead of depending on timing.
+     */
+    private void disablePickupEligibility() {
+        List<Agent> agents = agentRepository.findByHealthStatusNot(HealthStatus.RETIRED);
+        agents.forEach(agent -> agent.setPickupEnabled(Boolean.FALSE));
+        agentRepository.saveAll(agents);
     }
 
     private void awaitRunning(UUID runId) {

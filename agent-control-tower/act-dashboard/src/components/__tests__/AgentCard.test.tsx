@@ -77,4 +77,14 @@ describe('AgentCard pickup eligibility', () => {
 
     expect(screen.getByText('No pickup').getAttribute('title')).toContain('no reason reported');
   });
+
+  it('keeps the full role reachable via the title when the long role is truncated visually', () => {
+    const longRole =
+      'AI operator assistant for the Aria Conductor. Helps manage AI agents, execute commands, and answer system questions.';
+    render(<AgentCard agent={{ ...baseAgent, role: longRole }} {...cardProps} />);
+
+    const roleTag = screen.getByText(longRole);
+    expect(roleTag.className).toContain('role-tag');
+    expect(roleTag.getAttribute('title')).toBe(longRole);
+  });
 });

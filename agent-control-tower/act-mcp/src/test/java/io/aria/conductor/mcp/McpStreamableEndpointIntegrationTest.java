@@ -7,6 +7,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,6 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "aria.mcp.enabled=true",
         "aria.mcp.auth-mode=none"
 })
+@Import({io.aria.conductor.execution.approval.RunScopedCredentialService.class,
+        io.aria.conductor.execution.approval.WriteGrantService.class})
 class McpStreamableEndpointIntegrationTest {
 
     @LocalServerPort

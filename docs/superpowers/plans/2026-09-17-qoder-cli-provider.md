@@ -84,8 +84,11 @@ public class SandboxLifecycle {
     public String runCommand(String sandboxId, String command)                        // blocking
     public void runBackgroundCommand(String sandboxId, String command, Map<String, String> env)
     public boolean isServerHealthy()
+    public Sandbox sandbox(String sandboxId)                                          // escape hatch: raw SDK handle for provider-specific reads (opencode diagnostics)
 }
 ```
+
+Escape-hatch amendment (recorded during B1): `diagnose` stays in the opencode adapter (its log paths are opencode-specific) but its metrics section needs the raw SDK handle, so `sandbox(String)` is part of C0.5 as delivered; providers should use the lifecycle operations for everything else.
 
 `OpenCodeSandboxManager` keeps its exact public API (`createSandbox` 2-arg/3-arg, `uploadWorkspace`, `getSandboxUrl`, `renewSandbox`, `killSandbox`, `runCommand`, `runServeCommand`, `isServerHealthy`) and delegates; `runServeCommand(sandboxId, port, env)` still builds the opencode serve command and delegates to `runBackgroundCommand`. Its existing tests must pass without edits to their expectations.
 

@@ -4,6 +4,7 @@ import io.aria.conductor.execution.adk.opencode.OpenCodeSandboxManager;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -36,12 +37,20 @@ import java.util.UUID;
  * {@link #e2eModel()} exposes the validated value; probe scripts receive it as
  * {@code QODER_E2E_MODEL} and pin every {@code qodercli} invocation with it.
  *
- * <p>No Qoder credentials are involved in this flow: the harness ships no PAT or model
- * key to the sandbox. The sandbox-server connection is built with
+ * <p>No Qoder credentials are required by {@link #boot(String, String)}: that flow ships
+ * no PAT or model key to the sandbox. The sandbox-server connection is built with
  * {@code new OpenCodeSandboxManager(serverUrl, null)}, which lets the OpenSandbox SDK
  * fall back to an {@code OPEN_SANDBOX_API_KEY} environment variable if one is set (see
  * {@code OpenCodeSandboxManager#buildConnectionConfig}); the harness itself neither
  * reads nor prints that variable.
+ *
+ * <p>{@link #boot(String, String, Map)} forwards a caller-supplied env map to the
+ * sandbox container (the manager's sanctioned {@code createSandbox(agentId, image, env)}
+ * path). Authenticated gates (A3) use it to inject the Qoder PAT as
+ * {@code QODER_PERSONAL_ACCESS_TOKEN} — the environment is the only channel that
+ * carries it, never argv, files or logs. The harness treats the values as opaque: it
+ * neither reads, logs nor prints them (the manager logs the variable count only), and
+ * tests must not print the map either.
  */
 final class QoderSandboxHarness implements AutoCloseable {
 
@@ -71,11 +80,21 @@ final class QoderSandboxHarness implements AutoCloseable {
 
     /**
      * Create a confirmed-ready sandbox from {@code image} on the OpenSandbox server at
-     * {@code serverUrl}. Fails closed on a non-zero-credit model pin (see class javadoc)
+     * {@code serverUrl}, without sandbox env injection (A2/A4/A5 flows).
+     */
+    static QoderSandboxHarness boot(String serverUrl, String image) {
+        return boot(serverUrl, image, Map.of());
+    }
+
+    /**
+     * Create a confirmed-ready sandbox from {@code image} on the OpenSandbox server at
+     * {@code serverUrl}, injecting {@code sandboxEnv} into the sandbox container
+     * (environment only — see the class javadoc: values are opaque to the harness).
+     * Fails closed on a non-zero-credit model pin (see class javadoc)
      * and fails fast (without leaving a sandbox behind) when the server is unhealthy or
      * the exec channel never becomes ready.
      */
-    static QoderSandboxHarness boot(String serverUrl, String image) {
+    static QoderSandboxHarness boot(String serverUrl, String image, Map<String, String> sandboxEnv) {
         String e2eModel = resolveE2eModel(); // fail closed before any sandbox is created
         OpenCodeSandboxManager manager = new OpenCodeSandboxManager(serverUrl, null);
         if (!manager.isServerHealthy()) {
@@ -85,7 +104,7 @@ final class QoderSandboxHarness implements AutoCloseable {
         UUID agentId = UUID.randomUUID();
         String sandboxId = null;
         try {
-            sandboxId = manager.createSandbox(agentId, image);
+            sandboxId = manager.createSandbox(agentId, image, sandboxEnv);
             awaitExecdReady(manager, sandboxId);
             return new QoderSandboxHarness(manager, agentId, sandboxId, e2eModel);
         } catch (RuntimeException e) {

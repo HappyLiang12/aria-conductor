@@ -78,14 +78,14 @@ check_command "mvn" "Install Maven 3.9+: https://maven.apache.org/"
 
 java -version 2>&1 | grep -q "21" || echo "WARNING: JDK 21 recommended. Current version may not be compatible."
 
-# Container runtime status (required only for the opencode provider)
+# Container runtime status (required only for the opencode and qoder providers)
 echo "Container runtimes:"
 for rt in docker podman; do
     if command -v "$rt" &> /dev/null; then
         if "$rt" info &> /dev/null; then
             echo "  $rt: running"
         else
-            echo "  WARNING: $rt is installed but not running. Required only for the opencode provider."
+            echo "  WARNING: $rt is installed but not running. Required only for the opencode and qoder providers."
         fi
     else
         echo "  $rt: not installed"
@@ -99,7 +99,7 @@ if resolve_container_runtime; then
             echo "  Container runtime: $CONTAINER_RT (auto-detected)"
         fi
     else
-        echo "  WARNING: No container runtime available. Required only for the opencode provider."
+        echo "  WARNING: No container runtime available. Required only for the opencode and qoder providers."
     fi
 fi
 

@@ -534,13 +534,15 @@ Write-Output ("RESULT exit=" + `$LASTEXITCODE)
     # sandbox image, and it must pin MCP token auth. A qoder sandbox sits on the local
     # network next to the backend, so the local default (aria.mcp.auth-mode=none) would
     # hand it an unauthenticated operator API (design Section 6.2). The default run above
-    # must stay untouched, which the assertion on its own output already pins.
+    # must stay untouched, which the assertion on its own output already pins. The launcher
+    # runs in a nested pwsh child, like the refusal and fresh-checkout scenarios: only a
+    # separate process reports the launcher's own exit code.
     $qoderRoot = Join-Path $StubDir "dryrun-qoder"
     New-Item -ItemType Directory -Path $qoderRoot -Force | Out-Null
     Set-Content -Path (Join-Path $qoderRoot '.env') -Value "LLM_API_KEY=sk-test1234567890`n"
     $out = Invoke-Snippet @"
 `$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
-& '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Provider qoder -ProjectRoot '$qoderRoot'
+Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Provider qoder -ProjectRoot '$qoderRoot' 2>&1 | Out-String)
 Write-Output ("RESULT exit=" + `$LASTEXITCODE)
 "@ -PathPrepend $FakePodmanDir
     Assert-True "-Provider qoder -DryRun exits 0" ($out -match "RESULT exit=0") $out
@@ -549,6 +551,21 @@ Write-Output ("RESULT exit=" + `$LASTEXITCODE)
     Assert-True "-Provider qoder pins MCP token auth" `
         (($out -match "MCP auth\s*:\s*token") -and ($out -match 'mcp-token')) $out
     Assert-True "-Provider qoder -DryRun writes no .run state" (-not (Test-Path (Join-Path $qoderRoot '.run'))) $out
+
+    # The ValidateSet match is case-insensitive, so `-Provider Qoder` is accepted too, and
+    # the effective provider id must be normalized before it is rendered and passed onward.
+    # The id is what start-backend.ps1 forwards to Spring Boot as --adk.default-provider,
+    # and the backend's registry resolves it case-sensitively (AdkProviderRegistry: a
+    # `providers.get(pid)` lookup on lowercase keys), so a leaked "Qoder" would not resolve
+    # the qoder provider there. -cmatch is load-bearing: plain -match is case-insensitive
+    # and would pass on the unnormalized "Qoder" too.
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Provider Qoder -ProjectRoot '$qoderRoot' 2>&1 | Out-String)
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+    Assert-True "mixed-case -Provider Qoder selects qoder with the lowercase provider id" `
+        (($out -match "RESULT exit=0") -and ($out -cmatch 'Provider\s*:\s*qoder') -and ($out -match 'aria-conductor/qoder-sandbox:0\.1')) $out
 
     # The refusal case: an explicit override back to the unauthenticated mode must abort
     # with an explicit error instead of starting a stack whose sandboxes can reach an open

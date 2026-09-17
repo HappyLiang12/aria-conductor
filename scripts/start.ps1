@@ -51,8 +51,11 @@ $RunDir = Join-Path $ProjectRoot ".run"
 # Effective provider: the local-dev topology honours -Provider (opencode by default, qoder
 # as an explicit opt-in); compose is langchain-only. This must NOT be assigned back into
 # $Provider: PowerShell variables are case-insensitive, so that would trip the parameter's
-# ValidateSet (compose would die with 'langchain is not a valid value for Provider').
-$providerId = if ($Mode -eq 'local') { $Provider } else { 'langchain' }
+# ValidateSet (compose would die with 'langchain is not a valid value for Provider'). The id
+# is lowercased here because the ValidateSet match is case-insensitive too: -Provider Qoder
+# is accepted, and without normalization its raw casing would leak into the summary and into
+# the backend's case-sensitive --adk.default-provider lookup.
+$providerId = if ($Mode -eq 'local') { $Provider.ToLowerInvariant() } else { 'langchain' }
 $topology = if ($Mode -eq 'local') { 'local-dev (backend + frontend on host)' } else { 'full-stack compose (backend in a container)' }
 # Compose runs three phases (environment, stack bring-up, report); the local-dev flow runs eight.
 $phaseTotal = if ($Mode -eq 'compose') { 3 } else { 8 }
@@ -325,6 +328,16 @@ if ($providerId -eq 'qoder') {
         $env:ARIA_MCP_TOKEN = New-McpToken
     }
     Set-Content -Path $qoderTokenFile -Value $env:ARIA_MCP_TOKEN -NoNewline
+    # Tighten the file to the current user, the PowerShell twin of the bash launcher's
+    # chmod 600: drop the inherited ACEs and grant only this user. Read+write, not read
+    # alone, because the next qoder run rewrites the file right here and a read-only DACL
+    # would fail that Set-Content with access denied. Nothing in this repository reads the
+    # file back (the backend receives the token through ARIA_MCP_TOKEN, inherited from this
+    # process), and .run removal keeps working (delete-child comes from the parent entry).
+    # Best effort like the bash chmod: a failure here must not stop the launcher.
+    if ($IsWindows) {
+        icacls $qoderTokenFile /inheritance:r /grant:r "$([System.Security.Principal.WindowsIdentity]::GetCurrent().Name):(R,W)" | Out-Null
+    }
     Write-Host "      MCP auth token written to $qoderTokenFile" -ForegroundColor DarkGray
 }
 $env:VITE_BACKEND_PORT = "$backendPort"

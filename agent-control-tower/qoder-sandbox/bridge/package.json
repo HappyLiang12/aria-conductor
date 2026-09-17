@@ -1,0 +1,17 @@
+{
+  "name": "@aria-conductor/qoder-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/acp-client.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

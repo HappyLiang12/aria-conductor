@@ -409,9 +409,9 @@ Any failed required gate stops the project and is reported with raw evidence; do
 - Modify: `scripts/start.ps1`, `scripts/start-backend.sh` (`--provider qoder`), `README.md` mode note
 - Test: existing startup script tests (`e2e/startup-e2e.ps1`, `e2e/container-runtime-e2e.*`) extended
 
-**Interfaces:** `-Provider qoder` selects image + provider; never changes the default. Startup refuses qoder mode when the platform MCP is unauthenticated (`aria.mcp.auth-mode: none`), because sandboxes could then reach operator APIs; a documented override exists only for throwaway probes (design Section 6.2).
+**Interfaces:** `-Provider qoder` selects image + provider; never changes the default. qoder mode pins `ARIA_MCP_AUTH_MODE=token` with a locally generated token file so sandboxes cannot reach unauthenticated operator APIs; an explicit override to `none` is refused (design Section 6.2).
 
-- [ ] **Step 1:** Extend script tests red (dry-run assertions), including the refusal case: qoder mode with `auth-mode: none` exits with an explicit error unless the probe override is set.
+- [ ] **Step 1:** Extend script tests red (dry-run assertions), including the refusal case: qoder mode with an explicit `auth-mode: none` override exits with an explicit error, while the default qoder mode pins token auth automatically.
 - [ ] **Step 2:** Implement; run the startup e2e script (stub-only, no live sandbox).
 - [ ] **Step 3: Coordinator commit** — `feat(startup): add explicit qoder local mode`
 
@@ -455,7 +455,7 @@ Any failed required gate stops the project and is reported with raw evidence; do
 
 **Files:**
 - Create: `execution/approval/{AcpPermissionCoordinator.java,AcpPermissionRequestRepository.java}` (repository may live in act-common per repo convention)
-- Modify: `QoderAdkProvider` (wire coordinator callbacks; publish `ApprovalRequestedEvent` with source), `execution/approval/ApprovalExpiryChecker.java` (ACP rows route through the coordinator expiry path instead of only unblocking a gate future)
+- Modify: `QoderAdkProvider` (wire coordinator callbacks; publish `ApprovalRequestedEvent` with source; pass `mcpServers` — platform MCP URL plus the run-scoped token issued by C4 — into `session/new` at run start, replacing B6's empty list in slice C), `execution/approval/ApprovalExpiryChecker.java` (ACP rows route through the coordinator expiry path instead of only unblocking a gate future)
 - Test: unit tests with a fake bridge event source; integration test (H2) creating/deduping/expiring; restart-recovery test
 
 **Interfaces:** Consumes bridge `permission_request` events; validates run/session identity; host-side sanitization recomputes previews/digests before persistence (sandbox input is untrusted; unknown option kinds or malformed events are rejected, never coerced into an allow); creates `Approval(source=ACP_PERMISSION)` + companion atomically; dedupe by unique correlation; changed payload for same correlation → rejected + governance error; expiry = `min(approvals.timeout-ms, run deadline)`, enforced on reads/decisions and by the existing 60s `@Scheduled` checker, whose ACP branch delivers the reject/cancel through the same idempotent `deliverDecision(approvalId, …)` primitive C3 uses. On startup, pending ACP asks whose session cannot be resumed are expired with a restart-interruption reason and no replay (design Section 5.3).
@@ -497,7 +497,7 @@ Any failed required gate stops the project and is reported with raw evidence; do
 **Interfaces:** Implements the C0.8 matrix S1-S12. Guard: reads `QODER_E2E_MODEL` (default `efficient`); fails if not in `{efficient, lite}` unless `QODER_E2E_ALLOW_PAID=1`. Skip reason when PAT absent must name the credential and the design section.
 
 - [ ] **Step 1:** Write specs red (they will fail until the stack is up).
-- [ ] **Step 2:** Bring up the real stack (`pwsh -NoProfile -File scripts/start.ps1 -Provider qoder`) and run S1-S12; each scenario records raw output (command + observed result) into the evidence file. Reuse the harness patterns from `e2e/kanban-pickup-e2e.ps1` for S9.
+- [ ] **Step 2:** Precondition: load the PAT into the runtime credential store via the B8 API (read from the local file; never echoed). Bring up the real stack (`pwsh -NoProfile -File scripts/start.ps1 -Provider qoder`, which pins token auth) and run S1-S12; each scenario records raw output (command + observed result) into the evidence file. Reuse the harness patterns from `e2e/kanban-pickup-e2e.ps1` for S9.
 - [ ] **Step 3:** Run the regression set: `mvn clean test -Dspring.profiles.active=h2`, `mvn verify`, `pnpm test`, `pnpm build`, existing Playwright suites, `e2e/container-runtime-e2e.*`.
 - [ ] **Step 4:** Any NOT VERIFIED criterion is reported as such — never upgraded to PASS.
 - [ ] **Step 5: Coordinator commit** — `test(qoder): add mandatory local E2E regression suite for the governed provider`

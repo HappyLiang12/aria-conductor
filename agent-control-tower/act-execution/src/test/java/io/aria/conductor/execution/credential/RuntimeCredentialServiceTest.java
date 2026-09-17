@@ -256,4 +256,20 @@ class RuntimeCredentialServiceTest {
 
         verify(cipher, never()).decrypt(any());
     }
+
+    @Test
+    void maskedStatus_throwsCipherFailed_whenDecryptFails_withoutEchoingCiphertext() {
+        RuntimeException cipherFailure = new RuntimeException("Credential decryption failed");
+        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(row("enc-corrupt")));
+        when(cipher.encryptionEnabled()).thenReturn(true);
+        when(cipher.decrypt("enc-corrupt")).thenThrow(cipherFailure);
+
+        assertThatThrownBy(() -> service.maskedStatus(PROVIDER))
+                .isInstanceOf(RuntimeCredentialException.class)
+                .hasCause(cipherFailure)
+                .hasMessageNotContaining("enc-corrupt")
+                .hasMessageNotContaining(SYNTHETIC_PAT)
+                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
+                        .isEqualTo(RuntimeCredentialException.Cause.CIPHER_FAILED));
+    }
 }

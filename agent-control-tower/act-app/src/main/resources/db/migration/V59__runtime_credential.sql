@@ -3,8 +3,9 @@
 -- 1. No FK: there is no parent table — the row is deployment-scoped and keyed by
 --    provider_id (an opaque provider identifier, not a reference to another row).
 -- 2. UNIQUE(provider_id): no precedent elsewhere in this schema, but the store is a
---    singleton per provider and the service does a find-then-save upsert; the
---    constraint makes a duplicate row impossible even under concurrent saves.
+--    singleton per provider and the service does a find-then-save; the constraint
+--    makes a duplicate row impossible, and a losing concurrent save fails with a
+--    DataIntegrityViolationException rather than upserting.
 -- 3. TIMESTAMP (not TIMESTAMPTZ): matches the rest of the schema; H2 MODE=MySQL
 --    (h2 profile / CI) and MariaDB both reject TIMESTAMPTZ.
 CREATE TABLE runtime_credentials (

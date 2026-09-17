@@ -96,7 +96,8 @@ public class RuntimeCredentialService {
      * masked, because the suffix cannot be produced safely without the key.
      *
      * @throws RuntimeCredentialException with {@code KEY_NOT_CONFIGURED} when a row exists but
-     *         encryption is disabled
+     *         encryption is disabled, or {@code CIPHER_FAILED} (cipher exception as cause) when
+     *         the stored value cannot be decrypted
      */
     public RuntimeCredentialStatus maskedStatus(String providerId) {
         Optional<RuntimeCredential> existing = credentialRepo.findByProviderId(providerId);
@@ -110,8 +111,14 @@ public class RuntimeCredentialService {
                             + " and this store does not accept the Base64 development fallback");
         }
         RuntimeCredential credential = existing.get();
-        return new RuntimeCredentialStatus(true, mask(cipher.decrypt(credential.getEncPat())),
-                credential.getUpdatedAt());
+        try {
+            return new RuntimeCredentialStatus(true, mask(cipher.decrypt(credential.getEncPat())),
+                    credential.getUpdatedAt());
+        } catch (RuntimeException e) {
+            // Wrap without echoing the ciphertext or the cipher's message into ours.
+            throw new RuntimeCredentialException(RuntimeCredentialException.Cause.CIPHER_FAILED,
+                    "Failed to decrypt the stored runtime credential for provider " + providerId, e);
+        }
     }
 
     /** Mirrors {@code LlmProviderService.maskApiKey}: last four characters only, never more. */

@@ -1,5 +1,8 @@
 package io.aria.conductor.execution.adk.qoder;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.RunProgressEvent;
@@ -20,15 +23,21 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -40,6 +49,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
@@ -236,6 +246,8 @@ class QoderAdkProviderTest {
         assertThat(result.inputTokens()).isEqualTo(7);
         assertThat(result.outputTokens()).isEqualTo(3);
         assertThat(result.aborted()).isFalse();
+        // Both counters arrived as measured numbers: the pair counts as reported usage.
+        assertThat(result.usageReported()).isTrue();
 
         // One sandbox per agent, one bridge session per run, empty MCP list in slice B.
         ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
@@ -300,10 +312,20 @@ class QoderAdkProviderTest {
                 .isInstanceOf(TaskExecutionException.class)
                 .hasMessageContaining("deadline");
 
+        // Cancel is issued by the timeout path and again (idempotently) by the run-end
+        // cleanup in runTask's finally: call-count assertions deliberately do not depend
+        // on which path issued the cancel first.
+        verify(client, atLeastOnce()).cancel(BRIDGE_SESSION);
+        verify(sandboxLifecycle).killSandbox(SANDBOX_ID);
+        verify(sandboxLifecycle, never()).renewSandbox(anyString(), any());
+        // Design §5.3 ordering: the session cancel must precede the sandbox kill (the kill is
+        // only the last bounded fallback). The idempotent cancel issued by the run-end cleanup
+        // lands after the kill and does not disturb this order; the times(1) form is required
+        // because an InOrder check with atLeastOnce consumes the trailing cancel of that mock
+        // and then finds no kill after it (probe: b6fx-inorder-probe-atleastonce.log).
         InOrder order = inOrder(client, sandboxLifecycle);
         order.verify(client).cancel(BRIDGE_SESSION);
         order.verify(sandboxLifecycle).killSandbox(SANDBOX_ID);
-        verify(sandboxLifecycle, never()).renewSandbox(anyString(), any());
     }
 
     @Test
@@ -382,6 +404,11 @@ class QoderAdkProviderTest {
 
         verify(client).cancel(BRIDGE_SESSION);
         verify(client, never()).prompt(anyString(), anyString());
+        // The pre-execution abort throw must still run the run-end cleanup (no leaked registrations).
+        assertThat(provider.runSessionsForTest()).doesNotContainKey(runId);
+        assertThat(provider.runClientsForTest()).doesNotContainKey(runId);
+        assertThat(provider.runInstancesForTest()).doesNotContainKey(runId);
+        assertThat(provider.runPumpsForTest()).doesNotContainKey(runId);
     }
 
     @Test
@@ -428,7 +455,8 @@ class QoderAdkProviderTest {
 
         provider.abortTask(runId);
 
-        verify(client).cancel(BRIDGE_SESSION);
+        // Idempotent: the abort path cancels once and the run-end cleanup cancels again.
+        verify(client, atLeastOnce()).cancel(BRIDGE_SESSION);
         run.join(10_000);
         assertThat(run.isAlive()).isFalse();
     }
@@ -755,5 +783,439 @@ class QoderAdkProviderTest {
     void shutdownAgent_withoutAnInstance_isANoOp() {
         provider.shutdownAgent(UUID.randomUUID());
         verify(sandboxLifecycle, never()).killSandbox(anyString());
+    }
+
+    // ---- fix-round 1, item 1: the run's end terminates its bridge session ----------
+
+    @Test
+    void executeTask_completedRun_endsTheBridgeSessionOnce() {
+        UUID runId = UUID.randomUUID();
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+
+        TaskResult result = provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        assertThat(result.aborted()).isFalse();
+        // The bridge keeps the session's qodercli child alive after prompt_result: the run's
+        // end must terminate it (cancel is idempotent on the bridge side).
+        verify(client, times(1)).cancel(BRIDGE_SESSION);
+        assertThat(provider.runSessionsForTest()).doesNotContainKey(runId);
+    }
+
+    @Test
+    void executeTask_cancelledStopReason_stillEndsTheSession() {
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "cancelled"));
+
+        provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        verify(client, atLeastOnce()).cancel(BRIDGE_SESSION);
+    }
+
+    // ---- fix-round 1, item 3: run registrations never leak on failure paths --------
+
+    @Test
+    void executeTask_createSessionFailure_doesNotLeakRunRegistrations_andNeverCancels() {
+        UUID runId = UUID.randomUUID();
+        when(client.createSession(any())).thenThrow(new QoderBridgeException(
+                QoderBridgeException.Cause.UNREACHABLE, "bridge connection refused"));
+
+        assertThatThrownBy(() -> provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+
+        assertThat(provider.runSessionsForTest()).doesNotContainKey(runId);
+        assertThat(provider.runClientsForTest()).doesNotContainKey(runId);
+        assertThat(provider.runInstancesForTest()).doesNotContainKey(runId);
+        assertThat(provider.runPumpsForTest()).doesNotContainKey(runId);
+        // No session ever existed: nothing may be cancelled for a null session.
+        verify(client, never()).cancel(anyString());
+    }
+
+    // ---- fix-round 1, item 2: unknown usage stays unknown --------------------------
+
+    @Test
+    void executeTask_usageWithZeroPlaceholderCounters_reportsUnknownUsageNotZero() {
+        // A5 reality: the CLI reports literal zeros over ACP — unavailable accounting,
+        // never a measured "0 tokens" result (design §4.2, acceptance item 10).
+        UUID runId = UUID.randomUUID();
+        streamPlays(
+                sessionStarted(1, "efficient"),
+                event(2, "usage", "{\"credits\":null,\"inputTokens\":0,\"outputTokens\":0}"),
+                completed(3, "end_turn"));
+
+        TaskResult result = provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        assertThat(result.usageReported()).isFalse();
+        assertThat(result.inputTokens()).isZero();
+        assertThat(result.outputTokens()).isZero();
+        assertThat(usagePulse()).isEqualTo("qoder.usage input=n/a output=n/a credits=n/a");
+    }
+
+    @Test
+    void executeTask_usageEventWithoutCounters_rendersNa_andKeepsTheOutcomeUnknown() {
+        streamPlays(
+                sessionStarted(1, "efficient"),
+                event(2, "usage", "{\"credits\":null}"),
+                completed(3, "end_turn"));
+
+        TaskResult result = provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        assertThat(result.usageReported()).isFalse();
+        assertThat(usagePulse()).isEqualTo("qoder.usage input=n/a output=n/a credits=n/a");
+    }
+
+    @Test
+    void executeTask_partialUsageReport_keepsUsageUnknownButThePulseShowsTheKnownValue() {
+        streamPlays(
+                sessionStarted(1, "efficient"),
+                event(2, "usage", "{\"credits\":null,\"inputTokens\":7}"),
+                completed(3, "end_turn"));
+
+        TaskResult result = provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        // A partial report must not be half-fabricated into the budget: no measured pair, no sum.
+        assertThat(result.usageReported()).isFalse();
+        assertThat(result.inputTokens()).isZero();
+        assertThat(result.outputTokens()).isZero();
+        assertThat(usagePulse()).isEqualTo("qoder.usage input=7 output=n/a credits=n/a");
+    }
+
+    @Test
+    void executeTask_usageEventsAccumulate_reportOnlyMeasuredCounters() {
+        streamPlays(
+                sessionStarted(1, "efficient"),
+                event(2, "usage", "{\"credits\":null,\"inputTokens\":4,\"outputTokens\":0}"),
+                event(3, "usage", "{\"credits\":null,\"inputTokens\":6,\"outputTokens\":5}"),
+                completed(4, "end_turn"));
+
+        TaskResult result = provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        // The placeholder output zero of the first frame is unknown, not a 0 to add.
+        assertThat(result.usageReported()).isTrue();
+        assertThat(result.inputTokens()).isEqualTo(10);
+        assertThat(result.outputTokens()).isEqualTo(5);
+    }
+
+    @Test
+    void terminalResult_logsReportedNumbers_whenMeasured_andTheNotReportedMarkerOtherwise() {
+        Logger logger = (Logger) LoggerFactory.getLogger(QoderAdkProvider.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            // Unknown case: the CLI's placeholder zeros must never be logged as "0 input / 0 output".
+            streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+            provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                    new TaskContext(1, Duration.ofMinutes(2)));
+
+            // Reported case: the measured numbers are logged.
+            streamPlays(sessionStarted(1, "efficient"),
+                    event(2, "usage", "{\"credits\":null,\"inputTokens\":7,\"outputTokens\":3}"),
+                    completed(3, "end_turn"));
+            provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                    new TaskContext(1, Duration.ofMinutes(2)));
+
+            assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+                    .anyMatch(message -> message.contains("token usage not reported by the provider"))
+                    .anyMatch(message -> message.contains("7 input / 3 output tokens"))
+                    .noneMatch(message -> message.contains("0 input / 0 output"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    // ---- fix-round 1, item 4: execd / bridge-start retry halves --------------------
+
+    @Test
+    void prepareAgent_execProbeRetriesUntilTheExecChannelAccepts() {
+        UUID agentId = UUID.randomUUID();
+        when(sandboxLifecycle.runCommand(SANDBOX_ID, "true"))
+                .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                        "Command execution failed in sandbox sb-1: connection refused"))
+                .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                        "Command execution failed in sandbox sb-1: connection refused"))
+                .thenReturn("");
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        // The exec channel lags sandbox creation: the probe must retry, then preparation proceeds.
+        verify(sandboxLifecycle, times(3)).runCommand(SANDBOX_ID, "true");
+        assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    @Test
+    void prepareAgent_reissuesBridgeStart_untilTheSecondStartBringsItUp() {
+        UUID agentId = UUID.randomUUID();
+        provider.setBridgeStartRetryIntervalForTest(Duration.ofMillis(100));
+        provider.setBridgeReadyTimeoutForTest(Duration.ofSeconds(3));
+        provider.setBridgeReadyPollIntervalForTest(Duration.ofMillis(20));
+        AtomicInteger starts = new AtomicInteger();
+        doAnswer(invocation -> {
+            starts.incrementAndGet();
+            return null;
+        }).when(sandboxLifecycle).runBackgroundCommand(eq(SANDBOX_ID), anyString(), anyMap());
+        when(client.health()).thenAnswer(invocation -> {
+            if (starts.get() >= 2) {
+                return new QoderBridgeClient.Health("ok", "1.1.41");
+            }
+            throw new QoderBridgeException(QoderBridgeException.Cause.UNREACHABLE, "connection refused");
+        });
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        // The fire-and-forget launch issued before the bridge could answer is lost: the bounded
+        // re-issue is what brings the bridge up (exactly twice — the third would be a runaway).
+        verify(sandboxLifecycle, times(2)).runBackgroundCommand(eq(SANDBOX_ID),
+                eq(QoderAdkProvider.BRIDGE_START_COMMAND), anyMap());
+        assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    // ---- fix-round 1, item 5: one sandbox preparation per agent, no second owner ----
+
+    @Test
+    void getOrPrepareInstance_concurrentCallers_shareOneSandboxPreparation() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        CountDownLatch inCreate = new CountDownLatch(1);
+        CountDownLatch releaseCreate = new CountDownLatch(1);
+        when(sandboxLifecycle.createSandbox(any(), eq(IMAGE), anyMap())).thenAnswer(invocation -> {
+            inCreate.countDown();
+            releaseCreate.await(10, TimeUnit.SECONDS);
+            return SANDBOX_ID;
+        });
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first = pool.submit(() -> provider.prepareAgent(agentId, agent));
+            assertThat(inCreate.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<?> second = pool.submit(() -> provider.prepareAgent(agentId, agent));
+            Thread.sleep(150); // let the second caller join the in-flight preparation
+            releaseCreate.countDown();
+            first.get(10, TimeUnit.SECONDS);
+            second.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), eq(IMAGE), anyMap());
+        assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    @Test
+    void getOrPrepareInstance_afterTheOwnerFailed_aLaterCallerRetries() {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        when(sandboxLifecycle.createSandbox(any(), eq(IMAGE), anyMap()))
+                .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                        "docker daemon hiccup"))
+                .thenReturn(SANDBOX_ID);
+
+        assertThatThrownBy(() -> provider.prepareAgent(agentId, agent))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+
+        // A later caller must not adopt the failed preparation.
+        provider.prepareAgent(agentId, agent);
+
+        assertThat(provider.instancesForTest()).containsKey(agentId);
+        verify(sandboxLifecycle, times(2)).createSandbox(any(), eq(IMAGE), anyMap());
+    }
+
+    @Test
+    void getOrPrepareInstance_keepsTheCompletedPreparation_forLateCallers() {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent);
+
+        // The completed future stays in the preparation map: a late caller must find a
+        // mapping (never null) and adopt it instead of racing to become a second owner.
+        assertThat(provider.preparingForTest()).containsKey(agentId);
+        assertThat(provider.preparingForTest().get(agentId)).isDone();
+
+        provider.prepareAgent(agentId, agent); // late caller: adopts, no second sandbox
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), eq(IMAGE), anyMap());
+    }
+
+    @Test
+    void getOrPrepareInstance_afterTheInstanceWasRemoved_aLateCallerReprepares() {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent);
+        // The instance is killed and forgotten, but its completed future stays in `preparing`.
+        provider.shutdownAgent(agentId);
+
+        clearInvocations(sandboxLifecycle);
+        lenient().when(sandboxLifecycle.getSandboxUrl(anyString(), eq(4097))).thenReturn(BRIDGE_URL);
+        when(sandboxLifecycle.createSandbox(any(), eq(IMAGE), anyMap())).thenReturn("sb-2");
+
+        // The kept future is done but its instance is gone: a late caller must re-prepare
+        // (never adopt the killed sandbox) and the next late caller must adopt the fresh
+        // preparation instead of becoming a second owner.
+        provider.prepareAgent(agentId, agent);
+        provider.prepareAgent(agentId, agent);
+
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), eq(IMAGE), anyMap());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-2");
+    }
+
+    @Test
+    void getOrPrepareInstance_lateCallerThatSawAStaleInstance_neverBecomesASecondOwner() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent); // inst1 registered (sandbox sb-1)
+
+        CountDownLatch bProbeEntered = new CountDownLatch(1);
+        CountDownLatch releaseBProbe = new CountDownLatch(1);
+        // Starts at 1: the initial preparation above already consumed the setUp stub (sb-1).
+        AtomicInteger sandboxCounter = new AtomicInteger(1);
+        when(sandboxLifecycle.createSandbox(any(), eq(IMAGE), anyMap()))
+                .thenAnswer(invocation -> "sb-" + sandboxCounter.incrementAndGet());
+        lenient().when(sandboxLifecycle.getSandboxUrl(anyString(), eq(4097))).thenReturn(BRIDGE_URL);
+        Map<String, AtomicInteger> probesByThread = new ConcurrentHashMap<>();
+        when(client.health()).thenAnswer(invocation -> {
+            String thread = Thread.currentThread().getName();
+            int probe = probesByThread.computeIfAbsent(thread, key -> new AtomicInteger()).getAndIncrement();
+            if ("caller-B".equals(thread) && probe == 0) {
+                // caller-B reads inst1, then freezes inside its reachability probe.
+                bProbeEntered.countDown();
+                releaseBProbe.await(10, TimeUnit.SECONDS);
+                throw new QoderBridgeException(QoderBridgeException.Cause.UNREACHABLE, "stale instance");
+            }
+            if ("caller-C".equals(thread) && probe == 0) {
+                // caller-C finds inst1 unreachable and rebuilds while caller-B is frozen.
+                throw new QoderBridgeException(QoderBridgeException.Cause.UNREACHABLE, "stale instance");
+            }
+            return new QoderBridgeClient.Health("ok", "1.1.41");
+        });
+
+        AtomicReference<Throwable> callerBFailure = new AtomicReference<>();
+        Thread callerB = new Thread(() -> {
+            try {
+                provider.prepareAgent(agentId, agent);
+            } catch (Throwable t) {
+                callerBFailure.set(t);
+            }
+        }, "caller-B");
+        callerB.start();
+        assertThat(bProbeEntered.await(10, TimeUnit.SECONDS))
+                .as("caller-B must enter its stale-instance probe").isTrue();
+
+        Thread callerC = new Thread(() -> provider.prepareAgent(agentId, agent), "caller-C");
+        callerC.start();
+        callerC.join(10_000);
+        assertThat(callerC.isAlive()).as("caller-C must finish its rebuild").isFalse();
+
+        releaseBProbe.countDown();
+        callerB.join(10_000);
+        assertThat(callerB.isAlive()).as("caller-B must finish").isFalse();
+
+        // Exactly two sandboxes: inst1 (killed and replaced by caller-C) and C's rebuild.
+        // A third create means caller-B became a second owner and leaked caller-C's sandbox.
+        verify(sandboxLifecycle, times(2)).createSandbox(any(), eq(IMAGE), anyMap());
+        assertThat(provider.instancesForTest().get(agentId).sandboxId())
+                .as("caller-B must adopt the live instance, never overwrite it with a second sandbox")
+                .isEqualTo("sb-2");
+        assertThat(callerBFailure.get()).isNull();
+    }
+
+    // ---- fix-round 1, item 6: the bridge token never leaks through toString ---------
+
+    @Test
+    void qoderInstance_toString_doesNotLeakTheBridgeToken() {
+        UUID agentId = UUID.randomUUID();
+        provider.prepareAgent(agentId, agent(agentId));
+
+        QoderAdkProvider.QoderInstance instance = provider.instancesForTest().get(agentId);
+        assertThat(instance.bridgeToken()).isNotBlank();
+        assertThat(instance.toString())
+                .contains("QoderInstance[")
+                .contains("bridgeToken=<redacted>")
+                .doesNotContain(instance.bridgeToken());
+    }
+
+    // ---- fix-round 1, item 7: timing windows ---------------------------------------
+
+    @Test
+    void executeTask_prepTime_countsAgainstTheCallerDeadline() {
+        // Sandbox prep (here: endpoint resolution) takes longer than the whole caller window.
+        streamStaysOpen();
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            Thread.sleep(1500);
+            return BRIDGE_URL;
+        });
+        long startedNanos = System.nanoTime();
+
+        assertThatThrownBy(() -> provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(),
+                PROMPT_TEXT, new TaskContext(1, Duration.ofMillis(1000))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.TIMEOUT));
+
+        long elapsedMillis = (System.nanoTime() - startedNanos) / 1_000_000;
+        assertThat(elapsedMillis)
+                .as("prep time must count against the caller's window (window 1000ms + prep 1500ms)")
+                .isLessThan(2000L);
+    }
+
+    @Test
+    void abortTask_betweenSessionRegistrationAndPumpStart_doesNotKillTheSandbox() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent);
+        UUID runId = UUID.randomUUID();
+
+        CountDownLatch pumpConstructionEntered = new CountDownLatch(1);
+        CountDownLatch releasePumpConstruction = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            // Freeze the runner between runSessions.put and runPumps.put: the pump does not
+            // exist yet while the session is already registered.
+            pumpConstructionEntered.countDown();
+            releasePumpConstruction.await(10, TimeUnit.SECONDS);
+            return eventStream;
+        }).when(client).openEventStream(anyString());
+        streamPlays(); // clean stream end once the pump starts
+
+        AtomicReference<Throwable> runFailure = new AtomicReference<>();
+        Thread run = new Thread(() -> {
+            try {
+                provider.executeTask(agent, runId, PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+            } catch (Throwable t) {
+                runFailure.set(t);
+            }
+        }, "in-flight-run");
+        run.start();
+        assertThat(pumpConstructionEntered.await(10, TimeUnit.SECONDS)).isTrue();
+        waitUntil(() -> provider.runSessionsForTest().containsKey(runId));
+
+        // The abort lands after runSessions.put but before runPumps.put: the pump cannot prove
+        // the stop, yet the accepted cancel already terminated the session — no kill needed.
+        provider.abortTask(runId);
+        releasePumpConstruction.countDown();
+        run.join(10_000);
+        assertThat(run.isAlive()).isFalse();
+
+        assertThat(runFailure.get()).isInstanceOf(TaskExecutionException.class)
+                .satisfies(t -> assertThat(((TaskExecutionException) t).cause())
+                        .isEqualTo(TaskExecutionException.Cause.ABORTED));
+        verify(sandboxLifecycle, never()).killSandbox(anyString());
+        assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    /** The first {@code qoder.usage} pulse content published during the last run. */
+    private String usagePulse() {
+        return published.stream()
+                .map(RunProgressEvent::getContent)
+                .filter(content -> content != null && content.startsWith("qoder.usage"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "no qoder.usage progress event published: " + describe(published)));
     }
 }

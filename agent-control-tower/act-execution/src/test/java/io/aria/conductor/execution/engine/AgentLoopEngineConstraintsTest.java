@@ -157,7 +157,7 @@ class AgentLoopEngineConstraintsTest {
         when(taskProvider.taskConstraints())
                 .thenReturn(new TaskExecutionConstraints(Duration.ofMinutes(12)));
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
 
         engine.startRun(runId);
 
@@ -176,7 +176,7 @@ class AgentLoopEngineConstraintsTest {
         when(taskProvider.taskConstraints()).thenReturn(null);
         when(openCodeProperties.getMaxTaskMinutes()).thenReturn(OPENCODE_FALLBACK_MINUTES);
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
 
         engine.startRun(runId);
 
@@ -193,7 +193,7 @@ class AgentLoopEngineConstraintsTest {
         when(taskProvider.taskConstraints()).thenReturn(new TaskExecutionConstraints(null));
         when(openCodeProperties.getMaxTaskMinutes()).thenReturn(OPENCODE_FALLBACK_MINUTES);
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
 
         engine.startRun(runId);
 

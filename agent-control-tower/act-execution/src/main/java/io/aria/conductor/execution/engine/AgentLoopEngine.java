@@ -733,7 +733,15 @@ public class AgentLoopEngine {
             TaskResult result = awaitTaskResult(ctx, provider, taskPrompt, taskContext);
 
             // Success: token/iteration bookkeeping + audit + final output + completion.
-            ctx.addTokensUsed(result.inputTokens(), result.outputTokens());
+            if (result.usageReported()) {
+                ctx.addTokensUsed(result.inputTokens(), result.outputTokens());
+            } else {
+                // Unknown usage must stay unknown: the int counters are a 0 placeholder and
+                // must never be folded into the budget as measured usage (design §4.2,
+                // acceptance item 10).
+                log.warn("Token usage not reported by the provider for run {} — accounting unavailable,"
+                        + " wall-clock limit still applies", ctx.getRunId());
+            }
             ctx.incrementIteration();
             if (result.finalOutput() != null && !result.finalOutput().isBlank()) {
                 ctx.setLastAssistantResponse(result.finalOutput());

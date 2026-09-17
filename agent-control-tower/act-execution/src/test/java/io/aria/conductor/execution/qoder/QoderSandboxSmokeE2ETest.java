@@ -160,6 +160,25 @@ class QoderSandboxSmokeE2ETest {
             assertThat(modelEvent.getContent()).isEqualTo("qoder.model=" + EXPECTED_MODEL);
             assertThat(modelEvent.getSeq()).as("bridge event sequence").isPositive();
             assertThat(progress).extracting(RunProgressEvent::getSeq).isSorted();
+
+            // Honest usage: only a measured pair may be presented as tokens (design §4.2,
+            // acceptance item 10). The A5 capture shows the CLI reports placeholder zeros,
+            // which this provider must keep unknown (n/a) — never a fabricated 0-token result.
+            String expectedUsage = "qoder.usage input=" + (result.usageReported() ? result.inputTokens() : "n/a")
+                    + " output=" + (result.usageReported() ? result.outputTokens() : "n/a")
+                    + " credits=n/a";
+            RunProgressEvent usageEvent = progress.stream()
+                    .filter(e -> e.getContent().startsWith("qoder.usage"))
+                    .findFirst()
+                    .orElse(null);
+            if (usageEvent != null) {
+                assertThat(usageEvent.getContent()).as("the pulse must match the reported usage semantics")
+                        .isEqualTo(expectedUsage);
+            } else {
+                assertThat(result.usageReported())
+                        .as("no qoder.usage event on the wire means the counters stay unknown")
+                        .isFalse();
+            }
         } catch (TaskExecutionException e) {
             // Surface the typed failure plus the progress trail (the provider logs the rest).
             throw new AssertionError("Qoder smoke run failed (" + e.cause() + "): " + e.getMessage()
@@ -178,6 +197,7 @@ class QoderSandboxSmokeE2ETest {
         sb.append("[B6] TaskResult sessionId=").append(result.sessionId())
                 .append(" inputTokens=").append(result.inputTokens())
                 .append(" outputTokens=").append(result.outputTokens())
+                .append(" usageReported=").append(result.usageReported())
                 .append(" aborted=").append(result.aborted()).append("\n");
         sb.append("[B6] session_started model event: content=\"").append(modelEvent.getContent())
                 .append("\" seq=").append(modelEvent.getSeq()).append("\n");

@@ -30,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
@@ -124,6 +125,8 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     private Duration bridgeReadyTimeout = READY_TIMEOUT;
     /** Health poll interval while waiting for readiness (overridable in tests). */
     private Duration bridgeReadyPollInterval = READY_POLL_INTERVAL;
+    /** Bridge-start re-issue interval while readiness is unproven (overridable in tests). */
+    private Duration bridgeStartRetryInterval = BRIDGE_START_RETRY_INTERVAL;
     /** Cancel-to-kill grace (overridable in tests). */
     private Duration stopGrace = STOP_GRACE;
 
@@ -209,75 +212,96 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     }
 
     private TaskResult runTask(Agent agent, UUID agentId, UUID runId, String taskPrompt, TaskContext context) {
+        // C0.6: the caller's window covers the whole call — resolve the deadline before
+        // sandbox prep so the (up to ~150s) preparation time cannot escape it.
+        Duration deadline = resolveMaxDuration(context);
+        long deadlineNanos = System.nanoTime() + deadline.toNanos();
         QoderInstance inst = getOrPrepareInstance(agentId, agent);
         QoderBridgeClient client = inst.client();
-        Duration deadline = resolveMaxDuration(context);
         // Register the client before createSession so a cancel landing in the
         // sandbox-prep / session-creation window is recorded (pending abort) and
-        // honored immediately after the session exists.
+        // honored immediately after the session exists. The try starts right after
+        // these registrations so its finally covers EVERY exit path (including a
+        // createSession failure and the pre-execution abort throw) — no leak.
         runClients.put(runId, client);
         runInstances.put(runId, inst);
-
-        String sessionId;
-        try {
-            sessionId = client.createSession(new QoderBridgeClient.CreateSessionRequest(
-                    "run-" + runId, agentId.toString(), SANDBOX_CWD, properties.getModel(),
-                    deadlineSeconds(deadline), List.of()));
-        } catch (QoderBridgeException e) {
-            throw mapBridgeFailure(runId, e);
-        }
-        runSessions.put(runId, sessionId);
-        // A cancel that arrived before the session existed must terminate the run
-        // right away rather than letting it execute in the sandbox.
-        if (runAborted.remove(runId) != null) {
-            log.info("Qoder run {} cancelled before execution started — cancelling session {}", runId, sessionId);
-            cancelSession(client, sessionId, runId);
-            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
-                    "Run " + runId + " cancelled before execution started");
-        }
-        log.info("Qoder task {} started for agent {} (session {})", runId, agentId, sessionId);
-
-        QoderProgressPump pump = new QoderProgressPump(client, sessionId, runId, agentId, this::publishProgress);
-        runPumps.put(runId, pump);
-        pump.start();
-        // Renew the sandbox TTL while the long-lived run blocks — the SDK's own heartbeat
-        // fires too late at the 30-minute TTL boundary (R3-F2).
-        ScheduledExecutorService renewExecutor = startRenewHeartbeat(inst);
-        long deadlineNanos = System.nanoTime() + deadline.toNanos();
+        String sessionId = null;
+        QoderProgressPump pump = null;
+        ScheduledExecutorService renewExecutor = null;
         try {
             try {
-                client.prompt(sessionId, taskPrompt);
+                sessionId = client.createSession(new QoderBridgeClient.CreateSessionRequest(
+                        "run-" + runId, agentId.toString(), SANDBOX_CWD, properties.getModel(),
+                        deadlineSeconds(deadline), List.of()));
             } catch (QoderBridgeException e) {
                 throw mapBridgeFailure(runId, e);
             }
-            Duration remaining = Duration.ofNanos(Math.max(1L, deadlineNanos - System.nanoTime()));
-            QoderProgressPump.WaitResult wait = pump.awaitTerminal(remaining);
-            return switch (wait.status()) {
-                case TERMINAL -> terminalResult(runId, agentId, sessionId, wait.outcome());
-                case TIMEOUT -> {
-                    log.warn("Qoder task {} exceeded its deadline of {}s for agent {} — cancelling session {}",
-                            runId, deadline.toSeconds(), agentId, sessionId);
-                    stopRun(runId, sessionId, client, inst);
-                    throw new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
-                            "Qoder run " + runId + " exceeded its task deadline of " + deadline.toSeconds() + "s");
+            runSessions.put(runId, sessionId);
+            // A cancel that arrived before the session existed must terminate the run
+            // right away rather than letting it execute in the sandbox.
+            if (runAborted.remove(runId) != null) {
+                log.info("Qoder run {} cancelled before execution started — cancelling session {}", runId, sessionId);
+                throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                        "Run " + runId + " cancelled before execution started");
+            }
+            log.info("Qoder task {} started for agent {} (session {})", runId, agentId, sessionId);
+
+            pump = new QoderProgressPump(client, sessionId, runId, agentId, this::publishProgress);
+            runPumps.put(runId, pump);
+            pump.start();
+            // Renew the sandbox TTL while the long-lived run blocks — the SDK's own heartbeat
+            // fires too late at the 30-minute TTL boundary (R3-F2).
+            renewExecutor = startRenewHeartbeat(inst);
+            try {
+                try {
+                    client.prompt(sessionId, taskPrompt);
+                } catch (QoderBridgeException e) {
+                    throw mapBridgeFailure(runId, e);
                 }
-                case STREAM_ENDED -> {
-                    if (runAborted.remove(runId) != null) {
-                        throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
-                                "Qoder run " + runId + " was cancelled");
+                Duration remaining = Duration.ofNanos(Math.max(1L, deadlineNanos - System.nanoTime()));
+                QoderProgressPump.WaitResult wait = pump.awaitTerminal(remaining);
+                return switch (wait.status()) {
+                    case TERMINAL -> terminalResult(runId, agentId, sessionId, wait.outcome());
+                    case TIMEOUT -> {
+                        log.warn("Qoder task {} exceeded its deadline of {}s for agent {} — cancelling session {}",
+                                runId, deadline.toSeconds(), agentId, sessionId);
+                        stopRun(runId, sessionId, client, inst);
+                        throw new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
+                                "Qoder run " + runId + " exceeded its task deadline of " + deadline.toSeconds() + "s");
                     }
-                    // A clean server-side EOF is not a completion: only an explicit
-                    // completed/failed event may end a run.
-                    String detail = pump.streamFailureMessage();
-                    throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
-                            "Qoder run " + runId + " event stream ended without an explicit terminal event"
-                                    + (detail == null ? "" : ": " + detail));
+                    case STREAM_ENDED -> {
+                        if (runAborted.remove(runId) != null) {
+                            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                                    "Qoder run " + runId + " was cancelled");
+                        }
+                        // A clean server-side EOF is not a completion: only an explicit
+                        // completed/failed event may end a run.
+                        String detail = pump.streamFailureMessage();
+                        throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
+                                "Qoder run " + runId + " event stream ended without an explicit terminal event"
+                                        + (detail == null ? "" : ": " + detail));
+                    }
+                };
+            } finally {
+                if (renewExecutor != null) {
+                    renewExecutor.shutdownNow();
                 }
-            };
+                if (pump != null) {
+                    pump.stop();
+                    runPumps.remove(runId);
+                }
+            }
         } finally {
-            renewExecutor.shutdownNow();
-            pump.stop();
-            runPumps.remove(runId);
+            // Design §3.1: the bridge keeps a session (and its qodercli child) alive after
+            // prompt_result, so the run's end must terminate it — otherwise every finished
+            // run leaks one session + child into the agent's sandbox. The bridge's cancel
+            // is idempotent: an already-ended session answers 202 {terminated:false} without
+            // side effects, while a completed-but-open session rejects pending decisions,
+            // sends the ACP cancel and terminates the child. The stop-grace/kill sequence
+            // stays in stopRun (abort/timeout paths only).
+            if (sessionId != null) {
+                cancelSession(client, sessionId, runId);
+            }
             runSessions.remove(runId);
             runClients.remove(runId);
             runInstances.remove(runId);
@@ -290,10 +314,21 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         if (outcome.failed()) {
             throw mapRunFailure(runId, outcome);
         }
-        log.info("Qoder task {} finished for agent {} ({} input / {} output tokens)",
-                runId, agentId, outcome.inputTokens(), outcome.outputTokens());
+        // Honest usage (design §4.2, acceptance item 10): only a measured pair may be
+        // presented as tokens; unknown counters become 0 placeholders that must never be
+        // read as measured (usageReported=false).
+        boolean usageReported = outcome.inputTokens() != null && outcome.outputTokens() != null;
+        int inputTokens = usageReported ? outcome.inputTokens() : 0;
+        int outputTokens = usageReported ? outcome.outputTokens() : 0;
+        if (usageReported) {
+            log.info("Qoder task {} finished for agent {} ({} input / {} output tokens)",
+                    runId, agentId, inputTokens, outputTokens);
+        } else {
+            log.info("Qoder task {} finished for agent {} — token usage not reported by the provider",
+                    runId, agentId);
+        }
         return new TaskResult(runId, sessionId, outcome.finalOutput(),
-                outcome.inputTokens(), outcome.outputTokens(), outcome.aborted());
+                inputTokens, outputTokens, outcome.aborted(), usageReported);
     }
 
     @Override
@@ -326,7 +361,15 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     private void stopRun(UUID runId, String sessionId, QoderBridgeClient client, QoderInstance inst) {
         cancelSession(client, sessionId, runId);
         QoderProgressPump pump = runPumps.get(runId);
-        boolean stopped = pump != null && pump.awaitStopped(stopGrace);
+        if (pump == null) {
+            // The abort landed between session registration and pump start: the prompt is
+            // only issued after the pump exists, so the accepted cancel is sufficient —
+            // there is no reader to prove stopped, and killing the sandbox is wrong here.
+            log.info("Qoder run {} cancelled before its event-stream pump started — cancel is sufficient",
+                    runId);
+            return;
+        }
+        boolean stopped = pump.awaitStopped(stopGrace);
         if (stopped) {
             return;
         }
@@ -425,22 +468,45 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             log.warn("Existing Qoder instance for agent {} is unhealthy, rebuilding...", agentId);
             killAndForgetInstance(existing);
         }
-        // Concurrent callers for the same agent share a single preparation.
-        CompletableFuture<QoderInstance> mine = new CompletableFuture<>();
-        CompletableFuture<QoderInstance> previous = preparing.putIfAbsent(agentId, mine);
-        if (previous != null) {
-            return awaitPreparation(previous, agentId);
+        // Concurrent runs for the same agent share a single sandbox preparation.
+        // Ownership is decided atomically inside `preparing.compute` and the completed
+        // future is KEPT in the map (never removed) so a late caller can never observe
+        // a null mapping after the owner finished and race to become a second owner
+        // (TOCTOU fix — the previous get/putIfAbsent/remove sequence left such a window).
+        @SuppressWarnings("unchecked")
+        CompletableFuture<QoderInstance>[] ownerHolder = new CompletableFuture[1];
+        CompletableFuture<QoderInstance> future = preparing.compute(agentId, (key, previous) -> {
+            if (previous != null && !previous.isDone()) {
+                return previous; // someone is preparing — join them
+            }
+            // previous is done (or absent). Reuse only if the instance is still registered
+            // and reachable; otherwise become the owner of a fresh preparation.
+            QoderInstance inst = instances.get(agentId);
+            if (inst != null && isBridgeReachable(inst)) {
+                return previous != null ? previous : CompletableFuture.completedFuture(inst);
+            }
+            CompletableFuture<QoderInstance> fresh = new CompletableFuture<>();
+            ownerHolder[0] = fresh;
+            return fresh;
+        });
+        if (ownerHolder[0] != null) {
+            // Owner: prepare on the shared executor and complete the future. The completed
+            // future stays in `preparing` so late callers reuse it via the compute path
+            // above instead of racing to become a second owner.
+            try {
+                prepareExecutor.execute(() -> {
+                    try {
+                        ownerHolder[0].complete(prepareInstance(agentId, agent));
+                    } catch (Throwable t) {
+                        ownerHolder[0].completeExceptionally(t);
+                    }
+                });
+            } catch (RejectedExecutionException e) {
+                // Executor shut down (provider teardown) — fail the waiters fast.
+                ownerHolder[0].completeExceptionally(e);
+            }
         }
-        try {
-            QoderInstance prepared = prepareInstance(agentId, agent);
-            mine.complete(prepared);
-            return prepared;
-        } catch (RuntimeException | Error e) {
-            mine.completeExceptionally(e);
-            throw e;
-        } finally {
-            preparing.remove(agentId, mine);
-        }
+        return awaitPreparation(future, agentId);
     }
 
     private QoderInstance awaitPreparation(CompletableFuture<QoderInstance> future, UUID agentId) {
@@ -549,7 +615,7 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                 log.info("Qoder bridge not reachable for agent {} (sandbox {}) — starting it: {}",
                         agentId, sandboxId, BRIDGE_START_COMMAND);
                 sandboxLifecycle.runBackgroundCommand(sandboxId, BRIDGE_START_COMMAND, Map.of());
-                nextStartNanos = now + BRIDGE_START_RETRY_INTERVAL.toNanos();
+                nextStartNanos = now + bridgeStartRetryInterval.toNanos();
             }
             long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000;
             if (remainingMillis <= 0) {
@@ -721,6 +787,26 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         return runSessions;
     }
 
+    /** Test-only: expose the live runId → bridge client registry. */
+    Map<UUID, QoderBridgeClient> runClientsForTest() {
+        return runClients;
+    }
+
+    /** Test-only: expose the live runId → sandbox instance registry. */
+    Map<UUID, QoderInstance> runInstancesForTest() {
+        return runInstances;
+    }
+
+    /** Test-only: expose the live runId → progress pump registry. */
+    Map<UUID, QoderProgressPump> runPumpsForTest() {
+        return runPumps;
+    }
+
+    /** Test-only: expose the in-flight/shared sandbox preparations, keyed by agentId. */
+    Map<UUID, CompletableFuture<QoderInstance>> preparingForTest() {
+        return preparing;
+    }
+
     /** Test-only: shrink the bridge ready-wait budget. */
     void setBridgeReadyTimeoutForTest(Duration timeout) {
         this.bridgeReadyTimeout = timeout;
@@ -729,6 +815,11 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     /** Test-only: shrink the bridge ready poll interval. */
     void setBridgeReadyPollIntervalForTest(Duration interval) {
         this.bridgeReadyPollInterval = interval;
+    }
+
+    /** Test-only: shrink the bridge-start re-issue interval. */
+    void setBridgeStartRetryIntervalForTest(Duration interval) {
+        this.bridgeStartRetryInterval = interval;
     }
 
     /** Test-only: shrink the cancel-to-kill grace. */
@@ -746,5 +837,16 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * @param client      bridge client targeting this instance
      */
     record QoderInstance(UUID agentId, String sandboxId, String bridgeUrl, String bridgeToken,
-                         QoderBridgeClient client) { }
+                         QoderBridgeClient client) {
+
+        /** Redacting toString: the generated one would print the bridge bearer token. */
+        @Override
+        public String toString() {
+            return "QoderInstance[agentId=" + agentId
+                    + ", sandboxId=" + sandboxId
+                    + ", bridgeUrl=" + bridgeUrl
+                    + ", bridgeToken=<redacted>"
+                    + ", client=" + client + "]";
+        }
+    }
 }

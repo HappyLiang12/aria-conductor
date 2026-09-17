@@ -219,7 +219,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                 log.info("OpenCode task {} finished for agent {} ({} input / {} output tokens)",
                         runId, agent.getId(), resp.inputTokens(), resp.outputTokens());
                 return new TaskResult(runId, sessionId, resp.finalOutput(),
-                        resp.inputTokens(), resp.outputTokens(), false);
+                        resp.inputTokens(), resp.outputTokens(), false, true);
             } finally {
                 renewExecutor.shutdownNow();
             }

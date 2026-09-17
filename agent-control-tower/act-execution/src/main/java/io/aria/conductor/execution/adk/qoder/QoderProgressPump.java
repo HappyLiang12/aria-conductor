@@ -25,7 +25,9 @@ import java.util.function.Consumer;
  *       monotonic {@code sequence} as its {@code seq} (never a locally restarted counter),
  *       so the dashboard watermark stays aligned with the bridge replay window;</li>
  *   <li>aggregates the run outcome ({@code agent_message} text, {@code usage} tokens) and
- *       the terminal signal for {@link #awaitTerminal(Duration)}.</li>
+ *       the terminal signal for {@link #awaitTerminal(Duration)}. Usage is accumulated
+ *       honestly: unknown counters stay {@code null} (rendered {@code n/a}) instead of
+ *       fabricating placeholder zeros (design §4.2, acceptance item 10).</li>
  * </ul>
  *
  * <p>Terminal semantics (frozen): only an explicit {@code completed}/{@code failed} bridge
@@ -47,8 +49,15 @@ public class QoderProgressPump {
         TIMEOUT
     }
 
-    /** Aggregated run outcome gathered from the bridge event stream. */
-    public record TerminalOutcome(String finalOutput, int inputTokens, int outputTokens,
+    /**
+     * Aggregated run outcome gathered from the bridge event stream.
+     *
+     * <p>Usage counters preserve unknown as unknown: a counter is {@code null} until a
+     * {@code usage} event reports a positive finite count for that side. The CLI's
+     * placeholder zeros are unavailable accounting, not a measured zero (design §4.2,
+     * acceptance item 10), so they leave the counter null instead of fabricating a value.
+     */
+    public record TerminalOutcome(String finalOutput, Integer inputTokens, Integer outputTokens,
                                   boolean aborted, boolean failed, String failureReason,
                                   String failureCode) { }
 
@@ -68,8 +77,10 @@ public class QoderProgressPump {
     private final AtomicReference<String> streamFailure = new AtomicReference<>();
     private final CountDownLatch terminalArrived = new CountDownLatch(1);
     private final CountDownLatch loopEnded = new CountDownLatch(1);
-    private volatile int inputTokens;
-    private volatile int outputTokens;
+    /** Accumulated measured input tokens; null while no measurement exists (unknown). */
+    private volatile Integer inputTokens;
+    /** Accumulated measured output tokens; null while no measurement exists (unknown). */
+    private volatile Integer outputTokens;
     private volatile Thread reader;
 
     public QoderProgressPump(QoderBridgeClient client, String bridgeSessionId, UUID runId, UUID agentId,
@@ -210,11 +221,10 @@ public class QoderProgressPump {
             case "mode_changed" -> publish(seq, RunProgressEvent.Kind.STATUS,
                     "mode_changed: " + payload.path("currentModeId").asText(""), null);
             case "usage" -> {
-                inputTokens += payload.path("inputTokens").asInt(0);
-                outputTokens += payload.path("outputTokens").asInt(0);
+                mergeCounters(payload);
                 publish(seq, RunProgressEvent.Kind.STATUS,
-                        "qoder.usage input=" + payload.path("inputTokens").asInt(0)
-                                + " output=" + payload.path("outputTokens").asInt(0)
+                        "qoder.usage input=" + renderCount(inputTokens)
+                                + " output=" + renderCount(outputTokens)
                                 + " credits=" + payload.path("credits").asText("n/a"), null);
             }
             case "completed" -> complete(payload.path("stopReason").asText(null));
@@ -238,6 +248,45 @@ public class QoderProgressPump {
         if (terminal.compareAndSet(null, outcome)) {
             terminalArrived.countDown();
         }
+    }
+
+    /**
+     * Merge a {@code usage} frame into the accumulated counters. Only a measured count
+     * (a positive finite number) counts as reported; absent counters and placeholder
+     * zeros leave the side unknown instead of fabricating a value or fabricating a sum.
+     */
+    private void mergeCounters(JsonNode payload) {
+        Integer input = reportedCount(payload.path("inputTokens"));
+        if (input != null) {
+            Integer current = inputTokens;
+            inputTokens = (current == null ? 0 : current) + input;
+        }
+        Integer output = reportedCount(payload.path("outputTokens"));
+        if (output != null) {
+            Integer current = outputTokens;
+            outputTokens = (current == null ? 0 : current) + output;
+        }
+    }
+
+    /**
+     * A finite positive number is a measured counter; anything else is unknown.
+     *
+     * <p>The bridge never omits the keys when the CLI reports zeros
+     * ({@code optionalNumber} passes {@code 0} through — A5 evidence), so a literal
+     * "finite ⇒ reported" reading would turn the CLI's placeholder zeros into a
+     * fabricated measured zero. Design §4.2 / acceptance item 10 forbid that.
+     */
+    private static Integer reportedCount(JsonNode value) {
+        if (!value.isNumber() || !Double.isFinite(value.asDouble())) {
+            return null;
+        }
+        double count = value.asDouble();
+        return count > 0 ? (int) count : null;
+    }
+
+    /** Render an accumulated counter for the progress pulse; unknown renders as {@code n/a}. */
+    private static String renderCount(Integer count) {
+        return count == null ? "n/a" : String.valueOf(count);
     }
 
     private String currentOutput() {

@@ -123,6 +123,18 @@ final class QoderSandboxHarness implements AutoCloseable {
         return manager.runCommand(sandboxId, command);
     }
 
+    /**
+     * Renew this sandbox's TTL through the production manager path
+     * ({@link OpenCodeSandboxManager#renewSandbox(String, Duration)}), so gates can exercise
+     * the same call the runtime uses (A5). The manager returns {@code void} and only logs the
+     * new expiry, so callers that need to observe the effect read it back through the SDK
+     * (e.g. {@code Sandbox.resumer()} + {@code getInfo().getExpiresAt()}); this passthrough
+     * only exists because a second manager cannot target this harness's sandbox.
+     */
+    void renew(Duration extension) {
+        manager.renewSandbox(sandboxId, extension);
+    }
+
     /** The OpenSandbox sandbox id (evidence / log correlation). */
     String sandboxId() {
         return sandboxId;

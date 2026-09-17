@@ -455,3 +455,35 @@ export interface AdkProviderHealth {
   providerId: string;
   healthy: boolean;
 }
+
+// === Qoder Runtime Credential (B8 API) ===
+/**
+ * `GET|PUT /api/v1/adk/providers/qoder/credential` masked status. Absence of a
+ * stored credential is a normal 200 with `configured:false` and nulls; the
+ * response never carries the PAT (only the service-produced mask).
+ */
+export interface QoderCredentialStatus {
+  providerId: string;
+  configured: boolean;
+  patMasked: string | null;
+  /** ISO-8601 instant string, null when no credential is stored. */
+  updatedAt: string | null;
+  model: string;
+}
+
+/** Credential-state failure codes of the bounded probe (`success:false`). */
+export type QoderCredentialTestReason = 'NOT_CONFIGURED' | 'CIPHER_FAILED';
+
+/**
+ * `POST .../credential/test` result: a bounded NON-billable structural probe
+ * (configured, decryptable, non-blank). `reason`/`message` are omitted on
+ * success; `billable` is always false and `costNote` carries the disclosure.
+ */
+export interface QoderCredentialTestResult {
+  success: boolean;
+  reason?: QoderCredentialTestReason;
+  model: string;
+  billable: boolean;
+  costNote: string;
+  message?: string;
+}

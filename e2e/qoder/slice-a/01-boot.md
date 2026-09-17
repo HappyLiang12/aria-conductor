@@ -1,7 +1,7 @@
 # A1 — Linux artifact pin + image boot inside OpenSandbox
 
 - **Task**: Slice A gate A1 (plan `docs/superpowers/plans/2026-09-17-qoder-cli-provider.md`)
-- **Run date**: 2026-09-17 (local +08:00; commands executed 23:45–23:58)
+- **Run date**: 2026-09-17/18 (local +08:00; the recorded runs finished between 23:49:48 and 00:00:42 — see the run ledger in Step 5)
 - **Host / runtime**: Windows host, **podman** (podman machine) — the same image store the local
   OpenSandbox server uses (`aria-opensandbox`, `opensandbox-server` compose service, host port 8090;
   socket bind `/run/user/1000/podman/podman.sock` → `/var/run/docker.sock`)
@@ -62,8 +62,9 @@ $ npm view @qoder-ai/qodercli@latest version
 ```
 
 The install script resolves a **per-version release manifest** whose entries carry the platform
-archive URL **and its sha256** (the script verifies it before extracting, then delegates to
-`qodercli install`):
+archive URL **and its sha256**; it verifies the checksum **before** extracting, then delegates to
+the downloaded binary's `qodercli install --force` subcommand (both script-internal behaviors
+verified against the script itself — raw output below):
 
 ```
 $ curl -fsSL https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/channels/manifest.json | head -c 120
@@ -79,6 +80,27 @@ $ curl -fsSL https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/channels/1.1
     | tr -d ' \n' | grep -o '{"os":"linux","arch":"amd64","url":"[^"]*","sha256":"[^"]*"}'
 {"os":"linux","arch":"amd64","url":"https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/releases/1.1.41/qodercli-linux-x64.tar.gz","sha256":"1c2d174b098eb472a9ac19a80b89a664fdcb7d37dca09e64f44243faa4e3eca7"}
 ```
+
+Script-internal behaviors above, re-verified against the live install script (2026-09-18):
+
+```
+$ curl -fsSL https://qoder.com/install | grep -nE "Verifying checksum|Checksum mismatch|Extracting|install --force"
+290:    echo "==> Verifying checksum..."
+299:      fatal_error "Checksum mismatch" \
+309:  echo "==> Extracting..."
+327:  if ! "$extract_dir/$bin_name" install --force "$@"; then
+
+$ curl -fsSL https://qoder.com/install | grep -nE "BUN_OPTIMIZED_X64_REQUIRED_CPU_FLAGS=|selecting baseline|arch=\"amd64-baseline\""
+150:BUN_OPTIMIZED_X64_REQUIRED_CPU_FLAGS=(sse4_2 popcnt avx avx2 bmi1 bmi2 fma)
+211:      echo "==> CPU lacks Bun optimized x64 requirements; selecting baseline binary"
+212:      arch="amd64-baseline"
+```
+
+The first grep output shows the checksum verification (lines 290/299) preceding extraction (309) and
+the `install --force` delegation to the extracted binary (327). The second shows the CPU rule behind
+the Dockerfile pin: on `linux/amd64` the launcher falls back to `amd64-baseline` only when any of
+`sse4_2 popcnt avx avx2 bmi1 bmi2 fma` is missing (line 212), so a CPU exposing all seven (Step 2
+below) gets the optimized `amd64` artifact this image pins.
 
 ```
 $ curl -sIL https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/releases/1.1.41/qodercli-linux-x64.tar.gz | grep -iE "content-length|HTTP/"
@@ -114,7 +136,8 @@ it (with a new checksum) if a later decision requires it.
 smoke test with a throwaway `HOME`, sets `WORKDIR /workspace`, `CMD ["qodercli","--version"]`.
 No credentials or provider config are baked in.
 
-CPU-flag check that justifies the optimized (`amd64`, not `amd64-baseline`) artifact:
+CPU-flag check that justifies the optimized (`amd64`, not `amd64-baseline`) artifact — the same
+artifact the official install script selects for this flag set (rule quoted in Step 1):
 
 ```
 $ podman run --rm docker.io/library/node:22-slim sh -c 'grep -m1 "^flags" /proc/cpuinfo | tr " " "\n" | sort -u | grep -E "^(sse4_2|popcnt|avx|avx2|bmi1|bmi2|fma)$" | tr "\n" " "'
@@ -201,22 +224,28 @@ $ cd agent-control-tower && mvn clean verify -pl act-execution -Dit.test=QoderIm
 23:51:41.880 [main] ERROR io.aria.conductor.execution.adk.opencode.OpenCodeSandboxManager -- Failed to create OpenSandbox sandbox for agent bc2cf18b-8062-4cb9-8b2b-1fd18d13ed40: Server error : 500 Internal Server Error {"code":"DOCKER::SANDBOX_IMAGE_PULL_FAILED","message":"Failed to pull image aria-conductor/qoder-sandbox:0.1: 403 Client Error for http+docker://localhost/v1.44/images/create?tag=0.1&fromImage=aria-conductor%2Fqoder-sandbox: Forbidden (\"denied: requested access to the resource is denied\")"}
 [ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 6.556 s <<< FAILURE! -- in io.aria.conductor.execution.qoder.QoderImageBootE2ETest
 [ERROR] io.aria.conductor.execution.qoder.QoderImageBootE2ETest.pinnedImageBootsAndRunsPinnedQoderCli -- Time elapsed: 6.527 s <<< ERROR!
-io.aria.conductor.execution.adk.TaskExecutionException: OpenSandbox sandbox creation failed for agent bc2cf18b-8062-4cb9-8b2b-1fd18d13ed40: Server error : 500 Internal Server Error {"code":"DOCKER::SANDBOX_IMAGE_PULL_FAILED", ... }
+io.aria.conductor.execution.adk.TaskExecutionException: OpenSandbox sandbox creation failed for agent bc2cf18b-8062-4cb9-8b2b-1fd18d13ed40: Server error : 500 Internal Server Error {"code":"DOCKER::SANDBOX_IMAGE_PULL_FAILED","message":"Failed to pull image aria-conductor/qoder-sandbox:0.1: 403 Client Error for http+docker://localhost/v1.44/images/create?tag=0.1&fromImage=aria-conductor%2Fqoder-sandbox: Forbidden (\"denied: requested access to the resource is denied\")"}
 	at io.aria.conductor.execution.adk.opencode.OpenCodeSandboxManager.createSandboxWithRetry(OpenCodeSandboxManager.java:130)
 	at io.aria.conductor.execution.qoder.QoderImageBootE2ETest.pinnedImageBootsAndRunsPinnedQoderCli(QoderImageBootE2ETest.java:58)
-Caused by: com.alibaba.opensandbox.sandbox.domain.exceptions.SandboxApiException: Server error : 500 Internal Server Error {"code":"DOCKER::SANDBOX_IMAGE_PULL_FAILED", ...} | request_id=9164ceebd32249c6b8fbe6bc36d7f9fe
+Caused by: com.alibaba.opensandbox.sandbox.domain.exceptions.SandboxApiException: Server error : 500 Internal Server Error {"code":"DOCKER::SANDBOX_IMAGE_PULL_FAILED","message":"Failed to pull image aria-conductor/qoder-sandbox:0.1: 403 Client Error for http+docker://localhost/v1.44/images/create?tag=0.1&fromImage=aria-conductor%2Fqoder-sandbox: Forbidden (\"denied: requested access to the resource is denied\")"} | [DOCKER::SANDBOX_IMAGE_PULL_FAILED] Failed to pull image aria-conductor/qoder-sandbox:0.1: 403 Client Error for http+docker://localhost/v1.44/images/create?tag=0.1&fromImage=aria-conductor%2Fqoder-sandbox: Forbidden ("denied: requested access to the resource is denied") | request_id=9164ceebd32249c6b8fbe6bc36d7f9fe
 [ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0
 [INFO] --- failsafe:3.5.3:verify (default) @ act-execution ---
-[ERROR] Failed to execute goal org.apache.maven.plugins:maven-failsafe-plugin:3.5.3:verify (default) on project act-execution:
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-failsafe-plugin:3.5.3:verify (default) on project act-execution: 
+[ERROR] 
+[ERROR] See D:\project\aria-conductor\agent-control-tower\act-execution\target\failsafe-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
 ```
 
 The server tried to pull `aria-conductor/qoder-sandbox:0.1` (403 — not published anywhere, by
-design) because the image did not exist in the store yet.
+design) because the image did not exist in the store yet. (Maven's own summary line in that output
+points at its local run-artifact directory `act-execution/target/failsafe-reports`; the directory is
+regenerated by the command above and is not committed.)
 
 ### 5b. First green attempt (image built) — real execd-readiness race
 
 ```
-23:53:47.331 [main] ERROR ...CommandsAdapter -- Failed to run command (length: 23)
+23:53:47.331 [main] ERROR com.alibaba.opensandbox.sandbox.infrastructure.adapters.service.CommandsAdapter -- Failed to run command (length: 23)
 java.net.ConnectException: Failed to connect to /127.0.0.1:48912
 [ERROR] io.aria.conductor.execution.qoder.QoderImageBootE2ETest.pinnedImageBootsAndRunsPinnedQoderCli -- Time elapsed: 4.295 s <<< ERROR!
 io.aria.conductor.execution.adk.TaskExecutionException: Command execution failed in sandbox 2ce2076d-a956-4d53-9ce6-2ab1317038f5: Network connectivity error: Failed to connect to /127.0.0.1:48912
@@ -224,10 +253,12 @@ io.aria.conductor.execution.adk.TaskExecutionException: Command execution failed
 	at io.aria.conductor.execution.qoder.QoderImageBootE2ETest.pinnedImageBootsAndRunsPinnedQoderCli(QoderImageBootE2ETest.java:59)
 ```
 
-Sandbox creation succeeded (`Successfully created sandbox: 2ce2076d-...`); the command was sent
-~0.1 s after creation and the execd endpoint was not accepting connections yet. The test then
-gained the `awaitExecdReady` gate (Step 4) that production already had — the sandbox was still
-killed cleanly by the test's `finally` block.
+Sandbox creation succeeded (`Successfully created sandbox: 2ce2076d-a956-4d53-9ce6-2ab1317038f5`);
+the create call returned at 23:53:47.320 and the version command was sent 11 ms later (23:53:47.331),
+while the execd endpoint was not accepting connections yet (the stack points at a direct `runCommand`
+from the test body, line 59 — that revision had no gate). The test then gained the `awaitExecdReady`
+gate (Step 4) that production already had — the sandbox was still killed cleanly by the test's
+`finally` block.
 
 ### 5c. GREEN (same command as 5a, run after the build)
 
@@ -236,10 +267,10 @@ $ cd agent-control-tower && mvn verify -pl act-execution -Dit.test=QoderImageBoo
       -Dqoder.e2e.enabled=true -Djacoco.skip=true
 [INFO] --- failsafe:3.5.3:integration-test (default) @ act-execution ---
 [INFO] Running io.aria.conductor.execution.qoder.QoderImageBootE2ETest
-00:00:36.xxx [main] INFO com.alibaba.opensandbox.sandbox.Sandbox -- Starting create sandbox with startup source aria-conductor/qoder-sandbox:0.1 (timeout: 1800s) operation
-00:00:37.233 [main] INFO ...SandboxesAdapter -- Successfully created sandbox: 711f8c78-e68a-456a-afef-81de1f0eaaa6
+00:00:35.315 [main] INFO com.alibaba.opensandbox.sandbox.Sandbox -- Starting create sandbox with startup source aria-conductor/qoder-sandbox:0.1 (timeout: 1800s) operation
+00:00:37.233 [main] INFO com.alibaba.opensandbox.sandbox.infrastructure.adapters.service.SandboxesAdapter -- Successfully created sandbox: 711f8c78-e68a-456a-afef-81de1f0eaaa6
 [A1] sandbox 711f8c78-e68a-456a-afef-81de1f0eaaa6 image aria-conductor/qoder-sandbox:0.1 `qodercli --version` => 1.1.41
-00:00:42.668 [main] INFO ...SandboxesAdapter -- Successfully terminated sandbox: 711f8c78-e68a-456a-afef-81de1f0eaaa6
+00:00:42.668 [main] INFO com.alibaba.opensandbox.sandbox.infrastructure.adapters.service.SandboxesAdapter -- Successfully terminated sandbox: 711f8c78-e68a-456a-afef-81de1f0eaaa6
 [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 8.111 s -- in io.aria.conductor.execution.qoder.QoderImageBootE2ETest
 [INFO] Tests run: 864, Failures: 0, Errors: 0, Skipped: 0
 [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
@@ -247,14 +278,47 @@ $ cd agent-control-tower && mvn verify -pl act-execution -Dit.test=QoderImageBoo
 [INFO] Total time:  01:25 min
 ```
 
-This is the run matching the committed test source (a first green run at 23:57 succeeded with the
-same output — sandbox `8449f5d5-…`, 8.889 s — and was followed only by a Javadoc-comment edit plus
-one confirming re-run). The unit lane in the same command stayed green at 864/864.
+(The two `Tests run:` totals are the unit lane — 864, printed earlier in the same log — and the
+Failsafe lane — 1 — quoted as-is.)
 
-All raw output above is reproduced from the run console logs; the `[A1]` line is also embedded in
-`agent-control-tower/act-execution/target/failsafe-reports/TEST-io.aria.conductor.execution.qoder.QoderImageBootE2ETest.xml`
-(`<system-out>`, regenerated by any re-run of the command above). No stray sandbox containers were
-left behind (`podman ps -a` shows only `aria-opensandbox`).
+### Run ledger (every local log artifact accounted for)
+
+| Run (finished +08:00 / elapsed) | Command | Outcome | Established |
+|---|---|---|---|
+| 23:49:48 / 1:23 | the 5a command **without `clean`** (Failsafe never started, so `-Dit.test` is not independently observable in this log) | BUILD FAILURE at `jacoco:0.8.12:check` — `Rule violated for bundle act-execution: lines covered ratio is 0.45, but expected minimum is 0.58`; no Failsafe section, no dumpstream | `-Djacoco.skip=true` does not skip `jacoco:check`; the run needs `clean` (deviation 2 / concern 1) |
+| 23:51:42 / 1:28 | `mvn clean verify ...` (5a) | BUILD FAILURE; Failsafe red: `DOCKER::SANDBOX_IMAGE_PULL_FAILED` / HTTP 403 (image absent from the store) | genuine red before the image existed |
+| 23:52 (log saved) | `podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox` | image `004f664e9010` built; `sha256sum -c` OK; smoke `1.1.41` | image present in the podman store the OpenSandbox server shares |
+| 23:53:48 / 1:09 | `mvn verify ...` (5b) | BUILD FAILURE; sandbox `2ce2076d` created, version command hit the execd race (test line 59 — no gate in that revision) | need for the `awaitExecdReady` gate |
+| (no run) | — | `a1-green-attempt1` is a byte-identical copy of the 23:53 output (`cmp` clean) | nothing new was produced |
+| 23:55:44 / 1:22 | `mvn verify ...` | BUILD SUCCESS; sandbox `290daf13-…`, 8.139 s; **no `[A1]` line** (that revision predates the stdout evidence line); whether the readiness gate was active is not determinable from this log — no probe failure is logged | first green run |
+| 23:57:22 / 1:23 | `mvn verify ...` | BUILD SUCCESS; sandbox `8449f5d5-…`, 8.889 s; `[A1]` line present; one probe retry logged (stack `awaitExecdReady:93`, test body `:66`) | green with the evidence line; gate retry exercised |
+| 00:00:42 / 1:25 | `mvn verify ...` (quoted in 5c) | BUILD SUCCESS; sandbox `711f8c78-…`, 8.111 s; the logged stack line numbers (`awaitExecdReady:97`, test body `:70`) match the committed test source | the run quoted in 5c; confirming re-run |
+
+Timeline in words: the first green was 23:55; 23:57 was the first green that printed the `[A1]`
+line; 00:00 is the run matching the committed test source. `a1-red.log` (23:49) and `a1-build.log`
+(23:52) are the remaining two of the eight local log artifacts, and the five Failsafe dumpstreams
+under `agent-control-tower/act-execution/target/failsafe-reports/` correspond exactly to the five
+runs that reached Failsafe (23:51, 23:53, 23:55, 23:57, 00:00). The unit lane was green (864/864) in
+every run that reached it.
+
+**Provenance is the commands, not log files** — no uncommitted log path is the source of any
+quotation above:
+
+- **Step 1/2 network evidence**: every block starts with the exact `curl`/`npm view` command and
+  shows its captured output (the install-script greps were re-run 2026-09-18).
+- **Step 3 build block**: `podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox`
+  (the omitted apt output and intermediate image IDs are as marked; a rebuild reproduces the
+  `sha256sum -c`/`1.1.41` lines).
+- **5a red block**: `cd agent-control-tower && mvn clean verify -pl act-execution -Dit.test=QoderImageBootE2ETest -Dqoder.e2e.enabled=true -Djacoco.skip=true`
+  on a host with no `aria-conductor/qoder-sandbox` image in the store.
+- **5b race block**: the same command immediately after the build; the race is timing-dependent and
+  may not reproduce on a warm machine.
+- **5c green block**: `cd agent-control-tower && mvn verify -pl act-execution -Dit.test=QoderImageBootE2ETest -Dqoder.e2e.enabled=true -Djacoco.skip=true`
+  with the image present. The `[A1]` line is the test's stdout; Maven also writes it into its local
+  run artifact under `act-execution/target/failsafe-reports/`, which the same command regenerates
+  (like all `target/**` output, not committed).
+
+No stray sandbox containers were left behind (`podman ps -a` shows only `aria-opensandbox`).
 
 ## Deviations from the brief
 

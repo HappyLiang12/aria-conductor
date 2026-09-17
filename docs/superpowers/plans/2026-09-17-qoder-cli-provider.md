@@ -55,7 +55,7 @@ Event types: `session_started {model}`, `agent_message {text}`, `tool_call {tool
 
 ### C0.3 ACP call sequence (bridge internals)
 
-1. spawn `qodercli --acp` (argv exactly `["--acp"]`, env allowlist, cwd `/workspace`, no shell).
+1. spawn `qodercli --acp --plugin-dir /opt/qoder/plugin` (argv exactly `["--acp","--plugin-dir","/opt/qoder/plugin"]`, env allowlist, cwd `/workspace`, no shell). Amended 2026-09-18 after the B4 review: design §7.2 requires the pinned bundle be loaded explicitly and kept non-writable by the CLI; `/opt/qoder/plugin` is the root-owned baked copy in the sandbox image, and A3 verified the `--acp --plugin-dir <dir>` combination (`e2e/qoder/slice-a/03-mcp-auth.md:78`).
 2. `initialize {protocolVersion:1}` → wait matching response.
 3. `session/new {cwd, mcpServers:[{type:"http",name,url,headers:[{name:"Authorization",value:"Bearer …"}]}]}` → wait.
 4. `session/set_model {sessionId, modelId}` → wait.
@@ -315,7 +315,7 @@ Any failed required gate stops the project and is reported with raw evidence; do
 
 - [ ] **Step 1:** Failing vitest: spawn a fake CLI (a committed fixture script that emits scripted NDJSON) and assert the exact sequence in C0.3, including `session/set_model`, permission reply shape, rejection of `allow_always`-only offers, and that an unsupported client-method request from the CLI (e.g. an `fs/read_text_file`-class call) receives an explicit JSON-RPC error, never a fabricated success.
 - [ ] **Step 2:** Run red — `cd agent-control-tower/qoder-sandbox/bridge && npx vitest run`.
-- [ ] **Step 3:** Implement with `node:child_process` + NDJSON codec; env allowlist constants; no shell; argv exactly `["--acp"]`; the env allowlist excludes other providers' LLM credentials (`DEEPSEEK_API_KEY`, `LLM_API_KEY`, DB-managed keys) — a test asserts their absence from the spawned child env.
+- [ ] **Step 3:** Implement with `node:child_process` + NDJSON codec; env allowlist constants; no shell; argv per C0.3 step 1 (`["--acp","--plugin-dir","/opt/qoder/plugin"]` since the 2026-09-18 amendment); the env allowlist excludes other providers' LLM credentials (`DEEPSEEK_API_KEY`, `LLM_API_KEY`, DB-managed keys) — a test asserts their absence from the spawned child env.
 - [ ] **Step 4:** Green. **Coordinator commit** — `feat(qoder): add ACP client to the sandbox bridge`
 
 ### Task B3b: Bridge HTTP/SSE server
@@ -332,13 +332,13 @@ Any failed required gate stops the project and is reported with raw evidence; do
 ### Task B4: Final qoder-sandbox image (CLI + bridge + plugin)
 
 **Files:**
-- Modify: `agent-control-tower/qoder-sandbox/Dockerfile` (copy bridge, build `dist`, non-root user, `EXPOSE 4097`, `CMD ["node","/opt/qoder/bridge/main.js"]`), `agent-control-tower/qoder-sandbox/plugin/*` (from A2 format)
+- Modify: `agent-control-tower/qoder-sandbox/Dockerfile` (copy bridge, build `dist`, non-root user, `EXPOSE 4097`, `CMD ["node","/opt/qoder/bridge/dist/main.js"]` — corrected 2026-09-18: `tsconfig.json` emits `outDir dist`, so the brief's `main.js` path does not exist in the runtime stage), `agent-control-tower/qoder-sandbox/plugin/*` (from A2 format). The baked bundle is loaded per run via the C0.3 spawn argv (`--plugin-dir /opt/qoder/plugin`, amended 2026-09-18).
 - Modify: `scripts/lib/container-runtime.ps1` (add `Ensure-QoderSandboxImage`, mirroring `Ensure-OpencodeSandboxImage`), `act-app/src/main/resources/application.yml` (qoder image tag)
 
 **Interfaces:** Consumes A1 pin + B3b build; produces the runtime image for B6/B10.
 
-- [ ] **Step 1:** Build image; `docker run --rm` smoke: bridge `/health` responds and refuses requests without the bearer.
-- [ ] **Step 2:** Extend the container-runtime scenario test (`e2e/container-runtime-e2e.sh/.ps1`) with the qoder image case.
+- [ ] **Step 1:** Build image; `docker run --rm` smoke: bridge `/health` responds (unauthenticated per C0.2 — corrected 2026-09-18: the brief's literal "refuses without the bearer" applies to protected routes) and a protected route (`POST /sessions`) refuses requests without the bearer (anonymous and wrong-bearer 401; correct bearer passes the gate and fails validation with 400).
+- [ ] **Step 2:** Extend the container-runtime scenario test (`e2e/container-runtime-e2e.ps1`; corrected 2026-09-18: the bash lib has no image-ensure surface, verified in the B4 review) with the qoder image case.
 - [ ] **Step 3:** Record evidence; **coordinator commit** — `build(qoder): ship CLI, bridge and plugin bundle in the sandbox image`
 
 ### Task B5: `QoderBridgeClient` (Java)

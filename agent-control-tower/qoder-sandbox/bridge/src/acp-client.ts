@@ -653,9 +653,10 @@ export class AcpClient {
     }, this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
     // F3: the escalation timer stays REFERENCED while the CLI may still be alive, so a
     // host that exits right after close()/governance stop cannot skip the SIGKILL and
-    // leave a SIGTERM-ignoring qodercli behind. The `exit` handler clears it as soon as
-    // the child is actually gone (see wireChild), so it never keeps the loop alive longer
-    // than the CLI itself.
+    // leave a SIGTERM-ignoring qodercli behind. It is cleared by whichever of the child's
+    // `exit`/`close` handlers fires first (see wireChild), so once the child is known dead
+    // the timer no longer keeps the loop alive — including the failed-spawn path, where
+    // only `error` + `close` arrive and `exit` never fires.
   }
 
   /** Close the client: reject pending requests, abandon permissions, terminate the CLI. */
@@ -776,6 +777,12 @@ export class AcpClient {
       // held suffix is at most `token.length - 1` characters and is dropped: dropping that
       // bounded fragment is the safe failure mode, whereas flushing early can leak a token.
       this.flushStderrCarry();
+      // B3a re-review: a failed spawn (e.g. ENOENT) reports `error` + `close` but never
+      // `exit`, so clear the F3 escalation timer here too or a dead child keeps it pending.
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = null;
+      }
     });
     child.stdin.on('error', error => {
       // A broken stdin (e.g. the CLI is already gone) must never crash the bridge.

@@ -486,7 +486,7 @@ describe('failure propagation', () => {
     expect(exit.code).toBe(4);
 
     // F7: the caller-facing half of the same failure — the pending `session/prompt` is
-    // rejected and its `reject` emits `prompt_error` (src/acp-client.ts:521-538). The
+    // rejected and its `reject` emits `prompt_error` (src/acp-client.ts:545-562). The
     // prompt request id is 4 (ids 1-3 are the handshake) and the code is the typed
     // AcpProcessExitedError code.
     const promptError = await log.waitFor('prompt_error');
@@ -499,6 +499,33 @@ describe('failure propagation', () => {
     const { client, log, dir } = start('happy', { command: 'definitely-not-a-real-qodercli-binary' });
     await expect(client.createSession(sessionSpec(dir))).rejects.toMatchObject({ code: 'SPAWN_FAILED' });
     await log.waitFor('child_error');
+  });
+
+  it('does not hold the event loop after close() when the CLI binary cannot be spawned (B3a re-review)', async () => {
+    // getActiveResourcesInfo() lists referenced timers only (unref'd ones are excluded),
+    // so a referenced kill-escalation timer shows up as exactly one extra 'Timeout'.
+    const timeouts = (): number =>
+      process.getActiveResourcesInfo().filter(resource => resource === 'Timeout').length;
+    const before = timeouts();
+    const { client, log } = start('happy', {
+      command: 'definitely-not-a-real-qodercli-binary',
+      killGraceMs: 60_000,
+    });
+    // close() runs in the same tick as the constructor, i.e. BEFORE the spawn failure is
+    // delivered (spawn errors arrive on a later tick): terminate() therefore creates the
+    // referenced F3 escalation timer while the child is still "alive", and the child then
+    // reports `error` + `close` WITHOUT `exit` (ENOENT) — so only the `close` handler can
+    // clear that timer. This ordering is deterministic; closing after awaiting the failure
+    // would create the timer only after `close` has already fired.
+    client.close();
+    expect(timeouts()).toBe(before + 1);
+    await log.waitFor('child_error');
+    // `close` follows `error` on a later event-loop turn; bounded immediate turns (no
+    // sleeps) give the close handler the chance to clear the timer.
+    for (let turn = 0; turn < 200 && timeouts() > before; turn++) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(timeouts()).toBe(before);
   });
 
   it('surfaces a JSON-RPC handshake error instead of a silent fallback', async () => {

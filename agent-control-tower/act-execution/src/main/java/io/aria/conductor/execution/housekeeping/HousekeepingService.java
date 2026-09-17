@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.CategoryItem;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.CategoryReceipt;
@@ -81,6 +82,7 @@ public class HousekeepingService {
     private final KanbanRepository kanbanRepository;
     private final AgentRepository agentRepository;
     private final ApprovalRepository approvalRepository;
+    private final AcpPermissionRequestRepository acpPermissionRequestRepository;
     private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
     private final PromptCallRepository promptCallRepository;
@@ -96,6 +98,7 @@ public class HousekeepingService {
 
     public HousekeepingService(RunRepository runRepository, KanbanRepository kanbanRepository,
                                AgentRepository agentRepository, ApprovalRepository approvalRepository,
+                               AcpPermissionRequestRepository acpPermissionRequestRepository,
                                SessionTrajectoryRepository trajectoryRepository,
                                ToolCallRepository toolCallRepository,
                                PromptCallRepository promptCallRepository,
@@ -108,6 +111,7 @@ public class HousekeepingService {
         this.kanbanRepository = kanbanRepository;
         this.agentRepository = agentRepository;
         this.approvalRepository = approvalRepository;
+        this.acpPermissionRequestRepository = acpPermissionRequestRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;
         this.promptCallRepository = promptCallRepository;
@@ -294,6 +298,8 @@ public class HousekeepingService {
                     trajectoryRepository.deleteByRunIdInBulk(chunk);
                     toolCallRepository.deleteByRunIdInBulk(chunk);
                     promptCallRepository.deleteByRunIdInBulk(chunk);
+                    // ACP companion rows FK-reference approvals(id): delete them before the parent.
+                    acpPermissionRequestRepository.deleteByRunIdInBulk(chunk);
                     approvalRepository.deleteByRunIdInBulk(chunk);
                     agentSessionRepository.deleteByRunIdInBulk(chunk);
                     runRepository.deleteByIdInBulk(chunk);

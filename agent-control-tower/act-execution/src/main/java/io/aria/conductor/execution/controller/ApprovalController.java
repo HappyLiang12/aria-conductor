@@ -1,8 +1,10 @@
 package io.aria.conductor.execution.controller;
 
+import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.approval.ApprovalAnswerService;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.ApprovalQueryService;
@@ -28,6 +30,7 @@ public class ApprovalController {
     private final ApprovalGate approvalGate;
     private final ToolCallRepository toolCallRepository;
     private final ToolRiskResolver toolRiskResolver;
+    private final AcpPermissionRequestRepository acpPermissionRequestRepository;
     private final ApprovalQueryService approvalQueryService;
     private final ApprovalAnswerService approvalAnswerService;
 
@@ -35,9 +38,12 @@ public class ApprovalController {
     public ApprovalController(ApprovalRepository approvalRepository,
                               ApprovalGate approvalGate,
                               ToolCallRepository toolCallRepository,
-                              ToolRiskResolver toolRiskResolver) {
+                              ToolRiskResolver toolRiskResolver,
+                              AcpPermissionRequestRepository acpPermissionRequestRepository) {
         this(approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
-                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver),
+                acpPermissionRequestRepository,
+                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver,
+                        acpPermissionRequestRepository),
                 new ApprovalAnswerService(approvalRepository));
     }
 
@@ -46,12 +52,14 @@ public class ApprovalController {
                               ApprovalGate approvalGate,
                               ToolCallRepository toolCallRepository,
                               ToolRiskResolver toolRiskResolver,
+                              AcpPermissionRequestRepository acpPermissionRequestRepository,
                               ApprovalQueryService approvalQueryService,
                               ApprovalAnswerService approvalAnswerService) {
         this.approvalRepository = approvalRepository;
         this.approvalGate = approvalGate;
         this.toolCallRepository = toolCallRepository;
         this.toolRiskResolver = toolRiskResolver;
+        this.acpPermissionRequestRepository = acpPermissionRequestRepository;
         this.approvalQueryService = approvalQueryService;
         this.approvalAnswerService = approvalAnswerService;
     }
@@ -83,7 +91,12 @@ public class ApprovalController {
             String askType,
             String contextMd,
             String optionsJson,
-            String answer) {}
+            String answer,
+            // V60 provenance: source is never null (LEGACY_GATE for rows without one);
+            // deliveryState/displayJson come from the ACP companion row when it exists.
+            String source,
+            String deliveryState,
+            String displayJson) {}
 
     /**
      * List approvals, optionally filtered by {@link ApprovalStatus} or by the kanban card the
@@ -110,7 +123,9 @@ public class ApprovalController {
                     ToolCall tc = a.getToolCallId() != null
                             ? toolCallRepository.findById(a.getToolCallId()).orElse(null)
                             : null;
-                    return ResponseEntity.ok(toDetail(a, tc));
+                    AcpPermissionRequest companion =
+                            acpPermissionRequestRepository.findById(a.getId()).orElse(null);
+                    return ResponseEntity.ok(toDetail(a, tc, companion));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -135,9 +150,12 @@ public class ApprovalController {
         }
     }
 
-    private ApprovalDetail toDetail(Approval a, ToolCall tc) {
-        String toolName = tc != null ? tc.getToolName() : null;
-        String riskTier = toolName != null ? toolRiskResolver.resolve(toolName).name() : null;
+    private ApprovalDetail toDetail(Approval a, ToolCall tc, AcpPermissionRequest companion) {
+        // ACP asks have no ToolCall row: the companion's tool name is the only identity there is,
+        // and since it is not a registry tool, arguments and riskTier stay null.
+        String toolName = tc != null ? tc.getToolName()
+                : companion != null ? companion.getToolName() : null;
+        String riskTier = tc != null ? toolRiskResolver.resolve(tc.getToolName()).name() : null;
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
@@ -148,7 +166,10 @@ public class ApprovalController {
                 toolName, tc != null ? tc.getArguments() : null, riskTier,
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
-                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer(),
+                a.getSource() != null ? a.getSource().name() : "LEGACY_GATE",
+                companion != null ? companion.getDeliveryState() : null,
+                companion != null ? companion.getDisplayJson() : null);
     }
 
     /**

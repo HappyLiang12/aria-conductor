@@ -1,9 +1,12 @@
 package io.aria.conductor.execution.controller;
 
+import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.model.ToolCall;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -18,6 +21,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,8 +49,11 @@ class ApprovalControllerTest extends WebMvcTestBase {
     private final ApprovalGate approvalGate = mock(ApprovalGate.class);
     private final ToolCallRepository toolCallRepository = mock(ToolCallRepository.class);
     private final ToolRiskResolver toolRiskResolver = mock(ToolRiskResolver.class);
+    private final AcpPermissionRequestRepository acpPermissionRequestRepository =
+            mock(AcpPermissionRequestRepository.class);
     private final MockMvc mvc = mockMvcFor(new ApprovalController(
-            approvalRepository, approvalGate, toolCallRepository, toolRiskResolver));
+            approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
+            acpPermissionRequestRepository));
 
     @Test
     void listApprovals_enrichesApprovalsWithToolNameAndRiskTier() throws Exception {
@@ -322,6 +329,56 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.toolName").isEmpty())
                 .andExpect(jsonPath("$.riskTier").isEmpty());
         verifyNoInteractions(toolCallRepository, toolRiskResolver);
+    }
+
+    /**
+     * ACP ask (V60): there is no ToolCall row, so the tool identity falls back to the companion
+     * record and the ACP delivery fields (deliveryState/displayJson) are surfaced. The ACP tool
+     * name is not a registry tool, so arguments and riskTier stay null.
+     */
+    @Test
+    void getApproval_acpAsk_fallsBackToCompanionToolNameAndExposesDeliveryFields() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval ask = anApproval().withId(id).withReason("CLI wants to write a file").build();
+        ask.setSource(ApprovalSource.ACP_PERMISSION);
+        AcpPermissionRequest companion = AcpPermissionRequest.builder()
+                .approvalId(id)
+                .runId(ask.getRunId())
+                .bridgeSessionId("bridge-session-1")
+                .bridgeRequestId("bridge-request-1")
+                .toolName("write_file")
+                .requestDigest("digest-1")
+                .expiresAt(Instant.now().plusSeconds(600))
+                .deliveryState("PENDING_DELIVERY")
+                .displayJson("{\"title\":\"Write file\"}")
+                .build();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(ask));
+        when(acpPermissionRequestRepository.findById(id)).thenReturn(Optional.of(companion));
+
+        mvc.perform(get("/api/v1/approvals/" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("ACP_PERMISSION"))
+                .andExpect(jsonPath("$.toolName").value("write_file"))
+                .andExpect(jsonPath("$.arguments").isEmpty())
+                .andExpect(jsonPath("$.riskTier").isEmpty())
+                .andExpect(jsonPath("$.deliveryState").value("PENDING_DELIVERY"))
+                .andExpect(jsonPath("$.displayJson").value("{\"title\":\"Write file\"}"));
+
+        verifyNoInteractions(toolRiskResolver);
+    }
+
+    /** Legacy rows have no companion: source reads as LEGACY_GATE and the ACP fields are null. */
+    @Test
+    void listApprovals_legacyRows_defaultToLegacyGateWithNullAcpFields() throws Exception {
+        Approval legacy = anApproval().build();
+        when(approvalRepository.findAll(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(legacy)));
+
+        mvc.perform(get("/api/v1/approvals"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].source").value("LEGACY_GATE"))
+                .andExpect(jsonPath("$[0].deliveryState").isEmpty())
+                .andExpect(jsonPath("$[0].displayJson").isEmpty());
     }
 
     @Test

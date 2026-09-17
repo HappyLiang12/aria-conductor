@@ -10,6 +10,7 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.CategorySummary;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.Exclusions;
@@ -53,6 +54,7 @@ class HousekeepingServiceTest {
     @Mock KanbanRepository kanbanRepository;
     @Mock AgentRepository agentRepository;
     @Mock ApprovalRepository approvalRepository;
+    @Mock AcpPermissionRequestRepository acpPermissionRequestRepository;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
     @Mock PromptCallRepository promptCallRepository;
@@ -69,9 +71,9 @@ class HousekeepingServiceTest {
     @BeforeEach
     void setUp() {
         service = new HousekeepingService(runRepository, kanbanRepository, agentRepository,
-                approvalRepository, trajectoryRepository, toolCallRepository, promptCallRepository,
-                agentSessionRepository, kanbanService, agentService, runService, approvalGate,
-                eventPublisher, transactionTemplate);
+                approvalRepository, acpPermissionRequestRepository, trajectoryRepository,
+                toolCallRepository, promptCallRepository, agentSessionRepository, kanbanService,
+                agentService, runService, approvalGate, eventPublisher, transactionTemplate);
         lenient().when(runRepository.findByStatusIn(anyList())).thenReturn(List.of());
         lenient().when(runRepository.findByStatus(any())).thenReturn(List.of());
         lenient().when(kanbanRepository.findByStatus(any())).thenReturn(List.of());

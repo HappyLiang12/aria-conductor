@@ -70,8 +70,14 @@ describe('CrewPage ADK provider selector (B9)', () => {
     const labels = [...select.querySelectorAll('option')].map((o) => o.textContent);
     expect(labels).toContain('Qoder');
 
-    // B9 adds no default flip: the form keeps its pre-existing initial value
-    // and `opencode` stays the platform default (the row the API marks isDefault).
+    // B9 adds no default flip. Both lines below pin PRE-EXISTING behavior, not a
+    // B9 contract: `CrewPage` has always started a fresh agent form on
+    // 'langchain', and this fixture's `isDefault` row has always been 'opencode'
+    // (kept as a guard so the two notions — the form's own initial value and the
+    // API-marked platform default — cannot silently collapse into one). If a
+    // later change deliberately makes the form start on the provider marked
+    // `isDefault`, update these two expectations as part of that change; a
+    // failure here is not a B9 regression.
     expect(select.value).toBe('langchain');
     expect(PROVIDERS.find((p) => p.isDefault)?.id).toBe('opencode');
   });

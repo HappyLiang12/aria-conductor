@@ -25,12 +25,18 @@ import type { QoderCredentialTestResult } from '../types';
  *     service is reachable AND a credential is configured; otherwise blocked
  *     with an explicit reason. A configured PAT alone is not healthy.
  *
- * The PAT is written one way only: it lives in the PUT body and is cleared from
- * component state on success; nothing in this component renders or persists it.
+ * The PAT is written one way only: it lives in the PUT body and in the password
+ * editor's local state, and is dropped from that state as soon as the save
+ * attempt settles (success or failure); nothing else in this component renders
+ * or persists it.
  */
-const GREEN = '#4caf50';
-const RED = '#f44336';
-const AMBER = '#f6c453';
+// Design-system palette (styles/index.css :root). The probe text below already
+// uses these variables, so the badges must not reintroduce a second green/red.
+const GREEN = 'var(--green)';
+const RED = 'var(--red)';
+const AMBER = 'var(--amber)';
+// No design-system token exists for the neutral "unknown" grey; the previous
+// literal is kept so that badge's appearance does not change.
 const GREY = '#8b93a7';
 
 const muted: CSSProperties = { color: 'var(--text-mute)', fontSize: 11.5 };
@@ -39,7 +45,13 @@ function StateBadge({ label, color }: { label: string; color: string }) {
   return (
     <span
       className="status-badge status-badge-md"
-      style={{ backgroundColor: color + '22', color, borderColor: color }}
+      style={{
+        // color-mix replaces the `color + '22'` hex-alpha trick, which cannot
+        // work with a var() token; 13% is the same alpha as 0x22.
+        backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`,
+        color,
+        borderColor: color,
+      }}
     >
       {label}
     </span>
@@ -78,13 +90,21 @@ export function QoderCredentialCard() {
   const [probe, setProbe] = useState<QoderCredentialTestResult | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
+  // A failing credential store is deterministic (503 KEY_NOT_CONFIGURED, or an
+  // unreachable store), so retries only delay `Unavailable` by ~7 s (client
+  // default: 3 retries at 1 s / 2 s / 4 s). The error must render immediately.
   const statusQuery = useQuery({
     queryKey: ['qoder-credential'],
     queryFn: getQoderCredential,
+    retry: false,
   });
 
   // Same cache key the ProvidersPage inventory table uses for registered
   // providers: when qoder is registered both surfaces share one probe result.
+  // query-core takes the retry policy from the observer that triggers the fetch
+  // (`queryObserver.js` → `query.js`), so `retry:false` must be set on EVERY
+  // observer of this key — here and in `ProvidersPage.tsx` — or the immediate
+  // 404 classification becomes render-order dependent.
   const healthQuery = useQuery({
     queryKey: ['adk-provider-health', 'qoder'],
     queryFn: () => getAdkProviderHealth('qoder'),
@@ -95,8 +115,8 @@ export function QoderCredentialCard() {
     mutationFn: (value: string) => saveQoderCredential(value),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['qoder-credential'] });
-      // Drop the submitted secret from the mutation state as soon as the save
-      // settles: it is never rendered again and should not sit in the cache.
+      // Drop the submitted secret from the mutation state as well: it is never
+      // rendered again and should not sit in the cache.
       saveMutation.reset();
       setPat('');
       setEditing(false);
@@ -105,6 +125,9 @@ export function QoderCredentialCard() {
     },
     onError: (err: unknown) => {
       setNotice(null);
+      // The typed secret is dropped here too: after a failed attempt the editor
+      // must not keep the token in the DOM. Retrying means retyping the PAT.
+      setPat('');
       setFormError(apiMessage(err) ?? 'Saving the credential failed. Retry or check the backend logs.');
     },
   });
@@ -183,7 +206,11 @@ export function QoderCredentialCard() {
     removeMutation.mutate();
   };
 
-  const showInput = !statusUnavailable && (!configured || editing);
+  // `configured` defaults to false while the status GET is in flight, so the
+  // editor waits for the store's answer: no first-time PAT form flashes for an
+  // operator who already has a credential. The error state keeps its own Retry
+  // affordance and never shows the editor.
+  const showInput = statusQuery.isSuccess && (!configured || editing);
 
   return (
     <div className="card" style={{ marginTop: 24 }} data-testid="qoder-credential-card">
@@ -273,14 +300,24 @@ export function QoderCredentialCard() {
           Credential status unavailable —{' '}
           {apiMessage(statusQuery.error) ?? 'the credential store did not answer.'}
           <div style={{ marginTop: 10 }}>
-            <button type="button" className="btn" onClick={() => statusQuery.refetch()}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                void statusQuery.refetch();
+                // The sandbox-service row shares its cache key with the
+                // ProvidersPage inventory table: a stale `Not registered` /
+                // `Unknown` must not survive a manual retry.
+                void queryClient.invalidateQueries({ queryKey: ['adk-provider-health', 'qoder'] });
+              }}
+            >
               Retry
             </button>
           </div>
         </div>
       )}
 
-      {!statusUnavailable && showInput && (
+      {showInput && (
         <form onSubmit={handleSubmit} style={{ marginTop: 12 }}>
           <label
             htmlFor="qoder-pat"

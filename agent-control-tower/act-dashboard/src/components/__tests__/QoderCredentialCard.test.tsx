@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { QoderCredentialCard } from '../QoderCredentialCard';
@@ -95,6 +95,24 @@ describe('QoderCredentialCard credential editor', () => {
     expect(document.body.textContent).not.toContain(SYNTHETIC_PAT);
   });
 
+  it('does not flash the first-time PAT editor while the credential status is loading', async () => {
+    // The status GET stays in flight for a tick: `configured` defaults to false
+    // while pending, so an ungated editor would show a configured operator the
+    // first-time PAT form.
+    vi.mocked(getQoderCredential).mockImplementation(
+      () => new Promise<QoderCredentialStatus>((resolve) => setTimeout(() => resolve(UNCONFIGURED), 40)),
+    );
+    ui();
+
+    expect(screen.getAllByText('Checking…').length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText(/personal access token/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument();
+
+    // Once the store answers "not configured" the first-time form is correct.
+    expect(await screen.findByLabelText(/personal access token/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
   it('renders the masked configured state (masked PAT, timestamp, model) without posting', async () => {
     vi.mocked(getQoderCredential).mockResolvedValue(CONFIGURED);
     ui();
@@ -158,6 +176,9 @@ describe('QoderCredentialCard credential editor', () => {
 
     await waitFor(() => expect(saveQoderCredential).toHaveBeenCalledTimes(1));
     expect(await screen.findByText(/encryption is not configured\./)).toBeInTheDocument();
+    // Mirror of the success-path check above: a token sitting in an input
+    // `value` is invisible to textContent, so the display value must be checked.
+    expect(screen.queryByDisplayValue(SYNTHETIC_PAT)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain(SYNTHETIC_PAT);
   });
 
@@ -273,5 +294,96 @@ describe('QoderCredentialCard separate provider states', () => {
 
     expect(await screen.findByText('Not registered')).toBeInTheDocument();
     expect(screen.getByText('Unknown')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Retry policy of the card's two queries (report-D4).
+ *
+ * `getQoderCredential` failing is deterministic (503 KEY_NOT_CONFIGURED or an
+ * unreachable store), so an inherited retry only delays `Unavailable` by ~7 s
+ * (client default: 3 retries at 1 s / 2 s / 4 s). These tests render with a
+ * test-local client whose default IS retry:1 and whose retryDelay is 0, so an
+ * inherited retry would fire inside the assertion window below: the query-level
+ * `retry:false` has to win for the assertions to hold.
+ */
+describe('QoderCredentialCard retry policy (report-D4)', () => {
+  const STORE_503 = Object.assign(new Error('Service Unavailable'), {
+    response: {
+      status: 503,
+      data: {
+        code: 'KEY_NOT_CONFIGURED',
+        message: 'Runtime credential encryption is not configured.',
+      },
+    },
+  });
+
+  const PROBE_404 = Object.assign(new Error('Not Found'), { response: { status: 404 } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(saveQoderCredential).mockResolvedValue(CONFIGURED);
+    vi.mocked(deleteQoderCredential).mockResolvedValue(undefined);
+  });
+
+  /** Client whose defaults permit one immediate retry of every query. */
+  function uiWithRetryingClient() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+    return {
+      qc,
+      ...render(
+        <QueryClientProvider client={qc}>
+          <QoderCredentialCard />
+        </QueryClientProvider>,
+      ),
+    };
+  }
+
+  /** Longer than a 0 ms retryDelay: a scheduled retry must have fired by now. */
+  const flushScheduledRetries = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+  it('settles the deterministic credential 503 without an inherited retry', async () => {
+    vi.mocked(getQoderCredential).mockRejectedValue(STORE_503);
+    vi.mocked(getAdkProviderHealth).mockResolvedValue({ providerId: 'qoder', healthy: true });
+    uiWithRetryingClient();
+
+    expect(await screen.findByText('Unavailable')).toBeInTheDocument();
+    await flushScheduledRetries();
+    expect(getQoderCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles the shared provider-health 404 without an inherited retry', async () => {
+    vi.mocked(getQoderCredential).mockResolvedValue(UNCONFIGURED);
+    vi.mocked(getAdkProviderHealth).mockRejectedValue(PROBE_404);
+    uiWithRetryingClient();
+
+    expect(await screen.findByText('Not registered')).toBeInTheDocument();
+    await flushScheduledRetries();
+    expect(getAdkProviderHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the credential status AND the shared provider-health probe on Retry', async () => {
+    vi.mocked(getQoderCredential).mockRejectedValue(STORE_503);
+    // The 404 was a stale `Not registered`: the probe is healthy on the refetch.
+    vi.mocked(getAdkProviderHealth).mockRejectedValueOnce(PROBE_404).mockResolvedValue({
+      providerId: 'qoder',
+      healthy: true,
+    });
+    const user = userEvent.setup();
+    ui();
+    expect(await screen.findByText('Not registered')).toBeInTheDocument();
+    expect(getQoderCredential).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }));
+
+    // Both surfaces refresh: the credential GET is refetched and the shared
+    // provider-health key is invalidated, so a stale `Not registered` row cannot
+    // survive a manual retry.
+    expect(await screen.findByText('Healthy')).toBeInTheDocument();
+    expect(getAdkProviderHealth).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(getQoderCredential).toHaveBeenCalledTimes(2));
   });
 });

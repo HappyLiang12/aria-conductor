@@ -34,6 +34,11 @@ export function ProvidersPage() {
     queries: (providers ?? []).map((p) => ({
       queryKey: ['adk-provider-health', p.id],
       queryFn: () => getAdkProviderHealth(p.id),
+      // The qoder key is shared with QoderCredentialCard, and query-core takes
+      // the retry policy from whichever observer triggers the fetch: every
+      // observer must agree. A 404 means "not registered" and must classify at
+      // once instead of after the default 3 retries.
+      retry: false,
     })),
   });
 

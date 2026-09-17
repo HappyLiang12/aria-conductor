@@ -300,11 +300,12 @@ describe('QoderCredentialCard separate provider states', () => {
 /**
  * Retry policy of the card's two queries (report-D4).
  *
- * `getQoderCredential` failing is deterministic (503 KEY_NOT_CONFIGURED or an
- * unreachable store), so an inherited retry only delays `Unavailable` by ~7 s
- * (client default: 3 retries at 1 s / 2 s / 4 s). These tests render with a
- * test-local client whose default IS retry:1 and whose retryDelay is 0, so an
- * inherited retry would fire inside the assertion window below: the query-level
+ * A failing credential store is deterministic (503 KEY_NOT_CONFIGURED or an
+ * unreachable store), so an inherited retry would only delay `Unavailable` by
+ * ~1 s (the app client sets `retry: 1`, `App.tsx:19`; query-core's first retry
+ * delay is 1 s, `retryer.js` defaultRetryDelay). These tests render with a
+ * test-local client whose default permits one 0 ms retry, under fake timers, so
+ * "a scheduled retry would have fired" is deterministic: the query-level
  * `retry:false` has to win for the assertions to hold.
  */
 describe('QoderCredentialCard retry policy (report-D4)', () => {
@@ -339,30 +340,53 @@ describe('QoderCredentialCard retry policy (report-D4)', () => {
     };
   }
 
-  /** Longer than a 0 ms retryDelay: a scheduled retry must have fired by now. */
-  const flushScheduledRetries = () =>
-    act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+  /**
+   * Fake-timer driver: time only advances where a test advances it, so "a 0 ms
+   * retry scheduled on failure would have fired by now" is deterministic
+   * instead of a measured real-time window (no machine-speed dependence).
+   * `advanceTimersByTimeAsync` also flushes the rejected-fetch promise chains.
+   */
+  async function advanceFakeTimers(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
     });
+  }
 
   it('settles the deterministic credential 503 without an inherited retry', async () => {
-    vi.mocked(getQoderCredential).mockRejectedValue(STORE_503);
-    vi.mocked(getAdkProviderHealth).mockResolvedValue({ providerId: 'qoder', healthy: true });
-    uiWithRetryingClient();
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getQoderCredential).mockRejectedValue(STORE_503);
+      vi.mocked(getAdkProviderHealth).mockResolvedValue({ providerId: 'qoder', healthy: true });
+      uiWithRetryingClient();
 
-    expect(await screen.findByText('Unavailable')).toBeInTheDocument();
-    await flushScheduledRetries();
-    expect(getQoderCredential).toHaveBeenCalledTimes(1);
+      await advanceFakeTimers(0);
+      expect(screen.getByText('Unavailable')).toBeInTheDocument();
+
+      // Past any 0 ms retry the mutated client would have scheduled.
+      await advanceFakeTimers(60_000);
+      expect(getQoderCredential).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('settles the shared provider-health 404 without an inherited retry', async () => {
-    vi.mocked(getQoderCredential).mockResolvedValue(UNCONFIGURED);
-    vi.mocked(getAdkProviderHealth).mockRejectedValue(PROBE_404);
-    uiWithRetryingClient();
+    vi.useFakeTimers();
+    try {
+      vi.mocked(getQoderCredential).mockResolvedValue(UNCONFIGURED);
+      vi.mocked(getAdkProviderHealth).mockRejectedValue(PROBE_404);
+      uiWithRetryingClient();
 
-    expect(await screen.findByText('Not registered')).toBeInTheDocument();
-    await flushScheduledRetries();
-    expect(getAdkProviderHealth).toHaveBeenCalledTimes(1);
+      await advanceFakeTimers(0);
+      // Past any 0 ms retry the mutated client would have scheduled. A refetch
+      // wipes the error state while it runs, hence the terminal state is
+      // asserted after the advance has settled.
+      await advanceFakeTimers(60_000);
+      expect(screen.getByText('Not registered')).toBeInTheDocument();
+      expect(getAdkProviderHealth).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refreshes the credential status AND the shared provider-health probe on Retry', async () => {

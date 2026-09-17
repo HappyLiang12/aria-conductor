@@ -91,20 +91,22 @@ export function QoderCredentialCard() {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   // A failing credential store is deterministic (503 KEY_NOT_CONFIGURED, or an
-  // unreachable store), so retries only delay `Unavailable` by ~7 s (client
-  // default: 3 retries at 1 s / 2 s / 4 s). The error must render immediately.
+  // unreachable store), so an inherited retry would only delay `Unavailable` by
+  // ~1 s: the app client sets `retry: 1` (`App.tsx:19`) and query-core's first
+  // retry delay is 1 s (`retryer.js`, defaultRetryDelay). Render immediately.
   const statusQuery = useQuery({
     queryKey: ['qoder-credential'],
     queryFn: getQoderCredential,
     retry: false,
   });
 
-  // Same cache key the ProvidersPage inventory table uses for registered
-  // providers: when qoder is registered both surfaces share one probe result.
-  // query-core takes the retry policy from the observer that triggers the fetch
-  // (`queryObserver.js` → `query.js`), so `retry:false` must be set on EVERY
-  // observer of this key — here and in `ProvidersPage.tsx` — or the immediate
-  // 404 classification becomes render-order dependent.
+  // Same cache key the ProvidersPage inventory table and the TopBar badge use
+  // for registered providers: when qoder is registered all surfaces share one
+  // probe result. query-core takes the retry policy from the observer that
+  // triggers the fetch (`queryObserver.js` → `query.js`), so `retry:false` is
+  // pinned on every observer of this key — here, in `ProvidersPage.tsx` and in
+  // `TopBar.tsx` — or the immediate 404 classification becomes render-order
+  // dependent.
   const healthQuery = useQuery({
     queryKey: ['adk-provider-health', 'qoder'],
     queryFn: () => getAdkProviderHealth('qoder'),

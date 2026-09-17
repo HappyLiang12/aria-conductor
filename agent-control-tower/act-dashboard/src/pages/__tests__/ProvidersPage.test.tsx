@@ -103,26 +103,38 @@ describe('ProvidersPage qoder provider-health retry policy', () => {
   });
 
   it('settles the shared qoder health key without an inherited retry', async () => {
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
-    render(
-      <QueryClientProvider client={qc}>
-        <ProvidersPage />
-      </QueryClientProvider>,
-    );
+    // Fake timers: time only advances where this test advances it, so "a 0 ms
+    // retry scheduled on failure would have fired by now" is deterministic
+    // instead of a measured real-time window (the previous 400 ms window was
+    // machine-dependent).
+    vi.useFakeTimers();
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+      render(
+        <QueryClientProvider client={qc}>
+          <ProvidersPage />
+        </QueryClientProvider>,
+      );
 
-    // Let both observers (the card at mount, the table once the provider list
-    // resolves) probe the shared key, and let a retry scheduled with 0 delay
-    // land: it was observed to fire later than 100 ms under jsdom + act, so the
-    // window below is deliberately generous. The refetch wipes the error state
-    // while it runs, hence the terminal state is asserted after it settles.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    });
-    expect(screen.getByText('Not registered')).toBeInTheDocument();
+      // Let both observers (the card at mount, the table once the provider list
+      // resolves) probe the shared key; a retry scheduled with 0 delay would be
+      // queued on the fake clock here. The refetch wipes the error state while
+      // it runs, hence the terminal state is asserted after it settles.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Past any 0 ms retry; nothing on this page runs on an interval.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.getByText('Not registered')).toBeInTheDocument();
 
-    const qoderCalls = vi.mocked(getAdkProviderHealth).mock.calls.filter(([id]) => id === 'qoder');
-    // Exactly two probes: the card's mount probe and the table's probe once the
-    // provider list resolved — a retry from either observer would make it three.
-    expect(qoderCalls).toHaveLength(2);
+      const qoderCalls = vi.mocked(getAdkProviderHealth).mock.calls.filter(([id]) => id === 'qoder');
+      // Exactly two probes: the card's mount probe and the table's probe once
+      // the provider list resolved — a retry from any observer makes it three.
+      expect(qoderCalls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

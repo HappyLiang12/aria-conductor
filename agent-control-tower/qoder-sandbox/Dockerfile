@@ -25,9 +25,11 @@
 #     runtime-upload convention is unchanged: the Java side still uploads the bundle to
 #     /workspace/plugin and loads it per run via `--plugin-dir` (A2).
 #   - Auto-update is disabled for the pinned CLI by baking the documented user-settings
-#     key `general.enableAutoUpdate=false` into $HOME/.qoder/settings.json. The pinned
-#     1.1.41 binary reads that file on the exact `qodercli --acp` entry path the bridge
-#     uses (behavior verified in e2e/qoder/slice-b/01-image.md).
+#     key `general.enableAutoUpdate=false` into $HOME/.qoder/settings.json. The key is
+#     present in the pinned 1.1.41 binary (in-image `grep -a -o 'general.enableAutoUpdate'`
+#     returns 8 occurrences / 4 matching lines). That the CLI honors it on the
+#     `qodercli --acp` entry path the bridge uses is NOT yet exercised; verify it with a
+#     real sandbox in C6.
 #   - The container runs as the non-root `node` user (uid/gid 1000); /workspace and the
 #     CLI config root are owned by it. The bridge listens on 4097 inside the sandbox.
 
@@ -73,7 +75,7 @@ RUN apt-get update \
     && install -m 0755 /tmp/qodercli-extract/qodercli /usr/local/bin/qodercli \
     && rm -rf /tmp/qodercli-extract /tmp/qodercli.tar.gz \
     && HOME=/tmp/qodercli-smoke qodercli --version \
-    && rm -rf /tmp/qodercli-smoke \
+    && rm -rf /tmp/qodercli-smoke /tmp/qodercli-natives-* \
     && test "$(stat -c '%a %u:%g' /tmp)" = "1777 0:0"
 
 # Compiled bridge from stage 1. package.json must sit next to dist/ so Node treats the
@@ -81,14 +83,25 @@ RUN apt-get update \
 COPY --from=bridge-builder /build/bridge/dist /opt/qoder/bridge/dist
 COPY bridge/package.json /opt/qoder/bridge/package.json
 
-# Pinned plugin bundle (A2 format), on-disk layout unchanged. Root-owned on purpose:
-# unlike a runtime-uploaded copy in the agent workspace, this image copy cannot be
-# modified by the sandbox user.
+# Pinned plugin bundle (A2 format), on-disk layout unchanged. Root-owned on purpose, and it
+# is the mode normalization below (not the ownership alone) that makes this image copy
+# read-only for the sandbox user: unlike a runtime-uploaded copy in the agent workspace, this
+# image copy cannot be modified from inside the sandbox.
 COPY plugin /opt/qoder/plugin
 
+# COPY takes the modes from the build host (a Windows host yields 0777), so the pinned bundle
+# would be writable by the in-sandbox `node` user and the image would vary with the builder.
+# Normalize explicitly: root-owned, read/traverse-only for everyone else. No file under
+# /opt/qoder needs an execute bit (the CLI is at /usr/local/bin/qodercli, the bridge is
+# spawned as `node <path>`, the plugin files are data).
+RUN find /opt/qoder -type d -exec chmod 0755 {} + \
+    && find /opt/qoder -type f -exec chmod 0644 {} +
+
 # Qoder CLI auto-update off (documented key `general.enableAutoUpdate`, default true).
-# The CLI resolves its user config root from HOME on every start; HOME is set explicitly
-# so the same path is used by a direct `podman run` and by the OpenSandbox bootstrap.
+# The CLI resolves its user config root from HOME on every start. This ENV is verified for a
+# direct `podman run`; that the OpenSandbox bootstrap also starts the sandbox with HOME set to
+# /home/node is NOT VERIFIED here (A1/A2 observed HOME=/root inside an OpenSandbox-created
+# sandbox) — C6 must observe it in a real sandbox before the pinned-CLI property is trusted.
 ENV HOME=/home/node
 RUN install -d -o node -g node /home/node/.qoder \
     && printf '{\n  "general": {\n    "enableAutoUpdate": false\n  }\n}\n' > /home/node/.qoder/settings.json \

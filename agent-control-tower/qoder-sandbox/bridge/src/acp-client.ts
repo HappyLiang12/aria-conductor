@@ -5,8 +5,9 @@
  * selection) of docs/superpowers/plans/2026-09-17-qoder-cli-provider.md against the facts
  * observed on the real CLI in Slice A:
  *
- *  - C0.3 step 1 — spawn `qodercli` with argv exactly `["--acp"]`, an environment
- *    allowlist (`src/env.ts`) and cwd `/workspace`; never through a shell.
+ *  - C0.3 step 1 (amended) — spawn `qodercli` with the ACP entry plus the pinned plugin
+ *    dir (`DEFAULT_ARGS`), an environment allowlist (`src/env.ts`) and cwd `/workspace`;
+ *    never through a shell.
  *  - C0.3 steps 2-4 — `initialize {protocolVersion:1}`, `session/new {cwd, mcpServers}`,
  *    `session/set_model {sessionId, modelId}`, each awaited on the matching JSON-RPC
  *    response (response-driven, never fixed delays — spike section 3).
@@ -42,8 +43,14 @@ import { buildChildEnv } from './env.js';
 
 /** Executable spawned by default (C0.3 step 1). */
 export const DEFAULT_COMMAND = 'qodercli';
-/** argv spawned by default (C0.3 step 1: exactly `--acp`). */
-export const DEFAULT_ARGS: readonly string[] = ['--acp'];
+/**
+ * Pinned plugin bundle, loaded explicitly and kept non-writable by the CLI (design §7.2):
+ * the root-owned baked copy at `/opt/qoder/plugin` in the `aria-conductor/qoder-sandbox`
+ * image (Dockerfile:87). `--plugin-dir` + `--acp` is A3-verified (slice-a/03-mcp-auth.md:78).
+ */
+export const DEFAULT_PLUGIN_DIR = '/opt/qoder/plugin';
+/** argv spawned by default: ACP entry plus the pinned plugin dir (C0.3 step 1, amended). */
+export const DEFAULT_ARGS: readonly string[] = ['--acp', '--plugin-dir', DEFAULT_PLUGIN_DIR];
 /** Working directory of the CLI process by default (C0.3 step 1). */
 export const DEFAULT_CWD = '/workspace';
 export const ACP_PROTOCOL_VERSION = 1;
@@ -192,7 +199,7 @@ export interface SessionSpec {
 export interface AcpClientOptions {
   /** Executable to spawn; production default `qodercli`. Injectable for tests. */
   command?: string;
-  /** Full argv for the command; production default `['--acp']`. Injectable for tests. */
+  /** Full argv for the command; production default `DEFAULT_ARGS`. Injectable for tests. */
   args?: readonly string[];
   /** Working directory of the CLI process; production default `/workspace`. */
   cwd?: string;
@@ -247,10 +254,10 @@ export interface PermissionDecision {
 // ---------------------------------------------------------------------------------------
 
 /**
- * Resolve the CLI spawn plan (C0.3 step 1). Tests assert the production default is the
- * `qodercli` command with argv exactly `["--acp"]` and cwd `/workspace`; the fixture
- * suite overrides `command`/`args`/`cwd` to run the committed fake CLI through
- * `process.execPath`.
+ * Resolve the CLI spawn plan (C0.3 step 1, amended). Tests assert the production default is
+ * the `qodercli` command with argv `DEFAULT_ARGS` (`--acp --plugin-dir <DEFAULT_PLUGIN_DIR>`)
+ * and cwd `/workspace`; the fixture suite overrides `command`/`args`/`cwd` to run the
+ * committed fake CLI through `process.execPath`.
  */
 export function resolveSpawnPlan(options: AcpClientOptions = {}): SpawnPlan {
   return {

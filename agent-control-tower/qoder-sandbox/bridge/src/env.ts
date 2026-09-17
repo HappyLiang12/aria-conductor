@@ -8,8 +8,10 @@
  * refuse to start (the spike/A3 removed those explicitly before the allowlist existed).
  *
  * The model pin is NOT an environment variable: it travels as
- * `session/set_model {sessionId, modelId}` (C0.1/A4/A5). The plugin directory and cwd are
- * image/session concerns (`--plugin-dir` at image build, `session/new.cwd` per session).
+ * `session/set_model {sessionId, modelId}` (C0.1/A4/A5). Neither is the plugin directory:
+ * the root-owned copy baked into the image at `/opt/qoder/plugin` reaches the CLI through
+ * the spawn argv (`--plugin-dir`, `DEFAULT_PLUGIN_DIR` in `src/acp-client.ts`), and cwd
+ * through `session/new.cwd` per session. The environment carries neither.
  */
 export const CHILD_ENV_ALLOWLIST = [
   'PATH',

@@ -25,6 +25,7 @@ import {
   DEFAULT_ARGS,
   DEFAULT_COMMAND,
   DEFAULT_CWD,
+  DEFAULT_PLUGIN_DIR,
   GovernanceStopError,
   PermissionAlreadyResolvedError,
   UnknownPermissionRequestError,
@@ -188,14 +189,18 @@ afterEach(async () => {
 });
 
 describe('production spawn plan (C0.3 step 1)', () => {
-  it('spawns `qodercli` with argv exactly ["--acp"], cwd /workspace, no shell', () => {
+  it('spawns `qodercli` with argv ["--acp", "--plugin-dir", "/opt/qoder/plugin"] (C0.3 step 1 amended), cwd /workspace, no shell', () => {
+    // C0.3 step 1 amended by coordinator ruling: the spawn argv carries the pinned plugin
+    // dir (design §7.2 requires the bundle loaded explicitly and kept non-writable by the
+    // CLI; `--plugin-dir` + `--acp` is A3-verified, e2e/qoder/slice-a/03-mcp-auth.md:78).
     expect(DEFAULT_COMMAND).toBe('qodercli');
-    expect(DEFAULT_ARGS).toEqual(['--acp']);
+    expect(DEFAULT_PLUGIN_DIR).toBe('/opt/qoder/plugin');
+    expect(DEFAULT_ARGS).toEqual(['--acp', '--plugin-dir', DEFAULT_PLUGIN_DIR]);
     expect(DEFAULT_CWD).toBe('/workspace');
 
     const plan = resolveSpawnPlan({});
     expect(plan.command).toBe('qodercli');
-    expect(plan.args).toEqual(['--acp']);
+    expect(plan.args).toEqual(['--acp', '--plugin-dir', '/opt/qoder/plugin']);
     expect(plan.cwd).toBe('/workspace');
     expect(plan.shell).toBe(false);
     expect(Object.keys(plan.env).every(key => (CHILD_ENV_ALLOWLIST as readonly string[]).includes(key))).toBe(true);

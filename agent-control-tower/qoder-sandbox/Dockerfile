@@ -21,9 +21,9 @@
 #     stage with `npm ci && npm run build`; only `dist/` and `package.json` reach the
 #     final image, so the image never consumes host-built node_modules/dist output
 #     (.dockerignore keeps both out of the build context).
-#   - The pinned plugin bundle (plugin/) is baked verbatim at /opt/qoder/plugin. The
-#     runtime-upload convention is unchanged: the Java side still uploads the bundle to
-#     /workspace/plugin and loads it per run via `--plugin-dir` (A2).
+#   - The pinned plugin bundle (plugin/) is baked verbatim at /opt/qoder/plugin, root-owned and
+#     mode-normalized (see the normalization layer below); the bridge loads it explicitly via
+#     its C0.3 step-1 spawn argv `--plugin-dir /opt/qoder/plugin` (amended 2026-09-18; design §7.2).
 #   - Auto-update is disabled for the pinned CLI by baking the documented user-settings
 #     key `general.enableAutoUpdate=false` into $HOME/.qoder/settings.json. The key is
 #     present in the pinned 1.1.41 binary (in-image `grep -a -o 'general.enableAutoUpdate'`

@@ -358,8 +358,11 @@ $ podman history --format '{{.Size}}' d1312a38711d      $ podman history --forma
                                                         77.9MB
 ```
 
-Every layer size is identical except the CLI layer (179MB → 154MB) and the added 196kB
-normalization layer. The disappeared 25 MB is the directory M5 removes:
+Both columns are newest-first, but the rebuilt image has one more entry — the added 196kB
+normalization layer — so below that entry the rebuilt column sits one line lower; matched
+entry-for-entry across that offset, exactly two rows changed size: the CLI layer (179MB → 154MB)
+and the bridge `dist/` COPY (188kB → 190kB, consistent with the recompiled `dist/` after the
+amended bridge argv — section 7.1). The disappeared 25 MB is the directory M5 removes:
 
 ```
 $ MSYS_NO_PATHCONV=1 podman run --rm --network none --user 0 --entrypoint sh d1312a38711d -c 'du -sh /tmp/qodercli-natives-v1.1.41-unknown; find /tmp/qodercli-natives-v1.1.41-unknown -maxdepth 3 | head -20'
@@ -543,10 +546,10 @@ ef47378ab5c6aeb32b4ec3251aad08c6a1c15970a70e8186f9e67c3906018c51  /usr/local/bin
 ef47378ab5c6aeb32b4ec3251aad08c6a1c15970a70e8186f9e67c3906018c51  /usr/local/bin/qodercli
 ```
 
-HOME: the ENV is verified for a direct `podman run` (`id -un` → `node`, `HOME=/home/node` visible
-in the section-4 captures and in the `qodercli` runs of section 7); that the OpenSandbox bootstrap
-starts the sandbox with the same HOME is NOT VERIFIED here — C6 must observe it. The Dockerfile
-comment now says exactly that (`Dockerfile:100-104`).
+HOME: the image ENV sets `HOME=/home/node` (`Dockerfile:105`), and a direct `podman run` as the
+image user prints `id -un` → `node` (section 7.3; the section-4 `podman exec` shows the same); that
+the OpenSandbox bootstrap starts the sandbox with the same HOME is NOT VERIFIED here — C6 must
+observe it. The Dockerfile comment now says exactly that (`Dockerfile:100-104`).
 
 ### 7.5 I3 — the decisive auth-gate probe, and the smoke on the rebuilt image
 
@@ -652,12 +655,17 @@ $ MSYS_NO_PATHCONV=1 podman run --rm --network none --entrypoint qodercli localh
 plugins_rc=0
 ```
 
-Every field above is the pinned bundle's own text (`plugin/manifest.json`,
-`plugin/skills/aria-pinned/SKILL.md`), and `installPath` is the baked path, so in this image
-`--plugin-dir /opt/qoder/plugin` resolves exactly the pinned bundle and reports its one skill.
+The bundle's own text above is the plugin `name`, `version` and `description` (from
+`plugin/manifest.json`, with the same values in `plugin/.qoder-plugin/plugin.json`) and the skill's
+`name`/`description` (from `plugin/skills/aria-pinned/SKILL.md`); the remaining fields — `id`,
+`source`, `scope`, `enabled`, `canDisable`, `installPath` — are CLI-derived (they appear in no
+bundle file). `installPath` is the baked path, so in this image `--plugin-dir /opt/qoder/plugin`
+resolves exactly the pinned bundle and reports its one skill.
 What this does NOT show: that the plugin is loaded into an authenticated agent session — that stays
 with C6/C7. The `--acp` + `--plugin-dir` combination itself is already verified in task A3
 (`e2e/qoder/slice-a/03-mcp-auth.md:78`), and the shipped bridge compiles that argv (section 7.1).
+
+Note: the `/workspace/plugin`→baked-path reword of `plugin/skills/aria-pinned/SKILL.md` is in the repo but NOT in the already-built image `e7a530b490cb`, which still carries the previous text; it is non-behavioral and takes effect on the next image build (no rebuild was run for it).
 
 ### 7.7 M2 — scenario re-runs (RED, then GREEN)
 

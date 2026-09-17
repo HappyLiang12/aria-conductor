@@ -356,8 +356,9 @@ AssertEqual $card3.status 'BACKLOG' "a card created in BACKLOG should stay queue
 AssertTrue ([string]::IsNullOrWhiteSpace($card3.linkedRunId)) `
     "a queued BACKLOG card should carry no run" `
     "$(CardSnapshot $card3)"
-# The auto-dispatch listener runs in the creating thread's after-commit phase, so
-# it has already had its chance; the second read only rules out a late one.
+# The auto-dispatch listener runs on the kanban mirror executor once the creating
+# transaction has released its connection, so the settle window below is what
+# rules out a late promotion rather than the read's own timing.
 Start-Sleep -Seconds 2
 $card3 = ApiGet "/api/v1/kanban/items/$id3"
 Snapshot "still queued 2s later: $(CardSnapshot $card3)"

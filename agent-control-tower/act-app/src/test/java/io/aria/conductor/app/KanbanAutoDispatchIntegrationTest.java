@@ -19,10 +19,12 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Regression for the auto-dispatch duplication bug (code review, PR #79):
@@ -65,9 +67,13 @@ class KanbanAutoDispatchIntegrationTest {
 
         // Exactly one card, linked to the ORIGINAL run, still sitting in Todo:
         // the card describes the run, it is not an operator dispatch intent.
-        List<KanbanItem> cards = kanbanRepository.findByLinkedRunId(run.getId().toString());
-        assertThat(cards).hasSize(1);
-        assertThat(cards.get(0).getStatus()).isEqualTo(KanbanStatus.TODO);
+        // The mirror runs on the kanban mirror executor once the creating
+        // transaction has released its connection, so the card is awaited.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            List<KanbanItem> cards = kanbanRepository.findByLinkedRunId(run.getId().toString());
+            assertThat(cards).hasSize(1);
+            assertThat(cards.get(0).getStatus()).isEqualTo(KanbanStatus.TODO);
+        });
 
         // Exactly one run exists for the agent, with the caller's prompt seed —
         // no "Kanban task: ..." duplicate.

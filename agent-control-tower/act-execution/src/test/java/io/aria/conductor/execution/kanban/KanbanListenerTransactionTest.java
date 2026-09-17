@@ -84,7 +84,8 @@ class KanbanListenerTransactionTest {
         KanbanAutoDispatchListener kanbanAutoDispatchListener(KanbanRepository kanbanRepository,
                                                              KanbanTransitionService kanbanTransitionService,
                                                              PlatformTransactionManager transactionManager) {
-            return new KanbanAutoDispatchListener(kanbanRepository, kanbanTransitionService, transactionManager);
+            return new KanbanAutoDispatchListener(kanbanRepository, kanbanTransitionService, transactionManager,
+                    Runnable::run);
         }
 
         @Bean
@@ -92,7 +93,8 @@ class KanbanListenerTransactionTest {
                                                   KanbanRepository kanbanRepository,
                                                   RunRepository runRepository,
                                                   PlatformTransactionManager transactionManager) {
-            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager);
+            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager,
+                    Runnable::run);
         }
     }
 

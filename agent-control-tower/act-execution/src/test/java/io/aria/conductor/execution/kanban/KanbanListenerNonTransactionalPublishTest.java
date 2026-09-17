@@ -52,7 +52,11 @@ class KanbanListenerNonTransactionalPublishTest {
                                                   KanbanRepository kanbanRepository,
                                                   RunRepository runRepository,
                                                   PlatformTransactionManager transactionManager) {
-            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager);
+            // Runnable::run: these tests assert the mirror's effect right after
+            // publishing, which the dedicated executor would defer. The executor
+            // itself is covered by KanbanMirrorPoolStarvationTest.
+            return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager,
+                    Runnable::run);
         }
 
         @Bean
@@ -61,7 +65,7 @@ class KanbanListenerNonTransactionalPublishTest {
                                                          KanbanService kanbanService,
                                                          PlatformTransactionManager transactionManager) {
             return new KanbanReviewCardListener(
-                    approvalRepository, kanbanRepository, kanbanService, transactionManager);
+                    approvalRepository, kanbanRepository, kanbanService, transactionManager, Runnable::run);
         }
 
         /**

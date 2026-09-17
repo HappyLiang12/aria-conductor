@@ -124,11 +124,14 @@ class KanbanTransitionIntegrityIntegrationTest {
 
         // The chain the parking gesture has to break: RunKanbanAutoCreator
         // resolves cards by linkedRunId and drags a TODO card whose link still
-        // points at the iterating run back to IN_PROGRESS.
+        // points at the iterating run back to IN_PROGRESS. The mirror runs on the
+        // kanban mirror executor, so the card has to stay parked for a window
+        // rather than merely at the instant after publishing.
         eventPublisher.publishEvent(new RunIterationEvent(this, runId,
                 UUID.fromString(running.getLinkedAgentId()), 1, 5));
 
-        assertThat(kanbanService.get(card.getId()).getStatus()).isEqualTo(KanbanStatus.TODO);
+        await().during(Duration.ofSeconds(3)).until(() ->
+                kanbanService.get(card.getId()).getStatus() == KanbanStatus.TODO);
         assertThat(parked.getLinkedRunId()).isNull();
         // A parked card must not leave its run burning behind it.
         assertThat(runRepository.findById(runId).orElseThrow().getStatus()).isEqualTo(RunStatus.PAUSED);

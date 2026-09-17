@@ -27,7 +27,7 @@ class KanbanAutoDispatchListenerTest {
         kanbanRepository = mock(KanbanRepository.class);
         kanbanTransitionService = mock(KanbanTransitionService.class);
         listener = new KanbanAutoDispatchListener(kanbanRepository, kanbanTransitionService,
-                transactionManager());
+                transactionManager(), Runnable::run);
     }
 
     /** The attempt's own transaction boundary is covered end to end by KanbanListenerTransactionTest. */

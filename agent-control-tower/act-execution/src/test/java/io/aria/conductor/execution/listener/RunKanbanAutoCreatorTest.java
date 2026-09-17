@@ -67,7 +67,7 @@ class RunKanbanAutoCreatorTest {
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         creator = new RunKanbanAutoCreator(
-                kanbanService, kanbanRepository, runRepository, transactionManager);
+                kanbanService, kanbanRepository, runRepository, transactionManager, Runnable::run);
     }
 
     // ---- onRunStarted ----

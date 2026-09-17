@@ -132,7 +132,8 @@ class KanbanTransitionServiceTest {
     private RunKanbanAutoCreator newAutoCreator() {
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
-        return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager);
+        return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager,
+                Runnable::run);
     }
 
     // ---- behavior 1: TODO pickup ----

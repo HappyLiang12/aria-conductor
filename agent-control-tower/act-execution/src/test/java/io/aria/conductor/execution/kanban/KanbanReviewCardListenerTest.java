@@ -45,7 +45,7 @@ class KanbanReviewCardListenerTest {
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         listener = new KanbanReviewCardListener(
-                approvalRepository, kanbanRepository, kanbanService, transactionManager);
+                approvalRepository, kanbanRepository, kanbanService, transactionManager, Runnable::run);
     }
 
     private Approval approval() {

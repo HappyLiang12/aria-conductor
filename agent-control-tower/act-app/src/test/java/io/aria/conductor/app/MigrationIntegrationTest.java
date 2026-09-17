@@ -22,7 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MigrationIntegrationTest extends BaseH2IntegrationTest {
 
     private static final List<String> KEY_TABLES = List.of(
-            "agents", "runs", "approvals", "knowledge_items", "workflow_chains", "tool_definitions");
+            "agents", "runs", "approvals", "knowledge_items", "workflow_chains", "tool_definitions",
+            "runtime_credentials");
 
     @Autowired
     Flyway flyway;

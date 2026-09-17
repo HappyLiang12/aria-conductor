@@ -451,7 +451,7 @@ sits inside the same prompt window**, it is not a separate protocol turn.
 | Step 3: what is NOT observable recorded | PASS (recorded) | §3: `creditFieldMatches:[]`; no *effective*-model field outside the prompt response — the only other model fields are the `session/new` model-menu entries (`modelId` options, not the effective model); zero usage counters; no `session_started` |
 | Step 4: prompt wall clock and deadline derivation recorded | PASS (recorded) | §4: `promptSentEpochMs`/`promptResponseEpochMs`, `promptWallClockMs=313233`, derivation rule |
 | Reading `expiresAt` of a running sandbox | PASS (finding) | §1: `resumer()` → 409 Conflict (SDK-logged) on all four reads, `connector()` attach works and was used for all 4 reads |
-| Model pinned to `efficient` (zero-credit gate) | PASS | run header line; `modelSet:"accepted"`; harness default `efficient`, fails closed; `QODER_E2E_ALLOW_PAID` not set |
+| Model pinned to `efficient` (zero-credit gate) | PASS | pasted console line `[A5] sandbox … ready (model pin efficient)`; summary JSON `"model":"efficient"`, `modelSet:"accepted"`, `modelObservability.effectiveModel:"efficient"`; harness default `efficient`, fails closed; `QODER_E2E_ALLOW_PAID` not set |
 | PAT never in argv / files / output | PASS | §6 leak check (8 paths, counts 0) |
 | Maven run green | PASS | Provenance: pasted `Tests run: 864` unit lane, `Tests run: 1 … Time elapsed: 338.5 s`, `BUILD SUCCESS`, `Total time: 07:01 min` |
 | Server-side maximum TTL / clamping of a larger renewal | NOT VERIFIED | only `X=30m` was exercised; no larger-X run exists |

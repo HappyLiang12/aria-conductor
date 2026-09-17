@@ -8,9 +8,11 @@
 // /workspace/04-permissions.mjs and executes it through
 // OpenCodeSandboxManager#runCommand. It is a sibling of 03-mcp-auth.mjs and mirrors
 // its conventions (redacting console wrapper, newline-delimited JSON-RPC over the
-// CLI's stdio, permission replies on the original request id as
-// {outcome:'selected', optionId} / {outcome:'cancelled'}, bounded per-case waits,
-// summary marker A4-SUMMARY-JSON, exit code = number of failed cases).
+// CLI's stdio, permission replies on the original request id — the exercised selected
+// reply is the nested {outcome:{outcome:'selected', optionId}}; the flat
+// {outcome:'cancelled'} fallback replies are shape-unverified and NOT EXERCISED, see
+// 04-permissions.md §9 — bounded per-case waits, summary marker A4-SUMMARY-JSON,
+// exit code = number of failed cases).
 //
 // What it pins (each case is a fresh qodercli process and a fresh session):
 //   1. ALLOW-ONCE: a file-write prompt produces a session/request_permission for a
@@ -21,8 +23,9 @@
 //      permission request) and must be granted allow_once again — this is the
 //      discriminator between allow-once and a session-wide grant.
 //   2. DENY: the write permission request is answered with the option whose kind is
-//      `reject_once`, or with {outcome:'cancelled'} when no such option is offered.
-//      The file must be absent afterwards (no side effect on denial).
+//      `reject_once`; only when no such option is offered does the (shape-unverified,
+//      NOT EXERCISED — see 04-permissions.md §9) flat {outcome:'cancelled'} fallback
+//      apply. The file must be absent afterwards (no side effect on denial).
 //   3. CANCEL WHILE A REQUEST IS PENDING: the probe sends `session/cancel` while a
 //      write permission request is unanswered and records the outcome (request form
 //      and, when the request form errors, the notification form). When no form has an
@@ -500,6 +503,22 @@ async function runCase(caseName, options) {
       logEvent('out', 'permission-reply', { id: message.id }, { seq, reply: JSON.stringify(result) });
     };
 
+    // Send a `selected` reply and derive the escalation counter from the option actually
+    // sent: the selected optionId is mapped back to the offered menu, and the
+    // allow_always counter increments when that option's kind is `allow_always`. The
+    // counter is therefore a real observation of what left this process — the
+    // no-escalation gate in main() (`allowAlwaysSelected === 0`) can fail instead of
+    // passing on a constant.
+    const replySelected = optionId => {
+      const selected = optionsList.find(candidate => candidate.optionId === optionId)
+        || { optionId, kind: 'unoffered' };
+      if (selected.kind === 'allow_always') {
+        record.allowAlwaysSelections += 1;
+      }
+      entry.decision = `${selected.kind}:${selected.optionId}`;
+      reply({ outcome: { outcome: 'selected', optionId: selected.optionId } });
+    };
+
     if (options.mode === 'cancel') {
       // Do not answer: the cancel probe needs the request pending.
       if (!cancelProbeStarted) {
@@ -510,6 +529,8 @@ async function runCase(caseName, options) {
         // A second request arrived while the probe runs: refuse (never approve).
         entry.decision = 'cancelled-unidentified-after-cancel-probe';
         record.cancelledReplies += 1;
+        // NOT EXERCISED / shape-unverified: the flat {outcome:'cancelled'} reply was
+        // never exercised in this gate (04-permissions.md §9) — B3a must not copy it.
         reply({ outcome: 'cancelled' });
       }
       return;
@@ -518,6 +539,8 @@ async function runCase(caseName, options) {
     if (!entry.identified) {
       entry.decision = 'cancelled-unidentified';
       record.unidentifiedReplies += 1;
+      // NOT EXERCISED / shape-unverified: flat {outcome:'cancelled'} (04-permissions.md §9);
+      // B3a must not copy it.
       reply({ outcome: 'cancelled' });
       return;
     }
@@ -525,17 +548,20 @@ async function runCase(caseName, options) {
     if (options.mode === 'allow-once') {
       const allowOnce = (optionsList || []).find(option => option.kind === 'allow_once');
       if (allowOnce) {
-        entry.decision = `allow_once:${allowOnce.optionId}`;
         record.grantsAllowOnce += 1;
         if (activeTurn) {
           activeTurn.identifiedWrites += 1;
           activeTurn.grants += 1;
         }
-        reply({ outcome: { outcome: 'selected', optionId: allowOnce.optionId } });
+        // Decision label + escalation counter come from the optionId actually sent
+        // (replySelected maps it back to the offered menu).
+        replySelected(allowOnce.optionId);
       } else {
         // No allow_once offered: refuse rather than falling back to another option.
         entry.decision = 'cancelled-no-allow-once-option';
         record.cancelledReplies += 1;
+        // NOT EXERCISED / shape-unverified: flat {outcome:'cancelled'} (04-permissions.md §9);
+        // B3a must not copy it.
         reply({ outcome: 'cancelled' });
       }
       return;
@@ -544,12 +570,13 @@ async function runCase(caseName, options) {
     // deny: prefer the offered reject_once option, else the protocol-level cancel.
     const rejectOnce = (optionsList || []).find(option => option.kind === 'reject_once');
     if (rejectOnce) {
-      entry.decision = `reject_once:${rejectOnce.optionId}`;
       record.rejectSelections += 1;
-      reply({ outcome: { outcome: 'selected', optionId: rejectOnce.optionId } });
+      replySelected(rejectOnce.optionId);
     } else {
       entry.decision = 'cancelled-no-reject-once-option';
       record.cancelledReplies += 1;
+      // NOT EXERCISED / shape-unverified: flat {outcome:'cancelled'} (04-permissions.md §9);
+      // B3a must not copy it.
       reply({ outcome: 'cancelled' });
     }
     if (activeTurn) {
@@ -566,8 +593,10 @@ async function runCase(caseName, options) {
       requestForm: null,
       requestFormVerdict: null,
       notificationForm: null,
+      notificationSentAt: null,
       abortSignals: [],
       effectWaitMs: null,
+      notificationToAbortMs: null,
       verdict: null,
       concludedOutcome: null,
       fallback: null,
@@ -588,6 +617,7 @@ async function runCase(caseName, options) {
       // Probe the notification form too (ACP defines session/cancel as a
       // notification; a request-shaped call may be rejected for that reason alone).
       probe.notificationForm = 'sent (no id)';
+      probe.notificationSentAt = Date.now() - startedAt;
       logEvent('out', 'rpc', { method: 'session/cancel' }, { form: 'notification' });
       send({ method: 'session/cancel', params: { sessionId } });
     } else {
@@ -606,9 +636,18 @@ async function runCase(caseName, options) {
     }
     clearTimeout(cancelEffectTimer);
     probe.concludedOutcome = abortSignal;
+    // `effectWaitMs` is measured from the probe start (`startedAt` — the arrival of the
+    // pending permission request, i.e. when this probe began) to this conclusion, so it
+    // INCLUDES the failed request-form round trip. It is NOT the notification → abort
+    // delta; that one is `notificationToAbortMs` below.
     probe.effectWaitMs = Date.now() - startedAt - probe.startedAt;
     if (abortSignal !== 'no abort observed') {
       probe.abortSignals.push({ signal: abortSignal, stopReason: stopReason ?? null, t: Date.now() - startedAt });
+    }
+    // Notification → first-observed-abort delta, computed only when the notification
+    // form was actually sent (notificationSentAt set in onCancelProbeResponse).
+    if (probe.notificationSentAt != null && probe.abortSignals.length > 0) {
+      probe.notificationToAbortMs = probe.abortSignals[probe.abortSignals.length - 1].t - probe.notificationSentAt;
     }
     const aborted = probe.abortSignals.length > 0;
     const form = probe.requestFormVerdict;

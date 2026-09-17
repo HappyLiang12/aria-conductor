@@ -4,6 +4,7 @@ import io.aria.conductor.execution.adk.opencode.OpenCodeSandboxManager;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -28,9 +29,27 @@ import java.util.UUID;
  * &le; 4 MiB per file, mode 644 (a shell script is therefore run as
  * {@code bash /workspace/<script>.sh}, not executed directly).
  *
- * <p>No credentials are involved anywhere in this flow.
+ * <p>Plan Global Constraint: every local E2E Qoder run must use a zero-credit model.
+ * {@link #boot} therefore reads {@code QODER_E2E_MODEL} (system property or environment,
+ * default {@value #DEFAULT_E2E_MODEL}) and fails closed unless it is one of
+ * {@link #ZERO_CREDIT_MODELS} or {@code QODER_E2E_ALLOW_PAID=1} is set explicitly.
+ * {@link #e2eModel()} exposes the validated value; probe scripts receive it as
+ * {@code QODER_E2E_MODEL} and pin every {@code qodercli} invocation with it.
+ *
+ * <p>No Qoder credentials are involved in this flow: the harness ships no PAT or model
+ * key to the sandbox. The sandbox-server connection is built with
+ * {@code new OpenCodeSandboxManager(serverUrl, null)}, which lets the OpenSandbox SDK
+ * fall back to an {@code OPEN_SANDBOX_API_KEY} environment variable if one is set (see
+ * {@code OpenCodeSandboxManager#buildConnectionConfig}); the harness itself neither
+ * reads nor prints that variable.
  */
 final class QoderSandboxHarness implements AutoCloseable {
+
+    /** Zero-credit model used when {@code QODER_E2E_MODEL} is not set (plan Global Constraint). */
+    static final String DEFAULT_E2E_MODEL = "efficient";
+
+    /** Models priced at 0.00x Credit per the plan's frozen CLI facts. */
+    private static final Set<String> ZERO_CREDIT_MODELS = Set.of("efficient", "lite");
 
     /** Execd-readiness probe interval (mirrors {@code OpenCodeAdkProvider#awaitExecdReady}). */
     private static final Duration EXEC_READY_POLL_INTERVAL = Duration.ofMillis(500);
@@ -41,19 +60,23 @@ final class QoderSandboxHarness implements AutoCloseable {
     private final OpenCodeSandboxManager manager;
     private final UUID agentId;
     private final String sandboxId;
+    private final String e2eModel;
 
-    private QoderSandboxHarness(OpenCodeSandboxManager manager, UUID agentId, String sandboxId) {
+    private QoderSandboxHarness(OpenCodeSandboxManager manager, UUID agentId, String sandboxId, String e2eModel) {
         this.manager = manager;
         this.agentId = agentId;
         this.sandboxId = sandboxId;
+        this.e2eModel = e2eModel;
     }
 
     /**
      * Create a confirmed-ready sandbox from {@code image} on the OpenSandbox server at
-     * {@code serverUrl}. Fails fast (without leaving a sandbox behind) when the server is
-     * unhealthy or the exec channel never becomes ready.
+     * {@code serverUrl}. Fails closed on a non-zero-credit model pin (see class javadoc)
+     * and fails fast (without leaving a sandbox behind) when the server is unhealthy or
+     * the exec channel never becomes ready.
      */
     static QoderSandboxHarness boot(String serverUrl, String image) {
+        String e2eModel = resolveE2eModel(); // fail closed before any sandbox is created
         OpenCodeSandboxManager manager = new OpenCodeSandboxManager(serverUrl, null);
         if (!manager.isServerHealthy()) {
             throw new IllegalStateException("OpenSandbox server is not reachable at " + serverUrl
@@ -64,7 +87,7 @@ final class QoderSandboxHarness implements AutoCloseable {
         try {
             sandboxId = manager.createSandbox(agentId, image);
             awaitExecdReady(manager, sandboxId);
-            return new QoderSandboxHarness(manager, agentId, sandboxId);
+            return new QoderSandboxHarness(manager, agentId, sandboxId, e2eModel);
         } catch (RuntimeException e) {
             manager.killSandbox(sandboxId);
             throw e;
@@ -86,6 +109,15 @@ final class QoderSandboxHarness implements AutoCloseable {
         return sandboxId;
     }
 
+    /**
+     * The validated zero-credit model pin for this run (see class javadoc). Probe scripts
+     * receive it as {@code QODER_E2E_MODEL} and pin every {@code qodercli} invocation with
+     * {@code -m <model>}.
+     */
+    String e2eModel() {
+        return e2eModel;
+    }
+
     /** The synthetic agent id the sandbox is registered under in the driver. */
     UUID agentId() {
         return agentId;
@@ -95,6 +127,31 @@ final class QoderSandboxHarness implements AutoCloseable {
     @Override
     public void close() {
         manager.killSandbox(sandboxId);
+    }
+
+    /**
+     * Resolve the zero-credit model pin, failing closed (plan Global Constraint): any
+     * value outside {@link #ZERO_CREDIT_MODELS} is rejected unless
+     * {@code QODER_E2E_ALLOW_PAID=1} is set explicitly.
+     */
+    private static String resolveE2eModel() {
+        String model = setting("QODER_E2E_MODEL", DEFAULT_E2E_MODEL);
+        boolean allowPaid = "1".equals(setting("QODER_E2E_ALLOW_PAID", ""));
+        if (!ZERO_CREDIT_MODELS.contains(model) && !allowPaid) {
+            throw new IllegalStateException("QODER_E2E_MODEL='" + model + "' is not a zero-credit model "
+                    + ZERO_CREDIT_MODELS + "; local E2E Qoder runs must use a 0.00x-credit model. "
+                    + "Set QODER_E2E_ALLOW_PAID=1 to use a paid model explicitly.");
+        }
+        return model;
+    }
+
+    /** Read a setting from the system properties first, then the environment. */
+    private static String setting(String key, String defaultValue) {
+        String value = System.getProperty(key);
+        if (value == null || value.isBlank()) {
+            value = System.getenv(key);
+        }
+        return value == null || value.isBlank() ? defaultValue : value.trim();
     }
 
     /**

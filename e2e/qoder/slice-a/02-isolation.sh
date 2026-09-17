@@ -20,12 +20,22 @@
 #        --mcp-config '<inline JSON>'    the pinned server(s)
 #        --permission-mode default       explicit, cannot be relaxed by files
 #        --plugin-dir <pinned bundle>    only the pinned plugin bundle
+#        -m <model>                      zero-credit model pin (QODER_E2E_MODEL;
+#                                        the Java harness fails closed off
+#                                        {efficient, lite})
 #      none of the hostile servers/plugins/permission relaxation is effective.
 #   3. Plugin loading: the pinned bundle validates, and with a fresh config root
 #      `plugins list` shows exactly that one flag-scope plugin; the hostile
 #      user-installed plugin is invisible.
 #   4. Sandbox-level isolation: no container-runtime socket, no host credential
 #      mount, no credential env var inside the sandbox.
+#
+# Plan Global Constraint: every local E2E Qoder run is pinned to the zero-credit
+# model. MODEL defaults to "efficient" (overridable via QODER_E2E_MODEL, which the
+# Java harness validates fail-closed) and "-m $MODEL" is passed to every qodercli
+# invocation. The reported usage/credit fields of the isolated -p run are echoed for
+# the record only: A2 is pre-auth, the run aborts with an auth error and reports a
+# zero/empty usage block, and no cost statement is asserted.
 #
 # Exit status: 0 only when every case below passes; otherwise the number of
 # failed cases (non-zero). The last line is always
@@ -35,6 +45,10 @@ set -u
 
 QODERCLI="${QODERCLI:-qodercli}"
 HOME_DIR="${HOME:-/root}"
+
+# Zero-credit model pin (plan Global Constraint); the Java harness validates and
+# forwards QODER_E2E_MODEL — standalone runs default to the same value.
+MODEL="${QODER_E2E_MODEL:-efficient}"
 
 # Workspace inside the sandbox (the harness uploads to /workspace). Never fall
 # back to the script's own directory: the probes must not write into the repo.
@@ -62,15 +76,24 @@ last_log() {
   ls -t "$1"/logs/runs/*/qodercli.log 2>/dev/null | head -n 1
 }
 
-# run_cli <log-root> [args...] -> RUN_OUT (stdout+stderr), RUN_EXIT, RUN_LOG
-# The hostile HOME is always used, and the caller passes --config-dir when the
-# run must use the fresh root (logs then live under that root, not under $HOME).
+# run_cli [args...] -> RUN_OUT (stdout+stderr), RUN_EXIT, RUN_LOG
+# The hostile HOME and the zero-credit model pin are always used. The run-log root
+# derives from the run itself: the --config-dir value when the caller passes one,
+# else the hostile HOME's config root (qodercli's default log location), so the
+# printed log path always belongs to this run.
 run_cli() {
-  local log_root="$1"; shift
-  RUN_OUT="$(HOME="$HOSTILE_HOME" "$QODERCLI" "$@" 2>&1)"
+  local log_root="$HOSTILE_CONF" prev="" arg
+  for arg in "$@"; do
+    [ "$prev" = "--config-dir" ] && log_root="$arg"
+    case "$arg" in
+      --config-dir=*) log_root="${arg#--config-dir=}" ;;
+    esac
+    prev="$arg"
+  done
+  RUN_OUT="$(HOME="$HOSTILE_HOME" "$QODERCLI" -m "$MODEL" "$@" 2>&1)"
   RUN_EXIT=$?
   RUN_LOG="$(last_log "$log_root")"
-  echo "--- qodercli $*"
+  echo "--- qodercli -m $(printf '%q' "$MODEL")$(printf ' %q' "$@")"
   echo "    HOME=$HOSTILE_HOME exit=$RUN_EXIT log=${RUN_LOG:-<none>}"
   echo "$RUN_OUT"
 }
@@ -78,6 +101,10 @@ run_cli() {
 # -----------------------------------------------------------------------------
 section "CASE 0: CLI surface (version + raw --help of the flags relied on)"
 # -----------------------------------------------------------------------------
+echo "== zero-credit model pin (plan Global Constraint) =="
+echo "QODER_E2E_MODEL=${QODER_E2E_MODEL:-<unset>} MODEL=$MODEL (every qodercli call below gets -m $MODEL)"
+
+echo
 echo "== id / kernel / container markers =="
 id
 uname -a
@@ -86,19 +113,23 @@ ls -la /.dockerenv /run/.containerenv 2>&1 | head -n 5
 
 echo
 echo "== qodercli --version =="
-HOME="$HOSTILE_HOME" "$QODERCLI" --version
+HOME="$HOSTILE_HOME" "$QODERCLI" -m "$MODEL" --version
 
 echo
 echo "== qodercli --help (raw) =="
-HOME="$HOSTILE_HOME" "$QODERCLI" --help
+HOME="$HOSTILE_HOME" "$QODERCLI" -m "$MODEL" --help
 
 echo
 echo "== qodercli plugins --help (raw) =="
-HOME="$HOSTILE_HOME" "$QODERCLI" plugins --help
+HOME="$HOSTILE_HOME" "$QODERCLI" -m "$MODEL" plugins --help
 
 echo
 echo "== qodercli mcp --help (raw) =="
-HOME="$HOSTILE_HOME" "$QODERCLI" mcp --help
+HOME="$HOSTILE_HOME" "$QODERCLI" -m "$MODEL" mcp --help
+
+echo
+echo "== qodercli plugins validate --help (raw) =="
+HOME="$HOSTILE_HOME" "$QODERCLI" -m "$MODEL" plugins validate --help
 
 # -----------------------------------------------------------------------------
 section "CASE 1: plant the hostile environment and prove it is load-bearing"
@@ -168,13 +199,13 @@ description: hostile fixture skill (A2 isolation probe)
 Hostile fixture: this skill must never be visible when the sandbox runs with a
 fresh --config-dir.
 MD
-run_cli "$HOSTILE_CONF" plugins install "$HOSTILE_PLUGIN_SRC"
+run_cli plugins install "$HOSTILE_PLUGIN_SRC"
 echo "--- installed plugin files under $HOSTILE_CONF/plugins:"
 find "$HOSTILE_CONF/plugins" -type f 2>/dev/null | sort
 
 echo
 echo "== CASE 1a: baseline run, no isolation flags (hostile config must be effective) =="
-run_cli "$HOSTILE_CONF" -d -p hi --output-format json
+run_cli -d -p hi --output-format json
 if [ -z "$RUN_LOG" ]; then
   fatal "baseline: no run log written under $HOSTILE_CONF"
 else
@@ -197,18 +228,18 @@ fi
 
 echo
 echo "== CASE 1b: baseline config surfaces (hostile user plugin must be visible) =="
-run_cli "$HOSTILE_CONF" plugins list
+run_cli plugins list
 echo "$RUN_OUT" | grep -q 'a2-hostile-plugin' \
   && ok "baseline: hostile user plugin visible in 'plugins list'" \
   || fatal "baseline: hostile user plugin NOT visible (test setup is not load-bearing)"
-run_cli "$HOSTILE_CONF" skills list --all
+run_cli skills list --all
 echo "$RUN_OUT" | grep -q 'a2-hostile-skill' \
   && ok "baseline: hostile user plugin skill visible in 'skills list --all'" \
   || fatal "baseline: hostile user plugin skill NOT visible (test setup is not load-bearing)"
 
 echo
 echo "== CASE 1c: stored-config surface (mcp list, no flags) =="
-run_cli "$HOSTILE_CONF" mcp list
+run_cli mcp list
 for name in a2-hostile-user-settings a2-hostile-project-settings a2-hostile-local-settings a2-hostile-workspace-mcpjson; do
   echo "$RUN_OUT" | grep -q "$name" \
     && ok "mcp list (stored config): hostile server '$name' listed" \
@@ -217,7 +248,7 @@ done
 
 echo
 echo "== CASE 1d: stored-config surface with --setting-sources \"\" (settings files off, .mcp.json stays) =="
-run_cli "$HOSTILE_CONF" --setting-sources "" mcp list
+run_cli --setting-sources "" mcp list
 for name in a2-hostile-user-settings a2-hostile-project-settings a2-hostile-local-settings; do
   echo "$RUN_OUT" | grep -q "$name" \
     && fatal "mcp list with sources empty: settings-file server '$name' is still listed" \
@@ -237,7 +268,7 @@ PINNED_MCP_CONFIG='{"mcpServers":{"a2-pinned":{"type":"http","url":"http://127.0
 
 echo
 echo "== CASE 2a: full isolation flag set =="
-run_cli "$CLEAN_CONF" -d -p hi --output-format json \
+run_cli -d -p hi --output-format json \
   --config-dir "$CLEAN_CONF" \
   --setting-sources "" \
   --strict-mcp-config \
@@ -276,11 +307,20 @@ else
   grep -q 'Bypass permissions mode is enabled' "$RUN_LOG" \
     && fatal "isolated: bypass-permissions warning present (permission mode was relaxed)" \
     || ok "isolated: no bypass-permissions warning"
+  grep -q "model=\"$MODEL\"" "$RUN_LOG" \
+    && ok "isolated: run log reports the pinned model (model=\"$MODEL\")" \
+    || fatal "isolated: run log does not report model=\"$MODEL\""
+  # Plan Global Constraint: record the reported usage/credit fields, never assert
+  # zero cost. A2 is pre-auth, so the run aborts with an auth error and reports the
+  # CLI's zero/empty usage block.
+  echo "--- isolated run reported usage/credit fields (recorded, not asserted):"
+  printf '%s\n' "$RUN_OUT" | grep -o '"total_cost_usd":[0-9.]*\|"total_credits":[0-9.]*\|"input_tokens":[0-9]*\|"output_tokens":[0-9]*\|"modelUsage":{[^}]*}' | tr '\n' ' '
+  echo
 fi
 
 echo
 echo "== CASE 2b: --strict-mcp-config alone rejects everything not on argv =="
-run_cli "$CLEAN_CONF" -d -p hi --output-format json \
+run_cli -d -p hi --output-format json \
   --config-dir "$CLEAN_CONF" \
   --strict-mcp-config
 if [ -z "$RUN_LOG" ]; then
@@ -294,7 +334,7 @@ fi
 
 echo
 echo "== CASE 2c: coverage pin --setting-sources \"\" alone blocks settings files, not .mcp.json =="
-run_cli "$CLEAN_CONF" -d -p hi --output-format json \
+run_cli -d -p hi --output-format json \
   --config-dir "$CLEAN_CONF" \
   --setting-sources ""
 if [ -z "$RUN_LOG" ]; then
@@ -323,36 +363,45 @@ echo "== CASE 3a: validate the pinned bundle =="
 if [ ! -f "$BUNDLE/.qoder-plugin/plugin.json" ]; then
   fatal "pinned bundle not found at $BUNDLE/.qoder-plugin/plugin.json"
 else
-  run_cli "$CLEAN_CONF" plugins validate "$BUNDLE"
+  run_cli plugins validate "$BUNDLE"
   echo "$RUN_OUT" | grep -q 'aria-pinned' \
     && ok "validate: pinned bundle manifest name is aria-pinned" \
     || fatal "validate: pinned bundle manifest name missing"
   echo "$RUN_OUT" | grep -q 'is valid and ready to install' \
     && ok "validate: pinned bundle is valid" \
     || fatal "validate: pinned bundle is NOT valid"
+  echo
+  echo "== CASE 3a-2: raw manifest-path report (plugins validate --json) =="
+  run_cli plugins validate "$BUNDLE" --json
+  echo "$RUN_OUT" | grep -qE '"manifestPath": *"\.qoder-plugin/plugin\.json"' \
+    && ok "validate --json: report names target.manifestPath .qoder-plugin/plugin.json" \
+    || fatal "validate --json: report does not name .qoder-plugin/plugin.json"
+  echo "$RUN_OUT" | grep -qE '"valid": *true' \
+    && ok "validate --json: report is valid:true" \
+    || fatal "validate --json: report is not valid:true"
 fi
 
 echo
 echo "== CASE 3b: fresh config root hides the hostile user plugin =="
-run_cli "$CLEAN_CONF" --config-dir "$CLEAN_CONF" plugins list
+run_cli --config-dir "$CLEAN_CONF" plugins list
 echo "$RUN_OUT" | grep -q 'a2-hostile' \
   && fatal "fresh config root: hostile plugin still visible" \
   || ok "fresh config root: no hostile plugin visible"
 echo "$RUN_OUT" | grep -q 'No plugins installed' \
   && ok "fresh config root: no plugins installed" \
   || fatal "fresh config root: unexpected plugin inventory"
-run_cli "$CLEAN_CONF" --config-dir "$CLEAN_CONF" agents list
+run_cli --config-dir "$CLEAN_CONF" agents list
 echo "$RUN_OUT" | grep -q 'a2-hostile' \
   && fatal "fresh config root: hostile plugin agent still visible" \
   || ok "fresh config root: no hostile plugin agent visible"
-run_cli "$CLEAN_CONF" --config-dir "$CLEAN_CONF" skills list --all
+run_cli --config-dir "$CLEAN_CONF" skills list --all
 echo "$RUN_OUT" | grep -q 'a2-hostile' \
   && fatal "fresh config root: hostile plugin skill still visible" \
   || ok "fresh config root: no hostile plugin skill visible"
 
 echo
 echo "== CASE 3c: --plugin-dir loads exactly the pinned bundle =="
-run_cli "$CLEAN_CONF" --config-dir "$CLEAN_CONF" plugins list --plugin-dir "$BUNDLE" --json
+run_cli --config-dir "$CLEAN_CONF" plugins list --plugin-dir "$BUNDLE" --json
 plugins_json="$RUN_OUT"
 echo "$plugins_json" | grep -q '"name": "aria-pinned"' \
   && ok "plugin-dir: pinned bundle listed" \
@@ -453,19 +502,30 @@ else
 fi
 
 echo
-echo "== CASE 4f: secret surfaces (podman secrets mount, sandbox runtime env file) =="
-# podman mounts secrets as FILES under /run/secrets; no secret is passed to this
-# sandbox, so no file may appear there. Anything else (e.g. the RHEL subscription
-# data the podman machine injects into every container on this host, if present)
-# is enumerated raw and reported, not treated as an A2 credential leak.
-echo "--- /run/secrets contents (names only):"
-find /run/secrets -maxdepth 4 2>/dev/null | sort
-secret_files="$(find /run/secrets -maxdepth 1 -type f 2>/dev/null || true)"
-if [ -n "$secret_files" ]; then
-  echo "$secret_files"
-  fatal "podman secret file(s) injected into the sandbox under /run/secrets"
+echo "== CASE 4f: secret surfaces (podman secrets mount, deep scan; sandbox runtime env file) =="
+# podman mounts secrets as FILES directly under /run/secrets; no secret is passed to
+# this sandbox, so no such file may appear. The scan runs to full depth so nothing
+# can hide below the first level; the RHEL subscription tree the podman machine
+# injects into every container on this host (/run/secrets/rhsm/**) is enumerated raw
+# and disclosed, not treated as an A2 credential leak. Any other file under
+# /run/secrets is unexpected and fails the case.
+echo "--- /run/secrets contents (raw, full depth):"
+find /run/secrets 2>/dev/null | sort
+secret_files="$(find /run/secrets -type f 2>/dev/null || true)"
+direct_secrets="$(printf '%s\n' "$secret_files" | grep -E '^/run/secrets/[^/]+$' || true)"
+rhsm_files="$(printf '%s\n' "$secret_files" | grep -E '^/run/secrets/rhsm/' || true)"
+other_secrets="$(printf '%s\n' "$secret_files" | grep -Ev '^/run/secrets/[^/]+$|^/run/secrets/rhsm/' || true)"
+if [ -n "$direct_secrets" ]; then
+  echo "$direct_secrets"
+  fatal "podman secret file(s) injected into the sandbox directly under /run/secrets"
+elif [ -n "$other_secrets" ]; then
+  echo "$other_secrets"
+  fatal "unexpected file(s) under /run/secrets outside the disclosed rhsm tree"
 else
-  ok "no podman secret file directly under /run/secrets"
+  if [ -n "$rhsm_files" ]; then
+    echo "    disclosed (not a platform credential): $(printf '%s\n' "$rhsm_files" | wc -l) file(s) under /run/secrets/rhsm"
+  fi
+  ok "no podman secret file under /run/secrets (full-depth scan; host rhsm tree disclosed above if present)"
 fi
 if [ -n "${EXECD_ENVS:-}" ] && [ -f "${EXECD_ENVS}" ]; then
   # Sandbox-runtime file only; values are never printed (key names + emptiness check).

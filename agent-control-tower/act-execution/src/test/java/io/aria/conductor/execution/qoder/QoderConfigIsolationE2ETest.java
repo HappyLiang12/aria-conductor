@@ -77,7 +77,11 @@ class QoderConfigIsolationE2ETest {
         Path staging = buildStagingDirectory(script, bundle);
         try (QoderSandboxHarness harness = QoderSandboxHarness.boot(SANDBOX_SERVER_URL, QODER_SANDBOX_IMAGE)) {
             harness.upload(staging);
-            String output = harness.run("bash /workspace/02-isolation.sh 2>&1; echo A2_SCRIPT_EXIT=$?");
+            // Plan Global Constraint: pin every local E2E Qoder run to a zero-credit model.
+            // The harness validated the value fail-closed at boot; the script pins every
+            // qodercli invocation with -m <model>.
+            String output = harness.run("QODER_E2E_MODEL=" + harness.e2eModel()
+                    + " bash /workspace/02-isolation.sh 2>&1; echo A2_SCRIPT_EXIT=$?");
 
             // Raw evidence for e2e/qoder/slice-a/02-isolation.md (captured in the Failsafe report).
             System.out.println("=== [A2] sandbox " + harness.sandboxId() + " raw output begin ===");

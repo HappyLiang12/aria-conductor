@@ -39,10 +39,10 @@ import java.util.UUID;
  *
  * <p>No Qoder credentials are required by {@link #boot(String, String)}: that flow ships
  * no PAT or model key to the sandbox. The sandbox-server connection is built with
- * {@code new OpenCodeSandboxManager(serverUrl, null)}, which lets the OpenSandbox SDK
- * fall back to an {@code OPEN_SANDBOX_API_KEY} environment variable if one is set (see
- * {@code OpenCodeSandboxManager#buildConnectionConfig}); the harness itself neither
- * reads nor prints that variable.
+ * {@code new OpenCodeSandboxManager(serverUrl, null)}, and the manager delegates to
+ * {@code SandboxLifecycle#buildConnectionConfig}, which lets the OpenSandbox SDK fall back
+ * to an {@code OPEN_SANDBOX_API_KEY} environment variable if one is set; the harness itself
+ * neither reads nor prints that variable.
  *
  * <p>{@link #boot(String, String, Map)} forwards a caller-supplied env map to the
  * sandbox container (the manager's sanctioned {@code createSandbox(agentId, image, env)}

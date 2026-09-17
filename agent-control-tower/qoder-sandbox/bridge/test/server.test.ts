@@ -505,6 +505,45 @@ describe('session lifecycle over the C0.2 contract', () => {
     expect(await missing.json()).toEqual({ error: 'NOT_FOUND' });
   });
 
+  it('maps a create-time governance stop to a 502 GOVERNANCE_STOP without registering a session', async () => {
+    const bridge = await startBridge('session-new-escalation');
+    // The fixture reports a non-governed mode from `session/new` (A2 config-isolation
+    // drift, F2), so the client stops the run before `session/set_model` and the bridge
+    // must surface it as the explicit governance code, not a generic create failure.
+    const created = await createSession(bridge);
+    expect(created.status).toBe(502);
+    expect(created.body?.error).toBe('GOVERNANCE_STOP');
+    expect(String(created.body?.reason)).toContain('mode escalation observed');
+    expect(created.body).not.toHaveProperty('bridgeSessionId');
+  });
+
+  it('reports a prompt-time governance stop exactly once (no doubled failed frame)', async () => {
+    const bridge = await startBridge('mode-escalation');
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId);
+    await stream.waitFor('session_started');
+
+    const prompted = await post(bridge, `/sessions/${sessionId}/prompt`, { text: PROMPT });
+    expect(prompted.status).toBe(202);
+    await stream.waitForEnd(10_000);
+
+    // The client first emits `governance_error` (one `failed` frame) and then rejects the
+    // pending turn with the same decision as `prompt_error`/GOVERNANCE_STOP, which the
+    // bridge suppresses (src/server.ts:437-441). The governance `failed` ends the session,
+    // so the live reader stops at that frame; the retained tail is replayed to prove the
+    // echo was never appended as a second failure.
+    const replay = await openEvents(bridge, sessionId, 0);
+    expect(replay.status).toBe(200);
+    await replay.waitForEnd(10_000);
+    expect(replay.frames.map(frame => frame.type)).toEqual(['session_started', 'mode_changed', 'failed']);
+    expect(replay.frames[2]).toEqual({
+      sequence: 3,
+      type: 'failed',
+      reason: expect.stringContaining('mode escalation observed'),
+      code: 'MODE_ESCALATION',
+    });
+  });
+
   it('rejects an unknown model with an explicit provider error (no silent fallback)', async () => {
     const bridge = await startBridge('unknown-model');
     const created = await createSession(bridge, { model: 'efficient' });
@@ -584,7 +623,6 @@ describe('SSE replay (C0.2 events row)', () => {
     // Boundary: `after == floor - 1` replays the whole retained window.
     const boundary = await openEvents(bridge, sessionId, floor - 1);
     expect(boundary.status).toBe(200);
-    await boundary.waitForEnd(2_000).catch(() => undefined);
     for (let turn = 0; turn < 200 && boundary.frames.length < EVENT_RING_CAPACITY; turn++) {
       await new Promise(resolve => setImmediate(resolve));
     }
@@ -599,23 +637,26 @@ describe('SSE replay (C0.2 events row)', () => {
   });
 
   it('replays the whole retained buffer for a missing or blank `after`', async () => {
-    const bridge = await startScriptedBridge(() => new ScriptedClient());
+    const bridge = await startBridge('happy');
     const sessionId = await createSessionId(bridge);
 
     const missing = await openEventsUrl(`${base(bridge)}/sessions/${sessionId}/events`);
     expect(missing.status).toBe(200);
     const blank = await openEventsUrl(`${base(bridge)}/sessions/${sessionId}/events?after=`);
     expect(blank.status).toBe(200);
-    // Nothing was emitted after creation, so "replay everything retained" is an empty
-    // replay that keeps the stream attached (the session is alive).
-    await sleep(100);
-    expect(missing.frames).toEqual([]);
-    expect(blank.frames).toEqual([]);
+    // Creation already retained one event, so both resume forms must replay it from
+    // sequence 1 instead of starting at the tail (P1: the earlier scripted client emitted
+    // nothing, so this case only proved the framing, never the replay).
+    await missing.waitFor('session_started');
+    await blank.waitFor('session_started');
+    const retained = [{ sequence: 1, type: 'session_started', model: MODEL }];
+    expect(missing.frames).toEqual(retained);
+    expect(blank.frames).toEqual(retained);
+    // The replay does not detach the reader: the session is alive, so the stream stays open.
     expect(missing.ended).toBe(false);
 
     const invalid = await openEventsUrl(`${base(bridge)}/sessions/${sessionId}/events?after=abc`);
     expect(invalid.status).toBe(400);
-    expect(await invalid.status).toBe(400);
   });
 });
 

@@ -224,7 +224,6 @@ class AgentLoopEngineConstraintsTest {
 
         OpenCodeAdkProvider provider = newOpenCodeProvider(properties);
 
-        assertThat(properties.getMaxTaskMinutes()).isEqualTo(45);
         assertThat(provider.taskConstraints().maxTaskDuration()).isEqualTo(Duration.ofMinutes(45));
     }
 

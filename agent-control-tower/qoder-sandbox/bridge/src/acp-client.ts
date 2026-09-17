@@ -638,6 +638,14 @@ export class AcpClient {
     } catch {
       /* already gone */
     }
+    if (this.spawnError !== null) {
+      // P1 (B3a review): the child never spawned, so there is no live process to escalate
+      // against. Arming the timer here would leak a referenced one when a LATER close()
+      // follows the failure: the child's `error` + `close` already fired, so nothing is
+      // left to clear it. The same-tick race (close() before the failure is delivered)
+      // still arms — `spawnError` is null there — and the `close` handler clears it.
+      return;
+    }
     if (this.killTimer) {
       clearTimeout(this.killTimer);
     }
@@ -654,9 +662,8 @@ export class AcpClient {
     // F3: the escalation timer stays REFERENCED while the CLI may still be alive, so a
     // host that exits right after close()/governance stop cannot skip the SIGKILL and
     // leave a SIGTERM-ignoring qodercli behind. It is cleared by whichever of the child's
-    // `exit`/`close` handlers fires first (see wireChild), so once the child is known dead
-    // the timer no longer keeps the loop alive — including the failed-spawn path, where
-    // only `error` + `close` arrive and `exit` never fires.
+    // `exit`/`close` handlers fires first (see wireChild); a never-spawned child does not
+    // arm it at all (see the spawnError return above).
   }
 
   /** Close the client: reject pending requests, abandon permissions, terminate the CLI. */

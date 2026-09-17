@@ -528,6 +528,25 @@ describe('failure propagation', () => {
     expect(timeouts()).toBe(before);
   });
 
+  it('arms no kill-escalation timer when close() follows a failed spawn (P1)', async () => {
+    // Same technique as the case above: getActiveResourcesInfo() lists referenced timers
+    // only, so a leaked F3 escalation timer shows up as one extra 'Timeout'.
+    const timeouts = (): number =>
+      process.getActiveResourcesInfo().filter(resource => resource === 'Timeout').length;
+    const before = timeouts();
+    const { client, log } = start('happy', {
+      command: 'definitely-not-a-real-qodercli-binary',
+      killGraceMs: 60_000,
+    });
+    // This close() is the LATER one: wait for `child_error` and let the child's `close`
+    // (emitted after `error` on a later event-loop turn) run first, so neither handler will
+    // fire again and a timer armed here could never be cleared for its whole grace window.
+    await log.waitFor('child_error');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    client.close();
+    expect(timeouts()).toBe(before);
+  });
+
   it('surfaces a JSON-RPC handshake error instead of a silent fallback', async () => {
     const { client, dir } = start('handshake-error');
     const rejection = await client.createSession(sessionSpec(dir)).then(

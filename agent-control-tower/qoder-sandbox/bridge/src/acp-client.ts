@@ -373,6 +373,24 @@ function extractCurrentModeId(created: Record<string, unknown> | null): string |
   return typeof currentModeId === 'string' ? currentModeId : null;
 }
 
+/**
+ * F4 follow-up: length of the longest suffix of `text` that is a proper prefix of `token`
+ * (at most `token.length - 1`, so a complete token at the very end is sized 0 and stays
+ * subject to redaction instead of being held). The stderr path withholds exactly those
+ * characters so a token split across two pipe chunks cannot be rejoined from the emitted
+ * events or the tail; the hold is flushed once the child has exited and its stdio drained
+ * (`close`), never on `exit` alone (the last chunk can still arrive after `exit`).
+ */
+function tokenPrefixHoldLength(text: string, token: string): number {
+  const longest = Math.min(token.length - 1, text.length);
+  for (let length = longest; length > 0; length--) {
+    if (text.endsWith(token.slice(0, length))) {
+      return length;
+    }
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------------------
@@ -396,6 +414,12 @@ export class AcpClient {
   private nextRequestId = 1;
   private stdoutBuffer = '';
   private stderrText = '';
+  /**
+   * F4 follow-up: trailing suffix of the redacted stderr stream withheld because it is a
+   * proper prefix of the allowlisted PAT (≤ `token.length - 1` chars). Emitted from the
+   * child `close` handler (full stdio drain), never earlier; see wireChild.
+   */
+  private stderrCarry = '';
   private spawnError: Error | null = null;
   private exited = false;
   private exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -465,6 +489,17 @@ export class AcpClient {
     const sessionId = created?.sessionId;
     if (typeof sessionId !== 'string' || sessionId === '') {
       throw new AcpProtocolError('session/new returned no sessionId');
+    }
+
+    // C0.4/F2: the mode reported by `session/new` is enforced exactly like the
+    // `session/update` path (A2 hit a CLI image starting in `acceptEdits`): a session
+    // created outside the governed mode is stopped before any `session/set_model`, so
+    // the caller sees the governance error instead of a confusing AcpClosedError.
+    const currentModeId = extractCurrentModeId(created ?? null);
+    if (currentModeId !== null && currentModeId !== GOVERNED_CLI_MODE) {
+      const message = `mode escalation observed: currentModeId=${currentModeId} (governed mode is '${GOVERNED_CLI_MODE}')`;
+      this.stopForGovernance(message, { currentModeId });
+      throw new GovernanceStopError(`run stopped by governance: ${message}`, { currentModeId });
     }
 
     const availableModels = extractAvailableModelIds(created ?? null);
@@ -616,7 +651,11 @@ export class AcpClient {
         /* already gone */
       }
     }, this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
-    this.killTimer.unref?.();
+    // F3: the escalation timer stays REFERENCED while the CLI may still be alive, so a
+    // host that exits right after close()/governance stop cannot skip the SIGKILL and
+    // leave a SIGTERM-ignoring qodercli behind. The `exit` handler clears it as soon as
+    // the child is actually gone (see wireChild), so it never keeps the loop alive longer
+    // than the CLI itself.
   }
 
   /** Close the client: reject pending requests, abandon permissions, terminate the CLI. */
@@ -705,10 +744,7 @@ export class AcpClient {
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (text: string) => this.onStdout(text));
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (text: string) => {
-      this.stderrText = (this.stderrText + text).slice(-MAX_STDERR_TAIL_CHARS);
-      this.emit({ type: 'stderr', text });
-    });
+    child.stderr.on('data', (text: string) => this.onStderr(text));
     child.on('error', error => {
       this.spawnError = error;
       this.emit({ type: 'child_error', message: error.message });
@@ -728,6 +764,18 @@ export class AcpClient {
       this.emit({ type: 'child_exit', code, signal });
       this.abandonPermissions('process-exited');
       this.failPending(new AcpProcessExitedError(this.exitMessage(), { code, signal }));
+    });
+    child.on('close', () => {
+      // F4 follow-up: the carry flush belongs HERE, not in `exit`. Node emits `exit` as
+      // soon as the process ends, which may be BEFORE the stdio pipes are drained — the
+      // final stderr chunk can still arrive after it. Flushing on `exit` could therefore
+      // emit a held token prefix and then let one more chunk complete the token unredacted.
+      // Node emits `close` only after the process ended AND all stdio streams are closed,
+      // so every `data` event (including the last stderr chunk) has already reached
+      // onStderr and the carry is final. Should `close` never fire (child not reaped), the
+      // held suffix is at most `token.length - 1` characters and is dropped: dropping that
+      // bounded fragment is the safe failure mode, whereas flushing early can leak a token.
+      this.flushStderrCarry();
     });
     child.stdin.on('error', error => {
       // A broken stdin (e.g. the CLI is already gone) must never crash the bridge.
@@ -931,6 +979,49 @@ export class AcpClient {
       return 'the qodercli process is not running';
     }
     return `the qodercli process exited (code ${info.code ?? 'null'}, signal ${info.signal ?? 'null'})`;
+  }
+
+  /**
+   * F4: stderr may echo credentials (e.g. a rejected auth header); redact the allowlisted
+   * PAT before it reaches events (B3b republishes them) and the tail. F4 follow-up: the
+   * redacted stream's trailing suffix is held back in `stderrCarry` while it is still a
+   * proper prefix of the token, so a token split across two pipe chunks cannot be rejoined
+   * from the emitted events or the tail. Only text that cannot start a token is emitted.
+   */
+  private onStderr(text: string): void {
+    const token = this.spawnPlan.env.QODER_PERSONAL_ACCESS_TOKEN;
+    if (typeof token !== 'string' || token === '') {
+      this.emitStderr(text);
+      return;
+    }
+    const redacted = this.redactAllowlistedToken(this.stderrCarry + text);
+    const hold = tokenPrefixHoldLength(redacted, token);
+    this.stderrCarry = redacted.slice(redacted.length - hold);
+    const visible = redacted.slice(0, redacted.length - hold);
+    if (visible !== '') {
+      this.emitStderr(visible);
+    }
+  }
+
+  /** F4: never let the allowlisted PAT leave through stderr (events, tail). */
+  private redactAllowlistedToken(text: string): string {
+    const token = this.spawnPlan.env.QODER_PERSONAL_ACCESS_TOKEN;
+    return typeof token === 'string' && token !== '' ? text.split(token).join('[redacted]') : text;
+  }
+
+  /** Emit one redacted stderr chunk with the unchanged tail semantics (bounded accumulation). */
+  private emitStderr(text: string): void {
+    this.stderrText = (this.stderrText + text).slice(-MAX_STDERR_TAIL_CHARS);
+    this.emit({ type: 'stderr', text });
+  }
+
+  /** F4 follow-up: the child is gone — emit the held suffix instead of dropping it. */
+  private flushStderrCarry(): void {
+    if (this.stderrCarry !== '') {
+      const carry = this.stderrCarry;
+      this.stderrCarry = '';
+      this.emitStderr(carry);
+    }
   }
 
   private assertOpen(): void {

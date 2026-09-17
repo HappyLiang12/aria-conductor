@@ -19,11 +19,13 @@ import {
   AcpClient,
   AcpClosedError,
   AcpError,
+  AcpRequestTimeoutError,
   AcpRpcError,
   CANCEL_METHOD_DECISION,
   DEFAULT_ARGS,
   DEFAULT_COMMAND,
   DEFAULT_CWD,
+  GovernanceStopError,
   PermissionAlreadyResolvedError,
   UnknownPermissionRequestError,
   UnsupportedOptionsError,
@@ -482,6 +484,15 @@ describe('failure propagation', () => {
     client.prompt('sess-1', PROMPT);
     const exit = await log.waitFor('child_exit');
     expect(exit.code).toBe(4);
+
+    // F7: the caller-facing half of the same failure — the pending `session/prompt` is
+    // rejected and its `reject` emits `prompt_error` (src/acp-client.ts:521-538). The
+    // prompt request id is 4 (ids 1-3 are the handshake) and the code is the typed
+    // AcpProcessExitedError code.
+    const promptError = await log.waitFor('prompt_error');
+    expect(promptError.requestId).toBe('4');
+    expect(promptError.code).toBe('PROCESS_EXITED');
+    expect(promptError.message).toBe('the qodercli process exited (code 4, signal null)');
   });
 
   it('rejects the handshake when the CLI binary cannot be spawned', async () => {
@@ -520,5 +531,150 @@ describe('failure propagation', () => {
     expect(governance.message).toContain('acceptEdits');
     await log.waitFor('child_exit');
     expect(() => client.prompt('sess-1', PROMPT)).toThrowError(AcpClosedError);
+  });
+
+  it('bounds the handshake with REQUEST_TIMEOUT and close() still terminates a silent CLI (F1)', async () => {
+    const { client, log, dir } = start('silent', { handshakeTimeoutMs: 100 });
+    // The CLI is wedged, not dead: it started and never answers a single request.
+    expect((await log.hello()).scenario).toBe('silent');
+
+    const rejection = await client.createSession(sessionSpec(dir)).then(
+      () => null,
+      (error: unknown) => error as AcpError,
+    );
+    expect(rejection).toBeInstanceOf(AcpRequestTimeoutError);
+    expect(rejection?.code).toBe('REQUEST_TIMEOUT');
+    expect(rejection?.message).toBe('no initialize response within 100 ms');
+
+    // The timed-out handshake must not leave the wedged child behind.
+    client.close();
+    const exit = await log.waitFor('child_exit');
+    expect(exit.code !== null || exit.signal !== null).toBe(true);
+  });
+
+  it('stops the run when session/new reports a non-governed mode, before set_model (F2)', async () => {
+    const { client, log, dir } = start('session-new-escalation');
+    const rejection = await client.createSession(sessionSpec(dir)).then(
+      () => null,
+      (error: unknown) => error as AcpError,
+    );
+    // The caller gets the governance error, not an AcpClosedError from a skipped
+    // session/set_model.
+    expect(rejection).toBeInstanceOf(GovernanceStopError);
+    expect(rejection?.code).toBe('GOVERNANCE_STOP');
+    expect(rejection?.message).toBe(
+      "run stopped by governance: mode escalation observed: currentModeId=acceptEdits (governed mode is 'default')",
+    );
+
+    const governance = await log.waitFor('governance_error');
+    expect(governance.code).toBe('MODE_ESCALATION');
+    expect(governance.detail).toEqual({ currentModeId: 'acceptEdits' });
+    expect(log.received().some(message => message.method === 'session/set_model')).toBe(false);
+    await log.waitFor('child_exit');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'escalates SIGTERM to SIGKILL when the CLI ignores the term signal (F3)',
+    async () => {
+      // Windows cannot deliver a real SIGTERM to a child (`subprocess.kill('SIGTERM')`
+      // terminates immediately there), so the POSIX escalation path is asserted on POSIX.
+      const { client, log } = start('sigterm-ignored', { killGraceMs: 100 });
+      await log.hello();
+      const aliveCount = (): number =>
+        log.events.filter(event => event.type === 'notification' && event.method === 'fixture/alive').length;
+      const sigtermReceived = log.waitFor('notification', event => event.method === 'fixture/sigterm-received');
+      await log.waitFor('notification', event => event.method === 'fixture/alive');
+
+      client.close();
+      // The child survives SIGTERM: it reports the signal and keeps heartbeating while the
+      // referenced escalation timer counts down the grace window.
+      await sigtermReceived;
+      const aliveBefore = aliveCount();
+      const deadline = Date.now() + 5_000;
+      while (aliveCount() <= aliveBefore && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(aliveCount()).toBeGreaterThan(aliveBefore);
+
+      // ... and dies only through the escalation: the observed exit signal is SIGKILL.
+      const exit = await log.waitFor('child_exit');
+      expect(exit.signal).toBe('SIGKILL');
+    },
+  );
+});
+
+describe('stderr redaction (F4)', () => {
+  /** All `stderr` event texts joined in arrival order (what a log reader would see). */
+  function stderrText(log: EventLog): string {
+    return log.events
+      .filter((event): event is EventOf<'stderr'> => event.type === 'stderr')
+      .map(event => event.text)
+      .join('');
+  }
+
+  it('never lets the allowlisted PAT reach stderr events or stderrTail', async () => {
+    const { client, log } = start('stderr-token');
+    const stderr = await log.waitFor('stderr', event => event.text.includes('token='));
+    expect(stderr.text).toContain('qodercli: auth failed');
+    expect(stderr.text).toContain('token=[redacted] (fixture)');
+    expect(stderr.text).not.toContain(SYNTHETIC_PAT);
+
+    // The diagnostics tail is built from the same redacted text.
+    expect(client.stderrTail).toContain('token=[redacted] (fixture)');
+    expect(client.stderrTail).not.toContain(SYNTHETIC_PAT);
+  });
+
+  it('carries a token split across two stderr chunks and flushes the carry on child close (F4 follow-up)', async () => {
+    const { client, log } = start('stderr-token-split');
+    const half = SYNTHETIC_PAT.slice(0, Math.ceil(SYNTHETIC_PAT.length / 2));
+
+    // Chunk 1 is the token's first half, delivered alone (~100 ms before the rest): the
+    // carry holds it back, so the event stops before the partial token.
+    const first = await log.waitFor('stderr', event => event.text.includes('qodercli: auth failed'));
+    expect(first.text).toBe('qodercli: auth failed for token=');
+
+    // The completing half arrives as its own chunk and recombines with the carried first
+    // half, so the token is redacted as a whole (the first half alone is never emitted).
+    const second = await log.waitFor('stderr', event => event.text.includes('(fixture)'));
+    expect(second.text).toBe('[redacted] (fixture)\n');
+
+    // A truncated final write leaves a partial prefix held in the carry; the child then
+    // exits (close() sends SIGTERM) and the `close` handler (process gone, stdio drained)
+    // must flush the carry. Waiting for that flush event is itself the assertion: a silent
+    // drop times out here.
+    const third = await log.waitFor('stderr', event => event.text.includes('retrying'));
+    expect(third.text).toBe('retrying with token=');
+    client.close();
+    const flushed = await log.waitFor('stderr', event => event.text === half);
+    expect(flushed.text).toBe(half);
+    await log.waitFor('child_exit');
+
+    // After exit nothing held back was silently dropped: the surrounding ordinary text is
+    // present, and the split halves were never emitted, so no event can be rejoined into
+    // (and no tail can contain) the token.
+    const text = stderrText(log);
+    expect(text).toBe(`qodercli: auth failed for token=[redacted] (fixture)\nretrying with token=${half}`);
+    expect(text).not.toContain(SYNTHETIC_PAT);
+    expect(text).not.toContain(SYNTHETIC_PAT.slice(Math.ceil(SYNTHETIC_PAT.length / 2)));
+    expect(client.stderrTail).not.toContain(SYNTHETIC_PAT);
+    expect(client.stderrTail).toContain('token=[redacted] (fixture)');
+    expect(client.stderrTail).toContain(`retrying with token=${half}`);
+  });
+
+  it('passes ordinary stderr through complete and unmodified (F4 follow-up)', async () => {
+    const { client, log } = start('stderr-plain');
+    // The last character is a one-character prefix of the token, so the carry holds it
+    // back until the child exits — the carry must not swallow normal stderr output. The
+    // held character must arrive as its own event on `close` (stdio drained).
+    await log.waitFor('stderr', event => event.text.includes('ends with a'));
+    client.close();
+    await log.waitFor('stderr', event => event.text === SYNTHETIC_PAT.slice(0, 1));
+    await log.waitFor('child_exit');
+
+    const expected = `qodercli: warning: plain diagnostic line\nends with a ${SYNTHETIC_PAT.slice(0, 1)}`;
+    const text = stderrText(log);
+    expect(text).toBe(expected);
+    expect(client.stderrTail).toBe(expected);
+    expect(text).not.toContain(SYNTHETIC_PAT);
   });
 });

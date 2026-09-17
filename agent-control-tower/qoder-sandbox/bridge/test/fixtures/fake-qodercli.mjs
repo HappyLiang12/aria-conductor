@@ -24,7 +24,16 @@
  * `test-worker-token` is reported as a key name / presence flag only).
  *
  * Scenarios: happy | deny | allow-always-only | unsupported | cancel | exit-early |
- * exit-mid-turn | handshake-error | unknown-model | mode-escalation
+ * exit-mid-turn | handshake-error | unknown-model | mode-escalation |
+ * session-new-escalation | silent | sigterm-ignored | stderr-token | stderr-token-split |
+ * stderr-plain
+ *
+ * Synthetic-input warning (F6): the `initialize` and `session/new` result payloads below
+ * contain fixture-invented scaffolding fields (`agentInfo`, `authMethods`,
+ * `agentCapabilities`, `modes.availableModes`) that NO gate documents. Slice A evidence
+ * backs only `protocolVersion` (as an input), `sessionId`, `currentModeId`, the `modelId`
+ * menu, `_meta.qoder.toolName` and `title:null`; tests must not cite the synthetic fields
+ * as evidence about the real CLI.
  */
 import process from 'node:process';
 
@@ -125,6 +134,12 @@ function finishTurn() {
 }
 
 function onClientRequest(message) {
+  if (scenario === 'silent') {
+    // F1: a wedged CLI — it starts (fixture/hello above) but never answers anything, so
+    // the client's bounded handshake must time out; `close()` must still kill this child
+    // (it dies on SIGTERM like any node process).
+    return;
+  }
   switch (message.method) {
     case 'initialize': {
       if (scenario === 'exit-early') {
@@ -134,6 +149,12 @@ function onClientRequest(message) {
         respondError(message.id, -32000, 'Authentication required: Authentication is required.');
         return;
       }
+      // F6 SCAFFOLDING: `agentInfo`, `authMethods` and `agentCapabilities` (including
+      // `mcpCapabilities.sse`) are invented for this fixture — no gate documents them.
+      // A4/A5 evidence backs only `protocolVersion` (as an INPUT), `sessionId`,
+      // `currentModeId`, the `modelId` menu, `_meta.qoder.toolName` and `title:null`.
+      // Scenario assertions must not lean on the synthetic fields as evidence about the
+      // real CLI.
       respond(message.id, {
         protocolVersion: 1,
         agentInfo: { name: 'qoder-cli', title: 'Qoder CLI (fixture)', version: '1.1.41-fixture' },
@@ -148,9 +169,15 @@ function onClientRequest(message) {
     }
     case 'session/new': {
       facts.sessionNewParams = message.params ?? null;
+      // F6 SCAFFOLDING: `modes.availableModes` is invented; only `sessionId` and
+      // `currentModeId` are gate-backed (see the initialize comment above), and the
+      // `session-new-escalation` variant reports the A2 config-isolation drift (F2).
       respond(message.id, {
         sessionId: SESSION_ID,
-        modes: { currentModeId: 'default', availableModes: [{ id: 'default' }] },
+        modes: {
+          currentModeId: scenario === 'session-new-escalation' ? 'acceptEdits' : 'default',
+          availableModes: [{ id: 'default' }],
+        },
         models: { availableModels: scenario === 'unknown-model' ? PAID_MODEL_MENU : MODEL_MENU },
       });
       if (scenario === 'unknown-model') {
@@ -252,6 +279,51 @@ if (scenario === 'unsupported') {
   const id = 0; // the CLI numbers its own requests from 0 per session (A4)
   pendingCliRequests.set(String(id), 'unsupported');
   out({ id, method: 'fs/read_text_file', params: { path: '/workspace/notes.txt' } });
+}
+
+if (scenario === 'sigterm-ignored') {
+  // F3: ignore SIGTERM and keep heartbeating, so the test can observe that the child is
+  // still alive inside the grace window and dies only via the client's SIGKILL
+  // escalation. (Node on Windows cannot receive a real SIGTERM — the POSIX-only test is
+  // skipped there.)
+  process.on('SIGTERM', () => {
+    notify('fixture/sigterm-received', { pid: process.pid });
+  });
+  setInterval(() => notify('fixture/alive', { pid: process.pid }), 20);
+}
+
+if (scenario === 'stderr-token') {
+  // F4: echo the allowlisted PAT (read from the child env at runtime — never hardcoded)
+  // on stderr; the client must redact it before it reaches `stderr` events / stderrTail.
+  process.stderr.write(
+    `qodercli: auth failed for token=${process.env.QODER_PERSONAL_ACCESS_TOKEN ?? ''} (fixture)\n`,
+  );
+}
+
+if (scenario === 'stderr-token-split') {
+  // F4 follow-up: write the PAT in two pieces separated by a delay, so Node delivers two
+  // stderr chunks; the client must carry the partial token across them and never emit
+  // either half unredacted. A third (truncated) write leaves a partial prefix in the
+  // carry, proving the exit flush emits held text instead of silently dropping it. The
+  // token is read from the child env at runtime — never hardcoded.
+  const token = process.env.QODER_PERSONAL_ACCESS_TOKEN ?? '';
+  const splitAt = Math.ceil(token.length / 2);
+  process.stderr.write(`qodercli: auth failed for token=${token.slice(0, splitAt)}`);
+  setTimeout(() => {
+    process.stderr.write(`${token.slice(splitAt)} (fixture)\n`);
+  }, 100);
+  setTimeout(() => {
+    process.stderr.write(`retrying with token=${token.slice(0, splitAt)}`);
+  }, 200);
+}
+
+if (scenario === 'stderr-plain') {
+  // F4 follow-up: ordinary stderr with no token anywhere must pass through complete and
+  // unmodified. The last character IS the token's first character (a one-character proper
+  // prefix), so the client carries it until exit; it must be flushed, not swallowed.
+  const token = process.env.QODER_PERSONAL_ACCESS_TOKEN ?? '';
+  process.stderr.write('qodercli: warning: plain diagnostic line\n');
+  process.stderr.write(`ends with a ${token.slice(0, 1)}`);
 }
 
 let buffer = '';

@@ -339,3 +339,33 @@ nonempty MCP headers, and isolation from host/project customization.
 Remaining risks: hidden-flag/version drift, mode escalation through persistent grants,
 incomplete usage reporting, and treating audit logging as authorization. The companion design
 must address these before claiming a governed provider is ready.
+
+## 11. Model selection and cost evidence
+
+Addendum, 2026-09-17 (same day, after Sections 1-10 were written). Windows host probes only;
+nothing in this section was observed inside a sandbox. Probe scripts were ad-hoc and are not
+committed; the commands below are runnable and their outputs were captured during the probes.
+
+Observed facts:
+
+- The CLI's model listing shows `efficient` (Vision, 0.00x Credit) and `lite` (0.00x Credit)
+  alongside paid tiers (`auto` 1.00x, `performance` 1.10x, `ultimate` 1.60x).
+- `session/set_model {sessionId, modelId}` over the ACP session returned `{}` (accepted), so a
+  per-session model selection is expressible at session setup.
+- A print-mode call, `qodercli -p "<prompt>" -m efficient --output-format json`, reported
+  `total_credits: 0` and `modelUsage.efficient.credits: 0` with `is_error: false` and
+  `result: "ok"`.
+- `--help` exposes `-m/--model`, `--setting-sources <source>`, `--plugin-dir`,
+  `--strict-mcp-config`, `--mcp-config`, `--permission-mode`, `--output-format` and
+  `--session-id`/`--resume`/`--continue`.
+
+Interpretation for the implementation plan:
+
+- Local real-E2E runs are pinned to `efficient` behind a fail-closed allowlist
+  (`{efficient, lite}`; `QODER_E2E_ALLOW_PAID=1` as the explicit escape) so regression runs do
+  not consume paid credits.
+- One call reporting zero credits is not a guarantee that all runs are free. Reported usage is
+  recorded per run, and absent or unknown usage must stay unknown (design Section 4.2).
+- Still unverified: whether any ACP event exposes the effective model, whether `session/set_model`
+  success persists across a real sandbox prompt, and all Linux/sandbox behavior. These remain
+  Slice A gates (A3, A5) in the implementation plan.

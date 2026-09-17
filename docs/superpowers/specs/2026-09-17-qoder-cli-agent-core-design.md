@@ -2,7 +2,7 @@
 
 Date: 2026-09-17
 Baseline: `c6d37f8` (`main`, PR #89).
-Status: **Draft for user review after partial Phase 0 spike. Not approved for implementation.**
+Status: **Design approved by the user on 2026-09-17, including Section 1.1. Proceed to implementation planning; runtime gates remain unverified.**
 Evidence: `docs/reviews/2026-09-17-qoder-cli-acp-spike.md`.
 
 All components, endpoints, fields and behavior described as target design below are proposed,
@@ -31,7 +31,7 @@ Non-goals: the unrelated Overview/IA revamp, migrating existing agents, changing
 permission policy, a generic arbitrary-CLI framework, persistent permission grants, generic MCQ
 rendering, new tenant/role management, and changing existing LLM key storage.
 
-### 1.1 Corrections requiring review with this draft
+### 1.1 Approved design refinements
 
 - Phase 0 established Windows ACP feasibility, not Linux/sandbox readiness or complete parity.
 - MCP audit is not authorization. A worker must not possess operator decision authority.
@@ -45,8 +45,8 @@ rendering, new tenant/role management, and changing existing LLM key storage.
 - Cancellation, expiry, minimum live progress, and sandbox renewal belong in the first usable
   slice, not a later parity promise.
 
-These are design refinements, not implementation authorization. Review this document before
-writing a plan or changing production code.
+These refinements were approved with the design on 2026-09-17. Approval permits implementation
+planning; executing that plan remains a separate step, and runtime entry gates still apply.
 
 ## 2. Evidence and current integration seams
 
@@ -386,7 +386,7 @@ This scope needs multiple implementation slices after approval, not one unreview
 B and C are internal work slices, not independently advertised production features with governance
 missing. The later implementation plan must name wave dependencies and file ownership. Shared
 model/auth/lifecycle changes precede parallel provider/UI work; integration and real E2E follow.
-No coding begins from this draft.
+Begin with an approved Slice A execution plan; design approval alone does not bypass its gates.
 
 ## 10. Verification and acceptance
 

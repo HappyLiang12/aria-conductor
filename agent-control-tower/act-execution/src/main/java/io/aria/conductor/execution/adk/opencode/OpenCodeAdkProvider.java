@@ -6,6 +6,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.execution.adk.AbstractAdkProvider;
 import io.aria.conductor.execution.adk.TaskContext;
+import io.aria.conductor.execution.adk.TaskExecutionConstraints;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.llm.LlmMessage;
@@ -146,6 +147,16 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     @Override
     public boolean supportsTaskExecution() {
         return true;
+    }
+
+    /**
+     * The opencode task deadline ({@code opencode.max-task-minutes}) is resolved
+     * through the provider: the engine no longer reads {@link OpenCodeProperties}
+     * directly for the task deadline.
+     */
+    @Override
+    public TaskExecutionConstraints taskConstraints() {
+        return new TaskExecutionConstraints(Duration.ofMinutes(properties.getMaxTaskMinutes()));
     }
 
     @Override

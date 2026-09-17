@@ -55,6 +55,35 @@ try {
     return (pwsh -NoProfile -File $file)
 }
 
+# Runs one Ensure-QoderSandboxImage scenario in a fresh pwsh process whose PATH only
+# exposes a recording stub CLI. The stub answers `image inspect` with $ImagePresent and
+# appends every invocation to calls.log, so the scenario can assert whether a `build`
+# was issued. Returns @{ Out; Calls }.
+function Invoke-QoderImageScenario([bool]$ImagePresent) {
+    $dir = Join-Path $StubDir ([guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $dir | Out-Null
+    $inspectRc = if ($ImagePresent) { 0 } else { 1 }
+    $stub = @"
+Add-Content -LiteralPath '$dir\calls.log' -Value (`$args -join ' ')
+if (`$args.Count -ge 2 -and `$args[0] -eq 'image' -and `$args[1] -eq 'inspect') { exit $inspectRc }
+if (`$args.Count -ge 1 -and `$args[0] -eq 'build') { exit 0 }
+exit 1
+"@
+    Set-Content -Path (Join-Path $dir "podman.ps1") -Value $stub
+    $scenario = @"
+`$env:PATH = '$dir'
+. '$LibPath'
+`$built = Ensure-QoderSandboxImage -Runtime 'podman' -ProjectRoot '$ProjectRoot'
+Write-Output ("RESULT built={0}" -f `$built)
+"@
+    $file = Join-Path $dir "scenario.ps1"
+    Set-Content -Path $file -Value $scenario
+    $out = pwsh -NoProfile -File $file
+    $callsFile = Join-Path $dir "calls.log"
+    $calls = if (Test-Path $callsFile) { (Get-Content $callsFile -Raw) } else { "" }
+    return @{ Out = $out; Calls = $calls }
+}
+
 try {
     Write-Host "Container-runtime resolution scenarios:" -ForegroundColor Cyan
 
@@ -81,6 +110,21 @@ try {
 
     $out = Invoke-Scenario "" @()
     Assert-True "auto + neither available -> null runtime" ($out -match "runtime= mode=auto") $out
+
+    Write-Host "Qoder sandbox image ensure scenarios:" -ForegroundColor Cyan
+
+    $r = Invoke-QoderImageScenario $true
+    Assert-True "qoder image present -> no build" `
+        (($r.Out -match "RESULT built=False") -and
+        ($r.Calls -match "image inspect aria-conductor/qoder-sandbox:0.1") -and
+        ($r.Calls -notmatch "build")) ($r.Out + " | " + $r.Calls)
+
+    $r = Invoke-QoderImageScenario $false
+    $qoderContext = Join-Path $ProjectRoot "agent-control-tower/qoder-sandbox"
+    Assert-True "qoder image absent -> build invoked from the qoder-sandbox context" `
+        (($r.Out -match "RESULT built=True") -and
+        ($r.Calls -match "build -t aria-conductor/qoder-sandbox:0.1") -and
+        ($r.Calls -match [regex]::Escape($qoderContext))) ($r.Out + " | " + $r.Calls)
 
     Write-Host "Load-DotEnv scenarios:" -ForegroundColor Cyan
 

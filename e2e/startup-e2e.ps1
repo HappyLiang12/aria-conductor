@@ -527,6 +527,56 @@ Write-Output ("RESULT exit=" + `$LASTEXITCODE)
     Assert-True "-DryRun prints the mode block" (($out -match "Topology\s*:\s*local-dev") -and ($out -match "Provider\s*:\s*opencode") -and ($out -match "Runtime\s*:\s*podman")) $out
     Assert-True "-DryRun leaves the existing .env untouched" ((Get-Content (Join-Path $dryRoot '.env') -Raw) -match 'LLM_API_KEY=sk-test1234567890') $out
     Assert-True "-DryRun writes no .run state" (-not (Test-Path (Join-Path $dryRoot '.run'))) $out
+    Assert-True "the default mode block is untouched by the qoder opt-in" `
+        (($out -notmatch 'qoder') -and ($out -notmatch 'MCP auth')) $out
+
+    # -Provider qoder is an explicit opt-in: it must select the qoder provider and its
+    # sandbox image, and it must pin MCP token auth. A qoder sandbox sits on the local
+    # network next to the backend, so the local default (aria.mcp.auth-mode=none) would
+    # hand it an unauthenticated operator API (design Section 6.2). The default run above
+    # must stay untouched, which the assertion on its own output already pins.
+    $qoderRoot = Join-Path $StubDir "dryrun-qoder"
+    New-Item -ItemType Directory -Path $qoderRoot -Force | Out-Null
+    Set-Content -Path (Join-Path $qoderRoot '.env') -Value "LLM_API_KEY=sk-test1234567890`n"
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+& '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Provider qoder -ProjectRoot '$qoderRoot'
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+    Assert-True "-Provider qoder -DryRun exits 0" ($out -match "RESULT exit=0") $out
+    Assert-True "-Provider qoder selects the qoder provider and sandbox image" `
+        (($out -match "Provider\s*:\s*qoder") -and ($out -match 'aria-conductor/qoder-sandbox:0\.1')) $out
+    Assert-True "-Provider qoder pins MCP token auth" `
+        (($out -match "MCP auth\s*:\s*token") -and ($out -match 'mcp-token')) $out
+    Assert-True "-Provider qoder -DryRun writes no .run state" (-not (Test-Path (Join-Path $qoderRoot '.run'))) $out
+
+    # The refusal case: an explicit override back to the unauthenticated mode must abort
+    # with an explicit error instead of starting a stack whose sandboxes can reach an open
+    # operator API. A nested pwsh is used because only a separate process reports the
+    # launcher's own exit code and its stderr.
+    $refuseRoot = Join-Path $StubDir "dryrun-qoder-refuse"
+    New-Item -ItemType Directory -Path $refuseRoot -Force | Out-Null
+    Set-Content -Path (Join-Path $refuseRoot '.env') -Value "LLM_API_KEY=sk-test1234567890`nARIA_MCP_AUTH_MODE=none`n"
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Provider qoder -ProjectRoot '$refuseRoot' 2>&1 | Out-String)
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+    Assert-True "qoder mode refuses an explicit ARIA_MCP_AUTH_MODE=none override" `
+        (($out -match "RESULT exit=1") -and ($out -match 'ARIA_MCP_AUTH_MODE') -and ($out -match '(?i)refus')) $out
+    Assert-True "the refusal cites the design rule behind it" ($out -match '6\.2') $out
+    Assert-True "the refusal writes no .run state" (-not (Test-Path (Join-Path $refuseRoot '.run'))) $out
+
+    # compose stays langchain-only (its backend is containerized and cannot reach the
+    # OpenSandbox endpoints), so an explicit qoder request there must fail loudly instead
+    # of silently starting the other provider.
+    $out = Invoke-Snippet @"
+`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
+Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Mode compose -Provider qoder -ProjectRoot '$qoderRoot' 2>&1 | Out-String)
+Write-Output ("RESULT exit=" + `$LASTEXITCODE)
+"@ -PathPrepend $FakePodmanDir
+    Assert-True "qoder mode refuses -Mode compose instead of downgrading to langchain" `
+        (($out -match "RESULT exit=1") -and ($out -match '(?i)langchain') -and ($out -match 'qoder')) $out
 
     Write-Host "start.ps1 fresh-checkout -DryRun scenario:" -ForegroundColor Cyan
 

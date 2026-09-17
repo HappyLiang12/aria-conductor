@@ -168,6 +168,17 @@ public class LangChainAdkProvider extends AbstractAdkProvider {
     }
 
     @Override
+    public RuntimeHealth probeRuntimeHealth(UUID agentId) {
+        AdkInstance inst = instances.get(agentId);
+        if (inst == null || inst.port() == 0) {
+            return RuntimeHealth.NOT_STARTED;
+        }
+        return checkHealth(properties.getHost(), inst.port()) == AdkHealthStatus.HEALTHY
+                ? RuntimeHealth.REACHABLE
+                : RuntimeHealth.UNREACHABLE;
+    }
+
+    @Override
     public boolean isServiceHealthy() {
         // Service-level probe without agent context: the ADK host/port (the
         // default/remote port range start). No live agent instance means the

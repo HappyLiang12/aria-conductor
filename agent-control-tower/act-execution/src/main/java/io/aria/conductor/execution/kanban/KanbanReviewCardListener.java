@@ -4,14 +4,40 @@ import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.util.concurrent.Executor;
 
 /**
  * Surfaces every approval as a Review-column card (spec 4.3): links the ask to
  * the card already associated with the run, or creates a REVIEW card for
  * orphan approvals.
+ *
+ * <p>Runs after the requesting transaction commits, in its own transaction: the
+ * approval is recorded before the board is touched, and a failure here must
+ * neither roll back the approval that triggered it nor surface to the caller
+ * that recorded it. ApprovalGate raises asks outside any transaction, so the
+ * listener must fall back to running immediately for those; without it the ask
+ * would silently get no card.
+ *
+ * <p>The linking work sits inside a {@link TransactionTemplate} instead of a
+ * {@code @Transactional} method so the catch can sit outside the transaction
+ * boundary. A failure caught inside it — say a run link {@code create} refuses —
+ * leaves that transaction rollback-only, and its commit then throws
+ * {@code UnexpectedRollbackException} from the proxy, past the catch and into
+ * the event multicaster. The multicaster stops dispatching on a throw, so that
+ * would silently skip every listener registered after this one.
+ *
+ * <p>The work runs on the {@code kanbanMirrorExecutor} rather than on the
+ * publisher's thread: an after-commit listener still runs before Spring releases
+ * the publisher's connection, so linking there would ask the pool for a second
+ * connection on a thread that already holds one.
  */
 @Slf4j
 @Component
@@ -20,17 +46,23 @@ public class KanbanReviewCardListener {
     private final ApprovalRepository approvalRepository;
     private final KanbanRepository kanbanRepository;
     private final KanbanService kanbanService;
+    private final TransactionTemplate reviewTransaction;
+    private final Executor mirrorExecutor;
 
     public KanbanReviewCardListener(ApprovalRepository approvalRepository,
                                     KanbanRepository kanbanRepository,
-                                    KanbanService kanbanService) {
+                                    KanbanService kanbanService,
+                                    PlatformTransactionManager transactionManager,
+                                    @Qualifier("kanbanMirrorExecutor") Executor mirrorExecutor) {
         this.approvalRepository = approvalRepository;
         this.kanbanRepository = kanbanRepository;
         this.kanbanService = kanbanService;
+        this.reviewTransaction = new TransactionTemplate(transactionManager);
+        this.reviewTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.mirrorExecutor = mirrorExecutor;
     }
 
-    @EventListener
-    @Transactional
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onApprovalRequested(ApprovalRequestedEvent event) {
         // Defensive mirroring of RunKanbanAutoCreator: a listener must never
         // break the publisher's transaction.
@@ -39,24 +71,43 @@ public class KanbanReviewCardListener {
                     event.getApprovalId());
             return;
         }
-        try {
-            approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
-                if (approval.getKanbanItemId() != null) return;
+        submitMirror(() -> {
+            try {
+                reviewTransaction.executeWithoutResult(status -> linkReviewCard(event));
+            } catch (Exception e) {
+                log.warn("Failed to surface review card for approval {}: {}",
+                        event.getApprovalId(), e.getMessage());
+            }
+        });
+    }
 
-                kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
-                        .filter(card -> card.getStatus() == KanbanStatus.REVIEW
-                                || card.getStatus() == KanbanStatus.IN_PROGRESS
-                                || card.getStatus() == KanbanStatus.TODO)
-                        .findFirst()
-                        .ifPresentOrElse(
-                                card -> approval.setKanbanItemId(card.getId()),
-                                () -> createCard(approval, event));
-                approvalRepository.save(approval);
-            });
-        } catch (Exception e) {
-            log.warn("Failed to surface review card for approval {}: {}",
-                    event.getApprovalId(), e.getMessage());
+    /**
+     * A rejected submission (the executor is shutting down) must not travel
+     * back into the event multicaster: it stops dispatching on a throw, which
+     * would silence every listener registered after this one.
+     */
+    private void submitMirror(Runnable work) {
+        try {
+            mirrorExecutor.execute(work);
+        } catch (RuntimeException e) {
+            log.warn("Kanban mirroring could not be scheduled: {}", e.getMessage());
         }
+    }
+
+    private void linkReviewCard(ApprovalRequestedEvent event) {
+        approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
+            if (approval.getKanbanItemId() != null) return;
+
+            kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
+                    .filter(card -> card.getStatus() == KanbanStatus.REVIEW
+                            || card.getStatus() == KanbanStatus.IN_PROGRESS
+                            || card.getStatus() == KanbanStatus.TODO)
+                    .findFirst()
+                    .ifPresentOrElse(
+                            card -> approval.setKanbanItemId(card.getId()),
+                            () -> createCard(approval, event));
+            approvalRepository.save(approval);
+        });
     }
 
     private void createCard(Approval approval, ApprovalRequestedEvent event) {

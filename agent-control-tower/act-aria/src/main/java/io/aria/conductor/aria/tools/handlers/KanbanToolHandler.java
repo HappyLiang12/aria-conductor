@@ -1,5 +1,6 @@
 package io.aria.conductor.aria.tools.handlers;
 
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.execution.kanban.*;
 import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -137,18 +138,23 @@ public class KanbanToolHandler implements ToolHandler {
         // Mirror the orchestrator's idempotent no-op guard: repeating the current
         // status must not delegate (no run side effects) and must not claim a
         // "transitioned to" that never happened.
-        if (kanbanService.get(id).getStatus() == status) {
-            return "Kanban item " + id + " already " + status.name() + ".";
-        }
+        try {
+            if (kanbanService.get(id).getStatus() == status) {
+                return "Kanban item " + id + " already " + status.name() + ".";
+            }
 
-        TransitionRequest request = TransitionRequest.builder()
-                .status(status)
-                .comment(blankToNull(Objects.toString(args.get("comment"), "")))
-                .feedback(blankToNull(Objects.toString(args.get("feedback"), "")))
-                .agentTemplateId(blankToNull(Objects.toString(args.get("agentTemplateId"), "")))
-                .build();
-        KanbanItem item = kanbanTransitionService.transition(id, request);
-        return "Kanban item " + id + " transitioned to " + item.getStatus().name() + ".";
+            TransitionRequest request = TransitionRequest.builder()
+                    .status(status)
+                    .comment(blankToNull(Objects.toString(args.get("comment"), "")))
+                    .feedback(blankToNull(Objects.toString(args.get("feedback"), "")))
+                    .agentTemplateId(blankToNull(Objects.toString(args.get("agentTemplateId"), "")))
+                    .build();
+            KanbanItem item = kanbanTransitionService.transition(id, request);
+            return "Kanban item " + id + " transitioned to " + item.getStatus().name() + ".";
+        } catch (PickupRejectedException e) {
+            // execute()'s generic catch would drop the code Aria needs to explain a refusal.
+            return error(e.code() + ": " + e.getMessage());
+        }
     }
 
     private static String firstNonBlank(String a, String b) {

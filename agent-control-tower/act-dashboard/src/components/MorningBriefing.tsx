@@ -73,20 +73,22 @@ export default function MorningBriefing() {
           Snapshot · {generatedAt}
         </div>
         <ul style={{ margin: 0, paddingLeft: 18 }}>
+          {/* The four counts come from two unrelated sources — kanban card columns
+              and run status — so each label names its own source; the wording must
+              not imply that "in progress" cards and "running" runs are one set. */}
           <li>
-            <b style={{ color: '#6fe2b6' }}>{stats.done} task{stats.done === 1 ? '' : 's'} completed</b>{' '}
-            on the kanban board
+            <b style={{ color: '#6fe2b6' }}>{stats.done} cards done</b>
           </li>
           {/* Single HITL signal (D7): only the Review cards count; the
               pendingApprovals item was removed to avoid a second signal. */}
           <li>
-            <b style={{ color: '#ff97a3' }}>{stats.review} card{stats.review === 1 ? '' : 's'}</b> waiting on review
+            <b style={{ color: '#ff97a3' }}>{stats.review} cards in review</b>
           </li>
           <li>
-            <b style={{ color: 'var(--brand-2)' }}>{running} run{running === 1 ? '' : 's'}</b> active right now
+            <b style={{ color: 'var(--brand-2)' }}>{running} runs running</b>
           </li>
           <li>
-            <b style={{ color: 'var(--text)' }}>{stats.inProgress}</b> task{stats.inProgress === 1 ? '' : 's'} in flight
+            <b style={{ color: 'var(--text)' }}>{stats.inProgress} cards in progress</b>
           </li>
         </ul>
         <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-mute)' }}>

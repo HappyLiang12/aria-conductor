@@ -2,13 +2,14 @@ package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
 import io.aria.conductor.agent.dto.RunResponse;
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
-import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -18,19 +19,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
  * Orchestrates kanban transitions with their run side effects (spec section 4):
- * Todo entry is a dispatch intent (two-phase pickup), dragging to TODO or
- * BACKLOG pauses the linked run, request-changes re-dispatches with feedback,
- * cancel denies open asks and cancels the run.
+ * Todo entry is a dispatch intent (two-phase pickup), parking a card in TODO or
+ * BACKLOG stops the linked run and detaches the card, request-changes
+ * re-dispatches with feedback, cancel denies open asks and cancels the run.
  *
- * <p>Pickup pre-validates agent eligibility so the predictable failure modes
- * (missing/retired/unhealthy agent) stay in-transaction with lastError on the
- * card; anything slipping past pre-validation propagates and rolls the whole
- * transition back.
+ * <p>Pickup asks the single eligibility authority before crossing the run
+ * creation proxy: an ineligible or unknown agent is a synchronous operator
+ * conflict, answered with a 4xx rejection instead of being recorded on the card.
  */
 @Slf4j
 @Service
@@ -47,6 +48,7 @@ public class KanbanTransitionService {
     private final RunRepository runRepository;
     private final AgentRepository agentRepository;
     private final AgentPickerService agentPicker;
+    private final AgentPickupEligibility eligibility;
     private final ApprovalRepository approvalRepository;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -56,6 +58,7 @@ public class KanbanTransitionService {
                                    RunRepository runRepository,
                                    AgentRepository agentRepository,
                                    AgentPickerService agentPicker,
+                                   AgentPickupEligibility eligibility,
                                    ApprovalRepository approvalRepository,
                                    ApplicationEventPublisher eventPublisher) {
         this.kanbanRepository = kanbanRepository;
@@ -64,6 +67,7 @@ public class KanbanTransitionService {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.agentPicker = agentPicker;
+        this.eligibility = eligibility;
         this.approvalRepository = approvalRepository;
         this.eventPublisher = eventPublisher;
     }
@@ -99,14 +103,18 @@ public class KanbanTransitionService {
 
         return switch (to) {
             case BACKLOG -> {
-                pauseIfRunning(item);
+                stopLinkedRun(item);
+                detachLinkOnStop(item);
+                clearStaleLinksOnReopen(item);
                 yield kanbanService.transition(id, KanbanStatus.BACKLOG, request.getComment());
             }
             case TODO -> switch (item.getStatus()) {
                 case REVIEW -> requestChanges(item, request);
-                // Dragging an in-flight card back to TODO pauses the run; no re-dispatch.
+                // Dragging an in-flight card back to TODO stops the run and
+                // detaches the card; no re-dispatch.
                 case IN_PROGRESS -> {
-                    pauseIfRunning(item);
+                    stopLinkedRun(item);
+                    detachLinkOnStop(item);
                     yield kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                 }
                 // Normalize BACKLOG/DONE -> TODO first, then the pickup's
@@ -114,6 +122,7 @@ public class KanbanTransitionService {
                 // "redo": the completed run stays as history and the pickup
                 // creates a fresh run for the new attempt (defect D3).
                 case BACKLOG, DONE -> {
+                    clearStaleLinksOnReopen(item);
                     kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                     yield pickup(item, request);
                 }
@@ -145,14 +154,15 @@ public class KanbanTransitionService {
     /**
      * Two-phase pickup: assign (rule-based) then create the run (spec 4.2).
      *
-     * <p>Agent eligibility is pre-validated here (against the same
-     * {@link AgentRepository} lookup {@link RunService#createRun} performs) so
-     * the predictable failure modes stay in this transaction with lastError on
-     * the card. Crossing the createRun proxy with a doomed request would mark
-     * the shared transaction rollback-only, and catching the failure to
-     * "continue" would only defer it to an UnexpectedRollbackException at
-     * commit. Unexpected createRun failures are therefore not caught: they
-     * propagate and roll the whole transition back atomically.
+     * <p>Agent eligibility is checked here — against the one authority, before
+     * the createRun proxy is crossed: a doomed request would mark the shared
+     * transaction rollback-only, and catching the failure to "continue" would
+     * only defer it to an UnexpectedRollbackException at commit. Unexpected
+     * createRun failures are therefore not caught either: they propagate and roll
+     * the whole transition back atomically.
+     *
+     * <p>A synchronous operator action answers through its response, so a
+     * rejection writes no {@code lastError} on the card.
      */
     private KanbanItem pickup(KanbanItem item, TransitionRequest request) {
         // Assign phase runs whenever no agent is linked yet — even when a display
@@ -161,30 +171,25 @@ public class KanbanTransitionService {
         if (isBlank(item.getLinkedAgentId())) {
             eventPublisher.publishEvent(new KanbanItemAssigningEvent(this, item.getId()));
             String templateId = firstNonBlank(request.getAgentTemplateId(), item.getAgentTemplateId());
-            // AgentPickerService is a plain bean (no transaction proxy), so an
-            // empty healthy pool can be caught here without deferring a
-            // rollback-only transaction to commit — unlike createRun below.
-            try {
-                AgentPickerService.Choice choice = agentPicker.pick(templateId, item.getTitle(), item.getDescription());
-                item.setLinkedAgentId(choice.agentId().toString());
-                item.setAssignee(choice.agentName());
-            } catch (IllegalStateException e) {
-                // Predictable failure (no eligible agent): the card stays in its
-                // source status with lastError instead of rolling the whole
-                // transition back; re-drag retries (spec 4.2/6 refinement).
-                log.warn("Kanban pickup failed for {}: {}", item.getId(), e.getMessage());
-                item.setLastError(abbreviate(e.getMessage()));
-                return kanbanRepository.save(item);
-            }
+            AgentPickerService.Choice choice = agentPicker.pick(templateId, item.getTitle(), item.getDescription());
+            item.setLinkedAgentId(choice.agentId().toString());
+            item.setAssignee(choice.agentName());
             if (!isBlank(templateId)) {
                 item.setAgentTemplateId(templateId);
             }
         }
-        String violation = agentEligibilityViolation(item.getLinkedAgentId());
-        if (violation != null) {
-            log.warn("Kanban pickup failed for {}: {}", item.getId(), violation);
-            item.setLastError(abbreviate(violation));
-            return kanbanRepository.save(item); // stays in TODO, no auto retry
+        Agent linked = agentRepository.findById(UUID.fromString(item.getLinkedAgentId())).orElse(null);
+        if (linked == null) {
+            throw new PickupRejectedException("AGENT_NOT_ELIGIBLE",
+                    "Agent not found with id: " + item.getLinkedAgentId(),
+                    Map.of("agentId", item.getLinkedAgentId()));
+        }
+        AgentPickupEligibility.Evaluation evaluation = eligibility.evaluate(linked);
+        if (!evaluation.eligible()) {
+            throw new PickupRejectedException("AGENT_NOT_ELIGIBLE",
+                    "Agent " + linked.getName() + " cannot receive a card: " + evaluation.reasons(),
+                    Map.of("agentId", item.getLinkedAgentId(),
+                            "reasons", evaluation.reasons().stream().map(Enum::name).toList()));
         }
         // suppressAutoCard: the pickup owns card linkage for orchestrator-created
         // runs — RunKanbanAutoCreator must not double-card the board.
@@ -198,30 +203,6 @@ public class KanbanTransitionService {
         return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, request.getComment());
     }
 
-    /** Mirrors {@code RunService.createRun}'s eligibility guards; {@code null} means eligible. */
-    private String agentEligibilityViolation(String linkedAgentId) {
-        if (isBlank(linkedAgentId)) {
-            return "No agent is linked to this card";
-        }
-        UUID agentId;
-        try {
-            agentId = UUID.fromString(linkedAgentId);
-        } catch (IllegalArgumentException e) {
-            return "Agent not found with id: " + linkedAgentId;
-        }
-        Agent agent = agentRepository.findById(agentId).orElse(null);
-        if (agent == null) {
-            return "Agent not found with id: " + agentId;
-        }
-        if (agent.getHealthStatus() == HealthStatus.RETIRED) {
-            return "Cannot create run for retired agent: " + agent.getId();
-        }
-        if (agent.getHealthStatus() == HealthStatus.UNHEALTHY) {
-            return "Cannot create run for unhealthy agent: " + agent.getId();
-        }
-        return null;
-    }
-
     private KanbanItem requestChanges(KanbanItem item, TransitionRequest request) {
         approvalRepository.markStaleByKanbanItemId(item.getId(), Instant.now());
         kanbanService.transition(item.getId(), KanbanStatus.TODO, request.getComment());
@@ -229,20 +210,41 @@ public class KanbanTransitionService {
     }
 
     private KanbanItem resume(KanbanItem item) {
-        findRun(item).ifPresent(run -> {
-            if (run.getStatus() == RunStatus.PAUSED) {
-                runService.resumeRun(UUID.fromString(item.getLinkedRunId()));
-            }
-        });
+        String link = item.getLinkedRunId();
+        if (link == null || link.isBlank()) {
+            throw new PickupRejectedException("RUN_NOT_FOUND",
+                    "Card has no linked run to resume. Use request-changes to dispatch a new run.",
+                    Map.of("kanbanItemId", item.getId()));
+        }
+        UUID runId;
+        try {
+            runId = UUID.fromString(link);
+        } catch (IllegalArgumentException e) {
+            throw new PickupRejectedException("CORRUPT_RUN_LINK",
+                    "Linked run id is not a UUID: " + link, Map.of("linkedRunId", link));
+        }
+        Run run = runRepository.findById(runId).orElseThrow(() -> new PickupRejectedException("RUN_NOT_FOUND",
+                "No run with id " + runId, Map.of("runId", runId.toString())));
+        if (run.getStatus() != RunStatus.PAUSED) {
+            // A finished run cannot be continued. The honest alternatives are the
+            // card's own vocabulary: request-changes re-enters Todo and dispatches
+            // a new run; Done closes it out.
+            throw new PickupRejectedException("RUN_ALREADY_FINISHED",
+                    "Linked run is " + run.getStatus()
+                            + " — use request-changes to dispatch a new run, or move the card to Done.",
+                    Map.of("runId", runId.toString(), "runStatus", run.getStatus().name()));
+        }
+        runService.resumeRun(runId);
         return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, null);
     }
 
     private KanbanItem cancel(KanbanItem item, String comment) {
         approvalRepository.denyPendingByKanbanItemId(item.getId(), "task cancelled", Instant.now());
         // Card transition FIRST: the card lands on CANCELLED before any listener
-        // can race it. The synchronous RunKanbanAutoCreator.onRunCompleted (fired
-        // by cancelRun below) then finds the card already CANCELLED and skips it
-        // (terminal cards are never re-transitioned) — harmless by design.
+        // can race it. RunKanbanAutoCreator.onRunCompleted (fired by cancelRun
+        // below, after this transaction commits) then finds the card already
+        // CANCELLED and skips it (terminal cards are never re-transitioned) —
+        // harmless by design.
         kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
         findRun(item).ifPresent(run -> {
             if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
@@ -253,21 +255,80 @@ public class KanbanTransitionService {
         return item;
     }
 
-    private void pauseIfRunning(KanbanItem item) {
-        findRun(item).ifPresent(run -> {
-            if (run.getStatus() == RunStatus.RUNNING) {
-                runService.pauseRun(UUID.fromString(item.getLinkedRunId()));
-            }
-        });
+    /**
+     * Stop the linked run because the operator moved the card out of In Progress.
+     *
+     * <p>RunStatus allows PAUSED only from RUNNING, so a run that has not started
+     * yet is cancelled instead — it cannot be paused, and cancelling loses nothing
+     * since no work has been produced. Not stopping it would leave a live run whose
+     * iterations keep dragging the card back (RunKanbanAutoCreator.onRunIteration
+     * finds cards by linkedRunId).
+     */
+    private void stopLinkedRun(KanbanItem item) {
+        UUID runId = parseLinkOrNull(item);
+        if (runId == null) {
+            return;
+        }
+        Run run = runRepository.findById(runId).orElse(null);
+        if (run == null) {
+            return;
+        }
+        switch (run.getStatus()) {
+            case RUNNING -> runService.pauseRun(runId);
+            case PENDING, INITIALIZING -> runService.cancelRun(runId);
+            default -> { }
+        }
+    }
+
+    /**
+     * The link is the card's ownership credential: RunKanbanAutoCreator resolves
+     * cards by linkedRunId, so a parked card must drop it or the run the stop
+     * just cancelled (cancelRun publishes RunCompletedEvent(CANCELLED)) comes
+     * back through onRunCompleted and drags it to CANCELLED. Called by the
+     * TODO/BACKLOG stops only: the REVIEW destination keeps the link because the
+     * review ask is keyed on it, and a CANCELLED card keeps it as inert history.
+     */
+    private void detachLinkOnStop(KanbanItem item) {
+        if (item.getLinkedRunId() == null) {
+            return;
+        }
+        item.setLinkedRunId(null);
+        kanbanRepository.save(item);
+    }
+
+    /**
+     * Re-opening a finished card must not carry the finished run forward: the
+     * old run's approval can still arrive and re-attach to a card whose linked
+     * run is that same finished run (KanbanReviewCardListener matches by
+     * linkedRunId). Clearing both links makes the card a fresh dispatch intent.
+     */
+    private void clearStaleLinksOnReopen(KanbanItem item) {
+        if (item.getStatus() != KanbanStatus.DONE) {
+            return;
+        }
+        item.setLinkedRunId(null);
+        item.setLinkedAgentId(null);
+        item.setAssignee(null);
+        kanbanRepository.save(item);
+    }
+
+    /** Null for a blank or unparseable link: a corrupt link is history, not a run to operate on. */
+    private UUID parseLinkOrNull(KanbanItem item) {
+        String link = item.getLinkedRunId();
+        if (link == null || link.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(link);
+        } catch (IllegalArgumentException e) {
+            log.warn("Clearing corrupt linkedRunId {} on kanban item {}", link, item.getId());
+            return null;
+        }
     }
 
     private Optional<Run> findRun(KanbanItem item) {
-        if (isBlank(item.getLinkedRunId())) return Optional.empty();
-        try {
-            return runRepository.findById(UUID.fromString(item.getLinkedRunId()));
-        } catch (IllegalArgumentException e) {
-            return Optional.empty();
-        }
+        UUID runId = parseLinkOrNull(item);
+        return runId == null ? Optional.empty() : runRepository.findById(runId);
     }
 
     private String buildPromptSeed(KanbanItem item, String feedback) {
@@ -292,10 +353,5 @@ public class KanbanTransitionService {
     private static String cap(String s, int max) {
         if (s == null) return "";
         return s.length() > max ? s.substring(0, max) : s;
-    }
-
-    private static String abbreviate(String msg) {
-        if (msg == null) return "pickup failed";
-        return msg.length() > 480 ? msg.substring(0, 480) : msg;
     }
 }

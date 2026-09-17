@@ -39,6 +39,22 @@ class McpTokenEndpointIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.service.KnowledgeService knowledgeService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalQueryService approvalQueryService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalGate approvalGate;
+    @MockitoBean io.aria.conductor.agent.service.AgentService agentService;
+    @MockitoBean io.aria.conductor.agent.service.RunService runService;
+    @MockitoBean io.aria.conductor.agent.service.LlmProviderService llmProviderService;
+    @MockitoBean io.aria.conductor.agent.repository.AgentRepository agentRepository;
+    @MockitoBean io.aria.conductor.agent.repository.RunRepository runRepository;
+    @MockitoBean io.aria.conductor.execution.repository.ApprovalRepository approvalRepository;
+    @MockitoBean io.aria.conductor.execution.repository.PromptCallRepository promptCallRepository;
+    @MockitoBean io.aria.conductor.execution.repository.SessionTrajectoryRepository sessionTrajectoryRepository;
+    @MockitoBean io.aria.conductor.execution.kanban.KanbanService kanbanService;
+    @MockitoBean io.aria.conductor.execution.kanban.KanbanTransitionService kanbanTransitionService;
+    @MockitoBean io.aria.conductor.execution.dod.DoDService dodService;
+    @MockitoBean io.aria.conductor.execution.housekeeping.HousekeepingService housekeepingService;
+    @MockitoBean io.aria.conductor.dashboard.report.ReportService reportService;
+    @MockitoBean io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository skillDefinitionRepository;
+    @MockitoBean io.aria.conductor.aria.service.NotificationService notificationService;
+    @MockitoBean io.aria.conductor.aria.service.ScheduledJobService scheduledJobService;
 
     MockMvc mvc;
 

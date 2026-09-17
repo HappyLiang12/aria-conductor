@@ -7,6 +7,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.common.model.LlmProviderType;
 import io.aria.conductor.common.event.RunProgressEvent;
+import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
@@ -98,6 +99,10 @@ class OpenCodeAdkProviderTest {
 
     private Agent agent(UUID agentId) {
         return Agent.builder().id(agentId).name("test-agent").role("coder").description("desc").build();
+    }
+
+    private OpenCodeInstance openCodeInstance(OpenCodeHttpClient client, int failureCount) {
+        return new OpenCodeInstance("sb-1", true, Instant.now(), failureCount, client);
     }
 
     @Test
@@ -334,6 +339,40 @@ class OpenCodeAdkProviderTest {
         verify(sandboxManager, never()).killSandbox(any());
         assertThat(provider.instancesForTest()).containsKey(agentId);
         assertThat(provider.instancesForTest().get(agentId).failureCount()).isEqualTo(2);
+    }
+
+    // ---- side-effect-free runtime probe (health reconciler seam) ----
+
+    @Test
+    void probeReportsNotStartedWhenNoSandboxInstanceExists() {
+        UUID agentId = UUID.randomUUID();
+
+        assertThat(provider.probeRuntimeHealth(agentId))
+                .isEqualTo(AdkProvider.RuntimeHealth.NOT_STARTED);
+    }
+
+    @Test
+    void probeReportsReachableWithoutTouchingTheFailureCounter() {
+        UUID agentId = UUID.randomUUID();
+        OpenCodeHttpClient client = mock(OpenCodeHttpClient.class);
+        when(client.isHealthy()).thenReturn(true);
+        provider.putInstanceForTest(agentId, openCodeInstance(client, 2));
+
+        assertThat(provider.probeRuntimeHealth(agentId)).isEqualTo(AdkProvider.RuntimeHealth.REACHABLE);
+        // Probing must never accumulate failures: isHealthy(UUID) destroys the
+        // sandbox at three consecutive misses, so a read-path probe using it would
+        // let transient blips tear the runtime down.
+        assertThat(provider.instancesForTest().get(agentId).failureCount()).isEqualTo(2);
+    }
+
+    @Test
+    void probeReportsUnreachableWhenTheClientThrows() {
+        UUID agentId = UUID.randomUUID();
+        OpenCodeHttpClient client = mock(OpenCodeHttpClient.class);
+        when(client.isHealthy()).thenThrow(new RuntimeException("connection refused"));
+        provider.putInstanceForTest(agentId, openCodeInstance(client, 0));
+
+        assertThat(provider.probeRuntimeHealth(agentId)).isEqualTo(AdkProvider.RuntimeHealth.UNREACHABLE);
     }
 
     @Test

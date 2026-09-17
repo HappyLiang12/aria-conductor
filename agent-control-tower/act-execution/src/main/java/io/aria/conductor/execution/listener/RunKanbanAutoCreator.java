@@ -12,10 +12,16 @@ import io.aria.conductor.execution.kanban.KanbanRepository;
 import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.kanban.KanbanStatus;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * Automatically manages Kanban items in response to run lifecycle events:
@@ -24,6 +30,32 @@ import java.util.List;
  *   <li>{@link RunIterationEvent}   → transitions TODO → IN_PROGRESS</li>
  *   <li>{@link RunCompletedEvent}   → transitions to DONE (or CANCELLED)</li>
  * </ul>
+ *
+ * <p>Every method runs AFTER the publisher's transaction commits, in its own
+ * transaction: a card mirroring a run is only written once the run row is
+ * durable, and a kanban failure can no longer reach back into the run's
+ * transaction. Publishers with no transaction of their own (the loop engine,
+ * the zombie reaper) must still be mirrored, so every method also falls back to
+ * running immediately when no transaction is active.
+ *
+ * <p>The mirroring work sits inside a {@link TransactionTemplate} instead of a
+ * {@code @Transactional} method so the catch can sit outside the transaction
+ * boundary. A failure caught inside it — say a card the transition matrix
+ * refuses to move — leaves that transaction rollback-only, and its commit then
+ * throws {@code UnexpectedRollbackException} from the proxy, past the catch and
+ * into the event multicaster. The multicaster stops dispatching on a throw, so
+ * that would silently skip every listener registered after this one: the
+ * dashboard never hears {@code run.completed} and workflow chains never advance.
+ * Rolling back inside the template instead rethrows the original failure here.
+ *
+ * <p>That work then runs on the {@code kanbanMirrorExecutor}, not on the
+ * publisher's thread: an after-commit listener still runs before Spring releases
+ * the publisher's connection, so mirroring there would ask the pool for a second
+ * connection on a thread that already holds one. A burst of concurrent
+ * publishers as large as the pool then deadlocks every connection until the
+ * connection timeout and the cards are lost. Handing the work over releases the
+ * publisher's connection first; the executor's single thread keeps each run's
+ * mirror in publication order.
  */
 @Slf4j
 @Component
@@ -32,14 +64,23 @@ public class RunKanbanAutoCreator {
     private final KanbanService kanbanService;
     private final KanbanRepository kanbanRepository;
     private final RunRepository runRepository;
+    private final TransactionTemplate mirrorTransaction;
+    private final Executor mirrorExecutor;
 
-    public RunKanbanAutoCreator(KanbanService kanbanService, KanbanRepository kanbanRepository, RunRepository runRepository) {
+    public RunKanbanAutoCreator(KanbanService kanbanService,
+                                KanbanRepository kanbanRepository,
+                                RunRepository runRepository,
+                                PlatformTransactionManager transactionManager,
+                                @Qualifier("kanbanMirrorExecutor") Executor mirrorExecutor) {
         this.kanbanService = kanbanService;
         this.kanbanRepository = kanbanRepository;
         this.runRepository = runRepository;
+        this.mirrorTransaction = new TransactionTemplate(transactionManager);
+        this.mirrorTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.mirrorExecutor = mirrorExecutor;
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRunStarted(RunStartedEvent event) {
         // Kanban pickup owns card linkage for orchestrator-created runs: it sets
         // linkedRunId on the card it just dispatched, so a duplicate auto-card
@@ -48,77 +89,108 @@ public class RunKanbanAutoCreator {
             log.debug("Skipping auto-card for run {} (suppressAutoCard)", event.getRunId());
             return;
         }
-        try {
-            // Use the run's promptSeed as a meaningful title (truncated)
-            String title = runRepository.findById(event.getRunId())
-                    .map(run -> {
-                        String seed = run.getPromptSeed();
-                        if (seed != null && !seed.isBlank()) {
-                            return seed.length() > 60 ? seed.substring(0, 57) + "..." : seed;
-                        }
-                        return "Run: " + event.getRunId().toString().substring(0, 8);
-                    })
-                    .orElse("Run: " + event.getRunId().toString().substring(0, 8));
-
-            CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
-                    .title(title)
-                    .priority(KanbanPriority.MEDIUM)
-                    .linkedRunId(event.getRunId().toString())
-                    .linkedAgentId(event.getAgentId().toString())
-                    .build();
-            kanbanService.create(request);
-            log.info("Auto-created Kanban item for run: runId={}", event.getRunId());
-        } catch (Exception e) {
-            log.warn("Failed to auto-create Kanban item for run {}: {}",
-                    event.getRunId(), e.getMessage());
-        }
+        submitMirror(() -> {
+            try {
+                mirrorTransaction.executeWithoutResult(status -> createCardFor(event));
+            } catch (Exception e) {
+                log.warn("Failed to auto-create Kanban item for run {}: {}",
+                        event.getRunId(), e.getMessage());
+            }
+        });
     }
 
-    @EventListener
+    private void createCardFor(RunStartedEvent event) {
+        // Use the run's promptSeed as a meaningful title (truncated)
+        String title = runRepository.findById(event.getRunId())
+                .map(run -> {
+                    String seed = run.getPromptSeed();
+                    if (seed != null && !seed.isBlank()) {
+                        return seed.length() > 60 ? seed.substring(0, 57) + "..." : seed;
+                    }
+                    return "Run: " + event.getRunId().toString().substring(0, 8);
+                })
+                .orElse("Run: " + event.getRunId().toString().substring(0, 8));
+
+        CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
+                .title(title)
+                .priority(KanbanPriority.MEDIUM)
+                .linkedRunId(event.getRunId().toString())
+                .linkedAgentId(event.getAgentId().toString())
+                .build();
+        kanbanService.create(request);
+        log.info("Auto-created Kanban item for run: runId={}", event.getRunId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRunIteration(RunIterationEvent event) {
-        try {
-            List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
-            for (KanbanItem item : items) {
-                if (item.getStatus() == KanbanStatus.TODO) {
-                    kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, "Run iteration started");
-                    log.info("Auto-transitioned Kanban item {} to IN_PROGRESS for run {}",
-                            item.getId(), event.getRunId());
-                }
+        submitMirror(() -> {
+            try {
+                mirrorTransaction.executeWithoutResult(status -> startLinkedCards(event));
+            } catch (Exception e) {
+                log.warn("Failed to auto-transition Kanban item on iteration for run {}: {}",
+                        event.getRunId(), e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Failed to auto-transition Kanban item on iteration for run {}: {}",
-                    event.getRunId(), e.getMessage());
+        });
+    }
+
+    private void startLinkedCards(RunIterationEvent event) {
+        List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
+        for (KanbanItem item : items) {
+            if (item.getStatus() == KanbanStatus.TODO) {
+                kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, "Run iteration started");
+                log.info("Auto-transitioned Kanban item {} to IN_PROGRESS for run {}",
+                        item.getId(), event.getRunId());
+            }
         }
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRunCompleted(RunCompletedEvent event) {
-        try {
-            List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
-            KanbanStatus targetStatus = switch (event.getStatus()) {
-                // Defect D8: completed work always stops in REVIEW for human
-                // sign-off. Auto-DONE bypassed the review/approval loop (no
-                // REVIEW_REQUEST ask, no workspace, nothing to inspect).
-                case COMPLETED -> KanbanStatus.REVIEW;
-                case ABORTED -> KanbanStatus.CANCELLED;
-                case CANCELLED -> KanbanStatus.CANCELLED;
-                // F5: failed work stays visible in the attention column instead of
-                // silently vanishing into CANCELLED (rendered as "Archived").
-                // BLOCKED is retired (V52); failed work surfaces in REVIEW for the operator.
-                case FAILED -> KanbanStatus.REVIEW;
-                default -> KanbanStatus.REVIEW;
-            };
-            for (KanbanItem item : items) {
-                if (item.getStatus() != KanbanStatus.DONE
-                        && item.getStatus() != KanbanStatus.CANCELLED) {
-                    kanbanService.transition(item.getId(), targetStatus, "Run " + event.getStatus());
-                    log.info("Auto-transitioned Kanban item {} to {} for run {}",
-                            item.getId(), targetStatus, event.getRunId());
-                }
+        submitMirror(() -> {
+            try {
+                mirrorTransaction.executeWithoutResult(status -> settleLinkedCards(event));
+            } catch (Exception e) {
+                log.warn("Failed to auto-transition Kanban item on completion for run {}: {}",
+                        event.getRunId(), e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("Failed to auto-transition Kanban item on completion for run {}: {}",
-                    event.getRunId(), e.getMessage());
+        });
+    }
+
+    /**
+     * A rejected submission (the executor is shutting down) must not travel
+     * back into the event multicaster: it stops dispatching on a throw, which
+     * would silence every listener registered after this one.
+     */
+    private void submitMirror(Runnable work) {
+        try {
+            mirrorExecutor.execute(work);
+        } catch (RuntimeException e) {
+            log.warn("Kanban mirroring could not be scheduled: {}", e.getMessage());
+        }
+    }
+
+    private void settleLinkedCards(RunCompletedEvent event) {
+        KanbanStatus targetStatus = switch (event.getStatus()) {
+            // Defect D8: completed work always stops in REVIEW for human
+            // sign-off. Auto-DONE bypassed the review/approval loop (no
+            // REVIEW_REQUEST ask, no workspace, nothing to inspect).
+            case COMPLETED -> KanbanStatus.REVIEW;
+            case ABORTED -> KanbanStatus.CANCELLED;
+            case CANCELLED -> KanbanStatus.CANCELLED;
+            // F5: failed work stays visible in the attention column instead of
+            // silently vanishing into CANCELLED (rendered as "Archived").
+            // BLOCKED is retired (V52); failed work surfaces in REVIEW for the operator.
+            case FAILED -> KanbanStatus.REVIEW;
+            default -> KanbanStatus.REVIEW;
+        };
+        List<KanbanItem> items = kanbanRepository.findByLinkedRunId(event.getRunId().toString());
+        for (KanbanItem item : items) {
+            if (item.getStatus() != KanbanStatus.DONE
+                    && item.getStatus() != KanbanStatus.CANCELLED) {
+                kanbanService.transition(item.getId(), targetStatus, "Run " + event.getStatus());
+                log.info("Auto-transitioned Kanban item {} to {} for run {}",
+                        item.getId(), targetStatus, event.getRunId());
+            }
         }
     }
 }

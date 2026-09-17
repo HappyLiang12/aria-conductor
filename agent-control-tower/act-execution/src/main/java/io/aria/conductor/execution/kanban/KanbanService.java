@@ -1,9 +1,13 @@
 package io.aria.conductor.execution.kanban;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.KanbanItemCreatedEvent;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,7 +30,11 @@ import java.util.UUID;
  *
  * <p>Status transitions are validated via {@link #isValidTransition}; invalid
  * transitions throw {@link IllegalArgumentException} (mapped to HTTP 400 by
- * the global exception handler).
+ * the global exception handler). {@link #create} validates its birth state and
+ * its links the same way. Two move targets reject with a structured 409 instead:
+ * DONE while the linked run is still active, and REVIEW while the link cannot be
+ * parsed — the review ask is keyed on it. Create answers 409 for an ineligible
+ * dispatch target.
  */
 @Slf4j
 @Service
@@ -50,19 +59,35 @@ public class KanbanService {
         ALLOWED_TRANSITIONS = map;
     }
 
+    /**
+     * Statuses a card may be BORN in: exactly the ones the state machine can
+     * leave and the board can display. CANCELLED is terminal and DONE is a
+     * completion, not an origin; BLOCKED is retired (V52 migrated its rows to
+     * REVIEW), has no {@link #ALLOWED_TRANSITIONS} entry and no board column, so
+     * a card born there would be invisible and permanently stuck.
+     */
+    private static final Set<KanbanStatus> CREATABLE_STATUSES = EnumSet.of(
+            KanbanStatus.BACKLOG, KanbanStatus.TODO, KanbanStatus.IN_PROGRESS, KanbanStatus.REVIEW);
+
     private final KanbanRepository repository;
     private final ApplicationEventPublisher eventPublisher;
     private final RunRepository runRepository;
     private final ApprovalRepository approvalRepository;
+    private final AgentRepository agentRepository;
+    private final AgentPickupEligibility eligibility;
 
     public KanbanService(KanbanRepository repository,
                          ApplicationEventPublisher eventPublisher,
                          RunRepository runRepository,
-                         ApprovalRepository approvalRepository) {
+                         ApprovalRepository approvalRepository,
+                         AgentRepository agentRepository,
+                         AgentPickupEligibility eligibility) {
         this.repository = repository;
         this.eventPublisher = eventPublisher;
         this.runRepository = runRepository;
         this.approvalRepository = approvalRepository;
+        this.agentRepository = agentRepository;
+        this.eligibility = eligibility;
     }
 
     @Transactional
@@ -70,6 +95,7 @@ public class KanbanService {
         MDC.put("operation", "kanban.create");
         long start = System.currentTimeMillis();
         try {
+            validateCreate(request);
             KanbanItem item = KanbanItem.builder()
                     .title(request.getTitle())
                     .description(request.getDescription())
@@ -143,9 +169,13 @@ public class KanbanService {
                         "Invalid kanban transition: " + from + " -> " + toStatus);
             }
 
-            // Guard against premature DONE when a linked run is still active.
+            // Both guards run BEFORE the status changes, so a rejection always
+            // leaves the card where it was.
             if (toStatus == KanbanStatus.DONE && item.getLinkedRunId() != null) {
                 guardLinkedRunNotActive(item.getLinkedRunId());
+            }
+            if (toStatus == KanbanStatus.REVIEW) {
+                guardReviewLinkParseable(item.getLinkedRunId());
             }
 
             item.setStatus(toStatus);
@@ -168,31 +198,117 @@ public class KanbanService {
         log.info("Kanban item deleted: id={}", id);
     }
 
-    private void guardLinkedRunNotActive(String linkedRunId) {
+    /**
+     * Create-path validation. A malformed or non-creatable birth state is a bad
+     * request (400); an ineligible dispatch target is a state conflict (409).
+     * A rejection stages nothing: no card is saved and no {@code lastError} is
+     * written — the 409 body carries the reason for a synchronous caller.
+     */
+    private void validateCreate(CreateKanbanItemRequest request) {
+        KanbanStatus status = request.getStatus();
+        if (status != null && !CREATABLE_STATUSES.contains(status)) {
+            throw new IllegalArgumentException("INVALID_BIRTH_STATUS: a card cannot be created in " + status);
+        }
+        if (isDispatchIntent(request)) {
+            validateDispatchTarget(request.getLinkedAgentId());
+        } else {
+            validateRunLink(request.getLinkedRunId());
+        }
+    }
+
+    /**
+     * A dispatch intent is a create that requests work rather than describing an
+     * existing run: only a blank linkedRunId qualifies. It matters because
+     * {@code RunKanbanAutoCreator.onRunStarted} creates a card for EVERY run,
+     * Aria's own included — applying eligibility there would reject Aria's run
+     * cards, since Aria is a RESERVED_OPERATOR_AGENT.
+     */
+    private static boolean isDispatchIntent(CreateKanbanItemRequest request) {
+        String runLink = request.getLinkedRunId();
+        return runLink == null || runLink.isBlank();
+    }
+
+    private void validateRunLink(String runLink) {
+        UUID runId;
+        try {
+            runId = UUID.fromString(runLink);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("INVALID_RUN_LINK: linkedRunId is not a UUID: " + runLink);
+        }
+        if (runRepository.findById(runId).isEmpty()) {
+            throw new IllegalArgumentException("INVALID_RUN_LINK: no run with id " + runId);
+        }
+    }
+
+    private void validateDispatchTarget(String agentLink) {
+        if (agentLink == null || agentLink.isBlank()) {
+            return; // Aria auto-assigns at pickup time.
+        }
+        Agent agent = agentRepository.findById(UUID.fromString(agentLink)).orElse(null);
+        if (agent == null) {
+            throw new PickupRejectedException("AGENT_NOT_ELIGIBLE",
+                    "Agent not found with id: " + agentLink, Map.of("agentId", agentLink));
+        }
+        AgentPickupEligibility.Evaluation evaluation = eligibility.evaluate(agent);
+        if (!evaluation.eligible()) {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("agentId", agentLink);
+            details.put("reasons", evaluation.reasons().stream().map(Enum::name).toList());
+            throw new PickupRejectedException("AGENT_NOT_ELIGIBLE",
+                    "Agent " + agent.getName() + " cannot receive a card: " + evaluation.reasons(), details);
+        }
+    }
+
+    /**
+     * Refuse DONE while the linked run is still active. Active includes PAUSED:
+     * a paused run has not finished, and letting the card reach Done would orphan
+     * it (cancel is the only path that terminates a paused run, and Done skips it).
+     *
+     * <p>An unparseable link is history, not an active run — allowing DONE keeps a
+     * blemished card closable rather than permanently stuck. A missing run is
+     * likewise nothing to guard. A repository failure is NOT swallowed: silently
+     * permitting DONE on an unreadable link is how an active run gets orphaned.
+     */
+    void guardLinkedRunNotActive(String linkedRunId) {
         UUID runId;
         try {
             runId = UUID.fromString(linkedRunId);
         } catch (IllegalArgumentException e) {
             log.warn("Could not verify linked run status: {}", e.getMessage());
-            return; // graceful degradation when linkedRunId is not a UUID
+            return;
+        }
+        runRepository.findById(runId).ifPresent(run -> {
+            RunStatus status = run.getStatus();
+            if (status == RunStatus.PENDING
+                    || status == RunStatus.INITIALIZING
+                    || status == RunStatus.RUNNING
+                    || status == RunStatus.PAUSED) {
+                throw new PickupRejectedException("LINKED_RUN_ACTIVE",
+                        "Cannot move to Done: linked run " + runId + " is still " + status
+                                + ". Complete or cancel the run first.",
+                        Map.of("runId", runId.toString(), "runStatus", status.name()));
+            }
+        });
+    }
+
+    /**
+     * Refuse REVIEW while the link cannot be parsed: the review ask is keyed on the
+     * linked run, so moving a blemished card here would leave its status changed with
+     * no decision surface. The link is therefore parsed before the move. A blank link
+     * is not guarded — it is legitimately "no run", and no ask is expected for it.
+     */
+    private void guardReviewLinkParseable(String linkedRunId) {
+        if (linkedRunId == null || linkedRunId.isBlank()) {
+            return;
         }
         try {
-            runRepository.findById(runId).ifPresent(run -> {
-                RunStatus status = run.getStatus();
-                if (status == RunStatus.PENDING
-                        || status == RunStatus.INITIALIZING
-                        || status == RunStatus.RUNNING) {
-                    throw new IllegalArgumentException(
-                            "Cannot transition to DONE: linked run " + runId
-                                    + " is still " + status
-                                    + ". Complete or cancel the run first.");
-                }
-            });
+            UUID.fromString(linkedRunId);
         } catch (IllegalArgumentException e) {
-            throw e; // re-throw our own exception
-        } catch (Exception e) {
-            log.warn("Could not verify linked run status: {}", e.getMessage());
-            // Allow transition if we can't verify (graceful degradation).
+            throw new PickupRejectedException("CORRUPT_RUN_LINK",
+                    "Cannot move to Review: linked run id " + linkedRunId
+                            + " is not a UUID, so no review ask can attach to the card."
+                            + " Send the card back to Todo for a fresh run, or close it.",
+                    Map.of("linkedRunId", linkedRunId));
         }
     }
 

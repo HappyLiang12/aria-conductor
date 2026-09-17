@@ -59,6 +59,20 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
     }
 
+    @ExceptionHandler(PickupRejectedException.class)
+    public ResponseEntity<Map<String, Object>> handlePickupRejected(PickupRejectedException ex) {
+        // Synchronous pickup/transition rejection: the operator asked for a move that
+        // current state forbids. 409 + structured reason so the UI can say WHY.
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", HttpStatus.CONFLICT.value());
+        body.put("error", HttpStatus.CONFLICT.getReasonPhrase());
+        body.put("message", ex.getMessage());
+        body.put("code", ex.code());
+        body.put("details", ex.details());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
     @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
     public ResponseEntity<Map<String, Object>> handleOptimisticLock(
             org.springframework.orm.ObjectOptimisticLockingFailureException ex) {

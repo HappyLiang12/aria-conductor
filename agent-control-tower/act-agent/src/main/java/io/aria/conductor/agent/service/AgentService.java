@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.dto.UpdateAgentRequest;
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
@@ -50,6 +51,7 @@ public class AgentService {
     private final RoleToolTemplateRepository roleToolTemplateRepository;
     private final RoleSkillTemplateRepository roleSkillTemplateRepository;
     private final HarnessProfileService harnessProfileService;
+    private final AgentPickupEligibility eligibility;
 
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
@@ -60,7 +62,8 @@ public class AgentService {
                         AgentSkillRepository agentSkillRepository,
                         RoleToolTemplateRepository roleToolTemplateRepository,
                         RoleSkillTemplateRepository roleSkillTemplateRepository,
-                        HarnessProfileService harnessProfileService) {
+                        HarnessProfileService harnessProfileService,
+                        AgentPickupEligibility eligibility) {
         this.agentRepository = agentRepository;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
@@ -71,6 +74,7 @@ public class AgentService {
         this.roleToolTemplateRepository = roleToolTemplateRepository;
         this.roleSkillTemplateRepository = roleSkillTemplateRepository;
         this.harnessProfileService = harnessProfileService;
+        this.eligibility = eligibility;
     }
 
     @Transactional
@@ -87,6 +91,7 @@ public class AgentService {
                 .adkProvider(request.getAdkProvider() != null ? request.getAdkProvider() : "langchain")
                 .config(serializeConfig(withDefaultHarnessProfile(request.getConfig(), request.getRole())))
                 .healthStatus(HealthStatus.HEALTHY)
+                .pickupEnabled(Boolean.TRUE)
                 .build();
 
         Agent saved = agentRepository.save(agent);
@@ -124,6 +129,9 @@ public class AgentService {
         if (request.getProvider() != null) agent.setProvider(request.getProvider());
         if (request.getAdkProvider() != null) agent.setAdkProvider(request.getAdkProvider());
         if (request.getConfig() != null) agent.setConfig(serializeConfig(request.getConfig()));
+        if (request.getPickupEnabled() != null) {
+            agent.setPickupEnabled(request.getPickupEnabled());
+        }
 
         Agent saved = agentRepository.save(agent);
         return toResponse(saved);
@@ -363,7 +371,8 @@ public class AgentService {
                 && (tool.getStatus() == null || tool.getStatus() == VersionStatus.APPROVED);
     }
 
-    private AgentResponse toResponse(Agent agent) {
+    AgentResponse toResponse(Agent agent) {
+        AgentPickupEligibility.Evaluation pickup = eligibility.evaluate(agent);
         AgentResponse response = AgentResponse.builder()
                 .id(agent.getId())
                 .name(agent.getName())
@@ -378,6 +387,9 @@ public class AgentService {
                 .createdAt(agent.getCreatedAt())
                 .updatedAt(agent.getUpdatedAt())
                 .retiredAt(agent.getRetiredAt())
+                .pickupEligible(pickup.eligible())
+                .pickupIneligibleReasons(pickup.reasons().stream().map(Enum::name).toList())
+                .lastProbedAt(agent.getLastProbedAt())
                 .build();
 
         // Populate skills via SkillContextProvider (cycle-safe seam in act-common)

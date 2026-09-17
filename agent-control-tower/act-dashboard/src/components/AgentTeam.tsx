@@ -88,6 +88,7 @@ export default function AgentTeam() {
         )}
         {visibleAgents.map((agent, idx) => {
           const info = statusInfo(agent.healthStatus);
+          const taskLine = `${agent.role || agent.agentType} · ${agent.model || 'default'}`;
           return (
             <div
               key={agent.id}
@@ -98,12 +99,20 @@ export default function AgentTeam() {
               <div className={avatarClass(idx)}>{initials(agent.name)}</div>
               <div>
                 <div className="name">{agent.name}</div>
-                <div className="task">
-                  {agent.role || agent.agentType} · {agent.model || 'default'}
-                </div>
+                <div className="task" title={taskLine}>{taskLine}</div>
               </div>
               <div className="right">
                 <div className={info.pillClass}>{info.label}</div>
+                {agent.pickupEligible === false && (
+                  <span
+                    className="status wait"
+                    title={`Cannot receive kanban cards: ${(agent.pickupIneligibleReasons ?? []).join(', ') || 'no reason reported'}${
+                      agent.lastProbedAt ? ` · last probed ${agent.lastProbedAt}` : ''
+                    }`}
+                  >
+                    No pickup
+                  </span>
+                )}
                 <ActivityBars filled={info.filledBars} warn={info.warnBars} />
               </div>
             </div>

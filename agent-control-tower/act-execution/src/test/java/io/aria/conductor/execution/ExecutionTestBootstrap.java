@@ -1,5 +1,6 @@
 package io.aria.conductor.execution;
 
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.execution.kanban.KanbanService;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -18,6 +19,6 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 @EnableAutoConfiguration
 @EntityScan("io.aria.conductor")
 @EnableJpaRepositories("io.aria.conductor")
-@Import(KanbanService.class)
+@Import({KanbanService.class, AgentPickupEligibility.class})
 public class ExecutionTestBootstrap {
 }

@@ -9,6 +9,14 @@ import type {
 
 const BASE = '/api/v1/kanban/items';
 
+// 409 body from GlobalExceptionHandler when a transition is refused. Malformed
+// input still answers a plain 400 with only `message`, so every field is optional.
+export interface KanbanRejection {
+  code?: string;
+  message?: string;
+  details?: { evaluated?: number; excluded?: { name: string; reasons: string[] }[] };
+}
+
 export async function listKanbanItems(status?: KanbanStatus): Promise<KanbanItem[]> {
   const { data } = await client.get<KanbanItem[]>(BASE, {
     params: status ? { status } : undefined,

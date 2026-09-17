@@ -7,6 +7,8 @@ import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.List;
 import java.util.Optional;
@@ -40,7 +42,10 @@ class KanbanReviewCardListenerTest {
         approvalRepository = mock(ApprovalRepository.class);
         kanbanRepository = mock(KanbanRepository.class);
         kanbanService = mock(KanbanService.class);
-        listener = new KanbanReviewCardListener(approvalRepository, kanbanRepository, kanbanService);
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        listener = new KanbanReviewCardListener(
+                approvalRepository, kanbanRepository, kanbanService, transactionManager, Runnable::run);
     }
 
     private Approval approval() {

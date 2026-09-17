@@ -2,14 +2,18 @@ package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.agent.dto.CreateRunRequest;
 import io.aria.conductor.agent.dto.RunResponse;
+import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
+import io.aria.conductor.common.event.RunCompletedEvent;
+import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.execution.listener.RunKanbanAutoCreator;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,7 +21,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,8 +47,10 @@ import static org.mockito.Mockito.when;
  * trigger the matching run side effect (spec 4) — pickup dispatches a run,
  * dragging to TODO or BACKLOG pauses the linked run, request-changes
  * re-dispatches with the operator feedback, cancel denies open asks and cancels
- * the run. Eligibility failures are pre-validated before the createRun proxy is
- * crossed (no rollback-only surprises); unexpected createRun failures propagate.
+ * the run. Eligibility failures are pre-validated by the evaluator before the
+ * createRun proxy is crossed (no rollback-only surprises) and answered with a
+ * 4xx rejection — a synchronous action carries its answer in the response, so
+ * no lastError is written; unexpected createRun failures propagate.
  */
 class KanbanTransitionServiceTest {
 
@@ -53,6 +63,7 @@ class KanbanTransitionServiceTest {
     private RunRepository runRepository;
     private AgentRepository agentRepository;
     private AgentPickerService agentPicker;
+    private AgentPickupEligibility eligibility;
     private ApprovalRepository approvalRepository;
     private ApplicationEventPublisher eventPublisher;
     private KanbanTransitionService service;
@@ -67,16 +78,20 @@ class KanbanTransitionServiceTest {
         runRepository = mock(RunRepository.class);
         agentRepository = mock(AgentRepository.class);
         agentPicker = mock(AgentPickerService.class);
+        eligibility = new AgentPickupEligibility();
         approvalRepository = mock(ApprovalRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
         service = new KanbanTransitionService(kanbanRepository, kanbanService, runService,
-                runRepository, agentRepository, agentPicker, approvalRepository, eventPublisher);
+                runRepository, agentRepository, agentPicker, eligibility, approvalRepository, eventPublisher);
 
         card = KanbanItem.builder().id("c1").title("add CSV export")
                 .status(KanbanStatus.TODO).priority(KanbanPriority.MEDIUM).build();
         when(kanbanRepository.findById("c1")).thenReturn(Optional.of(card));
         when(kanbanRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(kanbanService.transition(any(), any(), any())).thenAnswer(inv -> card);
+        when(kanbanService.transition(any(), any(), any())).thenAnswer(inv -> {
+            card.setStatus(inv.getArgument(1));
+            return card;
+        });
         // Default: the linked agent is eligible (tests override when probing pre-validation).
         when(agentRepository.findById(any(UUID.class)))
                 .thenAnswer(inv -> Optional.of(agentWithStatus(inv.getArgument(0), HealthStatus.HEALTHY)));
@@ -87,6 +102,38 @@ class KanbanTransitionServiceTest {
 
     private Agent agentWithStatus(UUID id, HealthStatus status) {
         return Agent.builder().id(id).name("BA Agent").healthStatus(status).build();
+    }
+
+    /** The shared card in REVIEW, linked to the given run link. */
+    private void reviewCard(String linkedRunId) {
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setLinkedRunId(linkedRunId);
+    }
+
+    /** The shared card in IN_PROGRESS, linked to the given run link. */
+    private void inProgressCard(String linkedRunId) {
+        card.setStatus(KanbanStatus.IN_PROGRESS);
+        card.setLinkedRunId(linkedRunId);
+    }
+
+    /** The shared card in DONE, carrying the finished run and the agent that ran it. */
+    private void doneCard(String linkedRunId, String linkedAgentId) {
+        card.setStatus(KanbanStatus.DONE);
+        card.setLinkedRunId(linkedRunId);
+        card.setLinkedAgentId(linkedAgentId);
+    }
+
+    /**
+     * Creator wired to a no-op transaction manager. {@link RunKanbanAutoCreator}
+     * runs its mirroring inside a TransactionTemplate so a failed transition can
+     * be caught outside the transaction boundary; these tests only care that the
+     * mirror still runs, not what the transaction does.
+     */
+    private RunKanbanAutoCreator newAutoCreator() {
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        return new RunKanbanAutoCreator(kanbanService, kanbanRepository, runRepository, transactionManager,
+                Runnable::run);
     }
 
     // ---- behavior 1: TODO pickup ----
@@ -170,60 +217,66 @@ class KanbanTransitionServiceTest {
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
     }
 
-    // ---- behavior 2: pickup failure is pre-validated (never crosses createRun) ----
+    // ---- behavior 2: ineligible agent is rejected before createRun is crossed ----
 
     @Test
-    void pickupFailure_unhealthyAgent_preValidatedBeforeCreateRun() {
+    void pickupFailure_unhealthyAgent_rejectedWithReasonsBeforeCreateRun() {
         card.setAssignee("BA Agent");
         card.setLinkedAgentId(AGENT_ID.toString());
         when(agentRepository.findById(AGENT_ID))
                 .thenReturn(Optional.of(agentWithStatus(AGENT_ID, HealthStatus.UNHEALTHY)));
 
-        KanbanItem result = service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
-
-        // Pre-validation mirrors RunService.createRun's message exactly.
-        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
-        assertThat(result.getLastError())
-                .isEqualTo("Cannot create run for unhealthy agent: " + AGENT_ID);
-        // The transaction proxy must never be crossed with a doomed request.
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> {
+                    PickupRejectedException rejected = (PickupRejectedException) e;
+                    assertThat(rejected.code()).isEqualTo("AGENT_NOT_ELIGIBLE");
+                    assertThat(rejected.details()).containsEntry("agentId", AGENT_ID.toString());
+                    assertThat(rejected.details().get("reasons")).isEqualTo(List.of("UNHEALTHY"));
+                });
+        // The transaction proxy must never be crossed with a doomed request, and a
+        // synchronous rejection is answered by the response — not by the card.
         verify(runService, never()).createRun(any(CreateRunRequest.class));
         verify(kanbanService, never()).transition(any(), any(), any());
-        verify(kanbanRepository).save(card);
+        verify(kanbanRepository, never()).save(any());
     }
 
     @Test
-    void pickupFailure_retiredAgent_preValidatedBeforeCreateRun() {
+    void pickupFailure_retiredAgent_rejectedWithReasonsBeforeCreateRun() {
         card.setAssignee("BA Agent");
         card.setLinkedAgentId(AGENT_ID.toString());
         when(agentRepository.findById(AGENT_ID))
                 .thenReturn(Optional.of(agentWithStatus(AGENT_ID, HealthStatus.RETIRED)));
 
-        KanbanItem result = service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
-
-        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
-        assertThat(result.getLastError())
-                .isEqualTo("Cannot create run for retired agent: " + AGENT_ID);
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> {
+                    PickupRejectedException rejected = (PickupRejectedException) e;
+                    assertThat(rejected.code()).isEqualTo("AGENT_NOT_ELIGIBLE");
+                    assertThat(rejected.details().get("reasons")).isEqualTo(List.of("RETIRED"));
+                });
         verify(runService, never()).createRun(any(CreateRunRequest.class));
+        verify(kanbanRepository, never()).save(any());
     }
 
     @Test
-    void pickupFailure_missingAgent_lastErrorAbbreviated() {
-        // A non-UUID linkedAgentId cannot resolve to an agent; the oversized
-        // not-found message exercises the lastError abbreviation cap.
-        String garbageId = "a".repeat(600);
+    void pickupFailure_missingAgent_rejectedWithAgentId() {
+        UUID missing = UUID.randomUUID();
         card.setAssignee("BA Agent");
-        card.setLinkedAgentId(garbageId);
+        card.setLinkedAgentId(missing.toString());
+        when(agentRepository.findById(missing)).thenReturn(Optional.empty());
 
-        KanbanItem result = service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
-
-        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
-        assertThat(result.getLastError()).hasSize(480);
-        assertThat(result.getLastError()).startsWith("Agent not found with id: ");
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> {
+                    PickupRejectedException rejected = (PickupRejectedException) e;
+                    assertThat(rejected.code()).isEqualTo("AGENT_NOT_ELIGIBLE");
+                    assertThat(rejected.details()).containsEntry("agentId", missing.toString());
+                });
         verify(runService, never()).createRun(any(CreateRunRequest.class));
-        verify(kanbanRepository).save(card);
     }
 
     @Test
@@ -244,22 +297,27 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
-    void pickupFailure_emptyAgentPool_lastErrorInsteadOfRollback() {
-        // Assign phase: the healthy pool is empty — a predictable failure that
-        // must leave the card in place with lastError, not roll the transition back.
-        when(agentPicker.pick(any(), anyString(), any()))
-                .thenThrow(new IllegalStateException("No healthy agent available for kanban pickup"));
+    void pickupOnEmptyPoolRejectsWithNoEligibleAgent() {
+        when(agentPicker.pick(any(), anyString(), any())).thenThrow(new PickupRejectedException(
+                "NO_ELIGIBLE_AGENT",
+                "No pickup-eligible agent: 1 agent(s) evaluated and all excluded (Aria: RESERVED_OPERATOR_AGENT)",
+                Map.of("evaluated", 1, "excluded",
+                        List.of(Map.of("name", "Aria", "reasons", List.of("RESERVED_OPERATOR_AGENT"))))));
 
-        KanbanItem result = service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> {
+                    PickupRejectedException rejected = (PickupRejectedException) e;
+                    assertThat(rejected.code()).isEqualTo("NO_ELIGIBLE_AGENT");
+                    assertThat(rejected.details()).containsEntry("evaluated", 1);
+                });
 
-        assertThat(result.getStatus()).isEqualTo(KanbanStatus.TODO);
-        assertThat(result.getLastError())
-                .isEqualTo("No healthy agent available for kanban pickup");
         verify(runService, never()).createRun(any(CreateRunRequest.class));
-        // No IN_PROGRESS transition after the failed assign phase.
+        // No IN_PROGRESS transition after the failed assign phase, and nothing
+        // recorded on the card: the caller got the answer in the response.
         verify(kanbanService, never()).transition(any(), any(), any());
-        verify(kanbanRepository).save(card);
+        verify(kanbanRepository, never()).save(any());
     }
 
     // ---- behavior 3: no-op guard ----
@@ -336,6 +394,134 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
+    void leavingInProgressTowardsTodoPausesARunningRunAndDetaches() {
+        inProgressCard("00000000-0000-0000-0000-0000000000ad");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000ad")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000ad"))
+                        .status(RunStatus.RUNNING).build()));
+
+        KanbanItem moved = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        verify(runService).pauseRun(UUID.fromString("00000000-0000-0000-0000-0000000000ad"));
+        // The cleared link is persisted before the card moves: a parked card must
+        // not keep looking like the owner of a live run.
+        verify(kanbanRepository).save(card);
+        assertThat(moved.getLinkedRunId()).isNull();
+    }
+
+    @Test
+    void leavingInProgressTowardsTodoCancelsANotYetRunningRun() {
+        inProgressCard("00000000-0000-0000-0000-0000000000ae");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000ae")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000ae"))
+                        .status(RunStatus.INITIALIZING).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).build());
+
+        // PENDING and INITIALIZING cannot be paused (RunStatus forbids it); cancelling
+        // is the only legal stop and nothing has been produced yet.
+        verify(runService).cancelRun(UUID.fromString("00000000-0000-0000-0000-0000000000ae"));
+        verify(runService, never()).pauseRun(any());
+        assertThat(card.getLinkedRunId()).isNull();
+    }
+
+    @Test
+    void detachClearsTheLinkEvenWhenTheRunIsGone() {
+        inProgressCard("00000000-0000-0000-0000-0000000000af");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000af")))
+                .thenReturn(Optional.empty());
+
+        KanbanItem moved = service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        assertThat(moved.getLinkedRunId()).isNull();
+        verify(runService, never()).pauseRun(any());
+        verify(runService, never()).cancelRun(any());
+    }
+
+    @Test
+    void leavingInProgressTowardsTodoLeavesAPausedRunAlone() {
+        inProgressCard("00000000-0000-0000-0000-0000000000b0");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000b0")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000b0"))
+                        .status(RunStatus.PAUSED).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        verify(runService, never()).pauseRun(any());
+        verify(runService, never()).cancelRun(any());
+        assertThat(card.getLinkedRunId()).isNull();
+    }
+
+    /**
+     * The chain a parked card must break: RunService.createRun publishes
+     * RunStartedEvent while the run is still PENDING, so RunKanbanAutoCreator
+     * auto-creates a TODO card linked to it. Parking that card to BACKLOG
+     * cancels the PENDING run, and cancelRun publishes
+     * RunCompletedEvent(CANCELLED); should the link survive, the cancellation
+     * the stop itself caused drags the parked card into CANCELLED/Archived.
+     */
+    @Test
+    void parkingATodoCardDetachesTheRunItsStopCancelled() {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-0000000000b3");
+        card.setStatus(KanbanStatus.TODO);
+        card.setLinkedRunId(runId.toString());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).status(RunStatus.PENDING).build()));
+        // The listener finds exactly the cards the run link still points at:
+        // this one while the link lives, nothing once the stop detaches it.
+        when(kanbanRepository.findByLinkedRunId(anyString())).thenAnswer(inv ->
+                runId.toString().equals(card.getLinkedRunId()) ? List.of(card) : List.of());
+        RunKanbanAutoCreator autoCreator = newAutoCreator();
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).comment("park it").build());
+
+        // The stop cancelled the not-yet-running run — that cancellation is the
+        // event the card would be re-targeted by.
+        verify(runService).cancelRun(runId);
+        assertThat(card.getLinkedRunId()).isNull();
+
+        autoCreator.onRunCompleted(new RunCompletedEvent(this, runId, AGENT_ID, RunStatus.CANCELLED));
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.BACKLOG);
+        verify(kanbanService, never()).transition(eq("c1"), eq(KanbanStatus.CANCELLED), anyString());
+    }
+
+    /**
+     * Same chain from REVIEW: the stop pauses a RUNNING run (no event) and must
+     * not leave a claim on it, or an out-of-band resume can complete the run and
+     * drag the parked card to REVIEW.
+     */
+    @Test
+    void parkingAReviewCardDetachesTheRunItsStopPaused() {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-0000000000b4");
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setLinkedRunId(runId.toString());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).status(RunStatus.RUNNING).build()));
+        when(kanbanRepository.findByLinkedRunId(anyString())).thenAnswer(inv ->
+                runId.toString().equals(card.getLinkedRunId()) ? List.of(card) : List.of());
+        RunKanbanAutoCreator autoCreator = newAutoCreator();
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.BACKLOG).build());
+
+        verify(runService).pauseRun(runId);
+        assertThat(card.getLinkedRunId()).isNull();
+
+        autoCreator.onRunCompleted(new RunCompletedEvent(this, runId, AGENT_ID, RunStatus.COMPLETED));
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.BACKLOG);
+    }
+
+    @Test
     void doneToTodo_redoesWithAFreshRun() {
         // Defect D3: a finished card is re-doable. Redo normalizes DONE -> TODO
         // and then behaves exactly like a normal dispatch (fresh run).
@@ -345,6 +531,10 @@ class KanbanTransitionServiceTest {
         card.setLinkedRunId(RUN_ID.toString());
         when(runRepository.findById(RUN_ID))
                 .thenReturn(Optional.of(Run.builder().status(RunStatus.COMPLETED).build()));
+        // The re-open drops the finished run and the agent that ran it, so the
+        // pickup re-assigns before dispatching.
+        when(agentPicker.pick(any(), anyString(), any()))
+                .thenReturn(new AgentPickerService.Choice(AGENT_ID, "BA Agent"));
 
         service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.TODO).comment("redo after demo").build());
@@ -353,6 +543,7 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).pauseRun(any());
         verify(runService, never()).resumeRun(any());
         verify(runService).createRun(any(CreateRunRequest.class));
+        assertThat(card.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
         verify(kanbanService).transition("c1", KanbanStatus.TODO, "redo after demo");
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "redo after demo");
     }
@@ -370,6 +561,20 @@ class KanbanTransitionServiceTest {
         verify(runService, never()).createRun(any(CreateRunRequest.class));
         verify(runService, never()).pauseRun(any());
         verify(kanbanService).transition("c1", KanbanStatus.BACKLOG, "park it");
+    }
+
+    @Test
+    void reopeningDoneClearsStaleRunAndAgentLinksBeforeDispatch() {
+        doneCard("00000000-0000-0000-0000-0000000000b1", "00000000-0000-0000-0000-0000000000b2");
+        when(agentPicker.pick(any(), anyString(), any())).thenThrow(
+                new PickupRejectedException("NO_ELIGIBLE_AGENT", "none", Map.of()));
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build()))
+                .isInstanceOf(PickupRejectedException.class);
+
+        assertThat(card.getLinkedRunId()).isNull();
+        assertThat(card.getLinkedAgentId()).isNull();
     }
 
     @Test
@@ -515,33 +720,94 @@ class KanbanTransitionServiceTest {
     // ---- behavior 7: REVIEW -> IN_PROGRESS (approve & continue) ----
 
     @Test
-    void reviewToInProgress_withPausedRun_resumesRun() {
-        card.setStatus(KanbanStatus.REVIEW);
-        card.setLinkedRunId(RUN_ID.toString());
-        when(runRepository.findById(RUN_ID))
-                .thenReturn(Optional.of(Run.builder().status(RunStatus.PAUSED).build()));
+    void reviewToInProgressOnFinishedRunIsRejected() {
+        reviewCard("00000000-0000-0000-0000-0000000000ab");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000ab")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000ab"))
+                        .status(RunStatus.COMPLETED).build()));
 
-        service.transition("c1", TransitionRequest.builder()
-                .status(KanbanStatus.IN_PROGRESS).build());
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("RUN_ALREADY_FINISHED"));
 
-        verify(runService).resumeRun(RUN_ID);
-        verify(runService, never()).createRun(any(CreateRunRequest.class));
-        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        // The rejection is answered by the response, not by the card: it stays in
+        // REVIEW with nothing recorded on it.
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        assertThat(card.getLastError()).isNull();
+        verify(runService, never()).resumeRun(any());
+        verify(kanbanService, never()).transition(any(), any(), any());
     }
 
     @Test
-    void reviewToInProgress_withCompletedRun_transitionsWithoutResume() {
-        card.setStatus(KanbanStatus.REVIEW);
-        card.setLinkedRunId(RUN_ID.toString());
-        when(runRepository.findById(RUN_ID))
-                .thenReturn(Optional.of(Run.builder().status(RunStatus.COMPLETED).build()));
+    void reviewToInProgressOnCorruptLinkIsRejected() {
+        reviewCard("not-a-uuid");
 
-        service.transition("c1", TransitionRequest.builder()
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("CORRUPT_RUN_LINK"));
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        verify(runRepository, never()).findById(any());
+        verify(kanbanService, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void reviewToInProgressWithoutLinkedRunIsRejected() {
+        // A whitespace-only link is blank by the dispatch-intent predicate but used
+        // to persist verbatim and reach IN_PROGRESS with no resolvable run.
+        reviewCard("   ");
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("RUN_NOT_FOUND"));
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        verify(runRepository, never()).findById(any());
+        verify(kanbanService, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void reviewToInProgressOnMissingRunIsRejected() {
+        reviewCard("00000000-0000-0000-0000-0000000000aa");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000aa")))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> {
+                    PickupRejectedException rejected = (PickupRejectedException) e;
+                    assertThat(rejected.code()).isEqualTo("RUN_NOT_FOUND");
+                    assertThat(rejected.details())
+                            .containsEntry("runId", "00000000-0000-0000-0000-0000000000aa");
+                });
+
+        assertThat(card.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        verify(kanbanService, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void reviewToInProgressOnPausedRunResumes() {
+        reviewCard("00000000-0000-0000-0000-0000000000ac");
+        when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000ac")))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(UUID.fromString("00000000-0000-0000-0000-0000000000ac"))
+                        .status(RunStatus.PAUSED).build()));
+
+        KanbanItem moved = service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.IN_PROGRESS).build());
 
-        verify(runService, never()).resumeRun(any(UUID.class));
+        assertThat(moved.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
+        verify(runService).resumeRun(UUID.fromString("00000000-0000-0000-0000-0000000000ac"));
+        verify(runService, never()).createRun(any(CreateRunRequest.class));
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
-        assertThat(card.getLastError()).isNull();
     }
 
     // ---- behavior 8: prompt seed caps ----

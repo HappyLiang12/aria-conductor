@@ -128,8 +128,11 @@ final class QoderSandboxHarness implements AutoCloseable {
      * ({@link OpenCodeSandboxManager#renewSandbox(String, Duration)}), so gates can exercise
      * the same call the runtime uses (A5). The manager returns {@code void} and only logs the
      * new expiry, so callers that need to observe the effect read it back through the SDK
-     * (e.g. {@code Sandbox.resumer()} + {@code getInfo().getExpiresAt()}); this passthrough
-     * only exists because a second manager cannot target this harness's sandbox.
+     * (e.g. {@code Sandbox.connector()} + {@code getInfo().getExpiresAt()}); this passthrough
+     * only exists because a second manager cannot target this harness's sandbox. Do not copy
+     * {@code Sandbox.resumer()} for such reads: it asks the server to resume the sandbox and is
+     * rejected with HTTP 409 Conflict while the sandbox is running (observed on every A5 read),
+     * so {@code Sandbox.connector()} is the attach path that works.
      */
     void renew(Duration extension) {
         manager.renewSandbox(sandboxId, extension);

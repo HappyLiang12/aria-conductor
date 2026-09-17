@@ -32,8 +32,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ol>
  *   <li><b>production renewal path</b>: {@code OpenCodeSandboxManager#renewSandbox(id, 30m)}
  *       is exercised through {@link QoderSandboxHarness#renew(Duration)} and the sandbox's
- *       {@code expiresAt} is read back with a real SDK round trip (a {@code Sandbox.resumer()}
- *       handle + {@code getInfo().getExpiresAt()}) before and after — the manager method
+ *       {@code expiresAt} is read back with a real SDK round trip (a {@code Sandbox.connector()}
+ *       handle + {@code getInfo().getExpiresAt()}; {@code Sandbox.resumer()} is attempted first
+ *       but a server-side resume of a running sandbox is rejected with HTTP 409, so in practice
+ *       every read attaches through {@code connector()}) before and after — the manager method
  *       returns {@code void} and only logs, so the server value is the observable;</li>
  *   <li><b>long wait + renewal interleaving</b>: the in-sandbox probe
  *       ({@code e2e/qoder/slice-a/05-wait-renewal.mjs}) holds a write permission request
@@ -117,6 +119,12 @@ class QoderWaitRenewalE2ETest {
     /** Sandbox-side state file written by the probe (single-line key=value, sandbox clock). */
     private static final String STATE_FILE = "/tmp/a5/state";
 
+    /** File the prompted Write tool must create after the hold (also checked by the probe itself). */
+    private static final String PROBE_TARGET_FILE = "/tmp/a5/answer-under-renewal/written.txt";
+
+    /** Exact content the prompt requires (kept in sync with 05-wait-renewal.mjs FILE_CONTENT). */
+    private static final String PROBE_TARGET_CONTENT = "renewed";
+
     /** How long to wait for the probe to report PENDING after the run starts. */
     private static final Duration PENDING_WAIT = Duration.ofSeconds(150);
 
@@ -126,7 +134,7 @@ class QoderWaitRenewalE2ETest {
     /** How long to wait for a single state-file read to observe a phase token. */
     private static final Duration STATE_POLL_INTERVAL = Duration.ofSeconds(1);
 
-    /** Connection config for the test's own {@code Sandbox.resumer()} handles (mirrors the manager). */
+    /** Connection config for the test's own SDK attach handles (connector() reads; mirrors the manager). */
     private static final ConnectionConfig SANDBOX_CONNECTION_CONFIG = ConnectionConfig.builder()
             .protocol("http")
             .domain("localhost:8090")
@@ -158,7 +166,8 @@ class QoderWaitRenewalE2ETest {
 
             // ---- Step 1: the production renewal path, with a real SDK read of the effect ----
             // OpenCodeSandboxManager#renewSandbox returns void and only logs, so the observable
-            // is the server-side expiresAt, read back through a resumed SDK handle.
+            // is the server-side expiresAt, read back through an attached SDK handle
+            // (resumer() is tried first and 409s on a running sandbox; connector() is the read path).
             OffsetDateTime expiresBefore = readExpiresAt(sandboxId);
             long hostRenew1Started = System.currentTimeMillis();
             harness.renew(RENEWAL_EXTENSION);
@@ -229,67 +238,103 @@ class QoderWaitRenewalE2ETest {
                             RENEWAL_EXTENSION, expiresBeforeMidRenewal, expiresAfterMidRenewal)
                     .isAfter(expiresBeforeMidRenewal);
 
-            String output = awaitProbe(probeTask, harness);
-            long completedSeenAtHost = System.currentTimeMillis();
-            String finalState = readState(harness);
-            long tPending = stateField(finalState, "t_pending");
-            long tAnswer = stateField(finalState, "t_answer");
-            long heldMs = stateField(finalState, "held_ms");
-            System.out.println("[A5] STEP2 final state=\"" + finalState + "\"");
-            System.out.println("[A5] STEP2 completed observed on host at epochMs=" + completedSeenAtHost
-                    + " hostProbeWallClockMs=" + (completedSeenAtHost - pendingSeenAtHost));
-            System.out.println("[A5] STEP2 interleaving (sandbox clock): t_pending=" + tPending
-                    + " sandbox_before=" + sandboxBeforeRenew
-                    + " sandbox_after=" + sandboxAfterRenew
-                    + " t_answer=" + tAnswer + " held_ms=" + heldMs);
+            // The post-probe section is wrapped so that a failure before the evidence writes
+            // (probe timeout, sandbox death, state parse) still leaves a durable diagnosis:
+            // the probe mirrors its redacted console into /tmp/a5/console.log inside the
+            // sandbox, which this catch prints best-effort before rethrowing.
+            try {
+                String output = awaitProbe(probeTask, harness);
+                long completedSeenAtHost = System.currentTimeMillis();
+                String finalState = readState(harness);
+                long tPending = stateField(finalState, "t_pending");
+                long tAnswer = stateField(finalState, "t_answer");
+                long heldMs = stateField(finalState, "held_ms");
+                System.out.println("[A5] STEP2 final state=\"" + finalState + "\"");
+                System.out.println("[A5] STEP2 completed observed on host at epochMs=" + completedSeenAtHost
+                        + " hostProbeWallClockMs=" + (completedSeenAtHost - pendingSeenAtHost));
+                System.out.println("[A5] STEP2 interleaving (sandbox clock): t_pending=" + tPending
+                        + " sandbox_before=" + sandboxBeforeRenew
+                        + " sandbox_after=" + sandboxAfterRenew
+                        + " t_answer=" + tAnswer + " held_ms=" + heldMs);
 
-            assertThat(finalState)
-                    .as("the probe must finish the turn after the hold (sandbox %s)", sandboxId)
-                    .contains("phase=COMPLETED")
-                    .contains("file_ok=1");
-            assertThat(heldMs)
-                    .as("the pending wait must be the full 5-minute evidence window")
-                    .isGreaterThanOrEqualTo(HOLD_MS);
-            assertThat(sandboxBeforeRenew)
-                    .as("host renewal bracket must start at/after the probe recorded the pending request")
-                    .isGreaterThanOrEqualTo(tPending);
-            assertThat(sandboxAfterRenew)
-                    .as("host renewal bracket must end before the probe answered the pending request")
-                    .isLessThan(tAnswer);
+                // Host-side proof that the CLI still executed: read the file the CLI was supposed
+                // to write from the driver itself, instead of resting on the probe's self-report
+                // (the probe's own fileChecks remain in the summary — this is a second, independent
+                // observation, and the host-side read is part of the evidence in the .md).
+                String hostFileRead = harness.run("cat " + PROBE_TARGET_FILE + " 2>/dev/null || echo '<missing>'").trim();
+                System.out.println("[A5] STEP2 host-side read of " + PROBE_TARGET_FILE + " -> \""
+                        + hostFileRead + "\"");
 
-            // Raw evidence for e2e/qoder/slice-a/05-wait-renewal.md (captured in the Failsafe
-            // report). No credential material: the PAT reached the sandbox only through the
-            // container environment and the probe redacts its value in every console line.
-            System.out.println("=== [A5] sandbox " + sandboxId + " raw output begin ===");
-            System.out.println(output);
-            System.out.println("=== [A5] sandbox " + sandboxId + " raw output end ===");
-            Path evidence = Path.of("target", "qoder-a5-sandbox-output.txt");
-            Files.createDirectories(evidence.getParent());
-            Files.writeString(evidence, output, StandardCharsets.UTF_8);
-            System.out.println("[A5] un-folded sandbox output written to " + evidence.toAbsolutePath());
-            Path hostEvidence = Path.of("target", "qoder-a5-host-evidence.txt");
-            Files.writeString(hostEvidence,
-                    "sandboxId=" + sandboxId + "\n"
-                            + "step1.expiresBefore=" + expiresBefore + "\n"
-                            + "step1.expiresAfter=" + expiresAfter + "\n"
-                            + "step2.pendingSeenAtHostEpochMs=" + pendingSeenAtHost + "\n"
-                            + "step2.hostRenew=[" + hostRenew2Started + ".." + hostRenew2Finished + "]\n"
-                            + "step2.sandboxClockBracket=[" + sandboxBeforeRenew + ".." + sandboxAfterRenew + "]\n"
-                            + "step2.expiresBefore=" + expiresBeforeMidRenewal + "\n"
-                            + "step2.expiresAfter=" + expiresAfterMidRenewal + "\n"
-                            + "step2.stateAtPending=" + stateAtPending + "\n"
-                            + "step2.stateAfterRenewal=" + stateAfterRenewal + "\n"
-                            + "step2.finalState=" + finalState + "\n",
-                    StandardCharsets.UTF_8);
-            System.out.println("[A5] host evidence written to " + hostEvidence.toAbsolutePath());
+                // Raw evidence for e2e/qoder/slice-a/05-wait-renewal.md (captured in the Failsafe
+                // report). Written BEFORE the first assertion that consumes the probe verdict, so
+                // a red gate leaves the same evidence a green one does. No credential material:
+                // the PAT reached the sandbox only through the container environment and the
+                // probe redacts its value in every console line.
+                System.out.println("=== [A5] sandbox " + sandboxId + " raw output begin ===");
+                System.out.println(output);
+                System.out.println("=== [A5] sandbox " + sandboxId + " raw output end ===");
+                Path evidence = Path.of("target", "qoder-a5-sandbox-output.txt");
+                Files.createDirectories(evidence.getParent());
+                Files.writeString(evidence, output, StandardCharsets.UTF_8);
+                System.out.println("[A5] un-folded sandbox output written to " + evidence.toAbsolutePath());
+                Path hostEvidence = Path.of("target", "qoder-a5-host-evidence.txt");
+                Files.writeString(hostEvidence,
+                        "sandboxId=" + sandboxId + "\n"
+                                + "step1.expiresBefore=" + expiresBefore + "\n"
+                                + "step1.expiresAfter=" + expiresAfter + "\n"
+                                + "step2.pendingSeenAtHostEpochMs=" + pendingSeenAtHost + "\n"
+                                + "step2.hostRenew=[" + hostRenew2Started + ".." + hostRenew2Finished + "]\n"
+                                + "step2.sandboxClockBracket=[" + sandboxBeforeRenew + ".." + sandboxAfterRenew + "]\n"
+                                + "step2.expiresBefore=" + expiresBeforeMidRenewal + "\n"
+                                + "step2.expiresAfter=" + expiresAfterMidRenewal + "\n"
+                                + "step2.stateAtPending=" + stateAtPending + "\n"
+                                + "step2.stateAfterRenewal=" + stateAfterRenewal + "\n"
+                                + "step2.finalState=" + finalState + "\n"
+                                + "step2.hostFileRead=" + hostFileRead + "\n",
+                        StandardCharsets.UTF_8);
+                System.out.println("[A5] host evidence written to " + hostEvidence.toAbsolutePath());
 
-            assertThat(output)
-                    .as("wait/renewal script must exit 0 and report PASS in sandbox %s", sandboxId)
-                    .contains("A5_SCRIPT_EXIT=0")
-                    .contains(PASS_MARKER)
-                    .contains(SUMMARY_MARKER)
-                    .doesNotContain(FAIL_MARKER)
-                    .doesNotContain("[A5] FAIL");
+                assertThat(finalState)
+                        .as("the probe must finish the turn after the hold (sandbox %s)", sandboxId)
+                        .contains("phase=COMPLETED")
+                        .contains("file_ok=1");
+                assertThat(heldMs)
+                        .as("the pending wait must be the full 5-minute evidence window")
+                        .isGreaterThanOrEqualTo(HOLD_MS);
+                assertThat(sandboxBeforeRenew)
+                        .as("host renewal bracket must start at/after the probe recorded the pending request")
+                        .isGreaterThanOrEqualTo(tPending);
+                assertThat(sandboxAfterRenew)
+                        .as("host renewal bracket must end before the probe answered the pending request")
+                        .isLessThan(tAnswer);
+                assertThat(hostFileRead)
+                        .as("the driver must observe the exact content the CLI wrote at %s (sandbox %s)",
+                                PROBE_TARGET_FILE, sandboxId)
+                        .isEqualTo(PROBE_TARGET_CONTENT);
+                assertThat(output)
+                        .as("wait/renewal script must exit 0 and report PASS in sandbox %s", sandboxId)
+                        .contains("A5_SCRIPT_EXIT=0")
+                        .contains(PASS_MARKER)
+                        .contains(SUMMARY_MARKER)
+                        .doesNotContain(FAIL_MARKER)
+                        .doesNotContain("[A5] FAIL");
+            } catch (Throwable failure) {
+                // Evidence-preservation backstop: if the failure happened before the capture
+                // writes above, the probe's own stdout is not on disk. Read the durable
+                // redacted console mirror the probe keeps inside the sandbox (best effort;
+                // a dead sandbox must not mask the original failure) and print it with a
+                // clear marker before rethrowing.
+                try {
+                    String console = harness.run("cat /tmp/a5/console.log 2>/dev/null || echo '<no /tmp/a5/console.log>'");
+                    System.out.println("=== [A5] sandbox " + harness.sandboxId()
+                            + " durable console /tmp/a5/console.log begin ===");
+                    System.out.println(console);
+                    System.out.println("=== [A5] sandbox " + harness.sandboxId() + " durable console end ===");
+                } catch (Throwable consoleFailure) {
+                    System.out.println("[A5] could not read /tmp/a5/console.log after failure: " + consoleFailure);
+                }
+                throw failure;
+            }
         } finally {
             deleteRecursively(staging);
         }
@@ -318,11 +363,12 @@ class QoderWaitRenewalE2ETest {
     /**
      * Read the sandbox {@code expiresAt} with a real SDK round trip: attach a handle and call
      * {@code getInfo()} (the {@code Sandbox} constructor is not usable as API for this). The
-     * handle is attached with {@code Sandbox.resumer()} — the path named by the A5 brief — and
-     * falls back to {@code Sandbox.connector()} (attach without asking the server to resume a
-     * sandbox that is already running) when the resume call is rejected. The handle is closed
-     * afterwards: {@code Sandbox#close()} only releases the SDK HTTP client, it does not kill
-     * the sandbox.
+     * handle is attached with {@code Sandbox.resumer()} first, but a server-side resume of a
+     * <em>running</em> sandbox is rejected with HTTP 409 Conflict, so the read falls back to
+     * {@code Sandbox.connector()} (attach without asking the server to resume) — the path that
+     * produced all four readings recorded in {@code e2e/qoder/slice-a/05-wait-renewal.md}. The
+     * handle is closed afterwards: {@code Sandbox#close()} only releases the SDK HTTP client,
+     * it does not kill the sandbox.
      */
     private static OffsetDateTime readExpiresAt(String sandboxId) {
         try {

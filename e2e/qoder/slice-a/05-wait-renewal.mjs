@@ -67,6 +67,7 @@ const TOKEN_ENV = 'QODER_PERSONAL_ACCESS_TOKEN';
 const WORKSPACE = '/workspace';                    // session/process cwd (harness upload root)
 const CASE_ROOT = '/tmp/a5';                       // never inside the repo
 const STATE_FILE = `${CASE_ROOT}/state`;
+const CONSOLE_LOG_FILE = `${CASE_ROOT}/console.log`; // durable redacted console mirror (best effort)
 const HOST_RENEWAL_FILE = `${CASE_ROOT}/host-renewal`;
 const TARGET_DIR = `${CASE_ROOT}/answer-under-renewal`;
 const TARGET_FILE = `${TARGET_DIR}/written.txt`;
@@ -86,12 +87,23 @@ const MAX_OBSERVATIONS = 80;
 // Never print credential material: every console.log line passes through a
 // redactor that replaces the Qoder token value — if the environment provided one —
 // with [redacted]. This mirrors 04-permissions.mjs so CLI stderr tails and agent
-// answers can never leak the PAT into the capture or this document.
+// answers can never leak the PAT into the capture or this document. The same
+// redacted line is also appended to /tmp/a5/console.log inside the sandbox (best
+// effort, never allowed to fail the probe): if the host driver dies before it
+// captures stdout, `cat /tmp/a5/console.log` still carries this probe's verdict.
 const TOKEN_VALUE = process.env[TOKEN_ENV] || '';
 const consoleLog = console.log.bind(console);
-console.log = (...args) => consoleLog(...args.map(arg => (typeof arg === 'string' && TOKEN_VALUE.length >= 8
-  ? arg.split(TOKEN_VALUE).join('[redacted]')
-  : arg)));
+console.log = (...args) => {
+  const redacted = args.map(arg => (typeof arg === 'string' && TOKEN_VALUE.length >= 8
+    ? arg.split(TOKEN_VALUE).join('[redacted]')
+    : arg));
+  consoleLog(...redacted);
+  try {
+    fs.appendFileSync(CONSOLE_LOG_FILE, redacted.join(' ') + '\n', 'utf8');
+  } catch {
+    /* the durable mirror must never break the probe */
+  }
+};
 
 // ---- tiny helpers ----------------------------------------------------------
 
@@ -232,6 +244,9 @@ async function main() {
   const logEvent = (dir, tag, message, extra = {}) => {
     record.totalEvents += 1;
     if (events.length >= MAX_EVENTS) {
+      // The event log keeps the first MAX_EVENTS entries; count what the cap drops so
+      // the summary's eventsTruncated is a real observation, not a constant.
+      record.eventsTruncated += 1;
       return;
     }
     const entry = { t: Date.now() - startedAt, dir, tag };

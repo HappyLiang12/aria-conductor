@@ -111,8 +111,10 @@ public interface AdkProvider {
      * (e.g. its configured task deadline) instead of the engine reading
      * provider-specific properties.
      *
-     * @return the constraints, or {@code null} when the provider states none —
-     *         the engine then keeps its own fallback for the task deadline
+     * @return the constraints, or {@code null} when the provider states none.
+     *         Both {@code null} and a record whose
+     *         {@link TaskExecutionConstraints#maxTaskDuration()} is {@code null}
+     *         mean "no stated deadline": the engine then keeps its own fallback
      */
     default TaskExecutionConstraints taskConstraints() {
         return null;

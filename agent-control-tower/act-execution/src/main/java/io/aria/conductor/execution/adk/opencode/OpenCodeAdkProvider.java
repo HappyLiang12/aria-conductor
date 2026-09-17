@@ -150,9 +150,9 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     }
 
     /**
-     * The opencode task deadline ({@code opencode.max-task-minutes}) is resolved
-     * through the provider: the engine no longer reads {@link OpenCodeProperties}
-     * directly for the task deadline.
+     * The opencode task deadline ({@code opencode.max-task-minutes}) is now resolved
+     * through the provider; the engine's {@link OpenCodeProperties} read remains
+     * only as the fallback for providers that state no constraint.
      */
     @Override
     public TaskExecutionConstraints taskConstraints() {

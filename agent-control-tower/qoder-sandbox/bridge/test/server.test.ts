@@ -944,7 +944,12 @@ describe('request bounds', () => {
 
 describe('POST /probe (C2 ruling R1)', () => {
   it('performs one MCP initialize POST and answers reachable for a 2xx JSON-RPC result', async () => {
-    const seen: Array<{ authorization: string | undefined; body: string }> = [];
+    const seen: Array<{
+      authorization: string | undefined;
+      accept: string | undefined;
+      contentType: string | undefined;
+      body: string;
+    }> = [];
     const target = await startTarget((req, res) => {
       let body = '';
       req.setEncoding('utf8');
@@ -952,7 +957,12 @@ describe('POST /probe (C2 ruling R1)', () => {
         body += chunk;
       });
       req.on('end', () => {
-        seen.push({ authorization: req.headers.authorization, body });
+        seen.push({
+          authorization: req.headers.authorization,
+          accept: req.headers.accept,
+          contentType: req.headers['content-type'],
+          body,
+        });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05' } }));
       });
@@ -970,6 +980,9 @@ describe('POST /probe (C2 ruling R1)', () => {
     // Exactly one outbound POST, carrying exactly the caller's credential and an MCP initialize.
     expect(seen).toHaveLength(1);
     expect(seen[0]?.authorization).toBe('Bearer test-token-1');
+    // Streamable HTTP MCP rejects a request whose Accept excludes text/event-stream (2025-03-26).
+    expect(seen[0]?.accept).toBe('application/json, text/event-stream');
+    expect(seen[0]?.contentType).toBe('application/json');
     expect(JSON.parse(String(seen[0]?.body))).toMatchObject({
       method: 'initialize',
       params: { protocolVersion: expect.any(String) },

@@ -864,7 +864,8 @@ interface ProbeResult {
  * live; a connection/DNS/TLS failure or the timeout proves the opposite. Redirects are never
  * followed: a 3xx already proves liveness, and the probe must not replay the worker
  * credential to an origin the caller did not name. Neither the caller's headers nor the
- * response body ever appear in the verdict, and nothing here is logged.
+ * response body ever appear in the verdict, and nothing here is logged. The probe is an MCP
+ * client, so its `Accept` must allow `text/event-stream`, as the streamable transport requires.
  */
 function probeMcpEndpoint(request: ProbeRequest): Promise<ProbeResult> {
   return new Promise<ProbeResult>(resolve => {
@@ -889,6 +890,8 @@ function probeMcpEndpoint(request: ProbeRequest): Promise<ProbeResult> {
         headers: {
           ...Object.fromEntries(request.headers.map(header => [header.name, header.value])),
           'content-type': 'application/json',
+          // The streamable HTTP transport rejects a request whose Accept excludes it (400).
+          accept: 'application/json, text/event-stream',
         },
       },
       response => {

@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * C4 ruling 4: explicit, reviewed tool policy. Every MCP tool is classified by
+ * C4 ruling 7: explicit, reviewed tool policy. Every MCP tool is classified by
  * hand as {@link Category#WORKER_READ}, {@link Category#WORKER_WRITE} or
  * {@link Category#OPERATOR_ONLY}; there is no naming heuristic and no implicit
  * allowance:
@@ -117,19 +117,27 @@ public class ToolPolicyRegistry {
 
                 // ── operator-only: pinned denials ───────────────────────────────
                 deny("decide_approval",
-                        "pinned: workers never answer approval questions as a human (design §6.2 line 302)"),
+                        "pinned: workers never call decide_approval or answer approval questions as a human "
+                                + "(design §6.2 line 301)"),
                 deny("create_agent", "pinned: scope cannot increase through agent lifecycle (design §6.2 line 303)"),
                 deny("update_agent", "pinned: scope cannot increase through agent lifecycle (design §6.2 line 303)"),
-                deny("retire_agent", "pinned: scope cannot increase through agent lifecycle (design §6.2 line 303)"),
+                deny("retire_agent", "pinned: retiring an agent is a governance-relaxing agent update (design §6.2 line 302)"),
                 deny("run_agent", "pinned: scope cannot increase through delegated runs (design §6.2 line 303)"),
-                deny("pause_run", "pinned: run control stays operator-side (design §6.2 line 302)"),
-                deny("resume_run", "pinned: run control stays operator-side (design §6.2 line 302)"),
-                deny("cancel_run", "pinned: run control stays operator-side (design §6.2 line 302)"),
+                deny("pause_run", "pinned: run control stays operator-side (design §6.2 line 308 protects the "
+                        + "REST/MCP control-plane paths; §5.4 line 272 pause/resume are host state transitions)"),
+                deny("resume_run", "pinned: run control stays operator-side (design §6.2 line 308 protects the "
+                        + "REST/MCP control-plane paths; §5.4 line 272 pause/resume are host state transitions)"),
+                deny("cancel_run", "pinned: cancellation is the user's action, not a worker capability "
+                        + "(design §5.2 line 238 'A user cancelling the run terminates execution'); control-plane "
+                        + "paths stay protected (design §6.2 line 308)"),
                 deny("housekeeping_scan", "pinned: maintenance scanning is operator-side (design §6.2)"),
                 deny("housekeeping_execute", "pinned: destructive maintenance is operator-only (design §6.2)"),
-                deny("toggle_skill", "pinned: skill/policy mutation is operator-only (design §6.2 line 303)"),
-                deny("assign_skill", "pinned: skill/policy mutation is operator-only (design §6.2 line 303)"),
-                deny("unassign_skill", "pinned: skill/policy mutation is operator-only (design §6.2 line 303)"),
+                deny("toggle_skill", "pinned: skill mutation changes a worker's credential/permission policy "
+                        + "(design §6.2 line 301)"),
+                deny("assign_skill", "pinned: skill mutation changes a worker's credential/permission policy "
+                        + "(design §6.2 line 301)"),
+                deny("unassign_skill", "pinned: skill mutation changes a worker's credential/permission policy "
+                        + "(design §6.2 line 301)"),
                 deny("list_llm_providers", "pinned: credential/policy surface has no worker access (design §6.3)"),
                 deny("get_llm_provider", "pinned: credential/policy surface has no worker access (design §6.3)"),
                 deny("create_llm_provider", "pinned: credential/policy surface has no worker access (design §6.3)"),

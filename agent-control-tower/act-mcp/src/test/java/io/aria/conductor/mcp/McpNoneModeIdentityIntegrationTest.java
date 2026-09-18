@@ -148,7 +148,10 @@ class McpNoneModeIdentityIntegrationTest {
 
     @Test
     void staleOperatorToken_is401_inNoneMode() throws Exception {
-        // The operator bearer only exists in token mode; in none mode it is not a credential.
+        // isOperatorBearer is mode-independent: with a real ARIA_MCP_TOKEN configured, that
+        // bearer would be admitted as OPERATOR even in none mode. This test passes because the
+        // mocked McpProperties returns a null token (the production default is blank), so the
+        // present-but-unresolvable bearer is rejected 401.
         assertThat(rawMcpStatus("Bearer test-token-1")).isEqualTo(401);
     }
 

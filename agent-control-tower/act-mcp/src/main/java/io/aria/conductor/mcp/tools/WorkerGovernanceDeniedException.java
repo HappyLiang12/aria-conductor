@@ -3,7 +3,7 @@ package io.aria.conductor.mcp.tools;
 import java.util.UUID;
 
 /**
- * C4 ruling 7: the single typed runtime exception for every worker governance
+ * C4 ruling 8: the single typed runtime exception for every worker governance
  * denial. The stable {@link Code} lets callers, the C5 review surface and tests
  * assert the exact reason without parsing prose.
  *

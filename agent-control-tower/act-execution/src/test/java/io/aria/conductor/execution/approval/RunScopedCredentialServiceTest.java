@@ -23,8 +23,9 @@ import static org.mockito.Mockito.when;
 /**
  * C4 ruling 5: run-scoped worker credentials. Tokens are opaque SecureRandom
  * material (>= 32 bytes entropy), TTL is capped at a documented constant, a
- * token stops resolving once its run reaches a terminal status or the token is
- * revoked, and restart invalidation is by construction (in-memory store).
+ * token stops resolving once its run reaches a terminal status, disappears or is
+ * malformed (no agentId), or the token is revoked, and restart invalidation is
+ * by construction (in-memory store).
  *
  * <p>All tokens here are synthetic ({@code wcp_test_...}); no real credential
  * is ever created or logged.
@@ -165,6 +166,19 @@ class RunScopedCredentialServiceTest {
         String token = service.issue(runId, T0.plus(Duration.ofMinutes(5)));
         when(runRepository.findById(runId)).thenReturn(Optional.empty());
 
+        assertThat(service.resolve(token)).isEmpty();
+    }
+
+    @Test
+    void resolve_runWithoutAgentId_isEmpty_insteadOfThrowing() {
+        UUID runId = UUID.randomUUID();
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).agentId(null).status(RunStatus.RUNNING).build()));
+        String token = service.issue(runId, T0.plus(Duration.ofMinutes(5)));
+
+        // A malformed run row must deny the auth check, not surface an IllegalArgumentException/500.
+        assertThat(service.resolve(token)).isEmpty();
+        // The unusable credential is dropped like the other invalid token states.
         assertThat(service.resolve(token)).isEmpty();
     }
 

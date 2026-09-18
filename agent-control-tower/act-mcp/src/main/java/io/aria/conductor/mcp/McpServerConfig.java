@@ -150,6 +150,13 @@ public class McpServerConfig {
      * WORKER caller with no scope, which {@code WorkerGovernanceAspect} denies as
      * {@code INVALID_IDENTITY}. An absent header binds nothing (legacy in-process
      * and none-mode behavior — absent identity is operator-equivalent, ruling 4).
+     *
+     * <p>The single-argument {@link ToolCallback#call(String)} overload carries no
+     * transport context (in spring-ai 1.0.9 the interface's default
+     * {@code call(String, ToolContext)} delegates <em>to</em> it, and the MCP SDK
+     * adapter invokes the two-argument overload), so no identity can be recovered
+     * there; it fails closed rather than delegating an unbound
+     * (operator-equivalent) invocation.
      */
     static final class IdentityBindingToolCallback implements ToolCallback {
 
@@ -171,9 +178,18 @@ public class McpServerConfig {
             return delegate.getToolMetadata();
         }
 
+        /**
+         * Fails closed: this overload has no {@link ToolContext}, so the caller
+         * identity cannot be bound and delegating would silently run the call as
+         * operator-equivalent.
+         *
+         * @throws IllegalStateException always; the MCP transport path invokes
+         *                               {@link #call(String, ToolContext)}
+         */
         @Override
         public String call(String toolInput) {
-            return delegate.call(toolInput);
+            throw new IllegalStateException("IdentityBindingToolCallback cannot bind identity without the MCP "
+                    + "transport context; use call(String, ToolContext)");
         }
 
         @Override

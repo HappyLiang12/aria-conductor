@@ -7,10 +7,16 @@ import io.aria.conductor.execution.approval.WriteGrantService;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.common.McpTransportContext;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.mcp.McpToolUtils;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -23,13 +29,17 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -173,7 +183,8 @@ class McpWorkerEndpointIntegrationTest {
 
     @Test
     void workerToken_writeWithGrant_succeedsOnce_andTheReplayIsDenied() {
-        // The approval side (C2/C3) digests the FULL named-argument map, nulls preserved.
+        // C2/C3 contract: both sides digest the effective (top-level non-null) argument map, so
+        // the optional parameters the worker did not send do not shift the digest.
         Map<String, Object> approved = new LinkedHashMap<>();
         approved.put("title", "worker summary");
         approved.put("description", "approved work");
@@ -181,7 +192,7 @@ class McpWorkerEndpointIntegrationTest {
         approved.put("owner", null);
         approved.put("sourceRunId", null);
         approved.put("sensitivity", null);
-        writeGrants.grant(RUN_ID, "generate_report", WriteGrantService.argsDigest(approved));
+        writeGrants.grant(RUN_ID, "generate_report", WriteGrantService.effectiveArgsDigest(approved));
 
         try (McpSyncClient client = client(workerToken)) {
             client.initialize();
@@ -199,8 +210,38 @@ class McpWorkerEndpointIntegrationTest {
     }
 
     @Test
+    void workerToken_grantDigestFollowsTheEffectiveArgsContract_bothDirections() {
+        // A grant computed from the approval map WITHOUT the omitted optional key authorizes the
+        // invocation that binds that parameter to null.
+        writeGrants.grant(RUN_ID, "generate_report", WriteGrantService.effectiveArgsDigest(
+                Map.of("title", "effective title", "description", "effective description")));
+
+        try (McpSyncClient client = client(workerToken)) {
+            client.initialize();
+
+            McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest("generate_report",
+                    Map.of("title", "effective title", "description", "effective description")));
+            assertThat(okText(result)).contains("\"ok\":true");
+
+            // Reverse direction: a grant that pinned an optional value does not authorize the
+            // call that omits it, and the mismatch consumes nothing.
+            writeGrants.grant(RUN_ID, "generate_report", WriteGrantService.effectiveArgsDigest(
+                    Map.of("title", "pinned title", "description", "pinned description",
+                            "sensitivity", "internal")));
+            assertThat(callExpectingDenial(client, "generate_report",
+                    Map.of("title", "pinned title", "description", "pinned description")))
+                    .contains("GRANT_REQUIRED");
+
+            McpSchema.CallToolResult pinned = client.callTool(new McpSchema.CallToolRequest("generate_report",
+                    Map.of("title", "pinned title", "description", "pinned description",
+                            "sensitivity", "internal")));
+            assertThat(okText(pinned)).contains("\"ok\":true");
+        }
+    }
+
+    @Test
     void workerToken_grantForDifferentArgs_isDenied() {
-        writeGrants.grant(RUN_ID, "generate_report", WriteGrantService.argsDigest(
+        writeGrants.grant(RUN_ID, "generate_report", WriteGrantService.effectiveArgsDigest(
                 Map.of("title", "approved title", "description", "approved description")));
 
         try (McpSyncClient client = client(workerToken)) {
@@ -333,6 +374,63 @@ class McpWorkerEndpointIntegrationTest {
             assertThat(tools.tools())
                     .extracting(McpSchema.Tool::name)
                     .contains("decide_approval", "retire_agent", "housekeeping_execute");
+        }
+    }
+
+    // ── identity-binding callback: no unbound invocation path ───────────────
+
+    @Test
+    void identityBindingCallback_bindsTheTwoArgPath_andFailsClosedOnTheSingleArgPath() {
+        // In spring-ai 1.0.9 ToolCallback.call(String) is abstract and the interface's default
+        // two-arg overload delegates DOWN to it, so the wrapper cannot delete its override and
+        // the single-arg overload has no transport context at all. It fails closed instead of
+        // delegating unbound (which would silently run as operator-equivalent); the MCP adapter
+        // (McpToolUtils) invokes the two-arg overload, which binds the worker identity.
+        RecordingToolCallback delegate = new RecordingToolCallback();
+        McpServerConfig.IdentityBindingToolCallback callback = new McpServerConfig.IdentityBindingToolCallback(
+                delegate, new WorkerScopeResolver(mcpProperties, credentials));
+
+        assertThatThrownBy(() -> callback.call("{\"id\":\"" + RUN_ID + "\"}"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("transport context");
+        assertThat(delegate.observedIdentities).isEmpty();
+
+        McpSyncServerExchange exchange = mock(McpSyncServerExchange.class);
+        when(exchange.transportContext()).thenReturn(McpTransportContext.create(
+                Map.of(McpServerConfig.AUTHORIZATION_CONTEXT_KEY, "Bearer " + workerToken)));
+        ToolContext toolContext = new ToolContext(
+                Map.of(McpToolUtils.TOOL_CONTEXT_MCP_EXCHANGE_KEY, exchange));
+
+        assertThat(callback.call("{\"id\":\"" + RUN_ID + "\"}", toolContext)).isEqualTo("bound");
+        assertThat(delegate.observedIdentities).hasSize(1);
+        Optional<McpCallerContext.Caller> bound = delegate.observedIdentities.get(0);
+        assertThat(bound).isPresent();
+        assertThat(bound.orElseThrow().kind()).isEqualTo(McpCallerContext.Kind.WORKER);
+        assertThat(bound.orElseThrow().scope().runId()).isEqualTo(RUN_ID);
+        // The wrapper restores the ambient holder after the invocation.
+        assertThat(McpCallerContext.current()).isEmpty();
+    }
+
+    /** Records the ambient caller identity seen by each {@link ToolCallback} overload. */
+    private static final class RecordingToolCallback implements ToolCallback {
+
+        private final List<Optional<McpCallerContext.Caller>> observedIdentities = new ArrayList<>();
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return ToolDefinition.builder().name("probe").description("probe").inputSchema("{}").build();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            observedIdentities.add(McpCallerContext.current());
+            return "single";
+        }
+
+        @Override
+        public String call(String toolInput, ToolContext toolContext) {
+            observedIdentities.add(McpCallerContext.current());
+            return "bound";
         }
     }
 }

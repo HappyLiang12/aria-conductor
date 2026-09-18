@@ -17,7 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * C4 ruling 7: server-side enforcement of the worker/operator boundary at the
+ * C4 ruling 8: server-side enforcement of the worker/operator boundary at the
  * tool invocation seam, independent of the transport and of what the client
  * believed it was allowed to do. For every WORKER request:
  *
@@ -26,11 +26,12 @@ import java.util.Map;
  *   <li>no reviewed policy → {@code UNKNOWN_TOOL};</li>
  *   <li>OPERATOR_ONLY → {@code OPERATOR_ONLY};</li>
  *   <li>a declared scope parameter that names another run/agent → {@code SCOPE_MISMATCH};</li>
- *   <li>WORKER_WRITE → one-use grant bound to (runId, toolName, canonical
- *       digest of the actual named arguments) or {@code GRANT_REQUIRED}. The
- *       digest is computed from the live invocation, so a call whose arguments
- *       differ from the approved request never matches and a mismatch consumes
- *       nothing (design §6.1).</li>
+ *   <li>WORKER_WRITE → one-use grant bound to (runId, toolName, the frozen
+ *       {@link WriteGrantService#effectiveArgsDigest(Map) effective-argument
+ *       digest} of the live invocation) or {@code GRANT_REQUIRED}. The digest is
+ *       computed from the live invocation, so a call whose arguments differ from
+ *       the approved request never matches and a mismatch consumes nothing
+ *       (design §6.1).</li>
  * </ul>
  *
  * <p>Identity comes from {@link McpCallerContext}, bound per request by
@@ -126,8 +127,9 @@ public class WorkerGovernanceAspect {
     }
 
     /**
-     * Canonical digest of the actual named arguments, or null when the compiled
-     * parameter names are unavailable (fail closed at the caller).
+     * Digest of the actual named arguments under the frozen effective-argument
+     * contract (the approval side C2/C3 computes the same value), or null when
+     * the compiled parameter names are unavailable (fail closed at the caller).
      */
     private static String argumentDigest(ProceedingJoinPoint joinPoint) {
         Object[] args = joinPoint.getArgs();
@@ -139,7 +141,7 @@ public class WorkerGovernanceAspect {
         for (int i = 0; i < args.length; i++) {
             named.put(names[i], args[i]);
         }
-        return WriteGrantService.argsDigest(named);
+        return WriteGrantService.effectiveArgsDigest(named);
     }
 
     private static WorkerGovernanceDeniedException denial(WorkerGovernanceDeniedException.Code code,

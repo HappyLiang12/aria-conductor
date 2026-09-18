@@ -31,7 +31,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * grants die with the run.
  *
  * <p>{@link WriteGrantService#argsDigest(Map)} is the frozen canonicalizer C2/C3
- * reuse for approval-side digests, so its exact output is pinned here.
+ * reuse for approval-side digests, and
+ * {@link WriteGrantService#effectiveArgsDigest(Map)} is the frozen binding digest
+ * both sides must use (top-level nulls dropped), so their exact outputs are
+ * pinned here.
  */
 class WriteGrantServiceTest {
 
@@ -90,6 +93,25 @@ class WriteGrantServiceTest {
         clock.advance(WriteGrantService.GRANT_TTL.plus(Duration.ofSeconds(1)));
 
         assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+        // The consumed (expired) entry empties the queue, so the key is dropped too.
+        assertThat(service.trackedKeyCount()).isZero();
+    }
+
+    @Test
+    void consume_dropsTheKeyOnceItsQueueIsEmpty_andNewGrantsStillWork() {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+        assertThat(service.trackedKeyCount()).isEqualTo(1);
+
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        // A fully consumed tuple tracks no queue: a long-lived process cannot accumulate keys.
+        assertThat(service.trackedKeyCount()).isZero();
+
+        // Removing the key does not poison the tuple: a new grant is tracked and consumable.
+        service.grant(RUN, "generate_report", d);
+        assertThat(service.trackedKeyCount()).isEqualTo(1);
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.trackedKeyCount()).isZero();
     }
 
     @Test
@@ -232,6 +254,53 @@ class WriteGrantServiceTest {
 
         assertThat(WriteGrantService.argsDigest(Map.of("id", id)))
                 .isEqualTo(WriteGrantService.argsDigest(Map.of("id", id.toString())));
+    }
+
+    // ── frozen effective-argument digest (C2/C3 binding contract) ────────────
+
+    @Test
+    void effectiveArgsDigest_dropsTopLevelNulls_soOmittedOptionalsMatchTheirNullBinding() {
+        Map<String, Object> withNull = singleEntry("a", 1);
+        withNull.put("b", null);
+
+        // A worker that omits "b" binds it to null; both sides must digest {a:1}.
+        assertThat(WriteGrantService.effectiveArgsDigest(withNull))
+                .isEqualTo(WriteGrantService.effectiveArgsDigest(Map.of("a", 1)));
+        assertThat(WriteGrantService.effectiveArgsDigest(withNull))
+                .isNotEqualTo(WriteGrantService.argsDigest(withNull));
+
+        Map<String, Object> allNull = singleEntry("a", null);
+        allNull.put("b", null);
+        assertThat(WriteGrantService.effectiveArgsDigest(allNull))
+                .isEqualTo(WriteGrantService.effectiveArgsDigest(Map.of()));
+        assertThat(WriteGrantService.effectiveArgsDigest(null))
+                .isEqualTo(WriteGrantService.effectiveArgsDigest(Map.of()));
+        assertThat(WriteGrantService.effectiveArgsDigest(Map.of()))
+                .isEqualTo(WriteGrantService.argsDigest(Map.of()));
+    }
+
+    @Test
+    void effectiveArgsDigest_keepsNestedNulls_andMatchesArgsDigestForNonNullValues() {
+        // Only the top level is effective: a nested null is part of the payload.
+        Map<String, Object> nestedNull = singleEntry("outer", singleEntry("x", null));
+        assertThat(WriteGrantService.effectiveArgsDigest(nestedNull))
+                .isEqualTo(WriteGrantService.argsDigest(nestedNull));
+        assertThat(WriteGrantService.effectiveArgsDigest(nestedNull))
+                .isNotEqualTo(WriteGrantService.effectiveArgsDigest(Map.of("outer", Map.of())));
+
+        Map<String, Object> values = linkedMap("a", "x", "b", 2);
+        assertThat(WriteGrantService.effectiveArgsDigest(values))
+                .isEqualTo(WriteGrantService.argsDigest(values));
+
+        // argsDigest itself is unchanged: it still preserves top-level nulls.
+        assertThat(WriteGrantService.argsDigest(singleEntry("a", null)))
+                .isNotEqualTo(WriteGrantService.argsDigest(Map.of()));
+    }
+
+    private static Map<String, Object> singleEntry(String key, Object value) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put(key, value);
+        return map;
     }
 
     private static Map<String, Object> linkedMap(String k1, Object v1, String k2, Object v2) {

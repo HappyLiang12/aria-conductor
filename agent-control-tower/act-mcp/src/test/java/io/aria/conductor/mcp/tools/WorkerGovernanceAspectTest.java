@@ -105,7 +105,7 @@ class WorkerGovernanceAspectTest {
     void workerWrite_withMatchingGrant_runsOnce_andTheReplayIsDenied() {
         worker();
         writeGrants.grant(RUN, "generate_report",
-                WriteGrantService.argsDigest(args("title", "t", "description", "d")));
+                WriteGrantService.effectiveArgsDigest(args("title", "t", "description", "d")));
 
         assertThat(proxy.generateReport("t", "d")).isEqualTo("ok");
         assertThat(fixture.invoked).containsExactly("generate_report");
@@ -120,7 +120,7 @@ class WorkerGovernanceAspectTest {
     @Test
     void workerWrite_withGrantForDifferentArgs_isDenied_andConsumesNothing() {
         worker();
-        String approved = WriteGrantService.argsDigest(args("title", "t", "description", "d"));
+        String approved = WriteGrantService.effectiveArgsDigest(args("title", "t", "description", "d"));
         writeGrants.grant(RUN, "generate_report", approved);
 
         assertThatThrownBy(() -> proxy.generateReport("t", "changed"))
@@ -133,7 +133,7 @@ class WorkerGovernanceAspectTest {
     void workerWrite_withGrantForAnotherRun_isDenied() {
         worker();
         writeGrants.grant(OTHER_RUN, "generate_report",
-                WriteGrantService.argsDigest(args("title", "t", "description", "d")));
+                WriteGrantService.effectiveArgsDigest(args("title", "t", "description", "d")));
 
         assertThatThrownBy(() -> proxy.generateReport("t", "d"))
                 .isInstanceOf(WorkerGovernanceDeniedException.class)
@@ -142,15 +142,30 @@ class WorkerGovernanceAspectTest {
     }
 
     @Test
-    void workerWrite_digestIncludesNullOptionalParameters() {
+    void workerWrite_grantComputedWithoutTheOmittedOptional_authorizesTheNullBinding() {
         worker();
-        // update_kanban_item(id, title, description): the approval side digests the full
-        // named-argument map with nulls preserved, so a null optional parameter must not
-        // shift the digest.
-        writeGrants.grant(RUN, "update_kanban_item", WriteGrantService.argsDigest(
-                args("id", "item-1", "title", "new title", "description", null)));
+        // C2/C3 contract: both sides digest the effective (top-level non-null) argument map,
+        // so a grant computed from the approval request without the omitted optional key
+        // authorizes the invocation that binds that parameter to null.
+        writeGrants.grant(RUN, "update_kanban_item", WriteGrantService.effectiveArgsDigest(
+                args("id", "item-1", "title", "new title")));
 
         assertThat(proxy.updateKanbanItem("item-1", "new title", null)).isEqualTo("ok");
+    }
+
+    @Test
+    void workerWrite_grantThatPinnedTheOptionalValue_doesNotAuthorizeTheNullBinding() {
+        worker();
+        // Reverse direction of the same contract: an approval that pinned a value for the
+        // optional parameter does not authorize the call that omits it, and consumes nothing.
+        writeGrants.grant(RUN, "update_kanban_item", WriteGrantService.effectiveArgsDigest(
+                args("id", "item-2", "title", "new title", "description", "pinned description")));
+
+        assertThatThrownBy(() -> proxy.updateKanbanItem("item-2", "new title", null))
+                .isInstanceOf(WorkerGovernanceDeniedException.class)
+                .extracting(WorkerGovernanceAspectTest::codeOf)
+                .isEqualTo(WorkerGovernanceDeniedException.Code.GRANT_REQUIRED);
+        assertThat(proxy.updateKanbanItem("item-2", "new title", "pinned description")).isEqualTo("ok");
     }
 
     // ── operator-only tools ─────────────────────────────────────────────────

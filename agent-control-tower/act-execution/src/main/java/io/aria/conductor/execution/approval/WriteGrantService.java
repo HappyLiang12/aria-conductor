@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -88,18 +89,28 @@ public class WriteGrantService {
      * Atomically consumes one grant matching the tuple. Returns {@code true}
      * exactly once per granted authorization; {@code false} for unknown,
      * mismatched, already-consumed or expired grants. Never throws: any missing
-     * input is a denial (fail closed).
+     * input is a denial (fail closed). A consume that empties the key's queue also
+     * drops the key, so tracking does not grow with consumed grants.
      */
     public boolean consume(UUID runId, String toolName, String argsDigest) {
         if (runId == null || toolName == null || argsDigest == null) {
             return false;
         }
-        ConcurrentLinkedQueue<Instant> pending = grants.get(new GrantKey(runId, toolName, argsDigest));
+        GrantKey key = new GrantKey(runId, toolName, argsDigest);
+        ConcurrentLinkedQueue<Instant> pending = grants.get(key);
         if (pending == null) {
             return false;
         }
         Instant expiry = pending.poll();
+        // computeIfPresent is atomic per key on ConcurrentHashMap, so a concurrent
+        // grant cannot lose its entry to this removal.
+        grants.computeIfPresent(key, (k, queue) -> queue.isEmpty() ? null : queue);
         return expiry != null && expiry.isAfter(clock.instant());
+    }
+
+    /** Test seam: how many grant keys are currently tracked (empty keys are dropped). */
+    int trackedKeyCount() {
+        return grants.size();
     }
 
     /** Drops every grant of a run. Null is a no-op. */
@@ -132,6 +143,39 @@ public class WriteGrantService {
             // SHA-256 is mandatory on every Java platform.
             throw new IllegalStateException("SHA-256 is unavailable", e);
         }
+    }
+
+    /**
+     * Frozen effective-argument digest: the value both the enforcement side
+     * ({@code WorkerGovernanceAspect}) and the ACP approval side (C2/C3) must
+     * compute so an approved request matches the invocation it authorizes.
+     *
+     * <p>Why it exists: {@link #argsDigest(Map)} digests every named argument the
+     * invocation carries, including optional parameters the caller omitted (they
+     * bind to Java {@code null} and appear as null-valued entries). A
+     * {@code permission_request} event only carries the keys the worker actually
+     * sent, so the approval side cannot reproduce that full map. Digesting the
+     * effective (top-level non-null) map removes the difference without losing
+     * binding information: an omitted optional parameter and an explicit JSON
+     * {@code null} bind to the same Java invocation. Only the top level is
+     * affected — nested values still render canonically, so a nested
+     * {@code {x:null}} stays a JSON null and differs from an empty nested object.
+     *
+     * <p>The governance aspect and the approval side both call this method;
+     * {@link #argsDigest(Map)} itself stays unchanged for callers that need the
+     * literal argument map.
+     */
+    public static String effectiveArgsDigest(Map<String, Object> namedArgs) {
+        if (namedArgs == null || namedArgs.isEmpty()) {
+            return argsDigest(Map.of());
+        }
+        Map<String, Object> effective = new LinkedHashMap<>();
+        namedArgs.forEach((key, value) -> {
+            if (value != null) {
+                effective.put(key, value);
+            }
+        });
+        return argsDigest(effective);
     }
 
     private static String canonicalJson(Map<String, Object> map) {

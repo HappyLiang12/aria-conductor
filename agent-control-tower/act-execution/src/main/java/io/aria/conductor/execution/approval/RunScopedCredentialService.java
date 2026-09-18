@@ -137,7 +137,8 @@ public class RunScopedCredentialService {
 
     /**
      * Resolves an opaque token to the worker scope it grants, or empty when the
-     * token is unknown, expired, revoked, or its run is missing or terminal.
+     * token is unknown, expired, revoked, or its run is missing, malformed
+     * (no agentId) or terminal.
      * Expired/invalid tokens are dropped from the store as a side effect.
      */
     public Optional<WorkerScope> resolve(String token) {
@@ -153,7 +154,7 @@ public class RunScopedCredentialService {
             return Optional.empty();
         }
         Optional<Run> run = runRepository.findById(issued.runId());
-        if (run.isEmpty() || isTerminal(run.get().getStatus())) {
+        if (run.isEmpty() || run.get().getAgentId() == null || isTerminal(run.get().getStatus())) {
             drop(token, issued.runId());
             return Optional.empty();
         }

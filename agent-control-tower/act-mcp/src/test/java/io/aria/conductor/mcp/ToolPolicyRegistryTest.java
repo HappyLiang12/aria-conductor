@@ -19,7 +19,7 @@ import java.util.TreeSet;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * C4 ruling 4: the tool policy registry is an explicit, reviewed map with no
+ * C4 ruling 7: the tool policy registry is an explicit, reviewed map with no
  * fallbacks by accident. This test reconciles it in BOTH directions with the
  * actual {@code @Tool} methods of every {@link McpTool} bean package and with
  * the curated {@link McpToolInventory}, so a new tool cannot appear without a

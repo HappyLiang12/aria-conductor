@@ -510,15 +510,24 @@ scenario_s10_restart_interrupt() {
   # full restart = kill (done) + stop.ps1 (recorded pids, opensandbox compose stop,
   # removes .run/) + the documented start command. The h2 database lives in
   # agent-control-tower/act-app/data/ (not .run/), so the run/ask rows survive.
+  # Neither restart command may be piped into tee: MSYS pipes are inherited by
+  # grandchildren, and start.ps1 starts the backend/frontend detached
+  # (Start-Process -NoNewWindow, scripts/start.ps1:345-359) — those long-lived
+  # services hold the pipe's write end, tee never sees EOF and the harness
+  # deadlocks (E6: S10 stalled 12+ min right after "All services healthy."; R79).
+  # Redirect to a file, then tee the file: step log and console both get the output.
   step_note "5. stop.ps1 (releases the frontend port) then start.ps1 -Provider qoder with QODER_MODEL=$MODEL"
   log_cmd "cd $REPO_ROOT && pwsh -NoProfile -File scripts/stop.ps1"
-  ( cd "$REPO_ROOT" && pwsh -NoProfile -File scripts/stop.ps1 ) 2>&1 | tee -a "$SLOG"
-  step_note "   stop.ps1 exit=${PIPESTATUS[0]}"
+  ( cd "$REPO_ROOT" && pwsh -NoProfile -File scripts/stop.ps1 ) > "$wf/stop.out" 2>&1
+  local stop_rc=$?
+  tee -a "$SLOG" < "$wf/stop.out"
+  step_note "   stop.ps1 exit=$stop_rc"
 
   log_cmd "cd $REPO_ROOT && QODER_MODEL=$MODEL timeout $start_timeout pwsh -NoProfile -File scripts/start.ps1 -Provider qoder   (QODER_E2E_PAT stripped from the child env)"
   ( cd "$REPO_ROOT" && env -u QODER_E2E_PAT QODER_MODEL="$MODEL" timeout "$start_timeout" \
-      pwsh -NoProfile -File scripts/start.ps1 -Provider qoder ) 2>&1 | tee -a "$SLOG"
-  local start_rc=${PIPESTATUS[0]}
+      pwsh -NoProfile -File scripts/start.ps1 -Provider qoder ) > "$wf/start.out" 2>&1
+  local start_rc=$?
+  tee -a "$SLOG" < "$wf/start.out"
   step_note "   start.ps1 exit=$start_rc (124 = the ${start_timeout}s timeout fired)"
 
   local restarted="no"

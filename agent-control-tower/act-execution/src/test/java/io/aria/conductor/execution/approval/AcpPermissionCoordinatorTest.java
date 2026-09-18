@@ -586,6 +586,45 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
     }
 
     @Test
+    void deliverDecision_bridgeOutcomes_narrowTheDeliveredSet() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-outcome", json(Map.of("path", "/x"))));
+        UUID approvalId = approvalRepository.findByRunId(runId).get(0).getId();
+        // A 200 whose outcome is expired/unknown (or absent) is not a delivery: the CLI never
+        // applied the decision, so the companion stays FAILED and retryable (R18).
+        when(client.decide(SESSION_ID, "req-outcome", true, "operator approved")).thenReturn(
+                QoderBridgeClient.DecisionOutcome.EXPIRED,
+                QoderBridgeClient.DecisionOutcome.UNKNOWN,
+                null,
+                QoderBridgeClient.DecisionOutcome.ALREADY_RESOLVED,
+                QoderBridgeClient.DecisionOutcome.DELIVERED);
+
+        for (int i = 0; i < 3; i++) {
+            assertThat(coordinator.deliverDecision(approvalId, true, "operator approved"))
+                    .as("unapplied outcome attempt %d", i)
+                    .isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
+            flushAndClear();
+            assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveryState())
+                    .isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
+            assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveredAt()).isNull();
+        }
+        // Retryable by construction: the first answer that took effect settles the ask.
+        assertThat(coordinator.deliverDecision(approvalId, true, "operator approved"))
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+        flushAndClear();
+        assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+        assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveredAt())
+                .isEqualTo(FAKE_NOW);
+
+        // Three unapplied attempts plus the one that took effect: the settling answer settles the
+        // ask, so no further bridge call is made (4 invocations total).
+        verify(client, times(4)).decide(SESSION_ID, "req-outcome", true, "operator approved");
+    }
+
+    @Test
     void restartRecovery_expiresPendingAcpAsksWithoutReplay() {
         UUID runId = committedRun(RunStatus.RUNNING);
         bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));

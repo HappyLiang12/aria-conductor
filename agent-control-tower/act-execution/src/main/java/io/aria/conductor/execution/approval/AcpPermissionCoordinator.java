@@ -79,10 +79,11 @@ import java.util.stream.Collectors;
  * boundary (a constraint violation inside a shared transaction would poison it).
  *
  * <p><b>Delivery states.</b> {@code PENDING → DELIVERING → DELIVERED | CANCELLED | FAILED}:
- * {@code DELIVERED} is reserved for an answer that rules on the ask itself (the bridge's
- * {@code ALREADY_RESOLVED}), {@code CANCELLED} is an ask that was expired or recovered after a
- * restart, and {@code FAILED} is any other delivery outcome — the host's decision was never
- * applied — the only retryable state (R16).
+ * {@code DELIVERED} means the decision took effect — the bridge's {@code delivered} outcome or an
+ * answer that rules on the ask itself ({@code already_resolved} / {@code ALREADY_RESOLVED}) —
+ * {@code CANCELLED} is an ask that was expired or recovered after a restart, and {@code FAILED}
+ * is any other delivery outcome — the host's decision was never applied — the only retryable
+ * state (R16, R18).
  */
 @Slf4j
 @Component
@@ -92,7 +93,7 @@ public class AcpPermissionCoordinator {
     public static final String DELIVERY_PENDING = "PENDING";
     /** A delivery is in flight (the claiming worker owns it). */
     public static final String DELIVERY_DELIVERING = "DELIVERING";
-    /** The bridge answered the delivered decision. */
+    /** The decision took effect: the bridge applied it or had already ruled on the ask (R16, R18). */
     public static final String DELIVERY_DELIVERED = "DELIVERED";
     /** The ask was expired or interrupted by a restart; a cancel was delivered best-effort. */
     public static final String DELIVERY_CANCELLED = "CANCELLED";
@@ -111,6 +112,10 @@ public class AcpPermissionCoordinator {
     /** Causes that mean the bridge ruled on the ask itself: the only non-transport delivery success. */
     private static final List<QoderBridgeException.Cause> ASK_RULED_CAUSES = List.of(
             QoderBridgeException.Cause.ALREADY_RESOLVED);
+    /** 200 outcomes that mean the decision took effect: the only such answers counted as delivered (R18). */
+    private static final List<QoderBridgeClient.DecisionOutcome> DELIVERED_OUTCOMES = List.of(
+            QoderBridgeClient.DecisionOutcome.DELIVERED,
+            QoderBridgeClient.DecisionOutcome.ALREADY_RESOLVED);
     /** Bound of a stored preview (the full redacted input stays in {@code displayJson}). */
     private static final int MAX_DISPLAY_PREVIEW_CHARS = 4096;
     /** Bounds of the identity fields, matching the companion's column widths. */
@@ -394,11 +399,11 @@ public class AcpPermissionCoordinator {
     }
 
     /**
-     * One delivery attempt to the run's live bridge. Only an answer that rules on the ask itself
-     * — {@code 409 ALREADY_RESOLVED}, i.e. the request is already decided — counts as delivered.
-     * Every other cause, transport or not, means the host's decision was never applied: a 401 /
-     * 400 / 413 / 5xx rejects the host's own call, so the companion stays {@code FAILED},
-     * observable and retryable (R16, narrowing R8).
+     * One delivery attempt to the run's live bridge. The answer counts as delivered only when it
+     * rules on the ask itself: a 200 with the {@code delivered} / {@code already_resolved} outcome,
+     * or a 409 {@code ALREADY_RESOLVED}. Every other answer — an {@code expired} / {@code unknown}
+     * outcome, a 401 / 400 / 413 / 5xx rejection, a transport failure — means the host's decision
+     * was never applied: the companion stays {@code FAILED}, observable and retryable (R16, R18).
      */
     private boolean deliverToBridge(Claim claim, boolean approved, String reason) {
         QoderBridgeClient client = liveRuns.getOrDefault(claim.runId(), NO_LIVE_RUN).client();
@@ -408,8 +413,14 @@ public class AcpPermissionCoordinator {
             return false;
         }
         try {
-            client.decide(claim.bridgeSessionId(), claim.bridgeRequestId(), approved, reason);
-            return true;
+            QoderBridgeClient.DecisionOutcome outcome =
+                    client.decide(claim.bridgeSessionId(), claim.bridgeRequestId(), approved, reason);
+            boolean applied = outcome != null && DELIVERED_OUTCOMES.contains(outcome);
+            if (!applied) {
+                log.warn("Decision delivery for ask {} answered with outcome {} — the decision was not applied",
+                        claim.bridgeRequestId(), outcome);
+            }
+            return applied;
         } catch (QoderBridgeException e) {
             log.warn("Decision delivery for ask {} answered with {}: {}",
                     claim.bridgeRequestId(), e.cause(), e.getMessage());
@@ -484,8 +495,8 @@ public class AcpPermissionCoordinator {
         }
         String outcome = deliver(approvalId, false, reason, DELIVERY_CANCELLED);
         if (DELIVERY_FAILED.equals(outcome)) {
-            // The ask is terminal either way: an expired approval is never retried, so a
-            // transient bridge failure must not leave the companion in a PENDING-like state.
+            // The ask is terminal either way: an expired approval is never retried, so a failed
+            // delivery must not leave the companion in a retryable state.
             inTransaction(() -> {
                 companionRepository.findById(approvalId).ifPresent(row -> {
                     row.setDeliveryState(DELIVERY_CANCELLED);

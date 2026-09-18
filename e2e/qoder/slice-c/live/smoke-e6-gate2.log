@@ -1,0 +1,39 @@
+# E6 pre-run gate: real sandbox path + short-TTL expiry on the stack repaired at 19:39 (env-repair-before-e6.log)
+# smoke run — restored stack after the S10 restart failure — 2026-09-18T11:41:11Z
+# API_URL=http://localhost:8097 model=efficient git=6e85a01
+== 1. seed agent + run (real qoder, zero-credit model) ==
+   agent=47b92837-430d-40ae-8e6c-8256bada8db7 run=02e47198-66e4-40a0-9c94-88a3021e4182
+== 2. wait (<=180s) for a PENDING ACP_PERMISSION ask of the run ==
+   pending ask=bfa88b48-30df-45d4-bc92-12ec4d65333e after 23s
+   status=PENDING requestedAt=2026-09-18T11:41:32.135144Z expiresAt=2026-09-18T11:43:32.135144Z
+== 3. poll until EXPIRED (<=300s) — proves the restarted backend's short TTL ==
+   t+0s status=PENDING
+   t+5s status=PENDING
+   t+11s status=PENDING
+   t+16s status=PENDING
+   t+21s status=PENDING
+   t+27s status=PENDING
+   t+32s status=PENDING
+   t+37s status=PENDING
+   t+43s status=PENDING
+   t+48s status=PENDING
+   t+53s status=PENDING
+   t+59s status=PENDING
+   t+64s status=PENDING
+   t+69s status=PENDING
+   t+75s status=PENDING
+   t+80s status=PENDING
+   t+85s status=PENDING
+   t+91s status=PENDING
+   t+96s status=PENDING
+   t+101s status=PENDING
+   t+107s status=PENDING
+   t+112s status=PENDING
+   t+117s status=PENDING
+   t+123s status=PENDING
+   t+128s status=PENDING
+   t+133s status=EXPIRED
+   ask EXPIRED after ~133s (TTL + sweep)
+== 4. run outcome (<=180s, recorded not asserted as success) ==
+   run status=COMPLETED finalOutput=The write was denied. Would you like to approve it, or is there a reason you'd prefer not to create that file?
+SMOKE PASS: sandbox path works and the ask expired inside the short TTL

@@ -1,0 +1,53 @@
+=== operator-side stack restoration before E11 (disclosed in the evidence doc) ===
+=== timestamp: 2026-09-19 02:38:17 +0800 ===
+--- git revision the stack will be built from: 6b48899 ---
+--- pre-restart container inventory (podman ps -a): ---
+95edc8b02fee docker.io/opensandbox/server:latest Exited (0) 4 hours ago aria-opensandbox
+fb6cb2cbb21e localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-17231cc7-6868-466e-b2ca-133ab4f88d5c
+c2dcccf294c1 localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-111a22e2-2074-4f7b-be88-e1ef48be1f28
+1e8d91f24f04 localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-511a5ea8-8a83-41fa-9acf-c8fefc7a8a9c
+20ca2543967e localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-d2256025-5002-404a-adb0-be8b95b9043f
+ef33f34eb7fd localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-9c8d2c82-1d04-46e0-8372-0086865ecc7a
+b89df9ea7e35 localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-6e618110-2611-4326-befe-00be108c50bb
+--- archive-endpoint probe (the E7/E9 failure class; 500 broken pipe when the WSL VM is wedged): ---
+--- curl present: /usr/bin/curl ---
+HTTP 200
+HTTP 200
+--- stack restart under the R62 env (PACK_CREDENTIAL_KEY inline, never echoed) ---
+stop.ps1 exit=0
+Stopping Aria Conductor services...
+  stopped backend (PID 26472)
+  stopped frontend (PID 4068)
+  stopped OpenSandbox
+Done.
+start.ps1 exit=0
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+[5/8] Starting services
+      MCP auth token written to D:\project\aria-conductor\.run\mcp-token
+[6/8] Waiting for health
+[7/8] Reporting
+
+=========================================================
+  Aria Conductor - READY
+=========================================================
+  Topology : local-dev (backend + frontend on host)
+  Provider : qoder
+  Image    : aria-conductor/qoder-sandbox:0.1
+  MCP auth : token (token file: D:\project\aria-conductor\.run\mcp-token)
+  Runtime  : podman (explicit)
+  OpenSandbox: http://localhost:8090
+  Database : h2 (file)
+---------------------------------------------------------
+  Backend    : http://localhost:8097                    [OK]
+  Dashboard  : http://localhost:5273                    [OK]
+  OpenSandbox: http://localhost:8090                    [OK]
+  Swagger  : http://localhost:8080/swagger-ui.html
+---------------------------------------------------------
+  Logs : .run\backend.log   .run\frontend.log
+  Stop : pwsh -File scripts\stop.ps1
+=========================================================
+[8/8] Done
+All services healthy.

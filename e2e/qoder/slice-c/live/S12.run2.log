@@ -1,0 +1,80 @@
+# step: S12 (spec-owned governance scenario S12)
+# command: npx playwright test e2e/qoder-governance-e2e.spec.ts --grep "S12:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 4ceb5da
+# started: 2026-09-18T06:41:48Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (2.2s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (retry #1) (1.3s)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 400
+
+      768 |   // Board with one REVIEW card so the Review surface has a real target.
+      769 |   const card = await seedKanbanItem(request, { title: `s12-${uniqueName('card')}` });
+    > 770 |   expect((await transitionKanban(request, card.id, 'REVIEW')).status).toBe(200);
+          |                                                                       ^
+      771 |
+      772 |   // 1. Board.
+      773 |   await page.goto('/');
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:770:71
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 400
+
+      768 |   // Board with one REVIEW card so the Review surface has a real target.
+      769 |   const card = await seedKanbanItem(request, { title: `s12-${uniqueName('card')}` });
+    > 770 |   expect((await transitionKanban(request, card.id, 'REVIEW')).status).toBe(200);
+          |                                                                       ^
+      771 |
+      772 |   // 1. Board.
+      773 |   await page.goto('/');
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:770:71
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+EXIT=1

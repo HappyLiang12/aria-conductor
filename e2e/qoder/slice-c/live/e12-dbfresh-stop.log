@@ -1,0 +1,5 @@
+Stopping Aria Conductor services...
+  stopped backend (PID 5992)
+  stopped frontend (PID 9708)
+  stopped OpenSandbox
+Done.

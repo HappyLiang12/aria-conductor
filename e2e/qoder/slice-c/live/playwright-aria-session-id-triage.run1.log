@@ -1,0 +1,10 @@
+
+Running 5 tests using 1 worker
+
+  ok 1 [chromium] › e2e\aria-session-id.spec.ts:22:3 › Issue #13: Conversation ID Display in Aria UI › should display truncated conversation ID in Aria panel header (3.6s)
+  ok 2 [chromium] › e2e\aria-session-id.spec.ts:33:3 › Issue #13: Conversation ID Display in Aria UI › should copy full conversation ID to clipboard when copy button clicked (5.3s)
+  ok 3 [chromium] › e2e\aria-session-id.spec.ts:52:3 › Issue #13: Conversation ID Display in Aria UI › should clear conversation and create new conversation ID (3.2s)
+  ok 4 [chromium] › e2e\aria-session-id.spec.ts:73:3 › Issue #13: Conversation ID Display in Aria UI › should include conversation ID in error messages (2.5s)
+  ok 5 [chromium] › e2e\aria-session-id.spec.ts:87:3 › Issue #13: Conversation ID Display in Aria UI › should generate new conversation ID on first open (no localStorage) (3.7s)
+
+  5 passed (20.6s)

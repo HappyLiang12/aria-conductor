@@ -1,0 +1,570 @@
+# step: regression-playwright (regression: pre-existing Playwright suites only)
+# command: npx playwright test   (QODER_E2E / QODER_E2E_PAT / QODER_E2E_MODEL removed from the child env)
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: a4ed69a
+# started: 2026-09-18T10:36:26Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 258 tests using 3 workers
+
+  ok   2 [chromium] › e2e\agent-dev-workflow-governance.spec.ts:30:3 › Agent Dev-Workflow Governance › Aria is scoped to orchestration tools only (#25) (106ms)
+  ok   4 [chromium] › e2e\agent-dev-workflow-governance.spec.ts:46:3 › Agent Dev-Workflow Governance › a free-text dev worker resolves to the dev tool template (#25 delegation) (120ms)
+  ok   5 [chromium] › e2e\agent-dev-workflow-governance.spec.ts:64:3 › Agent Dev-Workflow Governance › git pack tools carry the correct governance risk tiers (#26/#23) (29ms)
+  ok   3 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:23:3 › Agent tool & skill recommendations › Add Agent pre-checks the role recommended tools (5.7s)
+  ok   1 [chromium] › e2e\adk-providers.spec.ts:24:1 › ADK providers: Providers page renders provider table + Per-Agent Backends (7.1s)
+  ok   6 [chromium] › e2e\agent-dev-workflow-governance.spec.ts:79:3 › Agent Dev-Workflow Governance › approvals API exposes enriched fields and the UI renders (#24) (11.5s)
+  ok   7 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:36:3 › Agent tool & skill recommendations › Hiring persists the recommended tools onto the new agent (42.1s)
+  ok   9 [chromium] › e2e\approvals-decision-flow.spec.ts:16:3 › Approvals decision flow › the approvals surface is the kanban Review column (sidebar entry retired) (38.1s)
+  ok  11 [chromium] › e2e\approvals-decision-flow.spec.ts:30:3 › Approvals decision flow › negative: deciding a non-existent approval is rejected (83ms)
+  ok   8 [chromium] › e2e\adk-providers.spec.ts:63:1 › ADK providers: Crew create form renders langchain + opencode options (45.2s)
+  -   13 [chromium] › e2e\aria-engine-unification.spec.ts:30:1 › Aria SSE streaming produces all expected events
+  ok  10 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:65:3 › Agent tool & skill recommendations › Apply role defaults restores the recommended set in Manage (30.0s)
+Non-streaming chat: runId=5698d0f3-a3f9-452f-bd8c-f91525c941ad, intent=agent.status
+  ok  14 [chromium] › e2e\aria-engine-unification.spec.ts:85:1 › Aria non-streaming chat uses Run-based flow (2.3m)
+  ok  16 [chromium] › e2e\aria-engine-unification.spec.ts:110:1 › AgentDrawer Live Activity Stream shows enhanced events (8.4s)
+Agent created: id=71fbfe07-0903-44a4-81f1-b9d05f002673, config="{\"maxToolCallRounds\":3}"
+  ok  17 [chromium] › e2e\aria-engine-unification.spec.ts:136:1 › Agent creation with config.maxToolCallRounds (8.0s)
+  ok  12 [chromium] › e2e\aria-conversation-id-regression.spec.ts:37:1 › non-streaming chat returns runId + conversationId (2.9m)
+✓ Cancel button rendered while busy
+  ok  18 [chromium] › e2e\aria-timeout-cancel.spec.ts:34:1 › Cancel button appears while Aria is busy (15.7s)
+  ok  19 [chromium] › e2e\aria-conversation-id-regression.spec.ts:58:1 › GET /api/v1/aria/sessions returns 404 (23.7s)
+✓ Cancel aborts request, user can send new message
+  ok  20 [chromium] › e2e\aria-timeout-cancel.spec.ts:77:1 › Clicking Cancel aborts request and allows new message (21.8s)
+  x   15 [chromium] › e2e\aria-session-id.spec.ts:22:3 › Issue #13: Conversation ID Display in Aria UI › should display truncated conversation ID in Aria panel header (1.6m)
+✓ Silent stream close shows error message and Retry button
+  ok  21 [chromium] › e2e\aria-conversation-id-regression.spec.ts:70:1 › DELETE /api/v1/aria/sessions/{id} returns 404 (18.3s)
+  ok  22 [chromium] › e2e\aria-timeout-cancel.spec.ts:146:1 › Error message on silent stream close (17.3s)
+  -   24 [chromium] › e2e\aria-conversation-id-regression.spec.ts:82:1 › streaming SSE emits expected events with runId + conversationId
+  ok  25 [chromium] › e2e\chat-smoke.spec.ts:9:3 › Chat smoke › renders thread list panel and composer (6.9s)
+  ok  27 [chromium] › e2e\chat-smoke.spec.ts:19:3 › Chat smoke › a seeded run surfaces as a thread in the list (1.4m)
+  x   23 [chromium] › e2e\aria-session-id.spec.ts:22:3 › Issue #13: Conversation ID Display in Aria UI › should display truncated conversation ID in Aria panel header (retry #1) (2.1m)
+  ok  28 [chromium] › e2e\concurrent-collaboration-ui.spec.ts:13:1 › concurrent workflows each render on the Workflows page with a live status (1.1m)
+  ok  29 [chromium] › e2e\configure-modal-close.spec.ts:30:3 › Configure modal closed-state visibility (F1) › scrim and modal are hidden and non-interactive after Done (19.2s)
+  ok  26 [chromium] › e2e\aria-conversation-id-regression.spec.ts:142:1 › conversationId is reused across two turns (#36) (3.2m)
+  ok  31 [chromium] › e2e\configure-modal-close.spec.ts:69:3 › Configure modal closed-state visibility (F1) › reopening the modal restores visibility (28.1s)
+  ok  32 [chromium] › e2e\crew-crud.spec.ts:9:3 › Crew page › renders roster, cost banner and hiring catalog (14.8s)
+  ok  34 [chromium] › e2e\crew-crud.spec.ts:19:3 › Crew page › API-seeded agent appears in the active roster (28.2s)
+  ok  30 [chromium] › e2e\aria-session-id.spec.ts:33:3 › Issue #13: Conversation ID Display in Aria UI › should copy full conversation ID to clipboard when copy button clicked (59.0s)
+  ok  35 [chromium] › e2e\crew-crud.spec.ts:26:3 › Crew page › hire-from-catalog deploys a template agent into the roster (1.0m)
+  ok  37 [chromium] › e2e\crew-crud.spec.ts:48:3 › Crew page › negative: blank agent name is rejected by the API (21ms)
+  ok  38 [chromium] › e2e\dod-lifecycle.spec.ts:17:1 › 1. init creates a DoD record at its first stage (2.4s)
+  ok  39 [chromium] › e2e\dod-lifecycle.spec.ts:23:1 › 2. status endpoint reports stages and overall status (2.0s)
+  ok  40 [chromium] › e2e\dod-lifecycle.spec.ts:32:1 › 3. evidence can be attached and listed (3.9s)
+  ok  36 [chromium] › e2e\aria-session-id.spec.ts:52:3 › Issue #13: Conversation ID Display in Aria UI › should clear conversation and create new conversation ID (1.3m)
+  ok  41 [chromium] › e2e\dod-lifecycle.spec.ts:45:1 › 4. passing review is recorded against the current stage (8.5s)
+  ok  43 [chromium] › e2e\dod-lifecycle.spec.ts:60:1 › 5. negative: reviewing an unknown task is rejected (109ms)
+  ok  44 [chromium] › e2e\dod-lifecycle.spec.ts:70:1 › 6. negative: status for an unknown task → 404 (52ms)
+  ok  45 [chromium] › e2e\fab-send-overlap.spec.ts:6:1 › Aria FAB does not occlude the Chat inject Send button (21.4s)
+  ok  42 [chromium] › e2e\aria-session-id.spec.ts:73:3 › Issue #13: Conversation ID Display in Aria UI › should include conversation ID in error messages (24.0s)
+  ok  46 [chromium] › e2e\fab-send-overlap.spec.ts:29:1 › inject Send button receives clicks (Aria panel state unchanged) (18.8s)
+  ok  47 [chromium] › e2e\aria-session-id.spec.ts:87:3 › Issue #13: Conversation ID Display in Aria UI › should generate new conversation ID on first open (no localStorage) (18.4s)
+  ok  49 [chromium] › e2e\harness-governance.spec.ts:27:3 › Customisable Harness Governance › harness profiles are seeded and exposed (default + weak-model-safe) (197ms)
+  ok  50 [chromium] › e2e\harness-governance.spec.ts:51:3 › Customisable Harness Governance › an agent on weak-model-safe has shell_exec removed from its tool set (72ms)
+  ok  51 [chromium] › e2e\harness-governance.spec.ts:73:3 › Customisable Harness Governance › a free-text dev worker auto-adopts weak-model-safe (no shell_exec, keeps git pack) (125ms)
+  ok  52 [chromium] › e2e\harness-governance.spec.ts:90:3 › Customisable Harness Governance › git pack tools carry the risk tiers that gate the diff preview (#push) (17ms)
+  ok  48 [chromium] › e2e\git-pack-governance.spec.ts:21:3 › Git Pack Governance Lifecycle › git_push triggers approval gate and resumes after approval (6.5s)
+  ok  54 [chromium] › e2e\git-pack-governance.spec.ts:49:3 › Git Pack Governance Lifecycle › pack management endpoints work (register, approve, reject) (57ms)
+  ok  55 [chromium] › e2e\git-pack-governance.spec.ts:75:3 › Git Pack Governance Lifecycle › DESTRUCTIVE tools require approval (risk tier gate) (36ms)
+  ok  53 [chromium] › e2e\harness-governance.spec.ts:100:3 › Customisable Harness Governance › approvals API exposes enriched fields and the UI renders (7.1s)
+  ok  57 [chromium] › e2e\harness-governance.spec.ts:117:3 › Customisable Harness Governance › workspace-diff endpoint responds (powers the push/PR code-diff preview) (342ms)
+  ok  56 [chromium] › e2e\housekeeping-cleanup.spec.ts:20:3 › Housekeeping cleanup › Ops panel scans and shows category counts (7.0s)
+  ok  58 [chromium] › e2e\journey-agent-run-report.spec.ts:24:1 › 1. agent created via API appears on the crew roster (6.7s)
+  ok  60 [chromium] › e2e\journey-agent-run-report.spec.ts:34:1 › 2. run starts and reaches a real state (fails fast without a key) (6.4s)
+  ok  61 [chromium] › e2e\journey-agent-run-report.spec.ts:51:1 › 3. approvals surface stays consistent with the API (10.8s)
+  -   62 [chromium] › e2e\journey-agent-run-report.spec.ts:96:3 › LLM-gated tail › 4. run completes and a generated report appears in the workspace
+  ok  63 [chromium] › e2e\journey-crew-deploy-run.spec.ts:17:1 › deploy from the Crew catalog, then start a run from the Runs page (15.7s)
+  ok  59 [chromium] › e2e\housekeeping-cleanup.spec.ts:42:3 › Housekeeping cleanup › kanban quick-clear removes finished cards via confirm modal (39.5s)
+  ok  64 [chromium] › e2e\journey-knowledge-promotion.spec.ts:23:1 › 1. submitted knowledge lands in the PENDING review queue (4.6s)
+  ok  66 [chromium] › e2e\journey-knowledge-promotion.spec.ts:38:1 › 2. REST approval moves it into the unified space (UI verified) (5.8s)
+  ok  67 [chromium] › e2e\journey-knowledge-promotion.spec.ts:54:1 › 3. promotion derives a new item of the target type (72ms)
+  ok  65 [chromium] › e2e\housekeeping-cleanup.spec.ts:69:3 › Housekeeping cleanup › Select Leftovers button shows count, matches sibling style, always gives feedback (8.1s)
+  ok  68 [chromium] › e2e\journey-knowledge-promotion.spec.ts:69:1 › 4. negative: promoting a non-existent item is rejected (29ms)
+  -   70 [chromium] › e2e\journey-knowledge-promotion.spec.ts:82:3 › LLM-gated tail › 5. knowledge-informed run completes with a real trajectory
+  ok  71 [chromium] › e2e\journey-workflow-yaml.spec.ts:17:1 › 0. seed a runnable agent (18ms)
+  ok  72 [chromium] › e2e\journey-workflow-yaml.spec.ts:24:1 › 1. YAML import creates a two-step chain (45ms)
+  ok  73 [chromium] › e2e\journey-workflow-yaml.spec.ts:52:1 › 2. chain and its steps are visible in the Workflows UI (6.1s)
+  ok  74 [chromium] › e2e\journey-workflow-yaml.spec.ts:61:1 › 3. governance: cancel drives the chain to a terminal state (UI + API) (5.2s)
+  ok  75 [chromium] › e2e\journey-workflow-yaml.spec.ts:83:1 › 4. negative: YAML referencing an unknown agent is rejected (31ms)
+  ok  69 [chromium] › e2e\housekeeping-cleanup.spec.ts:94:3 › Housekeeping cleanup › crew bulk-retire retires leftover e2e agents (12.7s)
+  ok  77 [chromium] › e2e\kanban-hitl.spec.ts:67:3 › kanban HITL board › board shows five status columns only (23.2s)
+  ok  78 [chromium] › e2e\kanban-hitl.spec.ts:78:3 › kanban HITL board › drag todo card to in progress dispatches pickup (7.5s)
+  ok  76 [chromium] › e2e\kanban-board.spec.ts:20:3 › Kanban board (Overview governed flow) › board renders all governed-flow columns (34.3s)
+  ok  79 [chromium] › e2e\kanban-hitl.spec.ts:98:3 › kanban HITL board › pause: dragging in-progress card back to todo keeps card TODO (8.0s)
+  ok  81 [chromium] › e2e\kanban-hitl.spec.ts:117:3 › kanban HITL board › cancel action transitions card (25.3s)
+  ok  80 [chromium] › e2e\kanban-board.spec.ts:35:3 › Kanban board (Overview governed flow) › API-seeded item appears in the Todo column (41.8s)
+  ok  82 [chromium] › e2e\kanban-hitl.spec.ts:133:3 › kanban HITL board › review card shows ask badge and opens decision zone (12.8s)
+  ok  84 [chromium] › e2e\knowledge-review.spec.ts:14:1 › 0. seed a PENDING knowledge item via API (358ms)
+  ok  85 [chromium] › e2e\knowledge-review.spec.ts:21:1 › 1. seeded item appears in the review queue (5.5s)
+  ok  83 [chromium] › e2e\kanban-board.spec.ts:46:3 › Kanban board (Overview governed flow) › create item via New Task modal (with empty-title validation) (15.9s)
+  ok  86 [chromium] › e2e\knowledge-review.spec.ts:30:1 › 2. approving via UI moves it into the unified space (15.7s)
+  ok  88 [chromium] › e2e\knowledge-review.spec.ts:55:1 › 3. negative: re-reviewing an approved item is rejected (145ms)
+  -   89 [chromium] › e2e\langchain-adk-e2e.spec.ts:100:1 › LangChain ADK: configure LLM → create agent → run → verify
+  -   90 [chromium] › e2e\multi-agent-lifecycle.spec.ts:90:1 › Multi-agent lifecycle: Research → Verify → Report via Aria
+  ok  87 [chromium] › e2e\kanban-board.spec.ts:64:3 › Kanban board (Overview governed flow) › dispatch then pause via API transitions (agent-gated pickup) (13.2s)
+  ok  91 [chromium] › e2e\notification-bell.spec.ts:4:3 › Notification Bell › bell icon is visible in TopBar (5.4s)
+  ok  93 [chromium] › e2e\notification-bell.spec.ts:10:3 › Notification Bell › bell shows no-bell emoji when no unread notifications (11.5s)
+  ok  94 [chromium] › e2e\notification-bell.spec.ts:18:3 › Notification Bell › bell shows badge when unread notifications exist (9.7s)
+  ok  95 [chromium] › e2e\notification-bell.spec.ts:26:3 › Notification Bell › click bell opens dropdown (12.3s)
+  ok  96 [chromium] › e2e\notification-bell.spec.ts:38:3 › Notification Bell › dropdown shows empty state when no notifications (3.4s)
+  ok  97 [chromium] › e2e\notification-bell.spec.ts:50:3 › Notification Bell › click outside closes dropdown (4.2s)
+  ok  98 [chromium] › e2e\observability-live.spec.ts:61:3 › Track A — live observability gate (no LLM key) › drawer stream window: idle empty state, collapse toggle, WS lines, toast 5s (30.8s)
+  x   33 [chromium] › e2e\crew-telemetry.spec.ts:10:3 › Crew Telemetry Display › should display agent cards with telemetry data (3.1m)
+  x   92 [chromium] › e2e\notification-toast.spec.ts:4:3 › Notification Toast › toast appears on aria.notification WebSocket event (35.6s)
+  ok 101 [chromium] › e2e\notification-toast.spec.ts:4:3 › Notification Toast › toast appears on aria.notification WebSocket event (retry #1) (8.6s)
+  -  102 [chromium] › e2e\opencode-adk-e2e.spec.ts:71:1 › OpenCode ADK: configure LLM → create agent → runtime switch → run → verify
+  ok 103 [chromium] › e2e\ops-approval-surface.spec.ts:25:1 › approving from the Operations surface resolves the ask (6.4s)
+  ok 104 [chromium] › e2e\ops-monitoring.spec.ts:9:3 › Ops monitoring surface › renders all four command-surface panels (20.5s)
+  ok  99 [chromium] › e2e\observability-live.spec.ts:107:3 › Track A — live observability gate (no LLM key) › Runs live detail: trajectory panel renders with collapse toggles (49.8s)
+  ok 106 [chromium] › e2e\observability-live.spec.ts:133:3 › Track A — live observability gate (no LLM key) › Kanban live transition: card moves columns (final state) (9.0s)
+  ok 105 [chromium] › e2e\ops-monitoring.spec.ts:19:3 › Ops monitoring surface › approvals panel mirrors the live queue (empty state when clear) (12.3s)
+  -  107 [chromium] › e2e\observability-live.spec.ts:173:3 › Track B — opencode progress replay live chain › run.progress lines + iteration display + history retention + trajectory growth
+  ok 108 [chromium] › e2e\ops-monitoring.spec.ts:47:3 › Ops monitoring surface › API-seeded run appears in Recent Runs with agent and prompt (5.2s)
+  -  110 [chromium] › e2e\qoder-adk-e2e.spec.ts:153:1 › S1: qoder agent ordinary run completes on the zero-credit model
+  -  111 [chromium] › e2e\qoder-adk-e2e.spec.ts:217:1 › S2: write attempt asks, allow once executes, second write asks again
+  -  112 [chromium] › e2e\qoder-adk-e2e.spec.ts:310:1 › S3: deny produces no side effect and does not cancel the run
+  -  113 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow
+  -  114 [chromium] › e2e\qoder-adk-e2e.spec.ts:451:1 › S6: credential set/mask/remove/test via API and the Providers page
+  -  115 [chromium] › e2e\qoder-governance-e2e.spec.ts:316:1 › S7: worker self-approval denied — decide_approval unreachable with an unknown worker-shaped MCP bearer
+  -  116 [chromium] › e2e\qoder-governance-e2e.spec.ts:434:1 › S8: one-use write-grant replay — operator replay control + forged worker write denied (worker one-use half NOT VERIFIED: no worker-token seam)
+  -  117 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE
+  -  118 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated
+  -  119 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls
+  ok 109 [chromium] › e2e\overview-dashboard.spec.ts:9:3 › Overview dashboard › renders executive summary stats and core panels (13.6s)
+  ok 120 [chromium] › e2e\qoder-review-ask.spec.ts:145:1 › Ops queue renders an ACP ask and surfaces a typed 409 as code: message (8.7s)
+  ok 121 [chromium] › e2e\overview-dashboard.spec.ts:28:3 › Overview dashboard › rail navigation drives the SPA routes (14.5s)
+  ok 122 [chromium] › e2e\qoder-review-ask.spec.ts:173:1 › Ops keeps a FAILED delivery retryable with the recorded decision (14.5s)
+  ok 123 [chromium] › e2e\overview-dashboard.spec.ts:41:3 › Overview dashboard › seeded agent is reflected in Active Agents count after reload (10.7s)
+  -  125 [chromium] › e2e\real-llm-scenarios.spec.ts:69:1 › rl-01 Providers page renders opencode + langchain ADK
+  -  126 [chromium] › e2e\real-llm-scenarios.spec.ts:89:1 › rl-02 OpenCode agent: create via UI → real-LLM run → result displayed
+  ok 124 [chromium] › e2e\qoder-review-ask.spec.ts:208:1 › board → expand review workspace renders the ACP card and a delivered outcome (10.2s)
+  ok 127 [chromium] › e2e\reports-generation.spec.ts:14:3 › Reports workspace › renders workspace header and generate affordance (5.4s)
+  ok 100 [chromium] › e2e\crew-telemetry.spec.ts:10:3 › Crew Telemetry Display › should display agent cards with telemetry data (retry #1) (1.7m)
+  ok 128 [chromium] › e2e\review-decision-zone.spec.ts:38:1 › clicking Deny in the decision zone resolves the ask (13.0s)
+  ok 129 [chromium] › e2e\reports-generation.spec.ts:21:3 › Reports workspace › archive state mirrors the live API (empty state when silent) (8.4s)
+  ok 130 [chromium] › e2e\crew-telemetry.spec.ts:47:3 › Crew Telemetry Display › should display Roster Cost banner with aggregated data (9.1s)
+  ok 132 [chromium] › e2e\reports-generation.spec.ts:35:3 › Reports workspace › generate dialog validates required fields (generation itself needs an LLM) (11.7s)
+  ok 133 [chromium] › e2e\crew-telemetry.spec.ts:81:3 › Crew Telemetry Display › should return valid JSON array from agent telemetry API (21.5s)
+  ok 134 [chromium] › e2e\runs-page.spec.ts:10:3 › Runs page › page renders header, filters and start-run affordance (12.2s)
+  ok 131 [chromium] › e2e\review-decision-zone.spec.ts:148:1 › clicking Approve in the decision zone resolves the ask (25.5s)
+  ok 136 [chromium] › e2e\runs-page.spec.ts:18:3 › Runs page › start-run form rejects empty submission (29.3s)
+  ok 138 [chromium] › e2e\runs-page.spec.ts:29:3 › Runs page › run started via UI form appears with a status badge (29.0s)
+  -  139 [chromium] › e2e\sdd-workflow.spec.ts:48:1 › development-workflow: spec approval then PASS verdict completes the chain
+  ok 140 [chromium] › e2e\sdd-workflow.spec.ts:138:1 › development-workflow: resubmit-approval recreates an EXPIRED approval (239ms)
+  -  141 [chromium] › e2e\settings-navigation.spec.ts:14:3 › Issue #18: LLM Provider Configuration UI Navigation › should display Settings item in sidebar navigation
+  -  142 [chromium] › e2e\settings-navigation.spec.ts:24:3 › Issue #18: LLM Provider Configuration UI Navigation › should navigate to Settings page when clicking Settings button
+  -  143 [chromium] › e2e\settings-navigation.spec.ts:43:3 › Issue #18: LLM Provider Configuration UI Navigation › should highlight Settings button as active when on /settings route
+  -  144 [chromium] › e2e\settings-navigation.spec.ts:53:3 › Issue #18: LLM Provider Configuration UI Navigation › should not display Configure button (replaced by Settings)
+  -  145 [chromium] › e2e\settings-navigation.spec.ts:63:3 › Issue #18: LLM Provider Configuration UI Navigation › should load Settings page directly at /settings URL
+  -  146 [chromium] › e2e\settings-navigation.spec.ts:79:3 › Issue #18: LLM Provider Configuration UI Navigation › should navigate from Settings to other pages and back
+  ok 147 [chromium] › e2e\template-api.spec.ts:31:3 › Issue #80: Template API migration › Template API returns correct data (20.0s)
+  ok 137 [chromium] › e2e\scheduled-jobs-page.spec.ts:20:1 › 1. a created job persists and can be paused and resumed (1.4m)
+  ok 148 [chromium] › e2e\template-api.spec.ts:67:3 › Issue #80: Template API migration › AgentCatalog renders 3 template cards (8.5s)
+  ok 149 [chromium] › e2e\scheduled-jobs-page.spec.ts:54:1 › 2. the job survives a reload, proving it is server-side state (8.2s)
+  ok 151 [chromium] › e2e\unknown-route.spec.ts:8:1 › unknown route renders the not-found surface, not a blank page (6.4s)
+  ok 150 [chromium] › e2e\template-api.spec.ts:103:3 › Issue #80: Template API migration › AgentCatalog deploy creates agent via API (9.9s)
+  -  153 [chromium] › e2e\template-api.spec.ts:146:8 › Issue #80: Template API migration › CrewPage role dropdown populates from API
+  ok 152 [chromium] › e2e\workflow-data-flow-e2e.spec.ts:46:1 › 0. setup — create test agent (9.2s)
+  ok 155 [chromium] › e2e\workflow-data-flow-e2e.spec.ts:53:1 › 1. 2-step workflow — step1 gets runId, step2 prompt has {previousOutput} (2.2s)
+  ok 154 [chromium] › e2e\template-api.spec.ts:195:3 › Issue #80: Template API migration › createFromTemplate API path is correct (10.2s)
+  ok 156 [chromium] › e2e\workflow-data-flow-e2e.spec.ts:74:1 › 2. 3-step workflow — each step has correct agentId and prompt (2.3s)
+  ok 158 [chromium] › e2e\workflow-data-flow-e2e.spec.ts:100:1 › 3. new workflow → currentStepIndex = 0 (2.5s)
+  ok 159 [chromium] › e2e\workflow-data-flow-e2e.spec.ts:114:1 › 4. step maxIterations — custom value preserved, default = 3 (1.8s)
+  ok 160 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:57:1 › 0. setup — create test agent (5.0s)
+  ok 157 [chromium] › e2e\workflow-governance.spec.ts:21:3 › Workflow Governance › workflow list should load without errors (11.8s)
+  ok 161 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:64:1 › 1. POST /workflows — create with steps (2.5s)
+  ok 163 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:84:1 › 2. GET /workflows — list contains created workflow (1.8s)
+  ok 164 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:97:1 › 3. GET /workflows/{id} — get single workflow (3.0s)
+  ok 162 [chromium] › e2e\workflow-governance.spec.ts:30:3 › Workflow Governance › cancel button should appear for running workflows (6.4s)
+  ok 165 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:110:1 › 4. POST /workflows/{id}/cancel — cancel workflow (1.9s)
+  ok 167 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:131:1 › 5. POST /workflows/{fake-id}/cancel — 404 for non-existent (1.9s)
+  ok 168 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:139:1 › 6. setup — create second workflow for mutation tests (2.3s)
+  ok 166 [chromium] › e2e\workflow-governance.spec.ts:37:3 › Workflow Governance › execute YAML button should be visible in header (6.7s)
+  ok 169 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:150:1 › 7. PUT /workflows/{id} — update workflow name (2.1s)
+  ok 171 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:172:1 › 8. POST /workflows/{id}/retry — error on non-FAILED workflow (4.1s)
+  ok 170 [chromium] › e2e\workflow-governance.spec.ts:42:3 › Workflow Governance › knowledge page should show WORKFLOW type option (12.7s)
+  ok 173 [chromium] › e2e\workflow-governance.spec.ts:51:3 › Workflow Governance › workflows page should navigate without JS errors (10.2s)
+  ok 174 [chromium] › e2e\workflow-governance.spec.ts:67:3 › Workflow Governance › regression: existing pages should load without errors (11.0s)
+  ok 175 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:87:1 › 0. setup — create test agent (4.1s)
+  ok 135 [chromium] › e2e\crew-telemetry.spec.ts:107:3 › Crew Telemetry Display › should show zero values for agents with no activity (2.9m)
+  ok 176 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:94:1 › 1. create → status is RUNNING or FAILED (no LLM) (1.3s)
+  ok 177 [chromium] › e2e\workflow-template-e2e.spec.ts:49:1 › 0. setup — create test agent (3.0s)
+  ok 178 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:104:1 › 2. RUNNING → cancel → CANCELLED, step SKIPPED (2.3s)
+  ok 179 [chromium] › e2e\workflow-template-e2e.spec.ts:56:1 › 1. reuse non-template workflow → rejected (400+) (1.2s)
+  ok 180 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:124:1 › 3. CANCELLED → cancel rejected (400+) (1.9s)
+  ok 181 [chromium] › e2e\workflow-template-e2e.spec.ts:71:1 › 2. reuse non-existent template → 400+ (1.7s)
+  ok 183 [chromium] › e2e\workflow-template-e2e.spec.ts:80:1 › 3. GET workflow → response includes isTemplate field (1.1s)
+  ok 184 [chromium] › e2e\workflow-template-e2e.spec.ts:96:1 › 4. reuse non-template with empty params → still rejected (1.1s)
+  ok 185 [chromium] › e2e\workflow-template-e2e.spec.ts:109:1 › 5. reuse non-template with null params → rejected (993ms)
+  ok 186 [chromium] › e2e\workflow-template-e2e.spec.ts:120:1 › 6. list workflows → each item has template field (2.0s)
+  ok 187 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:105:1 › 0. setup — create test agent (10.1s)
+  -  182 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:139:1 › 4. FAILED → retry step 0 → RUNNING
+  ok 188 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:112:1 › 1. page loads — "Workflows" title visible (4.6s)
+  ok 190 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:119:1 › 2. create workflow → card appears with correct name (3.7s)
+  x  172 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:188:1 › 9. POST /workflows/merge — merge two workflows (2.2s)
+  -  192 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:210:1 › 10. DELETE /workflows/{id} — delete non-running workflow
+  -  193 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:228:1 › 11. DELETE /workflows/{id} — cannot delete RUNNING workflow
+  -  194 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:252:1 › 12. POST /workflows/templates/{id}/reuse — rejects non-template
+  -  195 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:269:1 › 13. UI — workflows page shows workflow data
+  ok 189 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:159:1 › 5. FAILED → retry out-of-range stepIndex → 400+ (13.1s)
+  ok 191 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:130:1 › 3. card displays status badge (FAILED/COMPLETED/RUNNING) (10.0s)
+  ok 197 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:153:1 › 4. card shows "N/M steps" text (3.6s)
+  ok 198 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:57:1 › 0. setup — create test agent (retry #1) (2.8s)
+  ok 200 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:64:1 › 1. POST /workflows — create with steps (retry #1) (890ms)
+  ok 201 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:84:1 › 2. GET /workflows — list contains created workflow (retry #1) (1.0s)
+  ok 202 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:97:1 › 3. GET /workflows/{id} — get single workflow (retry #1) (952ms)
+  ok 203 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:110:1 › 4. POST /workflows/{id}/cancel — cancel workflow (retry #1) (760ms)
+  ok 204 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:131:1 › 5. POST /workflows/{fake-id}/cancel — 404 for non-existent (retry #1) (786ms)
+  ok 196 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:172:1 › 6. FAILED → retry non-failed step → 400+ (16.9s)
+  ok 205 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:139:1 › 6. setup — create second workflow for mutation tests (retry #1) (1.2s)
+  ok 207 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:150:1 › 7. PUT /workflows/{id} — update workflow name (retry #1) (1.3s)
+  ok 208 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:172:1 › 8. POST /workflows/{id}/retry — error on non-FAILED workflow (retry #1) (1.0s)
+  ok 209 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:188:1 › 9. POST /workflows/merge — merge two workflows (retry #1) (1.1s)
+  ok 210 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:210:1 › 10. DELETE /workflows/{id} — delete non-running workflow (retry #1) (1.5s)
+  ok 206 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:193:1 › 7. FAILED → update name → success (8.6s)
+  ok 211 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:228:1 › 11. DELETE /workflows/{id} — cannot delete RUNNING workflow (retry #1) (3.2s)
+  ok 199 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:165:1 › 5. FAILED workflow → Retry button visible with step number (19.2s)
+  ok 213 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:252:1 › 12. POST /workflows/templates/{id}/reuse — rejects non-template (retry #1) (2.4s)
+  ok 212 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:210:1 › 8. FAILED → append steps → totalSteps increases (3.5s)
+  ok 216 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:227:1 › 9. RUNNING → update rejected (400+) (3.3s)
+  ok 215 [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:269:1 › 13. UI — workflows page shows workflow data (retry #1) (4.5s)
+  ok 214 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:187:1 › 6. non-RUNNING workflow → Delete button visible (7.3s)
+  ok 217 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:242:1 › 10. non-RUNNING → delete → 204 → GET 404 (6.2s)
+  ok 218 [chromium] › e2e\workflow-validation-e2e.spec.ts:49:1 › 0. setup — create test agent (5.5s)
+  ok 221 [chromium] › e2e\workflow-validation-e2e.spec.ts:56:1 › 1. create with blank name → error (400+) (3.1s)
+  ok 220 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:256:1 › 11. RUNNING → delete rejected → cancel → delete (3.4s)
+  ok 222 [chromium] › e2e\workflow-validation-e2e.spec.ts:65:1 › 2. create with empty steps → error (400+) (2.7s)
+  ok 219 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:203:1 › 7. click Delete → confirm → card removed from list (10.4s)
+  ok 223 [chromium] › e2e\workflow-state-machine-e2e.spec.ts:290:1 › 12. non-existent ID → GET/cancel/delete all fail (3.5s)
+  ok 224 [chromium] › e2e\workflow-validation-e2e.spec.ts:74:1 › 3. create with step missing agentId → error (2.0s)
+  ok 225 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:227:1 › 8. select 2 workflows → "Merge N Workflows" button appears (6.8s)
+  ok 227 [chromium] › e2e\workflow-validation-e2e.spec.ts:84:1 › 4. create with step missing promptTemplate → error (400+) (5.5s)
+  ok 226 [chromium] › e2e\workflow-yaml-e2e.spec.ts:47:1 › 0. setup — create test agent (7.2s)
+  ok 230 [chromium] › e2e\workflow-yaml-e2e.spec.ts:54:1 › 1. execute-yaml with valid YAML → 201 + workflow created (1.4s)
+  ok 229 [chromium] › e2e\workflow-validation-e2e.spec.ts:93:1 › 5. create with non-existent agentId → error (2.5s)
+  ok 231 [chromium] › e2e\workflow-yaml-e2e.spec.ts:75:1 › 2. execute-yaml with empty content → 400 (1.3s)
+  ok 232 [chromium] › e2e\workflow-validation-e2e.spec.ts:104:1 › 6. merge with only 1 sourceId → 400+ (2.4s)
+  ok 233 [chromium] › e2e\workflow-yaml-e2e.spec.ts:85:1 › 3. execute-yaml with invalid YAML → error (2.8s)
+  ok 234 [chromium] › e2e\workflow-validation-e2e.spec.ts:118:1 › 7. merge with non-existent sourceId → 400+ (3.4s)
+  ok 235 [chromium] › e2e\workflow-yaml-e2e.spec.ts:97:1 › 4. execute-yaml → GET workflow has correct step count (3.2s)
+  ok 236 [chromium] › e2e\workflow-validation-e2e.spec.ts:133:1 › 8. merge with blank name → error (400+) (3.2s)
+  ok 237 [chromium] › e2e\workflow-yaml-e2e.spec.ts:123:1 › 5. execute-yaml with parameters → {key} substituted in prompts (4.0s)
+  ok 228 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:249:1 › 9. click Merge → prompt for name → merged workflow appears (14.5s)
+  ok 238 [chromium] › e2e\workflow-validation-e2e.spec.ts:151:1 › 9. reuse non-existent template ID → 400+ (3.1s)
+  ok 240 [chromium] › e2e\workflow-validation-e2e.spec.ts:160:1 › 10. execute-yaml with empty content → 400 (3.7s)
+  ok 239 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:285:1 › 10. Execute YAML button → modal dialog appears (5.2s)
+  ok 242 [api] › e2e\api\approval-request-changes.api.spec.ts:21:3 › request changes loop › sending a reviewed card back resolves the ask and creates a new attempt (2.4s)
+  -  244 [api] › e2e\api\branch-governance.api.spec.ts:89:1 › SDD branch handoff creates the chain branch on a real GitHub remote (local-only)
+  -  245 [api] › e2e\api\fault-injection.api.spec.ts:32:3 › OpenCode task-path fault injection › D1-2 serve over budget → run ABORTED (timeout path)
+  -  246 [api] › e2e\api\fault-injection.api.spec.ts:68:3 › OpenCode task-path fault injection › D2-2 cancel an executing opencode run → terminal within 15s
+  ok 243 [api] › e2e\api\approval-denial.api.spec.ts:27:3 › approval denial with reason › deny persists the reason and cancels the run (2.2s)
+  ok 248 [api] › e2e\api\knowledge-approval-concurrency.api.spec.ts:25:3 › Knowledge system — storage / query / approval › 1. lifecycle: submit (PENDING) → query → approve → Git-backed version (224ms)
+  ok 249 [api] › e2e\api\knowledge-approval-concurrency.api.spec.ts:55:3 › Knowledge system — storage / query / approval › 2. baseline guard: re-reviewing a decided item is rejected (sequential) (47ms)
+[knowledge-race] doubleWins=0/8 :: [{"id":"f66999f5-11d0-4243-ae1f-35cb1a97afa2","successes":1,"finalStatus":"REJECTED","statuses":[409,200]},{"id":"5020ec6f-18a0-417f-868e-0c3ded82e8f6","successes":1,"finalStatus":"REJECTED","statuses":[409,200]},{"id":"c3f9c742-60fc-4dc6-824e-6cd294673f65","successes":1,"finalStatus":"APPROVED","statuses":[200,409]},{"id":"b2742a80-18a0-44a1-ac20-eeb9cdc68794","successes":1,"finalStatus":"APPROVED","statuses":[200,409]},{"id":"c6682449-0425-4507-ae84-5c233b320f7d","successes":1,"finalStatus":"REJECTED","statuses":[409,200]},{"id":"b9c902f2-7293-450e-9dab-b38d9528f639","successes":1,"finalStatus":"APPROVED","statuses":[200,409]},{"id":"53c2dbb9-dd93-4369-93bf-6f25cc352921","successes":1,"finalStatus":"REJECTED","statuses":[409,200]},{"id":"626d9314-f033-4c8d-8a21-4bdbb8a5342b","successes":1,"finalStatus":"REJECTED","statuses":[409,200]}]
+  ok 250 [api] › e2e\api\knowledge-approval-concurrency.api.spec.ts:63:3 › Knowledge system — storage / query / approval › 3. RACE: concurrent opposing reviews must yield exactly one winner (766ms)
+[knowledge-load] {"count":24,"ok":24,"errors":0,"errorRate":0,"p50":100,"p95":148,"p99":155,"max":155,"byStatus":{"201":24}}
+  ok 251 [api] › e2e\api\knowledge-approval-concurrency.api.spec.ts:96:3 › Knowledge system — storage / query / approval › 4. LOAD: 24 concurrent submissions all persist (stresses Git mirror sync) (277ms)
+  x  241 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:305:1 › 10b. modals are unmounted when closed (no hidden autoFocus / Tab targets) (28.6s)
+  -  253 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:325:1 › 11. stats badges show running/completed counts
+  -  254 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:342:1 › 12. step card displays prompt template text
+  -  255 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:357:1 › 13. workflow card shows created timestamp
+  -  256 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:366:1 › 14. RUNNING workflow → Cancel button visible
+[load-read] {"count":100,"ok":100,"errors":0,"errorRate":0,"p50":1670,"p95":3241,"p99":4436,"max":4436,"byStatus":{"200":100}}
+  ok 252 [api] › e2e\api\load-stress.api.spec.ts:56:3 › Load & stability (LLM-free) › A. read burst: 100 concurrent reads stay 2xx (6.8s)
+[load-mixed] {"count":48,"ok":48,"errors":0,"errorRate":0,"p50":563,"p95":1292,"p99":1311,"max":1311,"byStatus":{"200":36,"201":12}} pool={"before":{"active":0,"pending":0,"idle":0,"threads":0},"after":{"active":0,"pending":0,"idle":0,"threads":0}}
+  ok 257 [api] › e2e\api\load-stress.api.spec.ts:72:3 › Load & stability (LLM-free) › B. mixed load @16: no 5xx, stable (3.8s)
+[load-saturation] {"count":48,"ok":48,"errors":0,"errorRate":0,"p50":451,"p95":600,"p99":608,"max":608,"byStatus":{"201":48}} serverErrors=0 peak={"active":0,"pending":0,"idle":0,"threads":0}
+  ok 258 [api] › e2e\api\load-stress.api.spec.ts:107:3 › Load & stability (LLM-free) › C. saturation probe: 48 concurrent writes degrade gracefully (no crash) (1.3s)
+  -  260 [api] › e2e\api\mcp-sdd-workflow.api.spec.ts:90:1 › mcp: external client instantiates development-workflow, approves the gate, chain leaves WAITING_APPROVAL
+  ok 261 [api] › e2e\api\multi-agent-collab.api.spec.ts:20:3 › Multi-agent collaboration › 1. structure: a 3-role chain is defined with steps in BA→Dev→QA order (209ms)
+  ok 259 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:105:1 › 0. setup — create test agent (retry #1) (3.6s)
+  ok 262 [api] › e2e\api\multi-agent-collab.api.spec.ts:39:3 › Multi-agent collaboration › 2. shared knowledge: an approved guideline is queryable by the crew (327ms)
+  ok 264 [api] › e2e\api\multi-agent-collab.api.spec.ts:53:3 › Multi-agent collaboration › 3. isolation: two concurrent chains keep their own steps (73ms)
+  ok 265 [api] › e2e\api\multi-agent-collab.api.spec.ts:80:3 › Multi-agent collaboration › 4. approval gate: list is an array and unknown decisions are rejected (56ms)
+  -  266 [api] › e2e\api\multi-agent-collab.api.spec.ts:97:5 › Multi-agent collaboration › real-LLM handoff › 5. BA→Dev→QA completes in order with per-step output
+[skill] /api/v1/skills baseline count = 1
+  ok 267 [api] › e2e\api\skill-lifecycle.api.spec.ts:34:3 › Skill system — creation / assignment / execution › A. skill registry is reachable and returns an array (12ms)
+  ok 268 [api] › e2e\api\skill-lifecycle.api.spec.ts:42:3 › Skill system — creation / assignment / execution › B. knowledge → SKILL promotion creates a type=SKILL knowledge artifact (112ms)
+  ok 269 [api] › e2e\api\skill-lifecycle.api.spec.ts:67:3 › Skill system — creation / assignment / execution › C. skill assignment enforces governance (unknown skill is rejected) (2.3s)
+  ok 263 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:112:1 › 1. page loads — "Workflows" title visible (retry #1) (4.3s)
+  ok 270 [api] › e2e\api\skill-lifecycle.api.spec.ts:81:3 › Skill system — creation / assignment / execution › D. concurrent skill toggles converge to a deterministic state (1.3s)
+  -  272 [api] › e2e\api\skill-lifecycle.api.spec.ts:105:3 › Skill system — creation / assignment / execution › E. real skill execution requires the self-improvement pipeline
+  ok 273 [api] › e2e\api\workflow-state-concurrency.api.spec.ts:46:3 › Workflow system — definition / execution / state machine › 1. definition + query: create a chain and read it back (2.5s)
+  ok 271 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:119:1 › 2. create workflow → card appears with correct name (retry #1) (4.8s)
+  ok 247 [api] › e2e\api\git-pack-gate.api.spec.ts:227:1 › a run blocks on the git_push PUSH gate and resumes after approval, pushing to the local remote (29.2s)
+  ok 275 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:130:1 › 3. card displays status badge (FAILED/COMPLETED/RUNNING) (retry #1) (5.2s)
+  ok 276 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:153:1 › 4. card shows "N/M steps" text (retry #1) (5.3s)
+  ok 274 [api] › e2e\api\workflow-state-concurrency.api.spec.ts:65:3 › Workflow system — definition / execution / state machine › 2. state guards: cancel/delete respect a terminal chain (16.7s)
+[workflow-cancel-race] doubleWins=4/8 :: [{"id":"ee8ef9c1-cc47-4271-b584-6b16ff9552b3","successes":2,"statuses":[200,200],"final":"CANCELLED"},{"id":"ac9e94f3-56e5-4523-8eea-b252f945256e","successes":1,"statuses":[200,400],"final":"CANCELLED"},{"id":"77e86688-27fe-48dd-ba0a-75e500315fec","successes":2,"statuses":[200,200],"final":"CANCELLED"},{"id":"58cbf72e-8621-4cd1-9843-3ba3976c9682","successes":2,"statuses":[200,200],"final":"CANCELLED"},{"id":"e0166f90-841a-4868-8291-a88901366948","successes":2,"statuses":[200,200],"final":"CANCELLED"},{"id":"fd5a653f-caa7-4d21-af5a-21c6bb6b6ddc","successes":1,"statuses":[200,400],"final":"CANCELLED"},{"id":"d30cfbf5-30a5-4fdd-82ac-0cad92b93e9b","successes":1,"statuses":[200,400],"final":"CANCELLED"},{"id":"90ad148c-be96-4b33-9965-20d78e6104a8","successes":1,"statuses":[200,400],"final":"CANCELLED"}]
+  ok 278 [api] › e2e\api\workflow-state-concurrency.api.spec.ts:81:3 › Workflow system — definition / execution / state machine › 3. RACE: concurrent cancels on RUNNING chains stay safe (no 5xx, valid terminal) (534ms)
+  ok 277 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:165:1 › 5. FAILED workflow → Retry button visible with step number (retry #1) (16.6s)
+  ok 280 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:187:1 › 6. non-RUNNING workflow → Delete button visible (retry #1) (7.6s)
+  ok 279 [api] › e2e\api\workflow-state-concurrency.api.spec.ts:117:3 › Workflow system — definition / execution / state machine › 5. merge: >=2 chains combine; <2 is rejected (20.0s)
+  ok 282 [api] › e2e\api\workflow-state-concurrency.api.spec.ts:130:3 › Workflow system — definition / execution / state machine › 6. execute-yaml: valid template runs; empty/unknown-agent rejected (82ms)
+  ok 283 [api] › e2e\api\workflow-state-concurrency.api.spec.ts:154:3 › Workflow system — definition / execution / state machine › 7. defining a workflow with an unresolvable agent must not 500 (33ms)
+  ok 281 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:203:1 › 7. click Delete → confirm → card removed from list (retry #1) (6.4s)
+  ok 284 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:227:1 › 8. select 2 workflows → "Merge N Workflows" button appears (retry #1) (5.6s)
+  ok 285 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:249:1 › 9. click Merge → prompt for name → merged workflow appears (retry #1) (9.3s)
+  ok 286 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:285:1 › 10. Execute YAML button → modal dialog appears (retry #1) (4.3s)
+  ok 287 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:305:1 › 10b. modals are unmounted when closed (no hidden autoFocus / Tab targets) (retry #1) (4.6s)
+  ok 288 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:325:1 › 11. stats badges show running/completed counts (retry #1) (3.5s)
+  ok 289 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:342:1 › 12. step card displays prompt template text (retry #1) (4.3s)
+  ok 290 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:357:1 › 13. workflow card shows created timestamp (retry #1) (3.2s)
+  ok 291 [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:366:1 › 14. RUNNING workflow → Cancel button visible (retry #1) (2.7s)
+
+
+  1) [chromium] › e2e\aria-session-id.spec.ts:22:3 › Issue #13: Conversation ID Display in Aria UI › should display truncated conversation ID in Aria panel header 
+
+    TimeoutError: page.click: Timeout 15000ms exceeded.
+    Call log:
+      - waiting for locator('.ai-fab')
+        - locator resolved to <button type="button" class="ai-fab " aria-expanded="false" aria-label="Open Aria panel">…</button>
+      - attempting click action
+        - waiting for element to be visible, enabled and stable
+        - element is visible, enabled and stable
+        - scrolling into view if needed
+        - done scrolling
+        - performing click action
+
+
+      21 |
+      22 |   test('should display truncated conversation ID in Aria panel header', async ({ page }) => {
+    > 23 |     await page.click('.ai-fab');
+         |                ^
+      24 |     await page.waitForSelector('.ai-panel', { state: 'visible' });
+      25 |
+      26 |     const conversationId = await waitForConversationId(page);
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\aria-session-id.spec.ts:23:16
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Tearing down "context" exceeded the test timeout of 120000ms.
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium-retry1\test-finished-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\aria-session-id-Issue-13-C-0cf4c-ion-ID-in-Aria-panel-header-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) [chromium] › e2e\crew-telemetry.spec.ts:10:3 › Crew Telemetry Display › should display agent cards with telemetry data 
+
+    Test timeout of 120000ms exceeded.
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator:  locator('.crew-card').nth(111).locator('.stats')
+    Expected: visible
+    Received: undefined
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for locator('.crew-card').nth(111).locator('.stats')
+
+
+      22 |       const card = cards.nth(i);
+      23 |       const statsSection = card.locator('.stats');
+    > 24 |       await expect(statsSection).toBeVisible();
+         |                                  ^
+      25 |
+      26 |       // Token display — the .v.tok element inside .stats
+      27 |       const tokenValue = statsSection.locator('.v.tok');
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\crew-telemetry.spec.ts:24:34
+
+    Test timeout of 120000ms exceeded.
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\crew-telemetry-Crew-Teleme-e644a-t-cards-with-telemetry-data-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\crew-telemetry-Crew-Teleme-e644a-t-cards-with-telemetry-data-chromium\error-context.md
+
+  3) [chromium] › e2e\notification-toast.spec.ts:4:3 › Notification Toast › toast appears on aria.notification WebSocket event 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: locator('.toast-item')
+    Expected substring: "Test notification"
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toContainText" with timeout 5000ms
+      - waiting for locator('.toast-item')
+
+
+      29 |     // Toast should appear from the real WebSocket event path
+      30 |     await expect(page.locator('.toast-item')).toBeVisible({ timeout: 10000 });
+    > 31 |     await expect(page.locator('.toast-item')).toContainText('Test notification');
+         |                                               ^
+      32 |   });
+      33 | });
+      34 |
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\notification-toast.spec.ts:31:47
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\notification-toast-Notific-99c33-otification-WebSocket-event-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\notification-toast-Notific-99c33-otification-WebSocket-event-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\notification-toast-Notific-99c33-otification-WebSocket-event-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\notification-toast-Notific-99c33-otification-WebSocket-event-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:188:1 › 9. POST /workflows/merge — merge two workflows 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 201
+    Received: 500
+
+      202 |   });
+      203 |
+    > 204 |   expect(status).toBe(201);
+          |                  ^
+      205 |   expect(data.name).toBe('E2E Merged Workflow');
+      206 |   expect(data.totalSteps).toBe(2);
+      207 | });
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\workflow-lifecycle-e2e.spec.ts:204:18
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\workflow-lifecycle-e2e-9-P-1d29e-merge-—-merge-two-workflows-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\workflow-lifecycle-e2e-9-P-1d29e-merge-—-merge-two-workflows-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\workflow-lifecycle-e2e-9-P-1d29e-merge-—-merge-two-workflows-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\workflow-lifecycle-e2e-9-P-1d29e-merge-—-merge-two-workflows-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5) [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:305:1 › 10b. modals are unmounted when closed (no hidden autoFocus / Tab targets) 
+
+    TimeoutError: locator.click: Timeout 15000ms exceeded.
+    Call log:
+      - waiting for locator('button:has-text("Execute YAML")')
+        - locator resolved to <button class="btn">Execute YAML</button>
+      - attempting click action
+        2 × waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <div class="toast-item">…</div> from <div class="toast-container">…</div> subtree intercepts pointer events
+        - retrying click action
+        - waiting 20ms
+        - waiting for element to be visible, enabled and stable
+        - element is visible, enabled and stable
+        - scrolling into view if needed
+        - done scrolling
+        - <div class="toast-item">…</div> from <div class="toast-container">…</div> subtree intercepts pointer events
+      2 × retrying click action
+          - waiting 100ms
+          - waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <header class="topbar">…</header> intercepts pointer events
+      5 × retrying click action
+          - waiting 500ms
+          - waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <div class="toast-item">…</div> from <div class="toast-container">…</div> subtree intercepts pointer events
+        - retrying click action
+          - waiting 500ms
+          - waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <div class="toast-item">…</div> from <div class="toast-container">…</div> subtree intercepts pointer events
+        - retrying click action
+          - waiting 500ms
+          - waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <header class="topbar">…</header> intercepts pointer events
+        - retrying click action
+          - waiting 500ms
+          - waiting for element to be visible, enabled and stable
+          - element is visible, enabled and stable
+          - scrolling into view if needed
+          - done scrolling
+          - <header class="topbar">…</header> intercepts pointer events
+      - retrying click action
+        - waiting 500ms
+        - waiting for element to be visible, enabled and stable
+        - element is visible, enabled and stable
+        - scrolling into view if needed
+        - done scrolling
+        - <div class="toast-item">…</div> from <div class="toast-container">…</div> subtree intercepts pointer events
+      - retrying click action
+        - waiting 500ms
+
+
+      316 |
+      317 |   // Opening Execute YAML mounts the YAML modal; closing unmounts it again.
+    > 318 |   await page.locator('button:has-text("Execute YAML")').click();
+          |                                                         ^
+      319 |   await expect(yamlModal).toBeVisible({ timeout: 5000 });
+      320 |   await yamlModal.getByRole('button', { name: 'Cancel' }).click();
+      321 |   await expect(yamlModal).toHaveCount(0, { timeout: 5000 });
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\workflow-ui-interaction-e2e.spec.ts:318:57
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\workflow-ui-interaction-e2-688a2-dden-autoFocus-Tab-targets--chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\workflow-ui-interaction-e2-688a2-dden-autoFocus-Tab-targets--chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\workflow-ui-interaction-e2-688a2-dden-autoFocus-Tab-targets--chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\workflow-ui-interaction-e2-688a2-dden-autoFocus-Tab-targets--chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Slow test file: [chromium] › e2e\aria-conversation-id-regression.spec.ts (6.9m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  1 failed
+    [chromium] › e2e\aria-session-id.spec.ts:22:3 › Issue #13: Conversation ID Display in Aria UI › should display truncated conversation ID in Aria panel header 
+  4 flaky
+    [chromium] › e2e\crew-telemetry.spec.ts:10:3 › Crew Telemetry Display › should display agent cards with telemetry data 
+    [chromium] › e2e\notification-toast.spec.ts:4:3 › Notification Toast › toast appears on aria.notification WebSocket event 
+    [chromium] › e2e\workflow-lifecycle-e2e.spec.ts:188:1 › 9. POST /workflows/merge — merge two workflows 
+    [chromium] › e2e\workflow-ui-interaction-e2e.spec.ts:305:1 › 10b. modals are unmounted when closed (no hidden autoFocus / Tab targets) 
+  35 skipped
+  218 passed (24.1m)
+
+EXIT=1

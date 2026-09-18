@@ -1,0 +1,22 @@
+# step: S9 (spec-owned scenario S9)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S9:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6b48899
+# started: 2026-09-18T18:44:06Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=0e7aaa8f-2e5c-4043-b3c5-16cde3fab194 agent=b3bdb7ce-4908-4c4d-83d6-f0558b3ec892 file=/workspace/e2e-s9-1789757051215-4925.txt
+[S9] auto-dispatch: card status=IN_PROGRESS linkedRunId=96c31477-73ed-44d2-8f7f-7eece4e2d3d9
+[S9] live ask=67ba64e1-e2f1-457b-9091-edd6549ae5f6 toolName=Write status=PENDING kanbanItemId=0e7aaa8f-2e5c-4043-b3c5-16cde3fab194 expiresAt=2026-09-18T18:46:39.199462Z
+[S9] ask decided: status=APPROVED deliveryState=DELIVERED
+[S9] card right after the decision: status=REVIEW
+[S9] run terminal=COMPLETED finalCardStatus=REVIEW
+  ok 1 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (36.0s)
+
+  1 passed (40.0s)
+
+EXIT=0

@@ -1,0 +1,30 @@
+{
+  "metrics": {
+    "count": 48,
+    "ok": 48,
+    "errors": 0,
+    "errorRate": 0,
+    "p50": 321,
+    "p95": 813,
+    "p99": 829,
+    "max": 829,
+    "byStatus": {
+      "200": 36,
+      "201": 12
+    }
+  },
+  "pool": {
+    "before": {
+      "active": 0,
+      "pending": 0,
+      "idle": 0,
+      "threads": 0
+    },
+    "after": {
+      "active": 0,
+      "pending": 0,
+      "idle": 0,
+      "threads": 0
+    }
+  }
+}

@@ -12,7 +12,8 @@
  * - delivery states are exactly
  *   `PENDING | DELIVERING | DELIVERED | CANCELLED | FAILED | MISSING`;
  * - a rejected decide answers 409 with body `{code, error}` (codes
- *   `EXPIRED | ALREADY_DECIDED | UNSUPPORTED_OPTIONS | INCONSISTENT_ASK`).
+ *   `EXPIRED | ALREADY_DECIDED | UNSUPPORTED_OPTIONS | INCONSISTENT_ASK | UNDECIDABLE_ASK
+ *   | GRANT_ALREADY_CONSUMED`).
  */
 import { isAxiosError } from 'axios';
 import type { Approval } from '../types';

@@ -653,6 +653,24 @@ public class AcpPermissionCoordinator {
     public record GrantBinding(String toolName, String digest) { }
 
     /**
+     * Whether the ask is persisted undecidable: the bridge truncated its input, so the invocation
+     * behind it can never be authorized and C3 must refuse an approval of this row (R4) — deny and
+     * cancel stay available. This exposes exactly the {@link #isTruncated(AcpPermissionRequest)}
+     * predicate, which C3 cannot read from {@link #grantBindingForDecision(UUID)} because empty
+     * there also means "not an MCP ask" (a non-MCP ask is decidable, merely never grantable). An
+     * ask without a companion record or with an unreadable display record is reported undecidable:
+     * it cannot prove the ask decidable (fail closed).
+     */
+    public boolean isUndecidable(UUID approvalId) {
+        if (approvalId == null) {
+            return true;
+        }
+        return companionRepository.findById(approvalId)
+                .map(AcpPermissionCoordinator::isTruncated)
+                .orElse(true);
+    }
+
+    /**
      * Maps the CLI's qualified worker MCP tool name ({@code mcp__<server>__<tool>}, the shape
      * permission asks carry) to the runtime tool name the enforcement seam sees. Only called for
      * names that matched {@link #MCP_TOOL_NAME}; the platform MCP server is the only server in the

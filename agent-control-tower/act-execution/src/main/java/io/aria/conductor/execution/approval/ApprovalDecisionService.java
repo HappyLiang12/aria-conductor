@@ -41,9 +41,17 @@ import java.util.UUID;
  *
  * <p><b>Idempotency and retries.</b> A repeated decision never re-delivers and never re-publishes:
  * it reports the recorded delivery state, except for the one retryable case — a delivery recorded
- * {@code FAILED} while the ask is still live — where the operator's repeat is the retry (fresh
- * grant, one more delivery attempt). Nothing retries in the background: a failure while the run
- * is dead or the deadline has passed stays FAILED, observable on the review surface.
+ * {@code FAILED} while the ask is still live — where the operator's repeat is the retry. A retry
+ * adds no fresh authorization: the one-use grant is reused while it is still pending, renewed only
+ * when it expired unused, and the retry is refused once that grant was consumed, so one approval
+ * can never authorize a second execution of its invocation (F2). Nothing retries in the
+ * background: a failure while the run is dead or the deadline has passed stays FAILED, observable
+ * on the review surface.
+ *
+ * <p><b>Undecidable asks.</b> An ask whose input the bridge had to truncate can never be
+ * authorized (R4): approving it is refused up front — the grant-side filter alone would skip the
+ * grant but still deliver the allow to an invocation the operator could not see. Deny and cancel
+ * keep working unchanged.
  *
  * <p><b>Transactions.</b> Like the coordinator, this service is called from foreign threads and
  * transactions, so the conditional transition plus its bookkeeping run in one
@@ -149,6 +157,14 @@ public class ApprovalDecisionService {
                 throw new AcpDecisionRejectedException(AcpDecisionRejectedException.Code.EXPIRED,
                         "ACP permission ask " + approvalId + " expired before the decision");
             }
+            if (approved && coordinator.isUndecidable(approvalId)) {
+                // R4/F3: the bridge truncated this ask's input, so the invocation behind it can
+                // never be authorized — refuse the approval itself instead of delivering an allow
+                // for a tool the operator could not see. Deny and cancel stay available.
+                throw new AcpDecisionRejectedException(AcpDecisionRejectedException.Code.UNDECIDABLE_ASK,
+                        "ACP permission ask " + approvalId + " is undecidable: the bridge truncated"
+                                + " its input, so approving it cannot be authorized — deny instead");
+            }
             if (approved && selectedOptionId == null) {
                 throw new AcpDecisionRejectedException(AcpDecisionRejectedException.Code.UNSUPPORTED_OPTIONS,
                         "ACP permission ask " + approvalId + " offers no allow-once option to approve");
@@ -183,7 +199,9 @@ public class ApprovalDecisionService {
     /**
      * The conditional transition did not match: someone else (an expiry, the run-end sweep or an
      * earlier decision) already made the ask terminal, or the operator repeated the same decision.
-     * Every outcome here is a report — never a second transition, a re-delivery or an event.
+     * Every outcome here is a report — never a second transition and never an event — except the
+     * one retryable case (a recorded {@code FAILED} delivery on a still-live ask), which makes one
+     * more delivery attempt under the prepared one-use authorization.
      */
     private Result reportLostRace(UUID approvalId, boolean approved, ApprovalStatus target, String reason) {
         Approval current = approvalRepository.findById(approvalId).orElseThrow(
@@ -211,10 +229,14 @@ public class ApprovalDecisionService {
         String deliveryState = row.getDeliveryState();
         if (AcpPermissionCoordinator.DELIVERY_FAILED.equals(deliveryState)
                 && isStillLive(current, row)) {
-            // Operator-driven retry of a failed delivery: a fresh one-use grant and one more
-            // attempt, with no new decision write and no second event.
+            // Operator-driven retry of a failed delivery: one more delivery attempt, with no new
+            // decision write and no second event. The one-use grant is prepared first — never
+            // duplicated — so the retry cannot authorize a second execution (F2); a retry that
+            // would is rejected before anything is delivered.
+            if (approved) {
+                prepareRetryGrant(approvalId, row);
+            }
             log.info("Retrying the failed delivery of ACP ask {} on operator request", approvalId);
-            issueGrant(approvalId, approved, row);
             deliveryState = coordinator.deliverDecision(approvalId, approved, reason);
         }
         return new Result(approvalId, approved, target.name(), deliveryState);
@@ -239,6 +261,31 @@ public class ApprovalDecisionService {
         }
         coordinator.grantBindingForDecision(approvalId).ifPresent(binding ->
                 writeGrantService.grant(row.getRunId(), binding.toolName(), binding.digest()));
+    }
+
+    /**
+     * Prepare the one-use authorization for a retried delivery of an approved invocation (F2): an
+     * authorization still pending for the exact tuple is reused, one that expired unused is
+     * renewed, and one that was already consumed refuses the retry — a retry must never authorize
+     * a second execution of the same approved invocation. Asks with no grantable binding (not an
+     * MCP tool call) have no authorization to prepare and retry as before.
+     *
+     * @throws AcpDecisionRejectedException when the invocation's one-use grant was consumed
+     */
+    private void prepareRetryGrant(UUID approvalId, AcpPermissionRequest row) {
+        coordinator.grantBindingForDecision(approvalId).ifPresent(binding -> {
+            WriteGrantService.RetryGrant outcome = writeGrantService.prepareRetryGrant(
+                    row.getRunId(), binding.toolName(), binding.digest());
+            if (outcome == WriteGrantService.RetryGrant.ALREADY_CONSUMED) {
+                // Wording true for both corners this code covers: the grant was consumed by an
+                // execution, or dropped after a denied attempt on an expired grant (no execution
+                // happened then) — so it must not claim the invocation "was already executed".
+                throw new AcpDecisionRejectedException(
+                        AcpDecisionRejectedException.Code.GRANT_ALREADY_CONSUMED,
+                        "ACP permission ask " + approvalId + " cannot be retried: its one-use write"
+                                + " grant is no longer available; a retry cannot authorize it again");
+            }
+        });
     }
 
     /**

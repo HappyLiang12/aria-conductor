@@ -336,6 +336,35 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
         assertThat(coordinator.grantBindingForDecision(approval.getId())).isEmpty();
     }
 
+    /**
+     * F3/R4: C3 refuses approval of a truncated ask and needs an explicit reader for the flag —
+     * {@link AcpPermissionCoordinator#grantBindingForDecision(UUID)} cannot carry it, because
+     * empty there also means "not an MCP ask". Only truncation is undecidable: a non-MCP ask stays
+     * decidable (it is merely never grantable).
+     */
+    @Test
+    void isUndecidable_readsTheTruncationFlag_andFailsClosedWithoutACompanion() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-decidable", json(Map.of("path", "/x"))));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-trunc", "call_t", "mcp__aria__write_file",
+                        "{\"path\":\"/workspace/x\"", true, "allow_once", "reject_once"));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-local", "call_l", "Bash", json(Map.of("command", "ls")), false,
+                        "allow_once", "reject_once"));
+
+        assertThat(coordinator.isUndecidable(companion(runId, "req-decidable").getApprovalId())).isFalse();
+        assertThat(coordinator.isUndecidable(companion(runId, "req-trunc").getApprovalId())).isTrue();
+        // Not grantable is not the same as undecidable: the refusal must read the flag only.
+        UUID localAsk = companion(runId, "req-local").getApprovalId();
+        assertThat(coordinator.grantBindingForDecision(localAsk)).isEmpty();
+        assertThat(coordinator.isUndecidable(localAsk)).isFalse();
+        // An ask without a companion record cannot prove decidability: fail closed.
+        assertThat(coordinator.isUndecidable(UUID.randomUUID())).isTrue();
+    }
+
     @Test
     void unknownAndTerminalRuns_dropTheEventWithBestEffortCancel() {
         bindRun(UUID.randomUUID(), client, FAKE_NOW.plus(Duration.ofMinutes(45)));

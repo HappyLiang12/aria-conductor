@@ -312,7 +312,7 @@ export async function listAsksForCard(request: APIRequestContext, cardId: string
  * `POST /approvals/{id}/decide` `{approved, reason}`. Returns the raw result so
  * callers can assert typed failures verbatim: 200
  * `{approvalId, approved, status:'processed', decision, deliveryState}`, or a typed
- * 409 `{code: EXPIRED|ALREADY_DECIDED|UNSUPPORTED_OPTIONS|INCONSISTENT_ASK, error}`.
+ * 409 `{code: EXPIRED|ALREADY_DECIDED|UNSUPPORTED_OPTIONS|INCONSISTENT_ASK|UNDECIDABLE_ASK|GRANT_ALREADY_CONSUMED, error}`.
  */
 export function decideAsk(
   request: APIRequestContext,

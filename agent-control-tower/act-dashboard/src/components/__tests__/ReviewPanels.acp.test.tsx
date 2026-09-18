@@ -144,6 +144,72 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
   });
 
+  it('does not offer Allow once for an undecidable (truncated) ask, while a decidable ask stays approvable', async () => {
+    renderPanel(
+      <DecisionPanel
+        item={item}
+        pendingAsks={[
+          acpAsk({
+            id: 'acp-trunc',
+            displayJson: acpDisplay({ rawInputTruncated: true, grantable: false }),
+          }),
+          acpAsk({ id: 'acp-decidable' }),
+        ]}
+      />,
+    );
+
+    const allowButtons = screen.getAllByRole('button', { name: 'Allow once' });
+    expect(allowButtons).toHaveLength(2);
+    // Asks render in list order: the truncated one cannot be approved, the plain one still can
+    // (the backend refuses a truncated approval with UNDECIDABLE_ASK).
+    expect(allowButtons[0]).toBeDisabled();
+    expect(allowButtons[1]).toBeEnabled();
+    // The explanation names the reason and the action that still works.
+    expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
+    expect(screen.getByText(/Deny still works/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Deny' })[0]).toBeEnabled();
+
+    await userEvent.click(allowButtons[0]);
+    expect(mockedApprove).not.toHaveBeenCalled();
+  });
+
+  it('treats an absent truncation flag as undecidable: only an explicit false is decidable', async () => {
+    renderPanel(
+      <DecisionPanel
+        item={item}
+        pendingAsks={[
+          // The backend predicate reads a missing flag as truncated (fail closed), so the ask
+          // must not be approvable here either — only `rawInputTruncated: false` is decidable.
+          acpAsk({
+            id: 'acp-flag-missing',
+            displayJson: acpDisplay({ rawInputTruncated: undefined }),
+          }),
+          acpAsk({ id: 'acp-explicit-false', displayJson: acpDisplay() }),
+        ]}
+      />,
+    );
+
+    const allowButtons = screen.getAllByRole('button', { name: 'Allow once' });
+    expect(allowButtons).toHaveLength(2);
+    expect(allowButtons[0]).toBeDisabled();
+    expect(allowButtons[1]).toBeEnabled();
+    expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Deny' })[0]).toBeEnabled();
+
+    await userEvent.click(allowButtons[0]);
+    expect(mockedApprove).not.toHaveBeenCalled();
+  });
+
+  it('treats an absent display as undecidable: no Allow once is offered, Deny still works', () => {
+    renderPanel(
+      <DecisionPanel item={item} pendingAsks={[acpAsk({ id: 'acp-no-display', displayJson: null })]} />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument();
+    expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
+  });
+
   it('shows Expired, disables both buttons and never calls the api once expired', async () => {
     renderPanel(
       <DecisionPanel

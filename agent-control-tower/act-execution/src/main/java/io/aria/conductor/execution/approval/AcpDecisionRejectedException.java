@@ -19,7 +19,13 @@ public class AcpDecisionRejectedException extends RuntimeException {
         /** Approving this ask has no allow-once option to echo back. */
         UNSUPPORTED_OPTIONS,
         /** The approval is marked as an ACP ask but its companion record is missing. */
-        INCONSISTENT_ASK
+        INCONSISTENT_ASK,
+        /** The ask's input was truncated by the bridge (R4): it can never be authorized, so an
+         * approval is refused while deny and cancel stay available. */
+        UNDECIDABLE_ASK,
+        /** The ask's one-use write grant was already consumed: a retry must never authorize a
+         * second execution of the same approved invocation (F2). */
+        GRANT_ALREADY_CONSUMED
     }
 
     private final Code code;

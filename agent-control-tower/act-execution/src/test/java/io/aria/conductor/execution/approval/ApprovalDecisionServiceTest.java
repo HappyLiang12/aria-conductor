@@ -118,10 +118,19 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
      * approval id. Events raised by the creation are dropped so decision events can be counted.
      */
     private UUID newAsk(String requestId, String rawInput, String... optionKinds) {
+        return newAsk(requestId, rawInput, false, optionKinds);
+    }
+
+    /** The undecidable variant of {@link #newAsk}: the bridge had to truncate the input (R4/F3). */
+    private UUID truncatedAsk(String requestId) {
+        return newAsk(requestId, RAW_INPUT_X, true, "allow_once", "reject_once");
+    }
+
+    private UUID newAsk(String requestId, String rawInput, boolean truncated, String... optionKinds) {
         UUID runId = committedRun(RunStatus.RUNNING);
         coordinator.bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
         coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
-                frame(requestId, rawInput, optionKinds));
+                frame(requestId, rawInput, truncated, optionKinds));
         flushAndClear();
         UUID approvalId = companionRepository
                 .findByBridgeSessionIdAndBridgeRequestId(SESSION_ID, requestId).orElseThrow()
@@ -131,12 +140,16 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
     }
 
     private ObjectNode frame(String requestId, String rawInput, String... optionKinds) {
+        return frame(requestId, rawInput, false, optionKinds);
+    }
+
+    private ObjectNode frame(String requestId, String rawInput, boolean truncated, String... optionKinds) {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("requestId", requestId);
         node.put("toolCallId", "call_" + requestId);
         node.put("toolName", "mcp__aria__write_file");
         node.put("rawInput", rawInput);
-        node.put("rawInputTruncated", false);
+        node.put("rawInputTruncated", truncated);
         ArrayNode options = node.putArray("options");
         for (String kind : optionKinds) {
             options.addObject()
@@ -286,6 +299,56 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         assertThat(decidedEvents()).isEmpty();
     }
 
+    /**
+     * F3 (R4, plan C0.2): the bridge truncated this ask's input, so the invocation behind it can
+     * never be authorized — the approval itself is refused, not merely left without a grant. The
+     * refusal must not deliver an allow to a tool the operator could not see.
+     */
+    @Test
+    void approve_truncatedAsk_isRefusedAsUndecidable_withoutDeliveryOrGrant() {
+        UUID approvalId = truncatedAsk("req-trunc");
+        assertThat(coordinator.grantBindingForDecision(approvalId))
+                .as("precondition: a truncated ask is never grantable").isEmpty();
+
+        AcpDecisionRejectedException rejection = assertThrows(AcpDecisionRejectedException.class,
+                () -> service.decide(approvalId, true, "operator approved"));
+
+        // The code is pinned by name: the RED for this fix is a runtime assertion failure (the
+        // constant does not exist before the fix) and the name is the operator-visible token.
+        assertThat(rejection.code().name()).isEqualTo("UNDECIDABLE_ASK");
+        assertThat(rejection.getMessage()).contains("undecidable").contains("truncated");
+        flushAndClear();
+        // The refusal left the ask exactly as it was: still PENDING, nothing delivered, no grant.
+        assertThat(approvalRepository.findById(approvalId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.PENDING);
+        AcpPermissionRequest row = companion(approvalId);
+        assertThat(row.getDeliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_PENDING);
+        assertThat(row.getSelectedOptionId()).isNull();
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+        assertThat(writeGrants.trackedKeyCount()).isZero();
+        assertThat(decidedEvents()).isEmpty();
+    }
+
+    /** F3: deny stays available for an undecidable ask — only the allowance is refused. */
+    @Test
+    void deny_truncatedAsk_stillDeniesAndDelivers() {
+        UUID approvalId = truncatedAsk("req-trunc-deny");
+        when(client.decide(SESSION_ID, "req-trunc-deny", false, "operator denied"))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+
+        ApprovalDecisionService.Result result = service.decide(approvalId, false, "operator denied");
+
+        assertThat(result.decision()).isEqualTo("DENIED");
+        assertThat(result.deliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+        flushAndClear();
+        assertThat(approvalRepository.findById(approvalId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.DENIED);
+        assertThat(companion(approvalId).getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+        verify(client, times(1)).decide(SESSION_ID, "req-trunc-deny", false, "operator denied");
+        assertThat(writeGrants.trackedKeyCount()).isZero();
+    }
+
     @Test
     void approve_afterExpiry_isRejectedExpiredAndNeverTransitions() {
         UUID approvalId = standardAsk("req-late");
@@ -366,10 +429,15 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
     }
 
-    // ---- idempotency and retry (R22, R24.4) ----------------------------------
+    // ---- idempotency and retry (R22, R24.4, F2) ------------------------------
 
+    /**
+     * F2 (R22/R24.4): a retry after a failed delivery must never authorize a second execution of
+     * the already-approved invocation. The one-use grant minted with the winner is reused while it
+     * is still pending, so one approval keeps exactly one consumable authorization.
+     */
     @Test
-    void idempotentRepeat_failedAndLive_retriesWithAFreshGrant() {
+    void idempotentRepeat_failedAndLive_reusesThePendingGrant_soExactlyOneConsumeSucceeds() {
         UUID approvalId = standardAsk("req-retry");
         when(client.decide(SESSION_ID, "req-retry", true, "operator approved"))
                 .thenThrow(new QoderBridgeException(QoderBridgeException.Cause.UNREACHABLE, "bridge down"))
@@ -378,23 +446,67 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
 
         ApprovalDecisionService.Result first = service.decide(approvalId, true, "operator approved");
         assertThat(first.deliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
-        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
         flushAndClear();
 
-        // Operator-driven retry while the ask is still live: re-issue the grant, deliver again.
+        // Operator-driven retry while the ask is still live: one more delivery attempt, no second
+        // decision write, no second event — and no second authorization.
         ApprovalDecisionService.Result second = service.decide(approvalId, true, "operator approved");
 
         assertThat(second.decision()).isEqualTo("APPROVED");
         assertThat(second.deliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
         verify(client, times(2)).decide(SESSION_ID, "req-retry", true, "operator approved");
-        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
-        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isFalse();
+        // One approval authorizes exactly one execution: the retry added no consumable grant.
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST))
+                .as("the retried delivery still authorizes the invocation").isTrue();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST))
+                .as("the retry must not authorize a second execution").isFalse();
         flushAndClear();
         assertThat(approvalRepository.findById(approvalId).orElseThrow().getStatus())
                 .isEqualTo(ApprovalStatus.APPROVED);
         assertThat(companion(approvalId).getDeliveryState())
                 .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
         // The retry never re-publishes the decision event.
+        assertThat(decidedEvents()).hasSize(1);
+    }
+
+    /**
+     * F2: the one-use grant is the authorization for exactly one execution. Once it was consumed,
+     * a retry is refused — minting another grant would authorize the same invocation twice.
+     */
+    @Test
+    void idempotentRepeat_afterTheGrantWasConsumed_isRefusedWithoutASecondDelivery() {
+        UUID approvalId = standardAsk("req-consumed");
+        when(client.decide(SESSION_ID, "req-consumed", true, "operator approved"))
+                .thenThrow(new QoderBridgeException(QoderBridgeException.Cause.UNREACHABLE, "bridge down"))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+        UUID runId = companion(approvalId).getRunId();
+        assertThat(service.decide(approvalId, true, "operator approved").deliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
+        // The invocation already ran: its one-use grant was consumed before the operator retried.
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
+        flushAndClear();
+
+        AcpDecisionRejectedException rejection = assertThrows(AcpDecisionRejectedException.class,
+                () -> service.decide(approvalId, true, "operator approved"));
+
+        // The code is pinned by name: the RED for this fix is a runtime assertion failure (the
+        // constant does not exist before the fix) and the name is the operator-visible token.
+        assertThat(rejection.code().name()).isEqualTo("GRANT_ALREADY_CONSUMED");
+        assertThat(rejection.getMessage()).contains(approvalId.toString());
+        // The wording must be true for both corners this code covers: the grant may have been
+        // consumed by an execution, or dropped after a denied attempt on an expired grant (no
+        // execution happened then) — so it must not claim the invocation "was already executed".
+        assertThat(rejection.getMessage())
+                .contains("no longer available")
+                .doesNotContain("already executed");
+        // No retry delivery, no new authorization, the recorded decision untouched.
+        verify(client, times(1)).decide(SESSION_ID, "req-consumed", true, "operator approved");
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isFalse();
+        flushAndClear();
+        assertThat(approvalRepository.findById(approvalId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(companion(approvalId).getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
         assertThat(decidedEvents()).hasSize(1);
     }
 
@@ -475,6 +587,8 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         when(client.decide(SESSION_ID, "req-bash", true, "operator approved"))
                 .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
 
+        // F3: only truncation is undecidable — a non-MCP (native) ask is not grantable but stays
+        // approvable, exactly as before the refusal was added.
         assertThat(service.decide(approvalId, true, "operator approved").deliveryState())
                 .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
 

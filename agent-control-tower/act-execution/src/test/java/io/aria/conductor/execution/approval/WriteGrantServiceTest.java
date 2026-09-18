@@ -10,7 +10,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +26,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -99,6 +104,20 @@ class WriteGrantServiceTest {
 
         assertThat(service.consume(RUN, "generate_report", d)).isFalse();
         // The consumed (expired) entry empties the queue, so the key is dropped too.
+        assertThat(service.trackedKeyCount()).isZero();
+    }
+
+    @Test
+    void consume_skipsExpiredEntries_soALiveGrantBehindADeadHeadStaysConsumable() {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+        clock.advance(WriteGrantService.GRANT_TTL.plus(Duration.ofSeconds(1)));
+        // A second approval's grant is minted after the first one lapsed unused: the dead head
+        // must not deny the live grant sitting behind it (the same prune the retry probe does).
+        service.grant(RUN, "generate_report", d);
+
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.consume(RUN, "generate_report", d)).isFalse();
         assertThat(service.trackedKeyCount()).isZero();
     }
 
@@ -179,6 +198,210 @@ class WriteGrantServiceTest {
 
         assertThat(service.consume(RUN, "generate_report", d)).isTrue();
         assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+    }
+
+    // ── retry preparation (F2: one approval authorizes one execution) ─────────
+
+    @Test
+    void prepareRetryGrant_reusesThePendingGrant_soExactlyOneConsumeSucceeds() {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+
+        assertThat(service.prepareRetryGrant(RUN, "generate_report", d))
+                .isEqualTo(WriteGrantService.RetryGrant.REUSED_PENDING);
+
+        // The pending authorization is untouched: still exactly one consumable grant.
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+    }
+
+    @Test
+    void prepareRetryGrant_renewsOnlyAfterTheGrantExpiredUnconsumed() {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+        clock.advance(WriteGrantService.GRANT_TTL.plus(Duration.ofSeconds(1)));
+
+        assertThat(service.prepareRetryGrant(RUN, "generate_report", d))
+                .isEqualTo(WriteGrantService.RetryGrant.RENEWED);
+
+        // The dead predecessor was replaced, not accumulated: one fresh grant, one execution.
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+        assertThat(service.trackedKeyCount()).isZero();
+    }
+
+    @Test
+    void prepareRetryGrant_refusesOnceTheGrantWasConsumed() {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+
+        assertThat(service.prepareRetryGrant(RUN, "generate_report", d))
+                .isEqualTo(WriteGrantService.RetryGrant.ALREADY_CONSUMED);
+        // No authorization was minted: the invocation stays executed exactly once.
+        assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+    }
+
+    @Test
+    void prepareRetryGrant_refusesForATupleThatWasNeverGranted() {
+        assertThat(service.prepareRetryGrant(RUN, "generate_report", digest("a", "b")))
+                .isEqualTo(WriteGrantService.RetryGrant.ALREADY_CONSUMED);
+    }
+
+    @Test
+    void prepareRetryGrant_ofTwoApprovedIdenticalCalls_neverMintsASecondAuthorization() {
+        String d = digest("report", "content");
+        // Two separate approvals of the same invocation: one pending grant each (design 6.1).
+        service.grant(RUN, "generate_report", d);
+        service.grant(RUN, "generate_report", d);
+
+        // A retry for one of them must not add a third consumable authorization.
+        assertThat(service.prepareRetryGrant(RUN, "generate_report", d))
+                .isEqualTo(WriteGrantService.RetryGrant.REUSED_PENDING);
+
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+    }
+
+    @Test
+    void prepareRetryGrant_dropsDeadEntries_soTheLiveGrantStaysConsumable() {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+        clock.advance(WriteGrantService.GRANT_TTL.plus(Duration.ofSeconds(1)));
+        // A second approval's live grant now sits behind the first one's dead entry.
+        service.grant(RUN, "generate_report", d);
+
+        assertThat(service.prepareRetryGrant(RUN, "generate_report", d))
+                .isEqualTo(WriteGrantService.RetryGrant.REUSED_PENDING);
+
+        // Without the prune, this consume would poll the dead head and deny the live grant.
+        assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+        assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+    }
+
+    @Test
+    void prepareRetryGrant_isIdempotentUnderConcurrency_exactlyOneConsumeWins() throws Exception {
+        String d = digest("report", "content");
+        service.grant(RUN, "generate_report", d);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<WriteGrantService.RetryGrant>> outcomes = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                outcomes.add(pool.submit(() -> {
+                    start.await();
+                    return service.prepareRetryGrant(RUN, "generate_report", d);
+                }));
+            }
+            start.countDown();
+            for (Future<WriteGrantService.RetryGrant> outcome : outcomes) {
+                assertThat(outcome.get(10, TimeUnit.SECONDS))
+                        .isEqualTo(WriteGrantService.RetryGrant.REUSED_PENDING);
+            }
+            assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+            assertThat(service.consume(RUN, "generate_report", d)).isFalse();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void prepareRetryGrant_rejectsNullArguments() {
+        assertThatThrownBy(() -> service.prepareRetryGrant(null, "generate_report", "d"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.prepareRetryGrant(RUN, null, "d"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.prepareRetryGrant(RUN, "generate_report", null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ── F2 atomicity: the dequeue and the retry probe share one per-key critical section ─────
+
+    /**
+     * F2 atomicity pin: the retry probe and the dequeue must run in ONE per-key critical section
+     * of the same {@code grants} map. Otherwise a concurrent consume can poll the only live entry
+     * (authorizing an execution) between the retry's non-empty observation and its branch
+     * decision, and the retry then takes the RENEWED branch and mints a second authorization —
+     * precisely the consume-first bypass the mechanism exists to close.
+     *
+     * <p>Deterministic and single-threaded, following the trapping-map pattern of
+     * {@link #grant_enqueuedWhileTheKeyIsBeingEmptied_isStillConsumable}: the map double records,
+     * for every poll of a grant queue, whether the poll ran inside a per-key map operation on that
+     * key. Both operations are map operations of this one map, so a poll recorded outside one is
+     * the race window itself (against the earlier lock-free `pending.poll()` the count is zero).
+     */
+    @Test
+    void consume_dequeuesInsideTheKeysOwnMapOperation_soNoRetryProbeCanSlipIn() throws Exception {
+        String d = digest("report", "content");
+        WriteGrantService raced = new WriteGrantService(clock);
+        GrantOperationWitness witness = new GrantOperationWitness();
+        Field field = WriteGrantService.class.getDeclaredField("grants");
+        field.setAccessible(true);
+        field.set(raced, witness.trappingMap());
+
+        raced.grant(RUN, "generate_report", d);
+        // The retry probe runs as a per-key operation of the same map (the shared critical
+        // section), then the consume dequeues.
+        assertThat(raced.prepareRetryGrant(RUN, "generate_report", d))
+                .isEqualTo(WriteGrantService.RetryGrant.REUSED_PENDING);
+        assertThat(raced.consume(RUN, "generate_report", d)).isTrue();
+
+        assertThat(witness.dequeuesInsideTheirKeyOperation())
+                .as("the dequeue that authorizes the execution must run inside the key's"
+                        + " per-key map operation (one critical section shared with the retry probe)")
+                .isEqualTo(1);
+        assertThat(witness.dequeuesOutsideAnyOperation())
+                .as("a poll outside a map operation is the interleaving window a retry probe"
+                        + " can renew through")
+                .isZero();
+        assertThat(raced.trackedKeyCount()).isZero();
+    }
+
+    /**
+     * Operational companion of {@link #consume_dequeuesInsideTheKeysOwnMapOperation_soNoRetryProbeCanSlipIn}:
+     * race a real consume against a real retry probe under a start latch and assert the forbidden
+     * combination never occurs — a consume that authorized an execution must never be followed by
+     * a renewal (a second authorization for the same grant). With the shared critical section
+     * every schedule is one of the two legal serial orders, so exactly one authorization exists
+     * after the race; the deterministic trap pin above is the primary witness.
+     */
+    @Test
+    void consumeRacedWithARetryProbe_neverRenewsAfterAConsumeAuthorizedTheExecution() throws Exception {
+        String d = digest("report", "content");
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 100; round++) {
+                WriteGrantService raced = new WriteGrantService(clock);
+                raced.grant(RUN, "generate_report", d);
+                CountDownLatch start = new CountDownLatch(1);
+                Future<Boolean> consumed = pool.submit(() -> {
+                    start.await();
+                    return raced.consume(RUN, "generate_report", d);
+                });
+                Future<WriteGrantService.RetryGrant> retried = pool.submit(() -> {
+                    start.await();
+                    return raced.prepareRetryGrant(RUN, "generate_report", d);
+                });
+                start.countDown();
+                boolean consumeWon = consumed.get(10, TimeUnit.SECONDS);
+                WriteGrantService.RetryGrant retryOutcome = retried.get(10, TimeUnit.SECONDS);
+
+                assertThat(consumeWon && retryOutcome == WriteGrantService.RetryGrant.RENEWED)
+                        .as("round %d: a renewal after consume=%s would be a second authorization",
+                                round, consumeWon)
+                        .isFalse();
+                // One approval, one execution: the race plus the follow-up consume authorize at
+                // most one call, whatever the schedule was.
+                int authorizations = consumeWon ? 1 : 0;
+                if (raced.consume(RUN, "generate_report", d)) {
+                    authorizations++;
+                }
+                assertThat(authorizations).as("round %d: authorizations", round).isEqualTo(1);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
@@ -324,6 +547,89 @@ class WriteGrantServiceTest {
         // argsDigest itself is unchanged: it still preserves top-level nulls.
         assertThat(WriteGrantService.argsDigest(singleEntry("a", null)))
                 .isNotEqualTo(WriteGrantService.argsDigest(Map.of()));
+    }
+
+    /**
+     * Map double for the F2 atomicity pin (the trapping-map pattern of
+     * {@link #grant_enqueuedWhileTheKeyIsBeingEmptied_isStillConsumable}): it records every poll
+     * of a grant queue together with the per-key map operation that is active at that moment.
+     * {@code consume} and {@code prepareRetryGrant} must both be operations of ONE map, so the
+     * decisive observation is whether the dequeue ran inside an operation on its own key. Only
+     * the fusing operations count as critical sections: a plain {@code get} is lock-free and is
+     * exactly where the earlier {@code consume} dequeued from.
+     */
+    private static final class GrantOperationWitness {
+
+        private final Deque<Object> activeOperations = new ArrayDeque<>();
+        private final List<Boolean> pollsInsideTheirKeyOperation = new ArrayList<>();
+
+        ConcurrentMap<Object, ConcurrentLinkedQueue<Instant>> trappingMap() {
+            return new ConcurrentHashMap<>() {
+                @Override
+                public ConcurrentLinkedQueue<Instant> compute(Object key,
+                        BiFunction<? super Object, ? super ConcurrentLinkedQueue<Instant>,
+                                ? extends ConcurrentLinkedQueue<Instant>> remappingFunction) {
+                    return super.compute(key, (k, queue) ->
+                            inOperation(k, () -> witnessed(k, remappingFunction.apply(k, queue))));
+                }
+
+                @Override
+                public ConcurrentLinkedQueue<Instant> computeIfPresent(Object key,
+                        BiFunction<? super Object, ? super ConcurrentLinkedQueue<Instant>,
+                                ? extends ConcurrentLinkedQueue<Instant>> remappingFunction) {
+                    return super.computeIfPresent(key, (k, queue) ->
+                            inOperation(k, () -> remappingFunction.apply(k, queue)));
+                }
+            };
+        }
+
+        /** Wraps a freshly created queue so its dequeues are witnessed (idempotent). */
+        private ConcurrentLinkedQueue<Instant> witnessed(Object key, ConcurrentLinkedQueue<Instant> queue) {
+            if (queue == null || queue instanceof WitnessedQueue) {
+                return queue;
+            }
+            return new WitnessedQueue(key, queue, activeOperations, pollsInsideTheirKeyOperation);
+        }
+
+        private ConcurrentLinkedQueue<Instant> inOperation(Object key, Supplier<ConcurrentLinkedQueue<Instant>> operation) {
+            activeOperations.push(key);
+            try {
+                return operation.get();
+            } finally {
+                activeOperations.pop();
+            }
+        }
+
+        long dequeuesInsideTheirKeyOperation() {
+            return pollsInsideTheirKeyOperation.stream().filter(Boolean.TRUE::equals).count();
+        }
+
+        long dequeuesOutsideAnyOperation() {
+            return pollsInsideTheirKeyOperation.stream().filter(Boolean.FALSE::equals).count();
+        }
+    }
+
+    /** A grant queue that reports to the witness whether each dequeue ran inside its key's operation. */
+    private static final class WitnessedQueue extends ConcurrentLinkedQueue<Instant> {
+
+        private final Object ownKey;
+        private final Deque<Object> activeOperations;
+        private final List<Boolean> pollsInsideTheirKeyOperation;
+
+        private WitnessedQueue(Object ownKey, Collection<? extends Instant> entries,
+                               Deque<Object> activeOperations,
+                               List<Boolean> pollsInsideTheirKeyOperation) {
+            this.ownKey = ownKey;
+            this.activeOperations = activeOperations;
+            this.pollsInsideTheirKeyOperation = pollsInsideTheirKeyOperation;
+            addAll(entries);
+        }
+
+        @Override
+        public Instant poll() {
+            pollsInsideTheirKeyOperation.add(ownKey.equals(activeOperations.peek()));
+            return super.poll();
+        }
     }
 
     private static Map<String, Object> singleEntry(String key, Object value) {

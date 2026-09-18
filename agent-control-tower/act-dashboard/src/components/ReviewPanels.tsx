@@ -18,6 +18,25 @@ interface PanelProps {
   pendingAsks: Approval[];
 }
 
+/**
+ * Whether an ACP ask is undecidable for approval (F3/R4). Mirrors the backend predicate
+ * (`AcpPermissionCoordinator.isTruncated`), which fails closed: a blank/unparseable display
+ * record counts as truncated, and so does an absent (or non-boolean) `rawInputTruncated` flag.
+ * Only an explicit `false` — the one value the backend reads as decidable — offers Allow once.
+ * `parseAcpDisplay` collapses an absent flag to `false`, so the raw record is consulted here for
+ * the tri-state; this reads the control flag only and never re-renders the redacted payload.
+ */
+function isUndecidableAcpAsk(ask: Approval): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(ask.displayJson ?? '');
+  } catch {
+    return true;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return true;
+  return (parsed as Record<string, unknown>).rawInputTruncated !== false;
+}
+
 /** Ask decision surface - used by the collapsed drawer and the ReviewWorkspace rail. */
 export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const queryClient = useQueryClient();
@@ -93,6 +112,10 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
         const display = parseAcpDisplay(ask);
         const toolLabel = acpToolLabel(ask);
         const expired = isAskExpired(ask);
+        // F3/R4: the backend refuses an approval the bridge truncated or that shows no readable
+        // display record (UNDECIDABLE_ASK), so Allow once must not be offered here either — the
+        // check fails closed exactly like the backend predicate. Deny still works.
+        const undecidable = isUndecidableAcpAsk(ask);
         return (
           <div key={ask.id} className="ask-card acp-card">
             <div className="ask-q">
@@ -127,7 +150,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
               {hasAllowOnce(ask) ? (
                 <button
                   className="btn primary"
-                  disabled={resolveAsk.isPending || expired}
+                  disabled={resolveAsk.isPending || expired || undecidable}
                   onClick={() => resolve({ ask, approved: true })}
                 >
                   Allow once
@@ -143,6 +166,11 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
               >
                 Deny
               </button>
+              {undecidable && (
+                <span className="acp-hint">
+                  This ask cannot be approved: its input is incomplete or unreadable. Deny still works.
+                </span>
+              )}
             </div>
           </div>
         );

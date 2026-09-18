@@ -414,3 +414,29 @@ export function transitionKanban(
 ) {
   return apiCall(request, 'POST', `/kanban/items/${id}/transition`, { status, ...extra });
 }
+
+/**
+ * Dispatch a just-seeded TODO card and return it once a run is linked.
+ *
+ * A card created in TODO is itself a dispatch intent: KanbanAutoDispatchListener
+ * (auto-dispatch-on-create, on by default) dispatches it right after the create
+ * commits and races an explicit TODO→IN_PROGRESS move with the same dispatch. When
+ * the listener wins the race, the move loses its optimistic lock and answers 409
+ * ("Card was modified by another move"); the card is dispatched either way, so the
+ * linked run — not the mover — is the contract.
+ */
+export async function dispatchSeededCard(request: APIRequestContext, id: string) {
+  const moved = await transitionKanban(request, id, 'IN_PROGRESS');
+  // A pickup pre-validation failure returns 200 with the card still in TODO
+  // (lastError set) — fail fast here instead of timing out on the run poll.
+  if (moved.status === 200 && moved.data?.status !== 'IN_PROGRESS') {
+    throw new Error(
+      `TODO→IN_PROGRESS stayed ${moved.data?.status} (lastError=${moved.data?.lastError});`
+      + ' pickup pre-validation failed',
+    );
+  }
+  if (moved.status !== 200 && moved.status !== 409) {
+    throw new Error(`TODO→IN_PROGRESS dispatch rejected: ${JSON.stringify(moved.data)}`);
+  }
+  return pollUntil<any>(request, `/kanban/items/${id}`, (c) => !!c?.linkedRunId, 30_000);
+}

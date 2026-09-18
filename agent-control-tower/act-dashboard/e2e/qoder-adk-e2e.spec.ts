@@ -476,7 +476,10 @@ test('S6: credential set/mask/remove/test via API and the Providers page', async
   await page.goto('/providers');
   const cardEl = page.getByTestId('qoder-credential-card');
   await expect(cardEl).toBeVisible({ timeout: 30_000 });
-  await expect(cardEl.getByText('Configured')).toBeVisible({ timeout: 30_000 });
+  // exact:true — the card also carries the fixed sentence "A configured PAT alone is
+  // not sufficient…" (QoderCredentialCard.tsx:296), which a substring match would
+  // resolve to as a second element (strict-mode violation).
+  await expect(cardEl.getByText('Configured', { exact: true })).toBeVisible({ timeout: 30_000 });
   const maskedCell = cardEl.locator('.cell-mono');
   await expect(maskedCell).toHaveText(`****${last4}`);
   const domText = (await page.locator('body').innerText()).replace(/\s+/g, ' ');

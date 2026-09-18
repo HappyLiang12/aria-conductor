@@ -191,12 +191,15 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 export interface SeedQoderAgentOpts {
   name?: string;
   /**
-   * Agent config JSON. Defaults to `{"taskApprovalRequired": false}` so the legacy
-   * task-level gate (AgentLoopEngine.taskApprovalGate, default-on) does not pause
-   * every scenario before the ACP ask under test (per-tool HITL is the qoder gate).
-   * Pass an explicit config to re-enable it.
+   * Agent config as a JSON object — the REST contract is a Map
+   * (CreateAgentRequest.config, act-agent CreateAgentRequest.java:35); a string
+   * body fails deserialization with a LinkedHashMap creator error. Defaults to
+   * `{"taskApprovalRequired": false}` so the legacy task-level gate
+   * (AgentLoopEngine.taskApprovalGate, default-on) does not pause every scenario
+   * before the ACP ask under test (per-tool HITL is the qoder gate). Pass an
+   * explicit config to re-enable it.
    */
-  config?: string;
+  config?: Record<string, unknown>;
 }
 
 /** POST /agents — ADK agent pinned to the `qoder` provider (fixtures' seeder defaults to opencode). */
@@ -207,7 +210,7 @@ export async function seedQoderAgent(request: APIRequestContext, opts: SeedQoder
     adkProvider: 'qoder',
     role: 'dev',
   };
-  body.config = opts.config ?? '{"taskApprovalRequired": false}';
+  body.config = opts.config ?? { taskApprovalRequired: false };
   const { status, data } = await requestJson(request, 'POST', '/agents', body);
   if (status !== 201) {
     throw new Error(`seedQoderAgent failed: HTTP ${status} ${JSON.stringify(data)?.slice(0, 300)}`);

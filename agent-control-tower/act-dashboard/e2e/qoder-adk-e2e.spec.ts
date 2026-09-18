@@ -47,7 +47,6 @@ import {
   listAsksForRun,
   listSandboxContainerIds,
   readFileInSandbox,
-  requestJson,
   requireEnabledOrSkip,
   runDetail,
   runProgress,
@@ -131,17 +130,22 @@ async function dispatchWriteCard(request: APIRequestContext, agentName: string, 
     agentTemplateId: agentName,
   });
   const moved = await transitionKanban(request, card.id, 'IN_PROGRESS');
-  expect(moved.status, `TODO→IN_PROGRESS dispatch rejected: ${JSON.stringify(moved.data)}`).toBe(200);
-  let runId: string | undefined = moved.data?.linkedRunId;
-  if (!runId) {
-    // Fallback: the transition response shape is not the contract; the card link is.
-    const cardNow = await requestJson(request, 'GET', `/kanban/items/${card.id}`);
-    runId = cardNow.data?.linkedRunId ?? undefined;
+  // A card created in TODO is itself a dispatch intent: KanbanAutoDispatchListener
+  // (auto-dispatch-on-create, on by default) dispatches it right after the create
+  // commits and races this explicit operator move with the same dispatch — card
+  // description, pinned agent, one run. When the listener wins, this move loses its
+  // optimistic lock and answers 409 ("Card was modified by another move"); the card
+  // is dispatched either way, so the run link — not the mover — is the contract.
+  if (moved.status !== 200 && moved.status !== 409) {
+    throw new Error(`TODO→IN_PROGRESS dispatch rejected: ${JSON.stringify(moved.data)}`);
   }
-  if (!runId) {
-    throw new Error(`dispatch did not link a run: ${JSON.stringify(moved.data)?.slice(0, 300)}`);
-  }
-  return { card, runId };
+  const dispatched = await pollUntil<any>(
+    request,
+    `/kanban/items/${card.id}`,
+    (c) => !!c?.linkedRunId,
+    30_000,
+  );
+  return { card, runId: dispatched.linkedRunId as string };
 }
 
 // ── S1 ──────────────────────────────────────────────────────────────────────

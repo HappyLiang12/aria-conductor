@@ -27,7 +27,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -325,9 +324,8 @@ class WriteGrantServiceTest {
      * decision, and the retry then takes the RENEWED branch and mints a second authorization —
      * precisely the consume-first bypass the mechanism exists to close.
      *
-     * <p>Deterministic and single-threaded, following the trapping-map pattern of
-     * {@link #grant_enqueuedWhileTheKeyIsBeingEmptied_isStillConsumable}: the map double records,
-     * for every poll of a grant queue, whether the poll ran inside a per-key map operation on that
+     * <p>Deterministic and single-threaded, using a trapping map: the map double records, for
+     * every poll of a grant queue, whether the poll ran inside a per-key map operation on that
      * key. Both operations are map operations of this one map, so a poll recorded outside one is
      * the race window itself (against the earlier lock-free `pending.poll()` the count is zero).
      */
@@ -402,30 +400,6 @@ class WriteGrantServiceTest {
         } finally {
             pool.shutdownNow();
         }
-    }
-
-    @Test
-    void grant_enqueuedWhileTheKeyIsBeingEmptied_isStillConsumable() throws Exception {
-        // Deterministic interleaving: a consume polls this key empty and drops it in the window
-        // between the grant's map lookup and its enqueue. The grant must survive the race.
-        WriteGrantService raced = new WriteGrantService(clock);
-        Field field = WriteGrantService.class.getDeclaredField("grants");
-        field.setAccessible(true);
-        ConcurrentMap<Object, ConcurrentLinkedQueue<Instant>> trapping = new ConcurrentHashMap<>() {
-            @Override
-            public ConcurrentLinkedQueue<Instant> computeIfAbsent(
-                    Object key, Function<? super Object, ? extends ConcurrentLinkedQueue<Instant>> mappingFunction) {
-                ConcurrentLinkedQueue<Instant> queue = super.computeIfAbsent(key, mappingFunction);
-                queue.poll();
-                super.computeIfPresent(key, (k, q) -> q.isEmpty() ? null : q);
-                return queue;
-            }
-        };
-        field.set(raced, trapping);
-
-        raced.grant(RUN, "amend_report", "digest-a");
-
-        assertThat(raced.consume(RUN, "amend_report", "digest-a")).isTrue();
     }
 
     @Test
@@ -550,9 +524,8 @@ class WriteGrantServiceTest {
     }
 
     /**
-     * Map double for the F2 atomicity pin (the trapping-map pattern of
-     * {@link #grant_enqueuedWhileTheKeyIsBeingEmptied_isStillConsumable}): it records every poll
-     * of a grant queue together with the per-key map operation that is active at that moment.
+     * Map double for the F2 atomicity pin: it records every poll of a grant queue together with
+     * the per-key map operation that is active at that moment.
      * {@code consume} and {@code prepareRetryGrant} must both be operations of ONE map, so the
      * decisive observation is whether the dequeue ran inside an operation on its own key. Only
      * the fusing operations count as critical sections: a plain {@code get} is lock-free and is

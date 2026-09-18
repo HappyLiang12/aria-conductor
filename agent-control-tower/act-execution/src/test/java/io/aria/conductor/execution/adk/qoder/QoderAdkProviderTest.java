@@ -27,6 +27,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -103,6 +105,8 @@ class QoderAdkProviderTest {
     @Mock SandboxLifecycle sandboxLifecycle;
     @Mock QoderBridgeClient client;
     @Mock QoderBridgeClient.EventStream eventStream;
+    /** Pump double for the deterministic stop-proof pins (no real reader thread). */
+    @Mock QoderProgressPump pump;
     @Mock RuntimeCredentialService credentialService;
     @Mock RunScopedCredentialService runScopedCredentialService;
     @Mock WriteGrantService writeGrantService;
@@ -536,8 +540,16 @@ class QoderAdkProviderTest {
 
     // ---- busy rejection ------------------------------------------------------
 
-    @Test
-    void executeTask_secondConcurrentRunForOneAgent_failsWithTypedBusyError() throws Exception {
+    /**
+     * The live negative of the parameterized hand-over pin: every non-terminal status — the
+     * complement of the guard's terminal set (PENDING / INITIALIZING / RUNNING / PAUSED) — keeps
+     * the typed busy rejection, never a handover. The EnumSource excludes the four terminal
+     * statuses, so a newly added non-terminal status is covered as soon as it exists.
+     */
+    @ParameterizedTest(name = "previous run live as {0}")
+    @EnumSource(value = RunStatus.class, mode = EnumSource.Mode.EXCLUDE,
+            names = {"COMPLETED", "FAILED", "CANCELLED", "ABORTED"})
+    void executeTask_secondConcurrentRunForOneAgent_failsWithTypedBusyError(RunStatus liveStatus) throws Exception {
         UUID agentId = UUID.randomUUID();
         UUID firstRun = UUID.randomUUID();
         UUID secondRun = UUID.randomUUID();
@@ -552,7 +564,7 @@ class QoderAdkProviderTest {
         // The live run's row proves it is not terminal: the terminal-aware slot guard added for
         // the kanban re-dispatch must still reject here, never hand the slot over.
         lenient().when(runRepository.findById(firstRun)).thenReturn(Optional.of(
-                Run.builder().id(firstRun).agentId(agentId).status(RunStatus.RUNNING).build()));
+                Run.builder().id(firstRun).agentId(agentId).status(liveStatus).build()));
 
         Thread first = new Thread(() -> provider.executeTask(agent(agentId), firstRun, PROMPT_TEXT,
                 new TaskContext(1, Duration.ofMinutes(2))), "first-run");
@@ -1676,21 +1688,27 @@ class QoderAdkProviderTest {
     // ---- G4 item 1: the per-agent slot guard is terminal-aware --------------------------------
 
     /**
-     * F9 acceptance on the qoder path: the kanban stop flips the previous run's row to CANCELLED
-     * synchronously, while its provider call keeps the agent's single-run slot until the abort
-     * finishes (async engine abort, ~1s poll, then up to the 15s stop grace). A re-dispatched run
-     * landing in that window must take the slot over instead of failing with the busy error, and
-     * the winding-down run's teardown must not evict the successor's registration.
+     * F9 acceptance on the qoder path: a terminal predecessor's provider call keeps the agent's
+     * single-run slot until its abort finishes (async engine abort, ~1s poll, then up to the 15s
+     * stop grace). A re-dispatched run landing in that window must take the slot over instead of
+     * failing with the busy error, and the winding-down run's teardown must not evict the
+     * successor's registration.
+     *
+     * <p>Parameterized over the guard's whole terminal set, so dropping any one of
+     * COMPLETED / FAILED / CANCELLED / ABORTED from it fails its parameter.
      */
-    @Test
-    void executeTask_previousRunCancelledButStillWindingDown_takesOverTheSlotInsteadOfRejecting() throws Exception {
+    @ParameterizedTest(name = "previous run terminal as {0}")
+    @EnumSource(value = RunStatus.class, names = {"COMPLETED", "FAILED", "CANCELLED", "ABORTED"})
+    void executeTask_previousRunTerminalButStillWindingDown_takesOverTheSlotInsteadOfRejecting(
+            RunStatus terminalStatus) throws Exception {
         UUID agentId = UUID.randomUUID();
         UUID oldRun = UUID.randomUUID();
         UUID newRun = UUID.randomUUID();
-        // The kanban stop already flipped the old run's row to CANCELLED; the engine's async
-        // abort has not torn its provider call down yet, so the slot is still held.
+        // The previous run's row is already terminal in the run store (the kanban stop flipped it
+        // to CANCELLED, or the run finished as COMPLETED/FAILED/ABORTED); its provider call has
+        // not been torn down yet, so the slot is still held.
         lenient().when(runRepository.findById(oldRun)).thenReturn(Optional.of(
-                Run.builder().id(oldRun).agentId(agentId).status(RunStatus.CANCELLED).build()));
+                Run.builder().id(oldRun).agentId(agentId).status(terminalStatus).build()));
         CountDownLatch oldStreamOpen = new CountDownLatch(1);
         CountDownLatch releaseOldStream = new CountDownLatch(1);
         CountDownLatch releaseNewStream = new CountDownLatch(1);
@@ -1763,6 +1781,78 @@ class QoderAdkProviderTest {
         assertThat(fresh.get()).isNotNull();
         assertThat(fresh.get().runId()).isEqualTo(newRun);
         assertThat(provider.activeRunsForTest()).doesNotContainKey(agentId);
+    }
+
+    // ---- G6 item 1: the last-resort kill is guarded by slot ownership --------------------------
+
+    /**
+     * G4 review Minor 1: after a terminal predecessor hands the agent's slot over, both runs hold
+     * the same {@link QoderAdkProvider.QoderInstance}, so an unproven stop in the predecessor must
+     * not run its last-resort kill — destroying the shared sandbox and closing the shared bridge
+     * client would end the successor's stream and lose its sandbox. The agent's slot is the
+     * ownership proof: it now belongs to the successor, so the kill is skipped.
+     */
+    @Test
+    void abortTask_supersededRunWithAnUnprovenStop_doesNotKillTheSandboxOrCloseTheSharedClient() {
+        QoderAdkProvider owning = owningClientsProvider();
+        UUID agentId = UUID.randomUUID();
+        UUID supersededRun = UUID.randomUUID();
+        UUID successorRun = UUID.randomUUID();
+        QoderAdkProvider.QoderInstance inst = instance(agentId);
+        owning.instancesForTest().put(agentId, inst);
+        owning.runInstancesForTest().put(supersededRun, inst);
+        owning.runClientsForTest().put(supersededRun, client);
+        owning.runSessionsForTest().put(supersededRun, BRIDGE_SESSION);
+        owning.runPumpsForTest().put(supersededRun, pump);
+        // The slot already belongs to the successor; both runs share the instance.
+        owning.activeRunsForTest().put(agentId, successorRun);
+        // The stop proof fails: this is exactly the last-resort boundary.
+        when(pump.awaitStopped(any(Duration.class))).thenReturn(false);
+
+        owning.abortTask(supersededRun);
+
+        // The cancel is still delivered (idempotent), but the shared sandbox, bridge client and
+        // instance registration survive for the successor that owns the slot.
+        verify(client).cancel(BRIDGE_SESSION);
+        verify(sandboxLifecycle, never()).killSandbox(anyString());
+        verify(client, never()).close();
+        assertThat(owning.instancesForTest()).containsEntry(agentId, inst);
+    }
+
+    /**
+     * The complementary direction: the guard protects a successor, it never disables the bounded
+     * fallback — a run that still owns the slot keeps killing the sandbox when its stop cannot be
+     * proven within the grace (design §5.3).
+     */
+    @Test
+    void abortTask_runThatStillOwnsTheSlotWithAnUnprovenStop_stillKillsTheSandbox() {
+        QoderAdkProvider owning = owningClientsProvider();
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        QoderAdkProvider.QoderInstance inst = instance(agentId);
+        owning.instancesForTest().put(agentId, inst);
+        owning.runInstancesForTest().put(runId, inst);
+        owning.runClientsForTest().put(runId, client);
+        owning.runSessionsForTest().put(runId, BRIDGE_SESSION);
+        owning.runPumpsForTest().put(runId, pump);
+        owning.activeRunsForTest().put(agentId, runId);
+        when(pump.awaitStopped(any(Duration.class))).thenReturn(false);
+
+        owning.abortTask(runId);
+
+        verify(sandboxLifecycle).killSandbox(SANDBOX_ID);
+        verify(client).close();
+    }
+
+    /** A provider that owns its bridge clients, so {@code closeIfOwned} is observable here. */
+    private QoderAdkProvider owningClientsProvider() {
+        return new QoderAdkProvider(properties, sandboxLifecycle, credentialService, publisher, mcpProperties);
+    }
+
+    /** A hand-built instance for the seeded-map pins (synthetic values only). */
+    private QoderAdkProvider.QoderInstance instance(UUID agentId) {
+        return new QoderAdkProvider.QoderInstance(agentId, SANDBOX_ID, BRIDGE_URL,
+                "synthetic-bridge-token", "synthetic-pat-hash", client);
     }
 
     // ---- G4 item 2: the pending-abort record is atomic with the run's registration ------------

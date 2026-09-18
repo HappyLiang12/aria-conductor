@@ -83,7 +83,9 @@ import java.util.function.Function;
  * <p>Deadline model (C0.6): the caller-provided {@link TaskContext#maxDuration()} is
  * honored; a {@code null} duration falls back to {@code qoder.max-task-minutes}. On
  * timeout the bridge session is cancelled first and the agent's sandbox is killed only
- * as the last bounded fallback when the stop cannot be proven.
+ * as the last bounded fallback when the stop cannot be proven — and only by a run that
+ * still owns the agent's slot, so a superseded run can never tear down the shared
+ * sandbox or bridge client of its successor.
  */
 @Slf4j
 @Component
@@ -572,8 +574,9 @@ public class QoderAdkProvider extends AbstractAdkProvider {
 
     /**
      * Cancel a run's bridge session and prove the stop: wait the bounded grace for the
-     * event stream to end; only when that cannot be proven is the agent's sandbox killed
-     * as the last bounded fallback (design §5.3).
+     * event stream to end; only when that cannot be proven — and the run still owns the
+     * agent's slot, so the shared sandbox is provably not serving a successor — is the
+     * agent's sandbox killed as the last bounded fallback (design §5.3).
      */
     private void stopRun(UUID runId, String sessionId, QoderBridgeClient client, QoderInstance inst) {
         cancelSession(client, sessionId, runId);
@@ -590,11 +593,23 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         if (stopped) {
             return;
         }
-        if (inst != null) {
-            log.warn("Qoder run {} did not stop within {}ms of cancel — killing sandbox {} as the last bounded fallback",
-                    runId, stopGrace.toMillis(), inst.sandboxId());
-            killAndForgetInstance(inst);
+        if (inst == null) {
+            return;
         }
+        // After a slot hand-over both runs hold this same instance (the terminal predecessor's
+        // teardown trails its cancellation): killing the sandbox and closing the bridge client
+        // would end the successor's stream and lose its sandbox. The agent's slot is the
+        // ownership proof — only a run that still owns it may run the last-resort kill.
+        UUID slotOwner = activeRuns.get(inst.agentId());
+        if (!runId.equals(slotOwner)) {
+            log.warn("Qoder run {} did not stop within {}ms of cancel — skipping the last-resort kill of"
+                            + " sandbox {}: the agent's slot now belongs to run {} (this run was superseded)",
+                    runId, stopGrace.toMillis(), inst.sandboxId(), slotOwner);
+            return;
+        }
+        log.warn("Qoder run {} did not stop within {}ms of cancel — killing sandbox {} as the last bounded fallback",
+                runId, stopGrace.toMillis(), inst.sandboxId());
+        killAndForgetInstance(inst);
     }
 
     private void cancelSession(QoderBridgeClient client, String sessionId, UUID runId) {

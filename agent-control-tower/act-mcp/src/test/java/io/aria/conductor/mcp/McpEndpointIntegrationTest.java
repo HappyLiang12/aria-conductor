@@ -29,6 +29,7 @@ class McpEndpointIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.service.KnowledgeService knowledgeService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalQueryService approvalQueryService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalGate approvalGate;
+    @MockitoBean io.aria.conductor.execution.approval.ApprovalDecisionService approvalDecisionService;
     @MockitoBean io.aria.conductor.agent.service.AgentService agentService;
     @MockitoBean io.aria.conductor.agent.service.RunService runService;
     @MockitoBean io.aria.conductor.agent.service.LlmProviderService llmProviderService;

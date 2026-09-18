@@ -2,6 +2,7 @@ package io.aria.conductor.execution.approval;
 
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Clock;
@@ -14,11 +15,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -174,6 +179,30 @@ class WriteGrantServiceTest {
 
         assertThat(service.consume(RUN, "generate_report", d)).isTrue();
         assertThat(service.consume(RUN, "generate_report", d)).isTrue();
+    }
+
+    @Test
+    void grant_enqueuedWhileTheKeyIsBeingEmptied_isStillConsumable() throws Exception {
+        // Deterministic interleaving: a consume polls this key empty and drops it in the window
+        // between the grant's map lookup and its enqueue. The grant must survive the race.
+        WriteGrantService raced = new WriteGrantService(clock);
+        Field field = WriteGrantService.class.getDeclaredField("grants");
+        field.setAccessible(true);
+        ConcurrentMap<Object, ConcurrentLinkedQueue<Instant>> trapping = new ConcurrentHashMap<>() {
+            @Override
+            public ConcurrentLinkedQueue<Instant> computeIfAbsent(
+                    Object key, Function<? super Object, ? extends ConcurrentLinkedQueue<Instant>> mappingFunction) {
+                ConcurrentLinkedQueue<Instant> queue = super.computeIfAbsent(key, mappingFunction);
+                queue.poll();
+                super.computeIfPresent(key, (k, q) -> q.isEmpty() ? null : q);
+                return queue;
+            }
+        };
+        field.set(raced, trapping);
+
+        raced.grant(RUN, "amend_report", "digest-a");
+
+        assertThat(raced.consume(RUN, "amend_report", "digest-a")).isTrue();
     }
 
     @Test

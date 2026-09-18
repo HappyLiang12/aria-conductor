@@ -47,7 +47,9 @@ import java.util.concurrent.ConcurrentMap;
  * automatic approval detection: the operator-side approval flow (a later task,
  * C2/C3) decides that a pending write request is approved and then calls
  * {@link #grant(UUID, String, String)} with the digest it computed through
- * {@link #argsDigest(Map)}. C4 only enforces consumption.
+ * {@link #effectiveArgsDigest(Map)} — the same method the enforcement side
+ * ({@code WorkerGovernanceAspect}) and the ACP approval side both use. C4 only
+ * enforces consumption.
  *
  * <p>All state is process memory, so grants also do not survive a restart.
  */
@@ -81,8 +83,11 @@ public class WriteGrantService {
     public void grant(UUID runId, String toolName, String argsDigest) {
         requireGrantKey(runId, toolName, argsDigest);
         Instant expiry = clock.instant().plus(GRANT_TTL);
-        grants.computeIfAbsent(new GrantKey(runId, toolName, argsDigest),
-                key -> new ConcurrentLinkedQueue<>()).add(expiry);
+        grants.compute(new GrantKey(runId, toolName, argsDigest), (key, queue) -> {
+            ConcurrentLinkedQueue<Instant> pending = queue == null ? new ConcurrentLinkedQueue<>() : queue;
+            pending.add(expiry);
+            return pending;
+        });
     }
 
     /**
@@ -102,8 +107,10 @@ public class WriteGrantService {
             return false;
         }
         Instant expiry = pending.poll();
-        // computeIfPresent is atomic per key on ConcurrentHashMap, so a concurrent
-        // grant cannot lose its entry to this removal.
+        // Both consume and grant mutate the key inside a single atomic
+        // ConcurrentHashMap operation, so this cleanup and a concurrent grant
+        // serialize per key: a grant can never be enqueued into a queue the map
+        // has already detached.
         grants.computeIfPresent(key, (k, queue) -> queue.isEmpty() ? null : queue);
         return expiry != null && expiry.isAfter(clock.instant());
     }

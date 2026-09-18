@@ -32,7 +32,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * C4 ruling 3 for auth-mode=none: a request without an Authorization header
+ * C4 ruling 2 for auth-mode=none: a request without an Authorization header
  * stays operator-equivalent (v1 behaviour unchanged), while a header that is
  * present must now be a live worker credential — anything else is 401. That
  * rejection is a deliberate fail-closed change (previously headers were ignored

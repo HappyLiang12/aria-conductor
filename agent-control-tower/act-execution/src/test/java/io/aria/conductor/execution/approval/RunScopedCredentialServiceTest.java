@@ -178,7 +178,10 @@ class RunScopedCredentialServiceTest {
 
         // A malformed run row must deny the auth check, not surface an IllegalArgumentException/500.
         assertThat(service.resolve(token)).isEmpty();
-        // The unusable credential is dropped like the other invalid token states.
+        // The unusable credential is dropped like the other invalid token states: even after the
+        // run row is repaired, the same token stays unresolvable.
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).agentId(UUID.randomUUID()).status(RunStatus.RUNNING).build()));
         assertThat(service.resolve(token)).isEmpty();
     }
 

@@ -151,7 +151,7 @@ public class ToolPolicyRegistry {
                 deny("instantiate_workflow_template", "default: workflow control is a control-plane action (design §6.2)"),
                 deny("get_workflow", "default: workflow control is a control-plane action (design §6.2)"),
                 deny("retire_knowledge", "default: no worker role retires knowledge (V34:16-18,29-31,42-45)"),
-                deny("list_approvals", "default: approval visibility is operator-side (design §6.2 line 302)"),
+                deny("list_approvals", "default: approval visibility is operator-side (design §6.2 line 301)"),
                 deny("list_agents", "default: agent inventory is control-plane; no worker consumer in V34"),
                 deny("list_runs", "default: run inventory is control-plane; workers read get_run instead"),
                 deny("list_running_runs", "default: run inventory is control-plane; no worker consumer in V34"),

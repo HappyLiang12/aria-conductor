@@ -165,6 +165,7 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
     }
 
     private static final String WRITE_FILE = "mcp__aria__write_file";
+    private static final String WRITE_FILE_RUNTIME = "write_file";
     private static final String RAWS_ARGS_DIGEST = WriteGrantService.effectiveArgsDigest(
             Map.of("path", "/workspace/x"));
     private static final String RAW_INPUT_X = json(Map.of("path", "/workspace/x"));
@@ -228,8 +229,8 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         assertThat(row.getDeliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
         // Exactly one bridge delivery and exactly one write grant for the approved triple.
         verify(client, times(1)).decide(SESSION_ID, "req-approve", true, "operator approved");
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isTrue();
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isFalse();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isFalse();
         // Exactly one ApprovalDecidedEvent, the two-arg TOOL_CALL shape of today.
         assertThat(decidedEvents()).singleElement().satisfies(event -> {
             assertThat(event.getApprovalId()).isEqualTo(approvalId);
@@ -261,7 +262,7 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         verify(client, times(1)).decide(SESSION_ID, "req-deny", false, "operator denied");
         // Denial leaves no reusable grant behind.
         assertThat(writeGrants.trackedKeyCount()).isZero();
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isFalse();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isFalse();
     }
 
     // ---- rejections (R21.1, R22, R24.3) --------------------------------------
@@ -377,7 +378,7 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
 
         ApprovalDecisionService.Result first = service.decide(approvalId, true, "operator approved");
         assertThat(first.deliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isTrue();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
         flushAndClear();
 
         // Operator-driven retry while the ask is still live: re-issue the grant, deliver again.
@@ -386,8 +387,8 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         assertThat(second.decision()).isEqualTo("APPROVED");
         assertThat(second.deliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
         verify(client, times(2)).decide(SESSION_ID, "req-retry", true, "operator approved");
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isTrue();
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isFalse();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isFalse();
         flushAndClear();
         assertThat(approvalRepository.findById(approvalId).orElseThrow().getStatus())
                 .isEqualTo(ApprovalStatus.APPROVED);
@@ -404,7 +405,7 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
                 .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
         UUID runId = companion(approvalId).getRunId();
         service.decide(approvalId, true, "operator approved");
-        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST)).isTrue();
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST)).isTrue();
         flushAndClear();
 
         ApprovalDecisionService.Result repeat = service.decide(approvalId, true, "operator approved");
@@ -480,6 +481,35 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
         // Not an MCP tool call: the approval stands but no write grant may be issued (R3/R4).
         assertThat(writeGrants.trackedKeyCount()).isZero();
         assertThat(writeGrants.consume(runId, "Bash", companion(approvalId).getRequestDigest())).isFalse();
+    }
+
+    /**
+     * R81: the enforcement seam (WorkerGovernanceAspect.java:89) consumes the grant with the Spring
+     * AI @Tool name — the bare runtime name. Minting under the ACP-qualified name left every
+     * approved worker write denied GRANT_REQUIRED in the live run (20:19:11, ask f6867117).
+     */
+    @Test
+    void mcpAsk_approve_issuesTheGrantUnderTheRuntimeToolName_theEnforcementSeamConsumes() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        coordinator.bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-runtime-name", RAW_INPUT_X, "allow_once", "reject_once"));
+        flushAndClear();
+        UUID approvalId = companionRepository
+                .findByBridgeSessionIdAndBridgeRequestId(SESSION_ID, "req-runtime-name").orElseThrow()
+                .getApprovalId();
+        when(client.decide(SESSION_ID, "req-runtime-name", true, "operator approved"))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+
+        assertThat(service.decide(approvalId, true, "operator approved").deliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+
+        assertThat(writeGrants.consume(runId, WRITE_FILE_RUNTIME, RAWS_ARGS_DIGEST))
+                .as("the runtime tool name must open the approved grant").isTrue();
+        assertThat(writeGrants.consume(runId, WRITE_FILE, RAWS_ARGS_DIGEST))
+                .as("the ACP-qualified name must NOT open the grant").isFalse();
+        assertThat(writeGrants.trackedKeyCount())
+                .as("no grant may linger under the qualified name").isZero();
     }
 
     // ---- bridge outcomes (R18, R24.8) ----------------------------------------

@@ -70,7 +70,7 @@ import java.util.stream.Collectors;
  * and its {@code displayJson} carries {@code "rawInputTruncated": true}; and an ask that is
  * not an MCP tool call still stores a real digest but is never grantable, because only names
  * matching {@code ^mcp__<server>__<tool>$} can carry a write grant. {@link
- * #digestForDecision(UUID)} is the only reader C3 may use, and it returns empty for both
+ * #grantBindingForDecision(UUID)} is the only reader C3 may use, and it returns empty for both
  * cases.
  *
  * <p><b>Transactions.</b> The coordinator is called from foreign threads and foreign
@@ -633,18 +633,34 @@ public class AcpPermissionCoordinator {
     }
 
     /**
-     * The stored authorization digest C3 feeds to {@link WriteGrantService#grant}. Empty when
-     * no companion exists, when the ask is undecidable (truncated input, R4) or when it is not
+     * The authorization binding C3 feeds to {@link WriteGrantService#grant}: the runtime tool name
+     * the enforcement seam consumes ({@code WorkerGovernanceAspect} is keyed by the Spring AI
+     * {@code @Tool} name, as is {@code ToolPolicyRegistry}) plus the stored argument digest. Empty
+     * when no companion exists, when the ask is undecidable (truncated input, R4) or when it is not
      * an MCP tool call (never grantable, R3).
      */
-    public Optional<String> digestForDecision(UUID approvalId) {
+    public Optional<GrantBinding> grantBindingForDecision(UUID approvalId) {
         if (approvalId == null) {
             return Optional.empty();
         }
         return companionRepository.findById(approvalId)
                 .filter(row -> MCP_TOOL_NAME.matcher(row.getToolName()).matches())
                 .filter(row -> !isTruncated(row))
-                .map(AcpPermissionRequest::getRequestDigest);
+                .map(row -> new GrantBinding(runtimeToolName(row.getToolName()), row.getRequestDigest()));
+    }
+
+    /** One approved worker write: the runtime tool name and the frozen argument digest. */
+    public record GrantBinding(String toolName, String digest) { }
+
+    /**
+     * Maps the CLI's qualified worker MCP tool name ({@code mcp__<server>__<tool>}, the shape
+     * permission asks carry) to the runtime tool name the enforcement seam sees. Only called for
+     * names that matched {@link #MCP_TOOL_NAME}; the platform MCP server is the only server in the
+     * worker's MCP config, so the bare tool name identifies the tool exactly.
+     */
+    static String runtimeToolName(String qualified) {
+        int separator = qualified.indexOf("__", "mcp__".length());
+        return separator < 0 ? qualified : qualified.substring(separator + 2);
     }
 
     private static boolean isTruncated(AcpPermissionRequest row) {

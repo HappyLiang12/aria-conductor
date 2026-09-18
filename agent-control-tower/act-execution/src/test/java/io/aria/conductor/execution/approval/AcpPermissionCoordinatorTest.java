@@ -229,8 +229,11 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
         assertThat(row.getOptionsJson()).contains("opt-allow_once").contains("opt-reject_once");
         assertThat(row.getDisplayJson()).contains("\"rawInputTruncated\":false")
                 .contains("\\\"path\\\"");
-        assertThat(coordinator.digestForDecision(approval.getId()))
-                .contains(row.getRequestDigest());
+        assertThat(coordinator.grantBindingForDecision(approval.getId()))
+                .hasValueSatisfying(binding -> {
+                    assertThat(binding.toolName()).isEqualTo("write_file");
+                    assertThat(binding.digest()).isEqualTo(row.getRequestDigest());
+                });
 
         // Exactly one after-commit event, carrying the ACP source and no tool-call UUID.
         List<ApprovalRequestedEvent> published = publishedApprovalEvents();
@@ -330,7 +333,7 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
         assertThat(row.getRequestDigest()).isEqualTo(sha256Hex(truncated));
         assertThat(row.getDisplayJson()).contains("\"rawInputTruncated\":true");
         assertThat(approval.getContent()).contains("truncated");
-        assertThat(coordinator.digestForDecision(approval.getId())).isEmpty();
+        assertThat(coordinator.grantBindingForDecision(approval.getId())).isEmpty();
     }
 
     @Test
@@ -376,6 +379,15 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
     }
 
     @Test
+    void runtimeToolName_stripsTheCliServerQualifier_forTheEnforcementSeam() {
+        assertThat(AcpPermissionCoordinator.runtimeToolName("mcp__aria__store_knowledge"))
+                .isEqualTo("store_knowledge");
+        assertThat(AcpPermissionCoordinator.runtimeToolName("mcp__aria__list_knowledge"))
+                .isEqualTo("list_knowledge");
+        assertThat(AcpPermissionCoordinator.runtimeToolName("Bash")).isEqualTo("Bash");
+    }
+
+    @Test
     void nonMcpAsk_isPersistedButNeverGrantable() {
         UUID runId = committedRun(RunStatus.RUNNING);
         bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
@@ -386,7 +398,7 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
 
         UUID approvalId = approvalRepository.findByRunId(runId).get(0).getId();
         assertThat(companion(runId, "req-bash").getToolName()).isEqualTo("Bash");
-        assertThat(coordinator.digestForDecision(approvalId)).isEmpty();
+        assertThat(coordinator.grantBindingForDecision(approvalId)).isEmpty();
     }
 
     @Test
@@ -905,8 +917,8 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
     }
 
     @Test
-    void digestForDecision_isEmptyForUnknownRows() {
-        assertThat(coordinator.digestForDecision(UUID.randomUUID())).isEmpty();
+    void grantBindingForDecision_isEmptyForUnknownRows() {
+        assertThat(coordinator.grantBindingForDecision(UUID.randomUUID())).isEmpty();
         assertThat(coordinator.deliverDecision(UUID.randomUUID(), true, "n/a"))
                 .isEqualTo(AcpPermissionCoordinator.DELIVERY_MISSING);
     }

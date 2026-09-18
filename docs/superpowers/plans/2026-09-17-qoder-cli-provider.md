@@ -476,8 +476,9 @@ authorization digest is the frozen `WriteGrantService.effectiveArgsDigest` — t
 shared with the enforcement side (R4, landed by `C4-fix1`); `requestDigest` holds that digest, oversize
 asks are persisted undecidable (R4); `Approval.toolCallId` stays null for ACP rows and the event gains a
 `source` field (R5, R6); malformed asks are cancelled, never coerced (R7); expiry is
-`min(approvals.timeout-ms, run deadline)` with the idempotent `deliverDecision`/`expire`/`digestForDecision`
-primitives C3 consumes (R8); restart recovery and the checker's ACP branch per R9/R10; provider wiring
+`min(approvals.timeout-ms, run deadline)` with the idempotent `deliverDecision`/`expire`/`grantBindingForDecision`
+primitives C3 consumes (R8; the binding reader was renamed from `digestForDecision` by the R81 fix); restart
+recovery and the checker's ACP branch per R9/R10; provider wiring
 issues the run-scoped worker credential (`RunScopedCredentialService.issue`, expiry = run deadline,
 capped at `MAX_TTL` 30 min — a longer run loses MCP access; documented residual), probes
 `sandboxHostResolver` candidates through the bridge, passes `mcpServers=[McpServer("aria", url,

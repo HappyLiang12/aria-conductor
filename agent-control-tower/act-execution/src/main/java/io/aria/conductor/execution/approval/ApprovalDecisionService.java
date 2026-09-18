@@ -229,15 +229,16 @@ public class ApprovalDecisionService {
 
     /**
      * Issue the one-use write grant that lets the approved invocation through the enforcement
-     * aspect. The coordinator's digest decides grantability (MCP tool name, untruncated input) and
-     * is empty for everything else — a denied ask never gets a grant.
+     * aspect. The coordinator's binding carries the runtime tool name the enforcement seam consumes
+     * and the frozen digest; it is empty when the ask is not grantable (not an MCP tool call,
+     * truncated input) — a denied ask never gets a grant.
      */
     private void issueGrant(UUID approvalId, boolean approved, AcpPermissionRequest row) {
         if (!approved) {
             return;
         }
-        coordinator.digestForDecision(approvalId).ifPresent(digest ->
-                writeGrantService.grant(row.getRunId(), row.getToolName(), digest));
+        coordinator.grantBindingForDecision(approvalId).ifPresent(binding ->
+                writeGrantService.grant(row.getRunId(), binding.toolName(), binding.digest()));
     }
 
     /**

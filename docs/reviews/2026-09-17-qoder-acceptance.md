@@ -4,13 +4,13 @@ Maps design Section 10 items 1–12 (`docs/superpowers/specs/2026-09-17-qoder-cl
 the executed evidence. Per `AGENTS.md`, an item is PASS only when every criterion was evaluated from the
 cited artifact; anything not evaluated says NOT VERIFIED and never gets upgraded.
 
-The authoritative live run for slice C is the fix-wave head (`06caaf0` plus `39583b1`, `de9e41f`,
-`da99c9f`, `b782c20`, `f03211c`, `33e1a25`, `6b48899`): execution **E11** (full matrix,
-`harness-console11.log`, `SUMMARY.run10.md`), **E12** (the environment-blocked steps re-run,
-`harness-console12.log`, `SUMMARY.run11.md`) and the E11 regression lane re-run (E13). The run-by-run
-disclosure, including every environment-caused failure and its classification, lives in
+The authoritative live runs for slice C are on the final tree (`173d210`, whose production code is
+identical to `7c8016a`): execution **E14** (the full matrix, `harness-console14.log`, `SUMMARY.run13.md`,
+with all six regression lanes green), **E15** (`SUMMARY.run14.md`, S5 and S9), **E16** (`SUMMARY.run15.md`,
+S10) and **E19** (`SUMMARY.run18.md`, S4). Together they carry every scenario, lane and scan on that tree.
+The run-by-run disclosure, including every environment-caused failure and its classification, lives in
 `docs/reviews/2026-09-17-qoder-slice-c-evidence.md`; the SDD ledger
-(`.superpowers/sdd/2026-09-17-qoder-cli-provider/progress.md`) carries the rulings R1–R108.
+(`.superpowers/sdd/2026-09-17-qoder-cli-provider/progress.md`) carries the rulings R1–R120.
 
 ## Item-by-item
 
@@ -46,8 +46,8 @@ disclosure, including every environment-caused failure and its classification, l
 
 ### 4. Task-level approval before CLI execution; cancel leaves nothing behind
 
-- Evidence: `S1.run6.log` (ordinary run through the task-approval config path), `S2.run6.log` (the
-  tool-level ask precedes the write), `S5.run9.log` (cancel: run `CANCELLED`, ask `EXPIRED` with
+- Evidence: `S1.run7.log` (ordinary run through the task-approval config path), `S2.run7.log` (the
+  tool-level ask precedes the write), `S5.run11.log` (cancel: run `CANCELLED`, ask `EXPIRED` with
   `run ended before decision`, graceful stop proven by the absence of `qodercli` in the container, the
   sandbox still present → the kill fallback was not needed), `e2e/qoder/slice-a/04-permissions.md` and
   `05-wait-renewal.md`, plus the wave's provider fix that honours a cancel landing during sandbox
@@ -56,8 +56,8 @@ disclosure, including every environment-caused failure and its classification, l
 
 ### 5. Ordinary and kanban runs surface asks; allow-once executes exactly once; deny prevents the side effect
 
-- Evidence: `S2.run6.log` (the first write lands after `proceed_once`; the second write raises a new ask),
-  `S3.run6.log` (denial → the file is absent, the run is not cancelled), `S9.run9.log` (kanban-dispatched
+- Evidence: `S2.run7.log` (the first write lands after `proceed_once`; the second write raises a new ask),
+  `S3.run7.log` (denial → the file is absent, the run is not cancelled), `S9.run11.log` (kanban-dispatched
   run shows the live ask; the decision does not mark the card DONE). The wave strengthened the invariant
   underneath: one approval now authorizes at most one execution (the dequeue and the retry probe share the
   per-key critical section), `request-changes` stops the linked run before re-dispatching, and the
@@ -91,8 +91,8 @@ disclosure, including every environment-caused failure and its classification, l
 
 ### 8. Concurrent approve/deny/expire/cancel has one terminal result; retries do not duplicate; late approvals rejected
 
-- Evidence: `S4.run8.log` (ask `EXPIRED` with `deliveryState=CANCELLED`, a late decide answers a typed
-  `409 EXPIRED`, the file is absent afterwards), `S5.run9.log` (cancel wins over a pending ask), and the
+- Evidence: `S4.run14.log` (ask `EXPIRED` with `deliveryState=CANCELLED`, a late decide answers a typed
+  `409 EXPIRED`, the file is absent afterwards), `S5.run11.log` (cancel wins over a pending ask), and the
   unit lanes `ApprovalGateConcurrencyTest`, `AcpPermissionCoordinatorTest` (ALREADY_RESOLVED, delivery
   race), `ApprovalDecisionServiceTest`, `ApprovalExpiryCheckerTest`. The wave's G2a fix is the
   load-bearing one here: a delivery retry can no longer accumulate a second consumable grant, and an
@@ -101,8 +101,8 @@ disclosure, including every environment-caused failure and its classification, l
 
 ### 9. Approval wait is visible, obeys the hard deadline, renews sandbox TTL, stays cancellable; restart interrupts rather than replays
 
-- Evidence: `e2e/qoder/slice-a/05-wait-renewal.md` (long wait + renewal), `S4.run8.log` (hard deadline with
-  `APPROVALS_TIMEOUT_MS=120000`), `S5.run9.log` (cancellable during the wait), `S10.run12.log` (backend
+- Evidence: `e2e/qoder/slice-a/05-wait-renewal.md` (long wait + renewal), `S4.run14.log` (hard deadline with
+  `APPROVALS_TIMEOUT_MS=120000`), `S5.run11.log` (cancellable during the wait), `S10.run15.log` (backend
   restart mid-ask → the startup sweep marks the run FAILED with "Run orphaned by backend restart", the ask
   expires with no replay), `ApprovalExpiryCheckerTest` (ACP branch), `QoderWaitRenewalE2ETest`. The wave
   added the bridge-side half: when the host is gone the bridge itself enforces the permission deadline and
@@ -111,7 +111,7 @@ disclosure, including every environment-caused failure and its classification, l
 
 ### 10. ACP final result, errors, unknown usage, bounded replay, unsupported shapes represented honestly; no zero-token inference presented as zero cost
 
-- Evidence: `S1.run6.log` (`reported usage (no zero-cost guarantee): totalTokensUsed=0`, the
+- Evidence: `S1.run7.log` (`reported usage (no zero-cost guarantee): totalTokensUsed=0`, the
   `qoder.model=efficient` progress event, the probe answering `billable=false`), the
   `QoderAdkProviderTest` / `QoderBridgeClientTest` / `QoderProgressPumpTest` lanes, the bridge unit suite
   re-run in this wave (72 passed | 2 skipped, GREEN log in the SDD workspace), and the spike report
@@ -120,16 +120,17 @@ disclosure, including every environment-caused failure and its classification, l
 
 ### 11. Browser golden path + deny/expire/cancel/double-submit in the existing Review surfaces; no other-provider regression
 
-- Evidence: `S12.run11.log` (governance regression including the ACP outcome strip derived from server
-  truth, console/network clean on touched routes), the live `S2.run6` / `S3.run6` / `S4.run8` / `S5.run9`
+- Evidence: `S12.run12.log` (governance regression including the ACP outcome strip derived from server
+  truth, console/network clean on touched routes), the live `S2.run7` / `S3.run7` / `S4.run14` / `S5.run11`
   paths, the new dashboard pins for the truncated-ask affordance (`ReviewQueue.acp.test.tsx`,
   `OpsPage.acp.test.tsx`, `ReviewPanels.acp.test.tsx`), and the `regression-playwright` lane.
-- Verdict: **PASS**, and the lane itself is **clean**: E13's run is `0 failed / 2 flaky / 35 skipped /
-  221 passed (14.2 m)`, `EXIT=0` (`regression-playwright.run7.log`). The two earlier occurrences were
-  classified away from the code first: E11's `overview-dashboard.spec.ts:28:3` was dirty-database slowness
-  (2.0 s on a fresh database) and E12's two workflow-spec failures pass standalone 27/27 in 31.9 s, i.e.
-  in-lane interference that did not recur. Double-submit is covered by the decision-dispatch race tests
-  (item 8) plus the C5 outcome strip rather than a separate browser scenario.
+- Verdict: **PASS**, and the lane itself is **clean**: E14's run is `regression-playwright.run8.log`, the
+  first fully clean lane of the series (E13's run7 was also clean at `0 failed / 2 flaky / 35 skipped /
+  221 passed`). The earlier occurrences were classified away from the code first: E11's
+  `overview-dashboard.spec.ts:28:3` was dirty-database slowness (2.0 s on a fresh database) and E12's two
+  workflow-spec failures pass standalone 27/27 in 31.9 s, i.e. in-lane interference. Double-submit is
+  covered by the decision-dispatch race tests (item 8) plus the C5 outcome strip rather than a separate
+  browser scenario.
 
 ### 12. Tests distinguish absent credentials (explicit skip) from configured-but-broken (failure)
 

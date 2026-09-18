@@ -8,8 +8,24 @@ import {
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
 import HousekeepingPanel from '../components/HousekeepingPanel';
+import { AcpDecisionOutcomes, type AcpOutcome } from '../components/AcpDecisionOutcomes';
+import {
+  acpToolLabel,
+  deliveryLabel,
+  describeDecisionError,
+  hasAllowOnce,
+  isAcpAsk,
+  isAskExpired,
+} from '../utils/acpAsk';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
-import type { Approval, Run, ActivityEvent, Agent, RunStatus } from '../types';
+import type {
+  Approval,
+  ApprovalDecisionReceipt,
+  Run,
+  ActivityEvent,
+  Agent,
+  RunStatus,
+} from '../types';
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -78,6 +94,28 @@ function eventToneOf(eventType: string): string {
   return '';
 }
 
+/**
+ * ACP success toast, keyed on the recorded delivery state: a delivered
+ * decision is an ok toast, a failed/missing delivery is an error toast
+ * carrying the delivery label (the decision itself is recorded regardless).
+ */
+function acpToastOf(
+  receipt: ApprovalDecisionReceipt,
+  approved: boolean,
+): { kind: 'ok' | 'info' | 'err'; msg: string } {
+  const state = receipt.deliveryState ?? null;
+  if (state === 'DELIVERED' || state === 'CANCELLED') {
+    return {
+      kind: 'ok',
+      msg: approved ? 'Permission delivered to the agent' : 'Denied — cancellation delivered',
+    };
+  }
+  if (state === 'FAILED' || state === 'MISSING') {
+    return { kind: 'err', msg: deliveryLabel(state) };
+  }
+  return { kind: 'info', msg: deliveryLabel(state) };
+}
+
 function avatarInitials(name: string): string {
   if (!name) return '··';
   const parts = name.trim().split(/\s+/);
@@ -105,6 +143,10 @@ export default function OpsPage() {
   const [now, setNow] = useState<Date>(new Date());
   const [toast, setToast] = useState<{ kind: 'ok' | 'info' | 'err'; msg: string } | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // ACP outcomes are Ops-local, keyed by ask id: a decided ask leaves the
+  // PENDING queue on the next refetch, so the strip under the queue keeps the
+  // outcome (and a FAILED delivery's Retry) reachable on this surface too.
+  const [acpOutcomes, setAcpOutcomes] = useState<Record<string, AcpOutcome>>({});
 
   // Heartbeat for "generated at" + relative timestamps.
   useEffect(() => {
@@ -156,22 +198,76 @@ export default function OpsPage() {
   }, [agentsQ.data]);
 
   /* ---------- Mutations ---------- */
+  // ACP asks decide through the same /decide endpoint; the ask (not just its
+  // id) is the mutation variable so the receipt can be recorded per ask.
+  const recordOutcome = (
+    ask: Approval,
+    approved: boolean,
+    receipt: ApprovalDecisionReceipt,
+  ) => {
+    setAcpOutcomes((prev) => ({
+      ...prev,
+      [ask.id]: {
+        askId: ask.id,
+        ask,
+        label: acpToolLabel(ask),
+        approved,
+        decision: receipt.decision ?? null,
+        deliveryState: receipt.deliveryState ?? null,
+        error: null,
+      },
+    }));
+  };
+
   const approveM = useMutation({
-    mutationFn: (id: string) => approveApproval(id),
-    onSuccess: () => {
+    mutationFn: (ask: Approval) => approveApproval(ask.id),
+    onSuccess: (receipt, ask) => {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
+      if (isAcpAsk(ask)) {
+        recordOutcome(ask, true, receipt);
+        setToast(acpToastOf(receipt, true));
+        return;
+      }
       setToast({ kind: 'ok', msg: 'Approval granted — agent unblocked.' });
     },
-    onError: () => setToast({ kind: 'err', msg: 'Approve failed. Retry.' }),
+    onError: (err, ask) => {
+      if (isAcpAsk(ask)) {
+        const rejection = describeDecisionError(err);
+        setToast({
+          kind: 'err',
+          msg: rejection ? `${rejection.code}: ${rejection.message}` : 'Approve failed. Retry.',
+        });
+        // The row may be stale (expired/decided elsewhere): refresh the queue.
+        qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
+        return;
+      }
+      setToast({ kind: 'err', msg: 'Approve failed. Retry.' });
+    },
   });
 
   const rejectM = useMutation({
-    mutationFn: (id: string) => rejectApproval(id),
-    onSuccess: () => {
+    mutationFn: (ask: Approval) => rejectApproval(ask.id),
+    onSuccess: (receipt, ask) => {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
+      if (isAcpAsk(ask)) {
+        recordOutcome(ask, false, receipt);
+        setToast(acpToastOf(receipt, false));
+        return;
+      }
       setToast({ kind: 'ok', msg: 'Approval denied.' });
     },
-    onError: () => setToast({ kind: 'err', msg: 'Deny failed. Retry.' }),
+    onError: (err, ask) => {
+      if (isAcpAsk(ask)) {
+        const rejection = describeDecisionError(err);
+        setToast({
+          kind: 'err',
+          msg: rejection ? `${rejection.code}: ${rejection.message}` : 'Deny failed. Retry.',
+        });
+        qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
+        return;
+      }
+      setToast({ kind: 'err', msg: 'Deny failed. Retry.' });
+    },
   });
 
   /* ---------- Derived: Activity Timeline ---------- */
@@ -334,10 +430,18 @@ export default function OpsPage() {
                 {pending.map((a, idx) => {
                   const agent = agentMap.get(/* runId is the bridge */ a.runId);
                   const requester = agent ?? null;
+                  const acp = isAcpAsk(a);
                   const kind = approvalKindOf(a.reason);
                   const ageMs = Date.now() - new Date(a.requestedAt).getTime();
                   const stale = ageMs > 5 * 60_000;
                   const busy = approveM.isPending || rejectM.isPending;
+                  const expired = acp && isAskExpired(a);
+                  const toolLabel = acp ? acpToolLabel(a) : null;
+                  const fallbackTitle =
+                    a.reason?.trim() ||
+                    (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off');
+                  const allowDisabled = busy || (acp && (expired || !hasAllowOnce(a)));
+                  const denyDisabled = busy || (acp && expired);
                   return (
                     <div
                       key={a.id}
@@ -345,7 +449,11 @@ export default function OpsPage() {
                       className={`qitem ${idx === 0 ? 'highlight' : ''}`}
                     >
                       <div className="h">
-                        <span className={kind.pill}>{kind.label}</span>
+                        {acp ? (
+                          <span className="pill acp">ACP permission</span>
+                        ) : (
+                          <span className={kind.pill}>{kind.label}</span>
+                        )}
                         <span
                           style={{
                             color: stale ? '#ffd884' : 'var(--text-mute)',
@@ -359,7 +467,7 @@ export default function OpsPage() {
                       </div>
 
                       <div className="ttl">
-                        {a.reason?.trim() || (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off')}
+                        {acp ? (toolLabel ?? fallbackTitle) : fallbackTitle}
                       </div>
                       <div className="desc" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span
@@ -386,18 +494,18 @@ export default function OpsPage() {
                             borderColor: 'rgba(54,211,153,.45)',
                             color: '#6fe2b6',
                           }}
-                          disabled={busy}
-                          onClick={() => approveM.mutate(a.id)}
+                          disabled={allowDisabled}
+                          onClick={() => approveM.mutate(a)}
                         >
-                          ✓ Approve
+                          {acp ? 'Allow once' : '✓ Approve'}
                         </button>
                         <button
                           className="btn danger"
                           style={{ flex: 1 }}
-                          disabled={busy}
-                          onClick={() => rejectM.mutate(a.id)}
+                          disabled={denyDisabled}
+                          onClick={() => rejectM.mutate(a)}
                         >
-                          ✕ Deny
+                          {acp ? 'Deny' : '✕ Deny'}
                         </button>
                       </div>
                     </div>
@@ -405,6 +513,16 @@ export default function OpsPage() {
                 })}
               </div>
             )}
+
+            {/* ACP outcomes decided here (the decided row leaves the queue on
+                the next refetch); a FAILED delivery stays retryable. */}
+            <AcpDecisionOutcomes
+              outcomes={Object.values(acpOutcomes)}
+              retrying={approveM.isPending || rejectM.isPending}
+              onRetry={(outcome) =>
+                outcome.approved ? approveM.mutate(outcome.ask) : rejectM.mutate(outcome.ask)
+              }
+            />
           </section>
 
           {/* ----- Run History ----- */}

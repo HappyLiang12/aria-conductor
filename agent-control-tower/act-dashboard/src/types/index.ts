@@ -70,6 +70,12 @@ export interface Approval {
   contextMd?: string | null;
   optionsJson?: string | null;
   answer?: string | null;
+  // ACP permission asks (qoder provider): origin discriminator, the redacted
+  // display payload (JSON string) and the delivery state of the last decision.
+  // A missing `source` is legacy and renders exactly like before.
+  source?: 'LEGACY_GATE' | 'ACP_PERMISSION';
+  deliveryState?: string | null;
+  displayJson?: string | null;
 }
 
 export interface WorkspaceDiff {
@@ -185,11 +191,17 @@ export interface ApprovalDecision {
  * decision receipt rather than the updated {@link Approval}:
  * `{ approvalId, approved, status: "processed" }`. Read the Approval back from
  * `GET /api/v1/approvals/{id}` for its resulting status.
+ *
+ * ACP permission asks additionally answer `decision: "APPROVED" | "DENIED"` and
+ * a `deliveryState` (`PENDING | DELIVERING | DELIVERED | CANCELLED | FAILED |
+ * MISSING`) — the decision is recorded even when its delivery fails.
  */
 export interface ApprovalDecisionReceipt {
   approvalId: string;
   approved: boolean;
   status: string;
+  decision?: string | null;
+  deliveryState?: string | null;
 }
 
 export interface CreateKnowledgeRequest {

@@ -571,11 +571,16 @@ test('S9: kanban-dispatched qoder run — board moves the card, the Review surfa
   await expect
     .poll(async () => (await askDetail(request, ask.id)).data?.status, { timeout: 90_000 })
     .toBe('APPROVED');
+  // status=APPROVED is durable at decision time; the delivery to the bridge is the next step
+  // and is briefly observable as DELIVERING (S9.run2 attempt 1 sampled exactly that window),
+  // so poll the delivery state instead of sampling it once.
+  await expect
+    .poll(async () => (await askDetail(request, ask.id)).data?.deliveryState, { timeout: 60_000 })
+    .toBe('DELIVERED');
   const decided = await askDetail(request, ask.id);
   console.log(
     `[S9] ask decided: status=${decided.data?.status} deliveryState=${decided.data?.deliveryState}`,
   );
-  expect(decided.data?.deliveryState).toBe('DELIVERED');
 
   const cardAfter = await requestJson<any>(request, 'GET', `/kanban/items/${card.id}`);
   console.log(`[S9] card right after the decision: status=${cardAfter.data?.status}`);
@@ -662,8 +667,10 @@ test('S11: platform-MCP read runs without an ask, the write waits for approval, 
   await expect
     .poll(async () => (await askDetail(request, ask.id)).data?.status, { timeout: 90_000 })
     .toBe('APPROVED');
-  const decided = await askDetail(request, ask.id);
-  expect(decided.data?.deliveryState).toBe('DELIVERED');
+  // Same delivery-window race as S9: poll for DELIVERED instead of sampling it once.
+  await expect
+    .poll(async () => (await askDetail(request, ask.id)).data?.deliveryState, { timeout: 60_000 })
+    .toBe('DELIVERED');
 
   // The approved write executes exactly once: the knowledge item appears.
   const knowledgeAfter = await pollUntil<any[]>(

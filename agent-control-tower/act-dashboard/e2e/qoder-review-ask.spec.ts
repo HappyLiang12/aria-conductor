@@ -12,7 +12,10 @@ import { test, expect, type Page, type Route } from '@playwright/test';
  * - a FAILED delivery stays retryable on the Ops surface with the recorded
  *   decision;
  * - board → `⤢ Expand review workspace` shows the ACP ask card with the
- *   displayJson preview and a delivered outcome after the mocked decide.
+ *   displayJson preview, and after the mocked decide the card ask list serves
+ *   the ask as decided (the real refetch lifecycle): the ACP card is gone but
+ *   the outcome strip — derived from that list on the parent — survives the
+ *   panel unmount (C5-fix1 F1/M2).
  */
 
 const ACP_ASK_ID = 'acp-e2e-1';
@@ -45,6 +48,16 @@ function acpAsk() {
     source: 'ACP_PERMISSION',
     deliveryState: 'PENDING',
     displayJson: DISPLAY_JSON,
+  };
+}
+
+/** The same ask after a decide: GET /approvals?kanbanItemId= serves it as decided. */
+function decidedAcpAsk() {
+  return {
+    ...acpAsk(),
+    status: 'APPROVED',
+    decidedAt: new Date().toISOString(),
+    deliveryState: 'DELIVERED',
   };
 }
 
@@ -193,19 +206,25 @@ test('Ops keeps a FAILED delivery retryable with the recorded decision', async (
 });
 
 test('board → expand review workspace renders the ACP card and a delivered outcome', async ({ page }) => {
+  // The card ask list follows the real lifecycle: pending before the decide,
+  // decided after it (this is what makes the strip a view of server truth).
+  let decided = false;
   await mockApi(page, {
-    pendingApprovals: () => [acpAsk()],
-    cardAsks: () => [acpAsk()],
-    decide: () => ({
-      status: 200,
-      body: {
-        approvalId: ACP_ASK_ID,
-        approved: true,
-        status: 'processed',
-        decision: 'APPROVED',
-        deliveryState: 'DELIVERED',
-      },
-    }),
+    pendingApprovals: () => (decided ? [] : [acpAsk()]),
+    cardAsks: () => (decided ? [decidedAcpAsk()] : [acpAsk()]),
+    decide: () => {
+      decided = true;
+      return {
+        status: 200,
+        body: {
+          approvalId: ACP_ASK_ID,
+          approved: true,
+          status: 'processed',
+          decision: 'APPROVED',
+          deliveryState: 'DELIVERED',
+        },
+      };
+    },
   });
 
   await page.goto('/');
@@ -221,6 +240,14 @@ test('board → expand review workspace renders the ACP card and a delivered out
   await expect(zone.getByRole('button', { name: 'Allow once' })).toBeEnabled();
 
   await zone.getByRole('button', { name: 'Allow once' }).click();
-  await expect(zone.getByText('approved · delivered')).toBeVisible();
-  await expect(zone.locator('.acp-outcome.ok')).toHaveCount(1);
+
+  // The decide's invalidation refetches the card ask list, which now serves the
+  // ask as decided (APPROVED/DELIVERED): the ACP card and the pending panel are
+  // gone (ShortApprovalView takes over) — the strip derived from the ask list
+  // must survive the panel unmount (F1).
+  const strip = page.locator('.acp-outcomes');
+  await expect(strip).toContainText('approved · delivered');
+  await expect(strip.locator('.acp-outcome.ok')).toHaveCount(1);
+  await expect(zone.locator('.pill.acp')).toHaveCount(0);
+  await expect(zone.getByText(/Run completed/)).toBeVisible();
 });

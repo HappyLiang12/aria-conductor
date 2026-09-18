@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, rejectApproval } from '../api/approvals';
-import { AcpDecisionOutcomes, type AcpOutcome } from './AcpDecisionOutcomes';
 import {
   acpToolLabel,
   describeDecisionError,
@@ -25,34 +24,8 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [requestFeedback, setRequestFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
-  // ACP outcomes are panel-local, keyed by ask id (a decided ask leaves the
-  // PENDING list on the next refetch, so the strip is the durable surface).
-  const [outcomes, setOutcomes] = useState<Record<string, AcpOutcome>>({});
   const acpAsks = pendingAsks.filter(isAcpAsk);
   const legacyAsks = pendingAsks.filter((a) => !isAcpAsk(a));
-  const outcomeList = useMemo(() => Object.values(outcomes), [outcomes]);
-  const recordError = (ask: Approval, approved: boolean, err: unknown) => {
-    setOutcomes((prev) => ({
-      ...prev,
-      [ask.id]: {
-        askId: ask.id,
-        ask,
-        label: acpToolLabel(ask),
-        approved,
-        decision: null,
-        deliveryState: null,
-        // Typed 409 body {code, error}; anything else gets generic wording.
-        error: describeDecisionError(err) ?? {
-          code: 'ERROR',
-          message: 'Action rejected — please retry.',
-        },
-      },
-    }));
-    // The card may be stale (expired/decided elsewhere): refresh the lists.
-    queryClient.invalidateQueries({ queryKey: ['kanban'] });
-    queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
-    queryClient.invalidateQueries({ queryKey: ['approvals'] });
-  };
   const resolveAsk = useMutation({
     mutationFn: ({
       ask,
@@ -70,24 +43,10 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       }
       return answerAsk(ask.id, { approved, answer });
     },
-    onSuccess: (receipt, variables) => {
-      if (isAcpAsk(variables.ask)) {
-        // The ACP receipt carries the recorded decision + delivery state; a
-        // delivery failure does NOT roll the decision back (it stays recorded).
-        const acpReceipt = receipt as ApprovalDecisionReceipt;
-        setOutcomes((prev) => ({
-          ...prev,
-          [variables.ask.id]: {
-            askId: variables.ask.id,
-            ask: variables.ask,
-            label: acpToolLabel(variables.ask),
-            approved: variables.approved,
-            decision: acpReceipt.decision ?? null,
-            deliveryState: acpReceipt.deliveryState ?? null,
-            error: null,
-          },
-        }));
-      }
+    onSuccess: () => {
+      // C5-fix1: the decision outcome is server truth — the parents derive
+      // the strip from the card ask list, so a successful decide only needs
+      // the lists refreshed (the decided ask leaves PENDING).
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
       // Badge + Waiting-on-you staleness: cards carry pendingAskCount.
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
@@ -95,7 +54,16 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
     },
     onError: (err, variables) => {
       if (isAcpAsk(variables.ask)) {
-        recordError(variables.ask, variables.approved, err);
+        // The rejection is the whole story: a typed 409 body surfaces as
+        // `code: message`; anything else gets the generic wording.
+        const rejection = describeDecisionError(err);
+        setError(
+          rejection ? `${rejection.code}: ${rejection.message}` : 'Action rejected — please retry.',
+        );
+        // The card may be stale (expired/decided elsewhere): refresh the lists.
+        queryClient.invalidateQueries({ queryKey: ['kanban'] });
+        queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+        queryClient.invalidateQueries({ queryKey: ['approvals'] });
         return;
       }
       setError('Action rejected — please retry.');
@@ -200,13 +168,6 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
           </div>
         </div>
       ))}
-      <AcpDecisionOutcomes
-        outcomes={outcomeList}
-        retrying={resolveAsk.isPending}
-        // A retry repeats the recorded decision (the server treats an operator
-        // repeat of a FAILED-but-live ask as the delivery retry).
-        onRetry={(outcome) => resolveAsk.mutate({ ask: outcome.ask, approved: outcome.approved })}
-      />
       {legacyAsks.length > 0 && (
         <button
           className="btn primary"

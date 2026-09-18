@@ -9,8 +9,10 @@
  * - the decision goes through `approveApproval`/`rejectApproval` (`/decide`)
  *   regardless of `askType`; ACP receipts carry `decision` + `deliveryState`;
  * - a rejected decide answers 409 `{code, error}` (axios error, body reachable);
- * - a decided ask leaves the PENDING list, so the outcome lives in a durable
- *   strip below the ask cards, not only on the card.
+ * - C5-fix1: a decided ask leaves the PENDING list, so this panel keeps NO
+ *   outcome record — the strip is derived from the card's ask list by the
+ *   parent surfaces (`AcpDecidedStrip`). All this panel does with a success or
+ *   a typed 409 is invalidate the three ask lists / show the error text.
  *
  * Harness mirrors ReviewPanels.test.tsx (the legacy-behavior pin, which must
  * stay untouched and green).
@@ -106,7 +108,11 @@ describe('DecisionPanel — ACP permission asks', () => {
   it('renders the badge, tool, preview and ACP controls for a pending ACP ask', () => {
     renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />);
 
-    expect(screen.getByText('ACP permission')).toBeInTheDocument();
+    // The badge must carry the .pill.acp pair the e2e and the Ops row use.
+    const badge = screen.getByText('ACP permission');
+    expect(badge).toBeInTheDocument();
+    expect(badge.className).toContain('pill');
+    expect(badge.className).toContain('acp');
     expect(screen.getByText('Write')).toBeInTheDocument();
     expect(screen.getByText('file_path: /workspace/out.csv')).toBeInTheDocument();
     // Options summary is rendered as text lines from displayJson.options.
@@ -158,7 +164,7 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(mockedReject).not.toHaveBeenCalled();
   });
 
-  it('routes Allow once to /decide and shows the delivered outcome in the strip', async () => {
+  it('routes Allow once to /decide, invalidates the ask lists and keeps no panel-local strip', async () => {
     mockedApprove.mockResolvedValue({
       approvalId: 'acp-1',
       approved: true,
@@ -166,16 +172,25 @@ describe('DecisionPanel — ACP permission asks', () => {
       decision: 'APPROVED',
       deliveryState: 'DELIVERED',
     });
-    renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />);
+    const qc = makeClient();
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+    renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />, qc);
 
     await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
     await waitFor(() => expect(mockedApprove).toHaveBeenCalledWith('acp-1', undefined));
 
-    expect(await screen.findByText('approved · delivered')).toBeInTheDocument();
-    expect(document.querySelector('.acp-outcome.ok')).not.toBeNull();
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban-items'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['approvals'] });
+    });
+    // C5-fix1: the strip is derived from the card ask list by the parent — the
+    // panel must not grow its own (it would die with the next refetch).
+    expect(document.querySelector('.acp-outcomes')).toBeNull();
+    expect(screen.queryByText(/approved ·/)).not.toBeInTheDocument();
   });
 
-  it('surfaces a typed 409 in the strip, never as success, and invalidates the ask lists', async () => {
+  it('surfaces a typed 409 as the inline panel error, never as success, and invalidates the ask lists', async () => {
     mockedApprove.mockRejectedValue({
       isAxiosError: true,
       response: {
@@ -192,7 +207,7 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(
       await screen.findByText('ALREADY_DECIDED: ask was decided elsewhere'),
     ).toBeInTheDocument();
-    expect(document.querySelector('.acp-outcome.err')).not.toBeNull();
+    expect(document.querySelector('.acp-outcome')).toBeNull();
     expect(screen.queryByText(/approved ·/)).not.toBeInTheDocument();
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban'] });
@@ -201,68 +216,16 @@ describe('DecisionPanel — ACP permission asks', () => {
     });
   });
 
-  it('shows the ERROR chip when the rejection is not a typed axios body', async () => {
+  it('falls back to the generic error text for an untyped ACP rejection', async () => {
     mockedReject.mockRejectedValue(new Error('boom'));
     renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Deny' }));
 
     expect(
-      await screen.findByText('ERROR: Action rejected — please retry.'),
+      await screen.findByText('Action rejected — please retry.'),
     ).toBeInTheDocument();
     expect(mockedReject).toHaveBeenCalledWith('acp-1', undefined);
-  });
-
-  it('shows a warn chip with Retry for FAILED delivery and re-decides on retry', async () => {
-    mockedApprove.mockResolvedValue({
-      approvalId: 'acp-1',
-      approved: true,
-      status: 'processed',
-      decision: 'APPROVED',
-      deliveryState: 'FAILED',
-    });
-    renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />);
-
-    await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
-    expect(await screen.findByText('approved · delivery failed')).toBeInTheDocument();
-    expect(document.querySelector('.acp-outcome.warn')).not.toBeNull();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(mockedApprove).toHaveBeenCalledTimes(2));
-    expect(mockedApprove).toHaveBeenNthCalledWith(2, 'acp-1', undefined);
-    // The retry must reuse the original decision, not flip it.
-    expect(mockedReject).not.toHaveBeenCalled();
-  });
-
-  it('renders the MISSING warn text without a Retry button', async () => {
-    mockedApprove.mockResolvedValue({
-      approvalId: 'acp-1',
-      approved: true,
-      status: 'processed',
-      decision: 'APPROVED',
-      deliveryState: 'MISSING',
-    });
-    renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />);
-
-    await userEvent.click(screen.getByRole('button', { name: 'Allow once' }));
-    expect(await screen.findByText('approved · no delivery recorded')).toBeInTheDocument();
-    expect(document.querySelector('.acp-outcome.warn')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
-  });
-
-  it('shows the denied outcome text for a DENIED decision', async () => {
-    mockedReject.mockResolvedValue({
-      approvalId: 'acp-1',
-      approved: false,
-      status: 'processed',
-      decision: 'DENIED',
-      deliveryState: 'CANCELLED',
-    });
-    renderPanel(<DecisionPanel item={item} pendingAsks={[acpAsk()]} />);
-
-    await userEvent.click(screen.getByRole('button', { name: 'Deny' }));
-    expect(await screen.findByText('denied · cancelled at the provider')).toBeInTheDocument();
-    expect(document.querySelector('.acp-outcome.ok')).not.toBeNull();
   });
 
   it('Approve all iterates legacy asks only', async () => {

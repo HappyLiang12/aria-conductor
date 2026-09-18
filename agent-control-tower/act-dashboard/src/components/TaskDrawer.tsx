@@ -9,6 +9,7 @@ import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { AcpDecidedStrip } from './AcpDecisionOutcomes';
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -266,6 +267,9 @@ export function TaskDrawer() {
               {item.status === 'REVIEW' && asksQuery.isSuccess && pendingAsks.length === 0 && (
                 <ShortApprovalView item={item} />
               )}
+              {/* C5-fix1: decided ACP outcomes come from the card's ask list, so
+                  the strip outlives the panel unmount a decide causes. */}
+              <AcpDecidedStrip asks={asksQuery.data ?? []} />
 
               {/* Status row */}
               <div className="section-h">Status</div>

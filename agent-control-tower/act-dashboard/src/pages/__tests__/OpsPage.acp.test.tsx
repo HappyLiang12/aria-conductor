@@ -9,7 +9,6 @@
  * surfaces pin the same wire shapes.
  */
 import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import OpsPage from '../OpsPage';
@@ -31,13 +30,11 @@ vi.mock('../../components/HousekeepingPanel', () => ({
   default: () => <div data-testid="housekeeping-panel" />,
 }));
 
-import { listApprovals, approveApproval, rejectApproval } from '../../api/approvals';
+import { listApprovals } from '../../api/approvals';
 import { listRecentRuns, getOpsSummary, getOpsActivity } from '../../api/ops';
 import { listAgents } from '../../api/agents';
 
 const mockedList = vi.mocked(listApprovals);
-const mockedApprove = vi.mocked(approveApproval);
-const mockedReject = vi.mocked(rejectApproval);
 
 const SUMMARY: DashboardSummary = {
   activeAgents: 0,
@@ -125,10 +122,11 @@ describe('OpsPage — undecidable ACP asks in the pending queue', () => {
     expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
     expect(screen.getByText(/Deny still works/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Deny' })[0]).toBeEnabled();
-
-    await userEvent.click(allowButtons[0]);
-    expect(mockedApprove).not.toHaveBeenCalled();
-    expect(mockedReject).not.toHaveBeenCalled();
+    // The explanation is the non-actionable affordance offered in place of the
+    // refused approval: it must sit on the truncated ask's row — the one whose
+    // Allow once is disabled. (A click on a disabled control cannot dispatch, so
+    // clicking it would pin nothing.)
+    expect(allowButtons[0].closest('.qitem')?.textContent).toContain('cannot be approved');
   });
 
   it('treats an absent truncation flag as undecidable: only an explicit false is decidable', async () => {
@@ -148,8 +146,9 @@ describe('OpsPage — undecidable ACP asks in the pending queue', () => {
     expect(allowButtons[1]).toBeEnabled();
     expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Deny' })[0]).toBeEnabled();
-
-    await userEvent.click(allowButtons[0]);
-    expect(mockedApprove).not.toHaveBeenCalled();
+    // Same pairing as the truncated case: the explanation must sit on the
+    // flag-missing ask's row — the one whose Allow once is disabled. (A click on
+    // a disabled control cannot dispatch, so it would pin nothing.)
+    expect(allowButtons[0].closest('.qitem')?.textContent).toContain('cannot be approved');
   });
 });

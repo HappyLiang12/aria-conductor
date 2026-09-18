@@ -144,7 +144,7 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
   });
 
-  it('does not offer Allow once for an undecidable (truncated) ask, while a decidable ask stays approvable', async () => {
+  it('does not offer Allow once for an undecidable (truncated) ask, while a decidable ask stays approvable', () => {
     renderPanel(
       <DecisionPanel
         item={item}
@@ -168,12 +168,14 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
     expect(screen.getByText(/Deny still works/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Deny' })[0]).toBeEnabled();
-
-    await userEvent.click(allowButtons[0]);
-    expect(mockedApprove).not.toHaveBeenCalled();
+    // The explanation is the non-actionable affordance offered in place of the
+    // refused approval: it must sit on the undecidable ask's card — the one whose
+    // Allow once is disabled. (A click on a disabled control cannot dispatch, so
+    // clicking it would pin nothing.)
+    expect(allowButtons[0].closest('.ask-card')?.textContent).toContain('cannot be approved');
   });
 
-  it('treats an absent truncation flag as undecidable: only an explicit false is decidable', async () => {
+  it('treats an absent truncation flag as undecidable: only an explicit false is decidable', () => {
     renderPanel(
       <DecisionPanel
         item={item}
@@ -195,9 +197,10 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(allowButtons[1]).toBeEnabled();
     expect(screen.getByText(/cannot be approved/)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Deny' })[0]).toBeEnabled();
-
-    await userEvent.click(allowButtons[0]);
-    expect(mockedApprove).not.toHaveBeenCalled();
+    // Same pairing as the truncated case: the explanation must sit on the
+    // flag-missing ask's card — the one whose Allow once is disabled. (A click on
+    // a disabled control cannot dispatch, so it would pin nothing.)
+    expect(allowButtons[0].closest('.ask-card')?.textContent).toContain('cannot be approved');
   });
 
   it('treats an absent display as undecidable: no Allow once is offered, Deny still works', () => {
@@ -210,7 +213,7 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
   });
 
-  it('shows Expired, disables both buttons and never calls the api once expired', async () => {
+  it('shows Expired and disables both buttons on the expired ask card', () => {
     renderPanel(
       <DecisionPanel
         item={item}
@@ -221,13 +224,11 @@ describe('DecisionPanel — ACP permission asks', () => {
     expect(screen.getByText('Expired')).toBeInTheDocument();
     const allow = screen.getByRole('button', { name: 'Allow once' });
     const deny = screen.getByRole('button', { name: 'Deny' });
+    // The expired marker and the two inert controls are the whole observable on
+    // this surface, so the disabled pair is the pin — clicking a disabled control
+    // cannot dispatch and would assert nothing.
     expect(allow).toBeDisabled();
     expect(deny).toBeDisabled();
-
-    await userEvent.click(allow);
-    await userEvent.click(deny);
-    expect(mockedApprove).not.toHaveBeenCalled();
-    expect(mockedReject).not.toHaveBeenCalled();
   });
 
   it('routes Allow once to /decide, invalidates the ask lists and keeps no panel-local strip', async () => {

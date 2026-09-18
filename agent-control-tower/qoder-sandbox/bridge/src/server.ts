@@ -10,11 +10,16 @@
  *  - Bodies are capped at 1 MiB (413) and drained without buffering past the cap.
  *  - ACP event names are mapped to the frozen C0.2 event names (see `onAcpEvent`); every
  *    string the CLI supplies is treated as untrusted and redacted against the session's
- *    known secrets (the bridge token plus the session's MCP header values) before it is
- *    republished, and raw payloads are never logged.
+ *    known secrets (the bridge token, the session's MCP header values and the allowlisted
+ *    PAT the bridge forwards to the CLI child) before it is republished, and raw payloads
+ *    are never logged. Streamed agent text additionally carries a trailing secret prefix
+ *    into the next chunk, so a secret the CLI splits across two chunks cannot be rejoined
+ *    from the published frames.
  *  - Decisions are resolved against the bridge's own pending map (which owns the
  *    deadline), so `delivered | already_resolved | expired | unknown` and the
- *    `ALREADY_RESOLVED` conflict are answered without re-entering the ACP client.
+ *    `ALREADY_RESOLVED` conflict are answered without re-entering the ACP client. At the
+ *    deadline the bridge also rejects the waiting CLI itself (design line 248), so a host
+ *    that is gone cannot leave the CLI blocked until the sandbox TTL.
  *  - `POST /probe` (C2 ruling R1) performs one MCP `initialize` POST from inside the sandbox
  *    to a caller-named URL with exactly the caller-supplied headers; any HTTP response proves
  *    liveness. The headers (a worker credential) and any response body never reach the answer
@@ -63,6 +68,13 @@ export const DEFAULT_PROBE_TIMEOUT_MS = 3000;
 
 /** Default permission deadline: the A5 gate held a pending request for 5 minutes. */
 export const DEFAULT_PERMISSION_DEADLINE_MS = 15 * 60 * 1000;
+
+/**
+ * Node stores a timer delay as a 32-bit signed integer: a larger delay overflows and the timer
+ * fires almost immediately. F4 follow-up: the local deadline delay is clamped to this largest
+ * accepted value, so a huge `permissionDeadlineMs` can never become an instant reject.
+ */
+export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 /** Resolved-permission memory, mirroring the ACP client's own bound. */
 const MAX_RESOLVED_PERMISSION_MEMORY = 1000;
@@ -143,6 +155,12 @@ interface PermissionRecord {
   /** The value delivered to the CLI (only meaningful in state `delivered`). */
   approved: boolean | null;
   expiresAt: number;
+  /**
+   * F4 residual (design line 248): the local-deadline timer armed when the record is
+   * created. The first resolution — a decision, a cancel, the session end, a prune or the
+   * bridge close — owns and clears it, so a resolved record can never be re-decided.
+   */
+  timer: NodeJS.Timeout | null;
 }
 
 interface BridgeSession {
@@ -155,6 +173,12 @@ interface BridgeSession {
   readonly decisions: Map<string, PermissionRecord>;
   /** Run deadline (epoch ms) from the create request's `deadlineSeconds`, else Infinity. */
   readonly deadlineAt: number;
+  /**
+   * F7 split guard: the trailing suffix of the redacted agent text withheld because it is
+   * still a proper prefix of a secret (see `projectUpdate`; at most `secret.length - 1`
+   * characters). Released by the next chunk, the turn boundary or the session end.
+   */
+  agentTextCarry: string;
   acpSessionId: string | null;
   ended: boolean;
   governanceReported: boolean;
@@ -188,6 +212,14 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     throw new Error('permissionDeadlineMs must be a positive number');
   }
   const createClient = options.createAcpClient ?? ((): BridgeAcpClient => new AcpClient(options.acpClientOptions ?? {}));
+  /**
+   * F7: the environment the default `AcpClient` factory forwards to every CLI child
+   * (`resolveSpawnPlan`'s `options.env ?? process.env`). Its allowlisted
+   * `QODER_PERSONAL_ACCESS_TOKEN` is the runtime PAT the CLI can echo back, and in
+   * production it is a DIFFERENT value from the session's MCP header (which carries the
+   * run-scoped worker token), so the header values alone do not cover it.
+   */
+  const childEnvSource = options.acpClientOptions?.env ?? process.env;
   const sessions = new Map<string, BridgeSession>();
 
   // ------------------------------------------------------------------------------------
@@ -244,7 +276,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
   async function createSession(req: IncomingMessage, res: ServerResponse): Promise<Routed> {
     const request = validateCreateRequest(await readJsonBody(req));
     const sessionId = randomUUID();
-    const secrets = collectSecrets(token, request.mcpServers);
+    const secrets = collectSecrets(token, request.mcpServers, childEnvSource);
     const client = createClient();
     const session: BridgeSession = {
       id: sessionId,
@@ -254,6 +286,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       secrets,
       decisions: new Map<string, PermissionRecord>(),
       deadlineAt: request.deadlineAt,
+      agentTextCarry: '',
       acpSessionId: null,
       ended: false,
       governanceReported: false,
@@ -323,11 +356,13 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     if (terminated) {
       // C0.2: reject pending requests first (fail closed — no approval can be delivered on
       // a cancelled session), then the ACP cancel notification (A4: notification only),
-      // then SIGTERM with the client's SIGKILL escalation in grace.
+      // then SIGTERM with the client's SIGKILL escalation in grace. Every record also
+      // drops its F4 deadline timer: a cancelled session has no waiting CLI to reject.
       for (const record of session.decisions.values()) {
         if (record.state === 'pending') {
           record.state = 'resolved';
         }
+        clearRecordTimer(record);
       }
       try {
         if (session.acpSessionId !== null) {
@@ -378,6 +413,9 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     }
     if (record.state === 'expired' || Date.now() > record.expiresAt) {
       record.state = 'expired';
+      // The lazy guard owns the deadline here: a timer that has not fired yet (or fired
+      // without the record being re-readable) must not send a second reply later.
+      clearRecordTimer(record);
       sendJson(res, 200, { outcome: 'expired' });
       return;
     }
@@ -391,11 +429,13 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       }
       if (error instanceof PermissionAlreadyResolvedError) {
         record.state = 'resolved';
+        clearRecordTimer(record);
         sendJson(res, 200, { outcome: 'already_resolved' });
         return;
       }
       if (error instanceof UnknownPermissionRequestError) {
         record.state = 'resolved';
+        clearRecordTimer(record);
         sendJson(res, 200, { outcome: 'unknown' });
         return;
       }
@@ -403,7 +443,45 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     }
     record.state = 'delivered';
     record.approved = approved;
+    clearRecordTimer(record);
     sendJson(res, 200, { outcome: 'delivered' });
+  }
+
+  /**
+   * F4 residual (design line 248): the local deadline's reject. The host owns the reject
+   * while it is present (design lines 247-248), so this only runs for a record that is
+   * still pending at its deadline — exactly the gap where nothing else answers the waiting
+   * CLI. The reply goes through the same private `AcpClient.decide` path the HTTP decide
+   * handler uses (never through HTTP), and the record is marked expired FIRST so the lazy
+   * guard answers `expired` to every later decision and no second reply can be sent.
+   *
+   * F4 follow-up: the timer is armed for one concrete record, so it resolves by record
+   * IDENTITY, not by key. A CLI that reused a requestId while the earlier ask was still pending
+   * replaced the map entry; the stale timer must not expire the newer record through the key.
+   */
+  function expireLocally(session: BridgeSession, requestId: string, record: PermissionRecord): void {
+    if (session.decisions.get(requestId) !== record) {
+      return; // a newer ask owns the id now (or the record was pruned): nothing to expire
+    }
+    if (record.state !== 'pending') {
+      return; // decided, cancelled, ended or pruned first
+    }
+    record.state = 'expired';
+    clearRecordTimer(record);
+    try {
+      session.acp.decide(requestId, false);
+    } catch {
+      // The CLI side is already gone (or never had the request): the record stays expired
+      // and any later HTTP decision is still answered `expired`, never re-delivered.
+    }
+  }
+
+  /** F4: the first resolution of a record owns its deadline timer; later paths never re-arm. */
+  function clearRecordTimer(record: PermissionRecord): void {
+    if (record.timer !== null) {
+      clearTimeout(record.timer);
+      record.timer = null;
+    }
   }
 
   /** C2 ruling R1: one sandbox-side reachability check of one candidate MCP endpoint. */
@@ -429,7 +507,20 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
         return;
       case 'permission_request': {
         const expiresAt = Math.min(Date.now() + permissionDeadlineMs, session.deadlineAt);
-        session.decisions.set(event.requestId, { state: 'pending', approved: null, expiresAt });
+        const record: PermissionRecord = { state: 'pending', approved: null, expiresAt, timer: null };
+        session.decisions.set(event.requestId, record);
+        // F4 residual (design line 248): with the host gone nothing else rejects the waiting
+        // CLI, so the local deadline must do what the host's expiry does. The timer is
+        // unref'd — the listening HTTP server keeps the process alive, and the deadline must
+        // not keep it alive by itself (the acp-client kill timer is deliberately referenced
+        // instead; see `terminate()`). The timer carries the record itself, so a reused
+        // requestId cannot make it resolve the wrong ask, and the delay is clamped to Node's
+        // timer range so an oversized deadline cannot fire almost immediately.
+        record.timer = setTimeout(
+          () => expireLocally(session, event.requestId, record),
+          clampTimerDelay(expiresAt - Date.now()),
+        );
+        record.timer.unref();
         pruneDecisionMemory(session);
         const params = event.params as { toolCall?: { rawInput?: unknown } } | undefined;
         const rawInput = boundedRawInput(session, params?.toolCall?.rawInput);
@@ -443,8 +534,13 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
           rawInput: rawInput.text,
           rawInputTruncated: rawInput.truncated,
           options: event.options.map(option => ({
-            optionId: option.optionId,
-            kind: option.kind,
+            // F7 follow-up: the option id is CLI-supplied text like any other (the bridge picks
+            // the option internally, the host only stores this echo), so it gets the redact pass.
+            optionId: redact(session, option.optionId),
+            // F7 closure: `kind` is CLI-supplied text too (the host matches it against
+            // allow_once/reject_once to derive the reply, ApprovalDecisionService.optionIdOfKind),
+            // so it takes the same pass. A hostile value still fails closed to UNSUPPORTED_OPTIONS.
+            kind: redact(session, option.kind),
             name: option.name === undefined ? null : redact(session, option.name),
           })),
           expiresAt: new Date(expiresAt).toISOString(),
@@ -452,6 +548,10 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
         return;
       }
       case 'prompt_result': {
+        // The turn's agent text has fully arrived: release the F7 split guard's hold before
+        // the terminal frames, so the host's run output (which concatenates `agent_message`
+        // text, QoderProgressPump) contains every published character.
+        flushAgentTextCarry(session);
         const result = (event.result ?? null) as Record<string, unknown> | null;
         const usage = extractRecord(result, 'usage');
         session.stream.append('usage', {
@@ -462,7 +562,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
           outputTokens: optionalNumber(usage?.outputTokens),
         });
         session.stream.append('completed', {
-          stopReason: typeof result?.stopReason === 'string' ? result.stopReason : null,
+          // F7 follow-up: the stop reason is CLI-supplied text, not a validated enum.
+          stopReason: optionalRedacted(session, result?.stopReason),
         });
         return;
       }
@@ -505,7 +606,19 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       case 'agent_message_chunk': {
         const text = extractText(update.content);
         // Redacted, never truncated: this text is the agent's answer (the host's run output).
-        return text === null ? [] : [{ type: 'agent_message', fields: { text: redact(session, text) } }];
+        if (text === null) {
+          return [];
+        }
+        // F7 split guard: agent text really is a stream (the CLI sends one chunk per delta and
+        // the host concatenates them into the run output), so a secret the CLI splits across
+        // two chunks could otherwise be rejoined from two frames. The carried suffix is
+        // rejoined with the next chunk BEFORE redaction, and the redacted text's trailing
+        // proper-prefix of any secret is held back for the next chunk / turn boundary.
+        const redacted = redact(session, session.agentTextCarry + text);
+        const hold = secretPrefixHoldLength(redacted, session.secrets);
+        session.agentTextCarry = redacted.slice(redacted.length - hold);
+        const visible = redacted.slice(0, redacted.length - hold);
+        return visible === '' ? [] : [{ type: 'agent_message', fields: { text: visible } }];
       }
       case 'tool_call': {
         const toolName = readToolName(update);
@@ -513,10 +626,12 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
           {
             type: 'tool_call',
             fields: {
+              // F7 follow-up: the correlation ids stay verbatim (the host echoes the requestId
+              // and keys tool names by toolCallId); every other CLI string is redacted.
               toolCallId: optionalString(update.toolCallId),
               toolName: toolName === null ? null : redact(session, toolName),
-              kind: optionalString(update.kind),
-              status: optionalString(update.status),
+              kind: optionalRedacted(session, update.kind),
+              status: optionalRedacted(session, update.status),
             },
           },
         ];
@@ -525,11 +640,11 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
         return [
           {
             type: 'tool_call_update',
-            fields: { toolCallId: optionalString(update.toolCallId), status: optionalString(update.status) },
+            fields: { toolCallId: optionalString(update.toolCallId), status: optionalRedacted(session, update.status) },
           },
         ];
       case 'current_mode_update': {
-        const currentModeId = optionalString(update.currentModeId);
+        const currentModeId = optionalRedacted(session, update.currentModeId);
         return currentModeId === null ? [] : [{ type: 'mode_changed', fields: { currentModeId } }];
       }
       default:
@@ -548,7 +663,12 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       if (record.state === 'pending') {
         record.state = 'resolved';
       }
+      clearRecordTimer(record);
     }
+    // F7 split guard: a dead CLI will not send the chunk that could complete a held prefix,
+    // so release it rather than silently dropping text. The hold is at most one character
+    // short of a secret and is never itself a complete secret.
+    flushAgentTextCarry(session);
     // The client emits `child_exit` BEFORE it rejects the pending request, so the
     // `prompt_error` that explains the end arrives in the same tick; ending the streams
     // synchronously here would drop it from live subscribers. One deferred close covers
@@ -583,6 +703,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       let evicted = false;
       for (const [id, record] of session.decisions) {
         if (record.state !== 'pending') {
+          clearRecordTimer(record);
           session.decisions.delete(id);
           evicted = true;
           break;
@@ -705,6 +826,14 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     },
     async close(): Promise<void> {
       for (const session of sessions.values()) {
+        // F4: every local deadline timer dies with its session; a surviving unref'd timer
+        // would otherwise reject a CLI the bridge no longer tracks.
+        for (const record of session.decisions.values()) {
+          clearRecordTimer(record);
+        }
+        // F7: the shutdown is a session end, so release a held agent-text suffix instead of
+        // dropping it from the last frame the readers would have received.
+        flushAgentTextCarry(session);
         session.stream.endAll();
         try {
           session.acp.close();
@@ -719,6 +848,15 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
       });
     },
   };
+}
+
+/**
+ * F4 follow-up: clamp a deadline delay into Node's accepted timer range. Without this, a delay
+ * above `MAX_TIMER_DELAY_MS` overflows the 32-bit timer slot and fires almost immediately, which
+ * would turn a huge `permissionDeadlineMs` (or a far run deadline) into an instant local reject.
+ */
+export function clampTimerDelay(delayMs: number): number {
+  return Math.min(Math.max(0, delayMs), MAX_TIMER_DELAY_MS);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -977,14 +1115,30 @@ function isJsonRpcResult(body: Buffer): boolean {
  * so a republished title reads `Authorization: Bearer [redacted]` (the fix for the B3a
  * re-review observation). Any other header value is treated as wholly secret. The bridge
  * token is always included.
+ *
+ * F7: the allowlisted PAT the bridge forwards to the CLI child (`env.ts:16-22`, inherited
+ * from the sandbox environment and already a secret on the stderr path, acp-client.ts) is
+ * included too. In production it is NOT one of the header values — the MCP header carries
+ * the run-scoped worker token — so it used to reach every outbound path verbatim whenever
+ * the CLI echoed it (agent text, a `prompt_error` reason or a create-failure message).
+ * Present-or-absent safe: an unset or blank value contributes nothing, and the value is
+ * never logged or echoed here.
  */
-function collectSecrets(token: string, mcpServers: readonly McpServerSpec[]): string[] {
+function collectSecrets(
+  token: string,
+  mcpServers: readonly McpServerSpec[],
+  childEnv: NodeJS.ProcessEnv,
+): string[] {
   const secrets = new Set<string>([token]);
   for (const server of mcpServers) {
     for (const header of server.headers ?? []) {
       const bearer = /^Bearer\s+(.+)$/i.exec(header.value);
       secrets.add(bearer?.[1] ?? header.value);
     }
+  }
+  const runtimePat = childEnv.QODER_PERSONAL_ACCESS_TOKEN;
+  if (typeof runtimePat === 'string' && runtimePat !== '') {
+    secrets.add(runtimePat);
   }
   return [...secrets].filter(secret => secret !== '');
 }
@@ -999,6 +1153,46 @@ function redactText(secrets: readonly string[], text: string): string {
     redacted = redacted.split(secret).join(SECRET_PLACEHOLDER);
   }
   return redacted;
+}
+
+/**
+ * F7 split guard: length of the longest suffix of `text` that is a proper prefix of any
+ * session secret (at most `secret.length - 1`, so a complete secret at the very end of the
+ * text is sized 0 and stays subject to redaction). Mirrors `tokenPrefixHoldLength` in
+ * `acp-client.ts` (the B3a F4 follow-up), applied to the streamed agent text.
+ */
+function secretPrefixHoldLength(text: string, secrets: readonly string[]): number {
+  let longest = 0;
+  for (const secret of secrets) {
+    const longestPossible = Math.min(secret.length - 1, text.length);
+    for (let length = longestPossible; length > 0; length--) {
+      if (text.endsWith(secret.slice(0, length))) {
+        if (length > longest) {
+          longest = length;
+        }
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+/**
+ * F7 split guard: release the held agent-text suffix as its own frame. Called at the turn
+ * boundary (a `prompt_result` proves no further chunk of this turn can complete a carried
+ * prefix) and on session end, so no published character is silently dropped; the hold is at
+ * most `secret.length - 1` characters and is never itself a complete secret.
+ */
+function flushAgentTextCarry(session: BridgeSession): void {
+  if (session.agentTextCarry === '') {
+    return;
+  }
+  const carry = session.agentTextCarry;
+  session.agentTextCarry = '';
+  // F7 follow-up: the release is the last chance to mask a value the hold let through (for
+  // example a secret that is a substring of the placeholder, or of another secret's span), so
+  // the carry gets the same final redact pass every other outbound string gets.
+  session.stream.append('agent_message', { text: redactText(session.secrets, carry) });
 }
 
 function readToolName(update: Record<string, unknown>): string | null {
@@ -1023,6 +1217,12 @@ function extractText(content: unknown): string | null {
 
 function optionalString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+/** F7 follow-up: `optionalString` plus the session redact pass (a present CLI string is text). */
+function optionalRedacted(session: BridgeSession, value: unknown): string | null {
+  const text = optionalString(value);
+  return text === null ? null : redact(session, text);
 }
 
 function optionalNumber(value: unknown): number | null {

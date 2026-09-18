@@ -9,7 +9,7 @@
  * `node <fixture> <scenario>` through `process.execPath` so the suite passes on
  * Git Bash/Windows as well as Linux.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,6 +204,9 @@ describe('production spawn plan (C0.3 step 1)', () => {
     expect(plan.cwd).toBe('/workspace');
     expect(plan.shell).toBe(false);
     expect(Object.keys(plan.env).every(key => (CHILD_ENV_ALLOWLIST as readonly string[]).includes(key))).toBe(true);
+    // F8: POSIX spawns the CLI as its own process-group leader so `terminate()` can signal
+    // the whole tree; Windows cannot deliver a signal to a group, so the child stays attached.
+    expect(plan.detached).toBe(process.platform !== 'win32');
   });
 
   it('keeps the spawn plan injectable for the fixture (command/args/cwd overrides)', () => {
@@ -728,4 +731,135 @@ describe('stderr redaction (F4)', () => {
     expect(client.stderrTail).toBe(expected);
     expect(text).not.toContain(SYNTHETIC_PAT);
   });
+});
+
+describe('process-tree termination (F8)', () => {
+  it('signals the CLI process GROUP first, escalating on the group within the grace window', async () => {
+    const calls: Array<[number, NodeJS.Signals]> = [];
+    const { client, log } = start('happy', {
+      // A Windows host cannot deliver a real group signal, so the sink records instead of
+      // killing: what is under test here is the client's decision, not the kernel's.
+      processGroupKill: true,
+      signalProcess: (pid, signal) => {
+        calls.push([pid, signal]);
+      },
+      killGraceMs: 120,
+    });
+    const started = await log.waitFor('child_started');
+    const pid = started.pid;
+    expect(typeof pid).toBe('number');
+
+    client.terminate();
+    // Group first: the negative pid is the group led by the detached CLI. The group call
+    // succeeded, so no direct-child fallback may appear.
+    expect(calls).toEqual([[-pid!, 'SIGTERM']]);
+
+    // The escalation keeps targeting the group, still without a direct-child call.
+    const deadline = Date.now() + 5_000;
+    while (calls.length < 2 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(calls).toEqual([[-pid!, 'SIGTERM'], [-pid!, 'SIGKILL']]);
+
+    // The recording sink never killed anything: clean the real child up by hand.
+    process.kill(pid!, 'SIGKILL');
+    await log.waitFor('child_exit');
+  });
+
+  it('falls back to the direct child when the group call is unavailable (ESRCH/EPERM)', async () => {
+    for (const code of ['ESRCH', 'EPERM'] as const) {
+      const calls: Array<[number, NodeJS.Signals]> = [];
+      const { client, log } = start('happy', {
+        processGroupKill: true,
+        killGraceMs: 60_000,
+        signalProcess: (pid, signal) => {
+          calls.push([pid, signal]);
+          if (pid < 0) {
+            throw Object.assign(new Error(`group kill failed (${code})`), { code });
+          }
+          // The fallback really terminates the fixture child.
+          process.kill(pid, signal);
+        },
+      });
+      const started = await log.waitFor('child_started');
+      const pid = started.pid as number;
+
+      client.terminate();
+      const exit = await log.waitFor('child_exit');
+      expect(calls).toEqual([[-pid, 'SIGTERM'], [pid, 'SIGTERM']]);
+      expect(exit.code !== null || exit.signal !== null).toBe(true);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'terminates the whole process group, leaving no background descendant behind (F8)',
+    async () => {
+      // POSIX-only: this drives the real kernel group kill, which Windows cannot deliver
+      // (`process.kill` has no negative-pid form there), so it is skipped on Windows. The
+      // client's group-first decision is pinned cross-platform by the two tests above; this
+      // one proves the effect on a real descendant once a POSIX host runs the suite.
+      const dir = workspace();
+      const client = new AcpClient({
+        command: '/bin/sh',
+        args: ['-c', 'sleep 300 & echo $! > descendant.pid; wait'],
+        cwd: dir,
+        killGraceMs: 500,
+        env: { PATH: process.env.PATH },
+      });
+      createdClients.push(client);
+      const log = new EventLog();
+      client.onEvent(event => log.push(event));
+
+      const isAlive = (pid: number): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      const started = await log.waitFor('child_started');
+      const shPid = started.pid as number;
+
+      // The background job writes its own pid; without it the test cannot prove anything.
+      const pidFile = join(dir, 'descendant.pid');
+      let descendantPid: number | null = null;
+      const readDeadline = Date.now() + 5_000;
+      while (descendantPid === null && Date.now() < readDeadline) {
+        try {
+          const parsed = Number(readFileSync(pidFile, 'utf8').trim());
+          descendantPid = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+        } catch {
+          /* the background job has not written its pid yet */
+        }
+        if (descendantPid === null) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      }
+      const descendant = descendantPid as number;
+      expect(descendant).not.toBeNull();
+      expect(isAlive(descendant)).toBe(true);
+
+      try {
+        client.terminate();
+        // SIGTERM reaches the whole group: killing only the direct child would leave
+        // `sleep 300` running, which is exactly the F8 defect.
+        const goneDeadline = Date.now() + 5_000;
+        while (isAlive(descendant) && Date.now() < goneDeadline) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        expect(isAlive(descendant)).toBe(false);
+        expect(isAlive(shPid)).toBe(false);
+      } finally {
+        for (const pid of [descendant, shPid]) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    },
+  );
 });

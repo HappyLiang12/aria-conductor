@@ -7,7 +7,8 @@
  *
  *  - C0.3 step 1 (amended) — spawn `qodercli` with the ACP entry plus the pinned plugin
  *    dir (`DEFAULT_ARGS`), an environment allowlist (`src/env.ts`) and cwd `/workspace`;
- *    never through a shell.
+ *    never through a shell. F8: on POSIX the CLI also leads its own process group
+ *    (`detached`) so `terminate()` can signal the whole tree (design lines 257-260).
  *  - C0.3 steps 2-4 — `initialize {protocolVersion:1}`, `session/new {cwd, mcpServers}`,
  *    `session/set_model {sessionId, modelId}`, each awaited on the matching JSON-RPC
  *    response (response-driven, never fixed delays — spike section 3).
@@ -209,6 +210,19 @@ export interface AcpClientOptions {
   handshakeTimeoutMs?: number;
   /** SIGTERM -> SIGKILL grace used by `terminate()` (C0.2: within 10 s by default). */
   killGraceMs?: number;
+  /**
+   * F8 test seam: whether `terminate()` signals the CLI's whole process group instead of the
+   * direct child. Defaults to `process.platform !== 'win32'` — Windows cannot deliver a
+   * signal to a group — so a Windows test pins `true` to exercise the POSIX decision with an
+   * injected `signalProcess`.
+   */
+  processGroupKill?: boolean;
+  /**
+   * F8 test seam: the pid-level signal sink. The default sends a negative pid to
+   * `process.kill` (the POSIX group) and a positive pid to the child handle
+   * (`child.kill`), which keeps the direct fallback free of pid reuse after a reap.
+   */
+  signalProcess?: CliSignalSink;
 }
 
 export interface SpawnPlan {
@@ -218,7 +232,21 @@ export interface SpawnPlan {
   env: Record<string, string>;
   /** Always false: the CLI is spawned without a shell (C0.3 step 1). */
   shell: false;
+  /**
+   * F8: true on POSIX — the CLI is spawned as its own process-group leader so `terminate()`
+   * can signal the whole tree (design lines 257-260, "terminate its process tree"). Windows
+   * has no signal-based group kill, so the child stays attached there and `terminate()` uses
+   * the direct child.
+   */
+  detached: boolean;
 }
+
+/**
+ * F8: the pid-level signal sink used by `terminate()`; a negative pid names a POSIX process
+ * group, a positive one a single process. Injectable so a test can pin the group-first
+ * ordering on a host that cannot deliver real group signals.
+ */
+export type CliSignalSink = (pid: number, signal: NodeJS.Signals) => void;
 
 export type AcpEvent =
   | { type: 'child_started'; pid: number | undefined; command: string; args: string[]; cwd: string; envKeys: string[] }
@@ -257,7 +285,8 @@ export interface PermissionDecision {
  * Resolve the CLI spawn plan (C0.3 step 1, amended). Tests assert the production default is
  * the `qodercli` command with argv `DEFAULT_ARGS` (`--acp --plugin-dir <DEFAULT_PLUGIN_DIR>`)
  * and cwd `/workspace`; the fixture suite overrides `command`/`args`/`cwd` to run the
- * committed fake CLI through `process.execPath`.
+ * committed fake CLI through `process.execPath`. F8: `detached` follows the real platform —
+ * a POSIX child leads its own process group, a Windows child cannot.
  */
 export function resolveSpawnPlan(options: AcpClientOptions = {}): SpawnPlan {
   return {
@@ -266,6 +295,7 @@ export function resolveSpawnPlan(options: AcpClientOptions = {}): SpawnPlan {
     cwd: options.cwd ?? DEFAULT_CWD,
     env: buildChildEnv(options.env ?? process.env),
     shell: false,
+    detached: process.platform !== 'win32',
   };
 }
 
@@ -414,6 +444,8 @@ export class AcpClient {
 
   private readonly options: AcpClientOptions;
   private readonly child: ChildProcessWithoutNullStreams;
+  /** F8: the pid-level signal sink `terminate()` uses (defaults to group-then-child). */
+  private readonly signalProcess: CliSignalSink;
   private readonly handlers = new Set<(event: AcpEvent) => void>();
   private readonly pending = new Map<number, PendingRequest>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
@@ -443,7 +475,22 @@ export class AcpClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       // C0.3 step 1: no shell anywhere — argv reaches the CLI process verbatim.
       shell: false,
+      // F8: see SpawnPlan.detached. Never `unref()`ed: the client keeps waiting for the
+      // child's exit events, the child just leads its own group on POSIX.
+      detached: this.spawnPlan.detached,
     });
+    const child = this.child;
+    this.signalProcess =
+      options.signalProcess ??
+      ((pid, signal) => {
+        if (pid < 0) {
+          process.kill(pid, signal);
+        } else {
+          // Handle-based kill for the direct child: after a reap a recycled pid must never
+          // make the fallback hit an unrelated process.
+          child.kill(signal);
+        }
+      });
     this.wireChild();
     queueMicrotask(() => {
       this.emit({
@@ -635,16 +682,16 @@ export class AcpClient {
    * Documented fallback for the cancel path (C0.3 step 7): SIGTERM, then SIGKILL after the
    * grace window. A4 did not need it (the notification aborted the turn), so it is kept
    * available rather than used by `cancel()`.
+   *
+   * F8 (design lines 257-260): the signals target the CLI's whole process group on POSIX, so
+   * a background descendant cannot survive the termination. See `signalCli` for the
+   * direct-child fallback.
    */
   terminate(): void {
     if (this.exited) {
       return;
     }
-    try {
-      this.child.kill('SIGTERM');
-    } catch {
-      /* already gone */
-    }
+    this.signalCli('SIGTERM');
     if (this.spawnError !== null) {
       // P1 (B3a review): the child never spawned, so there is no live process to escalate
       // against. Arming the timer here would leak a referenced one when a LATER close()
@@ -660,17 +707,41 @@ export class AcpClient {
       if (this.exited) {
         return;
       }
-      try {
-        this.child.kill('SIGKILL');
-      } catch {
-        /* already gone */
-      }
+      this.signalCli('SIGKILL');
     }, this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
     // F3: the escalation timer stays REFERENCED while the CLI may still be alive, so a
     // host that exits right after close()/governance stop cannot skip the SIGKILL and
     // leave a SIGTERM-ignoring qodercli behind. It is cleared by whichever of the child's
     // `exit`/`close` handlers fires first (see wireChild); a never-spawned child does not
     // arm it at all (see the spawnError return above).
+  }
+
+  /**
+   * F8: signal the CLI's process GROUP, falling back to the direct child only when the group
+   * call is unavailable — Windows (`processGroupKill` defaults to false there; the platform
+   * cannot deliver a signal to a group) or a group call that throws (ESRCH when the group is
+   * already gone, EPERM when the signal is not permitted, or any other group failure).
+   * Every path ends in the direct child, so `terminate()` can never become inert; a child
+   * that never spawned has nothing to signal.
+   */
+  private signalCli(signal: NodeJS.Signals): void {
+    const pid = this.child.pid;
+    if (pid === undefined) {
+      return;
+    }
+    if (this.options.processGroupKill ?? process.platform !== 'win32') {
+      try {
+        this.signalProcess(-pid, signal);
+        return;
+      } catch {
+        /* group unavailable (ESRCH/EPERM) or unsupported: fall back to the direct child */
+      }
+    }
+    try {
+      this.signalProcess(pid, signal);
+    } catch {
+      /* already gone */
+    }
   }
 
   /** Close the client: reject pending requests, abandon permissions, terminate the CLI. */

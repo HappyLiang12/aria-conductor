@@ -10,9 +10,12 @@
  * case needs CLI text that carries the token (the fixture never echoes it). The deadline
  * case stays on the real client and only injects the deadline length.
  *
- * All credentials here are synthetic (`test-bridge-token`, `test-worker-token`,
- * `test-token-1`), never a real PAT. The suite asserts that none ever appears in an HTTP
- * body, an SSE frame or a log line.
+ * All credentials here are synthetic, never a real PAT: `test-bridge-token` for the bridge
+ * bearer, `test-worker-token` for the session's MCP header value, `test-runtime-pat` for the
+ * PAT the bridge forwards to the CLI child (deliberately a DIFFERENT value, mirroring
+ * production where the MCP header carries the run-scoped worker token while
+ * `QODER_PERSONAL_ACCESS_TOKEN` carries the qoder PAT) and `test-token-1` for the probe.
+ * The suite asserts that none ever appears in an HTTP body, an SSE frame or a log line.
  *
  * C2 ruling R1 adds two suites: the bounded `permission_request.rawInput` evidence and
  * `POST /probe`. Both also inject a scripted client (no CLI spawns); the probe cases run
@@ -30,7 +33,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { AcpClient, type AcpClientOptions, type AcpEvent, type PermissionDecision } from '../src/acp-client.js';
 import {
   MAX_BODY_BYTES,
+  MAX_TIMER_DELAY_MS,
   PINNED_CLI_VERSION,
+  clampTimerDelay,
   createBridgeServer,
   type BridgeAcpClient,
   type BridgeServer,
@@ -39,11 +44,33 @@ import { EVENT_RING_CAPACITY, SessionEventStream } from '../src/sse.js';
 import { DEFAULT_BRIDGE_PORT, readBridgeConfig } from '../src/main.js';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-qodercli.mjs', import.meta.url));
-// Synthetic placeholders only: the bridge token and the PAT-shaped value a session's
-// mcpServers headers would carry in production.
+// Synthetic placeholders only: the bridge token and the worker token a session's
+// mcpServers headers carry in production.
 const BRIDGE_TOKEN = 'test-bridge-token';
 const PAT = 'test-worker-token';
+/**
+ * F7: the PAT the bridge forwards to every CLI child. Production keeps the two values
+ * separate — the session's MCP `Authorization` header carries the run-scoped worker token
+ * (`QoderAdkProvider.java:291,895`) while the sandbox env's `QODER_PERSONAL_ACCESS_TOKEN`,
+ * inherited by the bridge and allowlisted for the child (`src/env.ts:16-22`), carries the
+ * qoder PAT. The fixture used to reuse one value for both, which is exactly why the
+ * missing-PAT redaction was invisible.
+ */
+const RUNTIME_PAT = 'test-runtime-pat';
 const AUTHORIZATION = `Bearer ${BRIDGE_TOKEN}`;
+/**
+ * The child environment the default `AcpClient` factory forwards (`resolveSpawnPlan`'s
+ * `options.env ?? process.env`, allowlist `src/env.ts:16-22`). The harness passes it as
+ * `acpClientOptions.env` so the suite is hermetic: the bridge derives the PAT it must
+ * redact from that same source, and without it a test machine exporting a real
+ * `QODER_PERSONAL_ACCESS_TOKEN` would leak into every redaction set.
+ */
+const CHILD_ENV = {
+  PATH: process.env.PATH,
+  HOME: process.env.HOME ?? 'C:/b3b-home',
+  TERM: 'xterm',
+  QODER_PERSONAL_ACCESS_TOKEN: RUNTIME_PAT,
+};
 const MODEL = 'efficient';
 const PROMPT = 'Reply with exactly: ok';
 const OPTION_MENU = [
@@ -191,9 +218,15 @@ type EventHandler = (event: AcpEvent) => void;
 
 class ScriptedClient implements BridgeAcpClient {
   readonly calls: string[] = [];
+  /** F4: every permission decision the bridge delivered, in order (requestId, approved). */
+  readonly decisions: Array<[string, boolean]> = [];
   private handler: EventHandler | null = null;
 
-  constructor(private readonly script: (client: ScriptedClient) => void = () => undefined) {}
+  constructor(
+    private readonly script: (client: ScriptedClient) => void = () => undefined,
+    /** F7: when set, `createSession` fails with this message (create-failure redaction). */
+    private readonly createFailure: string | null = null,
+  ) {}
 
   onEvent(handler: EventHandler): () => void {
     this.handler = handler;
@@ -204,6 +237,9 @@ class ScriptedClient implements BridgeAcpClient {
 
   async createSession(): Promise<{ sessionId: string }> {
     this.script(this);
+    if (this.createFailure !== null) {
+      throw new Error(this.createFailure);
+    }
     return { sessionId: 'acp-scripted' };
   }
 
@@ -211,8 +247,9 @@ class ScriptedClient implements BridgeAcpClient {
     this.calls.push('prompt');
   }
 
-  decide(): PermissionDecision {
+  decide(requestId: string, approved: boolean): PermissionDecision {
     this.calls.push('decide');
+    this.decisions.push([requestId, approved]);
     return { outcome: 'selected', optionId: 'scripted' };
   }
 
@@ -251,12 +288,7 @@ function fixtureClient(scenario: string, overrides: Partial<AcpClientOptions> = 
     command: process.execPath,
     args: [FIXTURE, scenario],
     cwd: dir,
-    env: {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME ?? 'C:/b3b-home',
-      TERM: 'xterm',
-      QODER_PERSONAL_ACCESS_TOKEN: PAT,
-    },
+    env: { ...CHILD_ENV },
     killGraceMs: 500,
     ...overrides,
   });
@@ -271,6 +303,7 @@ async function startBridge(
   const bridge = createBridgeServer({
     token: BRIDGE_TOKEN,
     log: line => logLines.push(line),
+    acpClientOptions: { env: { ...CHILD_ENV } },
     createAcpClient: () => fixtureClient(scenario),
     ...overrides,
   });
@@ -279,11 +312,29 @@ async function startBridge(
   return bridge;
 }
 
-async function startScriptedBridge(create: () => BridgeAcpClient): Promise<BridgeServer> {
-  const bridge = createBridgeServer({ token: BRIDGE_TOKEN, log: line => logLines.push(line), createAcpClient: create });
+async function startScriptedBridge(
+  create: () => BridgeAcpClient,
+  overrides: { permissionDeadlineMs?: number } = {},
+): Promise<BridgeServer> {
+  const bridge = createBridgeServer({
+    token: BRIDGE_TOKEN,
+    log: line => logLines.push(line),
+    acpClientOptions: { env: { ...CHILD_ENV } },
+    createAcpClient: create,
+    ...overrides,
+  });
   createdServers.push(bridge);
   await bridge.listen(0, '127.0.0.1');
   return bridge;
+}
+
+/** Poll `predicate` until it holds, for timer-driven behaviour whose firing is the assertion. */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await sleep(20);
+  }
+  expect(predicate(), 'condition was not met within the bounded wait').toBe(true);
 }
 
 afterEach(async () => {
@@ -774,7 +825,7 @@ describe('permission decisions (C0.2 permissions row)', () => {
     expect(await denied.json()).toEqual({ outcome: 'delivered' });
   });
 
-  it('expires a decision after the pending deadline and never delivers it', async () => {
+  it('expires a decision at the pending deadline, releases the waiting CLI and never delivers it', async () => {
     const bridge = await startBridge('happy', { permissionDeadlineMs: 150 });
     const sessionId = await createSessionId(bridge);
     const stream = await openEvents(bridge, sessionId);
@@ -782,19 +833,156 @@ describe('permission decisions (C0.2 permissions row)', () => {
     const permission = await stream.waitFor('permission_request');
     const expiresAt = Date.parse(String(permission.expiresAt));
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 150);
-    await sleep(Math.max(0, expiresAt - Date.now()) + 60);
+
+    // F4 residual (design line 248): with the host gone nothing else rejects the waiting CLI,
+    // so at the local deadline the bridge delivers the reject itself through the same private
+    // path a host decision uses and the blocked turn is released instead of sitting until the
+    // sandbox TTL. A4 §2 proves the exercised CLI semantics of a reject_once selection: the
+    // tool call fails and the turn completes with stopReason end_turn
+    // (e2e/qoder/slice-a/04-permissions.md:205-217) — the fixture models exactly that, so the
+    // terminal frame arriving here is the reject's observable effect (the pre-fix bridge
+    // stayed silent and the turn never ended).
+    const completed = await stream.waitFor('completed');
+    expect(completed.stopReason).toBe('end_turn');
 
     const path = `/sessions/${sessionId}/permissions/${String(permission.requestId)}`;
     const expired = await post(bridge, path, { approved: true });
     expect(expired.status).toBe(200);
     expect(await expired.json()).toEqual({ outcome: 'expired' });
 
-    // Fail closed: the decision never reached the CLI, so the turn cannot complete; and the
-    // request stays expired for every later decision (a denial cannot rescue it either).
-    await sleep(400);
-    expect(stream.of('completed')).toHaveLength(0);
+    // Fail closed stays intact: the late decision is never delivered and never re-decided.
     const late = await post(bridge, path, { approved: false });
     expect(await late.json()).toEqual({ outcome: 'expired' });
+  });
+
+  it('sends exactly one reject when the host never decides (no duplicate decide)', async () => {
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p1',
+        toolCallId: 'call_1',
+        toolName: 'Write',
+        title: null,
+        options: [
+          { optionId: 'o1', kind: 'allow_once', name: 'Allow' },
+          { optionId: 'o2', kind: 'reject_once', name: 'Reject' },
+        ],
+        params: { toolCall: { rawInput: { file_path: '/workspace/x.txt' } } },
+      });
+    });
+    const bridge = await startScriptedBridge(() => client, { permissionDeadlineMs: 60 });
+    const sessionId = await createSessionId(bridge);
+
+    await waitUntil(() => client.decisions.length > 0);
+    // Exactly one reply at the deadline, and it is the reject flow's (approved=false).
+    expect(client.decisions).toEqual([['p1', false]]);
+
+    // A decision that arrives after the deadline is refused without a second reply.
+    const lateApprove = await post(bridge, `/sessions/${sessionId}/permissions/p1`, { approved: true });
+    expect(await lateApprove.json()).toEqual({ outcome: 'expired' });
+    const lateDeny = await post(bridge, `/sessions/${sessionId}/permissions/p1`, { approved: false });
+    expect(await lateDeny.json()).toEqual({ outcome: 'expired' });
+    expect(client.decisions).toEqual([['p1', false]]);
+  });
+
+  it('does not let the stale timer of a replaced record expire a newer ask that reuses the id', async () => {
+    const ask: AcpEvent = {
+      type: 'permission_request',
+      requestId: 'dup',
+      toolCallId: 'call_1',
+      toolName: 'Write',
+      title: null,
+      options: [{ optionId: 'o1', kind: 'allow_once', name: 'Allow' }],
+      params: { toolCall: { rawInput: { file_path: '/workspace/x.txt' } } },
+    };
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit(ask);
+    });
+    const bridge = await startScriptedBridge(() => client, { permissionDeadlineMs: 600 });
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId);
+    await stream.waitFor('permission_request');
+
+    // The CLI reuses the id while the first ask is still pending: the pending map now holds a
+    // NEW record (a distinct object for the same key) whose own deadline is 600 ms after this
+    // second ask.
+    await sleep(300);
+    client.emit(ask);
+    await waitUntil(() => stream.of('permission_request').length === 2);
+
+    // Wait past the FIRST record's deadline (600 ms after the first ask) while the replacement's
+    // deadline is still ahead. A timer that resolved by requestId alone would have marked the
+    // new record expired and rejected it early; the record that is actually pending must still
+    // be decidable by the host.
+    await sleep(450);
+
+    const decided = await post(bridge, `/sessions/${sessionId}/permissions/dup`, { approved: true });
+    expect(await decided.json()).toEqual({ outcome: 'delivered' });
+    expect(client.decisions).toEqual([['dup', true]]);
+  });
+
+  it('clamps the local deadline delay to the largest timeout Node accepts (2^31 - 1 ms)', () => {
+    // Node stores a delay as a 32-bit signed integer; a larger value overflows and the timer
+    // fires almost immediately, which would turn a huge permissionDeadlineMs into an instant
+    // reject. Asserted on the exported clamp rather than by arming a real multi-week timeout.
+    expect(MAX_TIMER_DELAY_MS).toBe(2 ** 31 - 1);
+    expect(clampTimerDelay(2 ** 31)).toBe(MAX_TIMER_DELAY_MS);
+    expect(clampTimerDelay(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_DELAY_MS);
+    expect(clampTimerDelay(150)).toBe(150);
+    expect(clampTimerDelay(-1)).toBe(0);
+  });
+
+  it('clears the local deadline timer when the host decides in time', async () => {
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p1',
+        toolCallId: 'call_1',
+        toolName: 'Write',
+        title: null,
+        options: [{ optionId: 'o1', kind: 'allow_once', name: 'Allow' }],
+        params: { toolCall: { rawInput: { file_path: '/workspace/x.txt' } } },
+      });
+    });
+    const bridge = await startScriptedBridge(() => client, { permissionDeadlineMs: 150 });
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId);
+    await stream.waitFor('permission_request');
+
+    const decided = await post(bridge, `/sessions/${sessionId}/permissions/p1`, { approved: true });
+    expect(await decided.json()).toEqual({ outcome: 'delivered' });
+
+    // Waiting past the deadline proves the resolution cleared the timer: a stale timer would
+    // have marked the delivered record expired and sent a second reply.
+    await sleep(300);
+    expect(client.decisions).toEqual([['p1', true]]);
+  });
+
+  it('clears the local deadline timer when the session is cancelled', async () => {
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p1',
+        toolCallId: 'call_1',
+        toolName: 'Write',
+        title: null,
+        options: [{ optionId: 'o1', kind: 'allow_once', name: 'Allow' }],
+        params: { toolCall: { rawInput: { file_path: '/workspace/x.txt' } } },
+      });
+    });
+    const bridge = await startScriptedBridge(() => client, { permissionDeadlineMs: 100 });
+    const sessionId = await createSessionId(bridge);
+
+    const cancelled = await post(bridge, `/sessions/${sessionId}/cancel`, {});
+    expect(await cancelled.json()).toEqual({ terminated: true });
+
+    // A cancelled session has no waiting CLI left to reject: no decide may follow the cancel.
+    await sleep(300);
+    expect(client.decisions).toEqual([]);
   });
 
   it('rejects a malformed decision body', async () => {
@@ -1142,6 +1330,298 @@ describe('secret handling (B3a re-review observation)', () => {
     for (const line of logLines) {
       expect(line).toMatch(/^(GET|POST) \S+ -> \d{3}( session=\S+)?$/);
     }
+  });
+});
+
+describe('runtime PAT redaction (F7)', () => {
+  it('never republishes the runtime PAT the bridge forwards to the CLI child', async () => {
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'session_update',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: `the agent echoed ${RUNTIME_PAT} verbatim` },
+        },
+      });
+      scripted.emit({
+        type: 'prompt_error',
+        requestId: '1',
+        code: 'RPC_ERROR',
+        message: `the CLI rejected the run: token=${RUNTIME_PAT}`,
+      });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p1',
+        toolCallId: 'call_1',
+        toolName: 'Write',
+        title: `Write guarded by Authorization: Bearer ${RUNTIME_PAT}`,
+        options: [{ optionId: 'o1', kind: 'allow_once', name: 'Allow' }],
+        params: { toolCall: { rawInput: { authorization: `Bearer ${RUNTIME_PAT}` } } },
+      });
+    });
+    const bridge = await startScriptedBridge(() => client);
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId);
+
+    const message = await stream.waitFor('agent_message');
+    const failed = await stream.waitFor('failed');
+    const permission = await stream.waitFor('permission_request');
+
+    expect(message.text).toBe('the agent echoed [redacted] verbatim');
+    expect(failed).toEqual({
+      sequence: expect.any(Number),
+      type: 'failed',
+      reason: 'the CLI rejected the run: token=[redacted]',
+      code: 'RPC_ERROR',
+    });
+    expect(permission.title).toBe('Write guarded by Authorization: Bearer [redacted]');
+    const redactedInput = JSON.stringify({ authorization: 'Bearer [redacted]' });
+    expect(permission.redactedPreview).toBe(redactedInput);
+    expect(permission.rawInput).toBe(redactedInput);
+    // The session's MCP header carries a DIFFERENT synthetic value, so a redaction set built
+    // from the header values alone lets every one of these strings through verbatim.
+    expect(RUNTIME_PAT).not.toBe(PAT);
+    expect(stream.raw).not.toContain(RUNTIME_PAT);
+    expect(logLines.join('\n')).not.toContain(RUNTIME_PAT);
+  });
+
+  it('holds back a runtime PAT split across two agent chunks so the frames cannot be rejoined', async () => {
+    const half = RUNTIME_PAT.slice(0, Math.ceil(RUNTIME_PAT.length / 2));
+    const rest = RUNTIME_PAT.slice(half.length);
+    expect(half + rest).toBe(RUNTIME_PAT);
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `leaked ${half}` } },
+      });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `${rest} tail` } },
+      });
+    });
+    const bridge = await startScriptedBridge(() => client);
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId);
+
+    await stream.waitFor('agent_message', frame => String(frame.text).includes('tail'));
+    // The partial prefix never leaves the bridge on its own: the first frame stops before it
+    // and the completing half is redacted together with the carried first half, so no reader
+    // (including the host, which concatenates agent text into the run output) can rejoin it.
+    expect(stream.of('agent_message').map(frame => frame.text)).toEqual(['leaked ', '[redacted] tail']);
+    expect(stream.raw).not.toContain(RUNTIME_PAT);
+    expect(stream.raw).not.toContain(half);
+    expect(stream.raw).not.toContain(rest);
+    expect(logLines.join('\n')).not.toContain(half);
+  });
+
+  it('redacts the runtime PAT in a create-failure reason (the host-facing error text)', async () => {
+    const client = new ScriptedClient(() => undefined, `session/new failed: token=${RUNTIME_PAT} rejected`);
+    const bridge = await startScriptedBridge(() => client);
+
+    const created = await createSession(bridge);
+
+    expect(created.status).toBe(502);
+    expect(created.body?.error).toBe('SESSION_CREATE_FAILED');
+    expect(created.body?.reason).toBe('session/new failed: token=[redacted] rejected');
+    expect(JSON.stringify(created.body)).not.toContain(RUNTIME_PAT);
+  });
+
+  it('redacts the runtime PAT echoed into CLI-supplied scalar fields', async () => {
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'session_update',
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_9',
+          kind: `k-${RUNTIME_PAT}`,
+          status: `s-${RUNTIME_PAT}`,
+          _meta: { qoder: { toolName: 'Write' } },
+        },
+      });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_9', status: `u-${RUNTIME_PAT}` },
+      });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'current_mode_update', currentModeId: `m-${RUNTIME_PAT}` },
+      });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p-9',
+        toolCallId: 'call_9',
+        toolName: 'Write',
+        title: null,
+        options: [{ optionId: `o-${RUNTIME_PAT}`, kind: 'allow_once', name: 'Allow' }],
+        params: { toolCall: { rawInput: { file_path: '/workspace/x.txt' } } },
+      });
+      scripted.emit({ type: 'prompt_result', requestId: 'p-9', result: { stopReason: `r-${RUNTIME_PAT}` } });
+    });
+    const bridge = await startScriptedBridge(() => client);
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId, 0);
+    const completed = await stream.waitFor('completed');
+
+    // Enum-shaped values are still CLI-supplied strings, so the PAT must not ride through any of
+    // them; the ids stay verbatim because the host correlates on them and echoes the requestId.
+    expect(stream.of('tool_call')).toEqual([
+      {
+        sequence: expect.any(Number),
+        type: 'tool_call',
+        toolCallId: 'call_9',
+        toolName: 'Write',
+        kind: 'k-[redacted]',
+        status: 's-[redacted]',
+      },
+    ]);
+    expect(stream.of('tool_call_update')).toEqual([
+      { sequence: expect.any(Number), type: 'tool_call_update', toolCallId: 'call_9', status: 'u-[redacted]' },
+    ]);
+    expect(stream.of('mode_changed')).toEqual([
+      { sequence: expect.any(Number), type: 'mode_changed', currentModeId: 'm-[redacted]' },
+    ]);
+    const permission = stream.of('permission_request')[0];
+    expect(permission?.requestId).toBe('p-9');
+    expect(permission?.toolCallId).toBe('call_9');
+    expect(permission?.options).toEqual([{ optionId: 'o-[redacted]', kind: 'allow_once', name: 'Allow' }]);
+    expect(completed).toEqual({ sequence: expect.any(Number), type: 'completed', stopReason: 'r-[redacted]' });
+    expect(stream.raw).not.toContain(RUNTIME_PAT);
+    expect(logLines.join('\n')).not.toContain(RUNTIME_PAT);
+  });
+
+  it('redacts the flushed split-guard carry under a pathological secret set', async () => {
+    // Pathological by construction: the bridge token is the word inside the redaction placeholder
+    // and the MCP header secret starts with the placeholder's own tail, so the split guard holds
+    // a carry that contains the complete token. Synthetic values only.
+    const token = 'redacted';
+    const headerSecret = 'redacted]tok-9x';
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `x${token}` } },
+      });
+      scripted.emit({ type: 'prompt_result', requestId: '1', result: { stopReason: 'end_turn' } });
+    });
+    const bridge = createBridgeServer({
+      token,
+      log: line => logLines.push(line),
+      acpClientOptions: { env: {} },
+      createAcpClient: () => client,
+    });
+    createdServers.push(bridge);
+    await bridge.listen(0, '127.0.0.1');
+    const authorization = `Bearer ${token}`;
+    const created = await post(
+      bridge,
+      '/sessions',
+      createSessionBody({
+        mcpServers: [
+          {
+            name: 'aria-stub',
+            url: 'http://127.0.0.1:9/mcp',
+            headers: [{ name: 'Authorization', value: `Bearer ${headerSecret}` }],
+          },
+        ],
+      }),
+      authorization,
+    );
+    expect(created.status).toBe(201);
+    const sessionId = String(((await created.json()) as Record<string, unknown>).bridgeSessionId);
+    const stream = await openEvents(bridge, sessionId, 0, authorization);
+    await stream.waitFor('completed');
+
+    // 'xredacted' redacts to 'x[redacted]'; the 9-character tail 'redacted]' is held (it is a
+    // proper prefix of the header secret), so the turn-boundary flush must run the carry through
+    // the redact pass before publishing it instead of republishing the raw hold.
+    expect(stream.of('agent_message').map(frame => frame.text)).toEqual(['x[', '[redacted]]']);
+  });
+
+  it('never lets the runtime PAT reach any published frame, whichever CLI-supplied field carries it', async () => {
+    // The F7 closure, deliberately NOT a per-field test: one session where the CLI echoes the
+    // same runtime PAT into every class of outbound string — free text, enum-shaped fields, an
+    // options entry (all three option fields), the preview/rawInput pair, an error reason and a
+    // stop reason. A future CLI-supplied field republished without its redact pass turns this
+    // red even though every per-field test above still passes.
+    const client = new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `text ${RUNTIME_PAT}` } },
+      });
+      scripted.emit({
+        type: 'session_update',
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call_9',
+          kind: `kind-${RUNTIME_PAT}`,
+          status: `status-${RUNTIME_PAT}`,
+          _meta: { qoder: { toolName: `tool-${RUNTIME_PAT}` } },
+        },
+      });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_9', status: `upd-${RUNTIME_PAT}` },
+      });
+      scripted.emit({
+        type: 'session_update',
+        update: { sessionUpdate: 'current_mode_update', currentModeId: `mode-${RUNTIME_PAT}` },
+      });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p-9',
+        toolCallId: 'call_9',
+        toolName: `ask-${RUNTIME_PAT}`,
+        title: `title ${RUNTIME_PAT}`,
+        options: [
+          { optionId: `opt-${RUNTIME_PAT}`, kind: RUNTIME_PAT, name: `label ${RUNTIME_PAT}` },
+          { optionId: 'opt-plain', kind: 'reject_once', name: 'Reject' },
+        ],
+        params: { toolCall: { rawInput: { authorization: `Bearer ${RUNTIME_PAT}` } } },
+      });
+      scripted.emit({ type: 'prompt_error', requestId: '1', code: 'RPC_ERROR', message: `reason ${RUNTIME_PAT}` });
+      scripted.emit({ type: 'prompt_result', requestId: 'p-9', result: { stopReason: `stop-${RUNTIME_PAT}` } });
+    });
+    const bridge = await startScriptedBridge(() => client);
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId, 0);
+    await stream.waitFor('completed');
+
+    // Non-vacuity: every surface class must really have been published (a stream that emitted
+    // nothing would satisfy the leak scan below without proving anything).
+    const types = stream.frames.map(frame => frame.type);
+    for (const surface of [
+      'agent_message',
+      'tool_call',
+      'tool_call_update',
+      'mode_changed',
+      'permission_request',
+      'failed',
+      'completed',
+    ]) {
+      expect(types, `surface '${surface}' was never published`).toContain(surface);
+    }
+
+    // The closure scan: the PAT may not appear in ANY published frame, whatever field carried
+    // it (this is the assertion that was red while `options[].kind` was the one unredacted field).
+    const leaked = stream.frames
+      .filter(frame => JSON.stringify(frame).includes(RUNTIME_PAT))
+      .map(frame => frame.type);
+    expect(leaked, 'the runtime PAT reached a published frame').toEqual([]);
+
+    // The mandate, literally: nowhere in the concatenated SSE payloads.
+    expect(stream.raw).not.toContain(RUNTIME_PAT);
+
+    // Every carrier was not just dropped: exactly 15 carriers went in and 15 masks came out
+    // (a silently dropped frame would fail this count too).
+    expect(stream.raw.split('[redacted]').length - 1).toBe(15);
+    // The redaction set is built from the runtime PAT and NOT from the MCP header value: the
+    // two synthetic values differ, so a header-only set would have let every carrier through.
+    expect(RUNTIME_PAT).not.toBe(PAT);
+    expect(logLines.join('\n')).not.toContain(RUNTIME_PAT);
   });
 });
 

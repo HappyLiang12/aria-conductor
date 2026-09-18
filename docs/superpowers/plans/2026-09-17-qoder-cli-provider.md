@@ -50,8 +50,11 @@ These names and shapes are authoritative for all tasks below. If implementation 
 | `GET /sessions/{id}/events?after=N` | — | `text/event-stream`, `data: {"sequence":N,"type":...}`; ring buffer 1000; too-old `after` → `409 {"error":"REPLAY_GAP"}` |
 | `POST /sessions/{id}/permissions/{requestId}` | `{approved, reason?}` | `200 {"outcome":"delivered\|already_resolved\|expired\|unknown"}`; conflicting re-decision → `409 {"error":"ALREADY_RESOLVED"}`; approved with no `allow_once` option → `422 {"error":"UNSUPPORTED_OPTIONS"}` |
 | `POST /sessions/{id}/cancel` | — | `202 {"terminated":true\|false}`; rejects pending requests, then SIGTERM→SIGKILL within 10s grace |
+| `POST /probe` | `{url, headers:[{name,value}], timeoutMs?}` | `200 {"reachable":bool,"status":int\|null,"detail":string\|null}` — one MCP `initialize` POST from inside the sandbox; added by C2 ruling R1 for host-side reachability pre-flight, default timeout 3000 ms |
 
-Event types: `session_started {model}`, `agent_message {text}`, `tool_call {toolCallId, toolName, kind, status}`, `tool_call_update {toolCallId, status}`, `permission_request {requestId, toolCallId, toolName, title, redactedPreview, inputDigest, options[{optionId, kind, name}], expiresAt}`, `mode_changed {currentModeId}`, `usage {credits, inputTokens, outputTokens}`, `completed {stopReason}`, `failed {reason}`.
+Event types: `session_started {model}`, `agent_message {text}`, `tool_call {toolCallId, toolName, kind, status}`, `tool_call_update {toolCallId, status}`, `permission_request {requestId, toolCallId, toolName, title, redactedPreview, inputDigest, rawInput, rawInputTruncated, options[{optionId, kind, name}], expiresAt}`, `mode_changed {currentModeId}`, `usage {credits, inputTokens, outputTokens}`, `completed {stopReason}`, `failed {reason}`.
+
+Amended 2026-09-18 (C2 ruling R1, `.superpowers/sdd/2026-09-17-qoder-cli-provider/task-C2-rulings.md`): `permission_request` additionally carries the tool-call `rawInput` (bounded to 65536 characters, `rawInputTruncated` flags truncation) so the host can recompute the display preview and the authorization digest itself; `redactedPreview`/`inputDigest` remain for backwards compatibility but are never persisted, and a lie in them cannot authorize anything. A truncated (`rawInputTruncated:true`) ask is persisted as undecidable — approval is refused, deny/cancel still work.
 
 ### C0.3 ACP call sequence (bridge internals)
 
@@ -466,6 +469,22 @@ Any failed required gate stops the project and is reported with raw evidence; do
 - [ ] **Step 1:** Failing tests: duplicate event → one ask; changed digest → rejected; malformed/unknown-option event → rejected, not coerced into an allow; secret-looking strings are redacted in stored display content; expired-before-decision → EXPIRED and reject delivered to the bridge (short expiry, fake clock); run deadline earlier than approval timeout wins; restart recovery expires pending ACP asks without replay.
 - [ ] **Step 2:** Red → implement → green. **Step 3: Coordinator commit** — `feat(approval): create host-side approvals from ACP permission events`
 
+Amended 2026-09-18 (binding rulings in `.superpowers/sdd/2026-09-17-qoder-cli-provider/task-C2-rulings.md`,
+controller): the bridge forwards bounded `rawInput` and `POST /probe` (C0.2 amendment A1, R1); the host
+recomputes preview and digest itself and never persists sandbox-provided display text (R2, R3); the
+authorization digest is the frozen `WriteGrantService.effectiveArgsDigest` — top-level nulls dropped —
+shared with the enforcement side (R4, landed by `C4-fix1`); `requestDigest` holds that digest, oversize
+asks are persisted undecidable (R4); `Approval.toolCallId` stays null for ACP rows and the event gains a
+`source` field (R5, R6); malformed asks are cancelled, never coerced (R7); expiry is
+`min(approvals.timeout-ms, run deadline)` with the idempotent `deliverDecision`/`expire`/`digestForDecision`
+primitives C3 consumes (R8); restart recovery and the checker's ACP branch per R9/R10; provider wiring
+issues the run-scoped worker credential (`RunScopedCredentialService.issue`, expiry = run deadline,
+capped at `MAX_TTL` 30 min — a longer run loses MCP access; documented residual), probes
+`sandboxHostResolver` candidates through the bridge, passes `mcpServers=[McpServer("aria", url,
+[Authorization: Bearer <worker token>])]` (never anonymous on failure) and revokes credential + grants in
+the run's `finally` (R11); bridge gates are `npx vitest run` + `npm run build`, the image rebuild is C6's
+(R13); module homes and gates per R14. Out of scope: decision dispatch/grants (C3), UI (C5).
+
 ### Task C3: Decision dispatch (legacy vs ACP) and delivery
 
 **Files:**
@@ -500,7 +519,7 @@ Any failed required gate stops the project and is reported with raw evidence; do
 **Interfaces:** Implements the C0.8 matrix S1-S12. Guard: reads `QODER_E2E_MODEL` (default `efficient`); fails if not in `{efficient, lite}` unless `QODER_E2E_ALLOW_PAID=1`. Skip reason when PAT absent must name the credential and the design section.
 
 - [ ] **Step 1:** Write specs red (they will fail until the stack is up).
-- [ ] **Step 2:** Precondition: load the PAT into the runtime credential store via the B8 API (read from the local file; never echoed). Bring up the real stack (`pwsh -NoProfile -File scripts/start.ps1 -Provider qoder`, which pins token auth) and run S1-S12; each scenario records raw output (command + observed result) into the evidence file. Reuse the harness patterns from `e2e/kanban-pickup-e2e.ps1` for S9.
+- [ ] **Step 2:** Precondition: rebuild the sandbox image first — `podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox` (C2 ruling R13: `Ensure-QoderSandboxImage` never rebuilds an existing image and the bridge `dist/` is not committed, so the rawInput/probe changes only reach the sandbox through a fresh build). Then load the PAT into the runtime credential store via the B8 API (read from the local file; never echoed). Bring up the real stack (`pwsh -NoProfile -File scripts/start.ps1 -Provider qoder`, which pins token auth) and run S1-S12; each scenario records raw output (command + observed result) into the evidence file. Reuse the harness patterns from `e2e/kanban-pickup-e2e.ps1` for S9.
 - [ ] **Step 3:** Run the regression set: `mvn clean test -Dspring.profiles.active=h2`, `mvn verify`, `pnpm test`, `pnpm build`, existing Playwright suites, `e2e/container-runtime-e2e.*`.
 - [ ] **Step 4:** Any NOT VERIFIED criterion is reported as such — never upgraded to PASS.
 - [ ] **Step 5: Coordinator commit** — `test(qoder): add mandatory local E2E regression suite for the governed provider`

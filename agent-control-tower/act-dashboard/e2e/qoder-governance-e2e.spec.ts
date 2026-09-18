@@ -342,7 +342,16 @@ test('S7: worker self-approval denied — decide_approval unreachable with an un
     title: `s7-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  expect((await transitionKanban(request, card.id, 'IN_PROGRESS')).status).toBe(200);
+  // A card created in TODO is itself a dispatch intent: KanbanAutoDispatchListener
+  // (auto-dispatch-on-create, on by default) dispatches it right after the create
+  // commits and races this explicit operator move. Losing that race answers 409
+  // ("Card was modified by another move") on an already-dispatched card, so only a
+  // status outside {200, 409} is a real dispatch failure — same stance as
+  // qoder-adk-e2e.spec.ts's dispatchWriteCard and kanban-hitl.spec.ts.
+  const moved = await transitionKanban(request, card.id, 'IN_PROGRESS');
+  if (moved.status !== 200 && moved.status !== 409) {
+    throw new Error(`TODO→IN_PROGRESS dispatch rejected: ${JSON.stringify(moved.data)}`);
+  }
   const pendingList = await pollUntil<any[]>(
     request,
     `/approvals?kanbanItemId=${card.id}`,

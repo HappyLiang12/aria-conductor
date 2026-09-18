@@ -409,6 +409,29 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
         assertThat(content).contains("[redacted]");
     }
 
+    @Test
+    void hostileToolName_isSanitizedInDisplayText_andKeptRawAsTheIdentity() throws Exception {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        String hostileName = "writ\u0007e_file";
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-hostile", "call_hostile", hostileName, json(Map.of("path", "/x\u007f")),
+                        false, "allow_once", "reject_once"));
+
+        flushAndClear();
+        Approval approval = approvalRepository.findByRunId(runId).get(0);
+        assertThat(approval.getReason()).isEqualTo("ACP permission request: writ e_file");
+        assertThat(approval.getContent()).contains("`writ e_file`").doesNotContain("\u0007", "\u007f");
+        assertThat(MAPPER.readTree(companion(runId, "req-hostile").getDisplayJson())
+                .path("toolName").asText()).isEqualTo("writ e_file");
+        // The identity copy stays raw: a redelivery of the same payload must still dedupe.
+        assertThat(companion(runId, "req-hostile").getToolName()).isEqualTo(hostileName);
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-hostile", "call_hostile", hostileName, json(Map.of("path", "/x\u007f")),
+                        false, "allow_once", "reject_once"));
+        assertThat(publishedApprovalEvents()).hasSize(1);
+    }
+
     // ---- expiry, delivery, restart recovery -----------------------------------
 
     @Test
@@ -520,6 +543,46 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
                 .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
 
         verify(client, times(2)).decide(SESSION_ID, "req-retry", false, "operator denied");
+    }
+
+    @Test
+    void deliverDecision_bridgeRejectionsStayFailed_andOnlyTheAskRulingDelivers() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-rejection", json(Map.of("path", "/x"))));
+        UUID approvalId = approvalRepository.findByRunId(runId).get(0).getId();
+        // Every non-transport cause that rejects the host's own call (401/400/404/409/413/422/5xx)
+        // means the decision was never applied — only the answer that rules on the ask itself
+        // (409 ALREADY_RESOLVED) may count as delivered (R16).
+        when(client.decide(SESSION_ID, "req-rejection", true, "operator approved")).thenThrow(
+                new QoderBridgeException(QoderBridgeException.Cause.UNAUTHORIZED, "bridge token rejected"),
+                new QoderBridgeException(QoderBridgeException.Cause.INVALID_REQUEST, "malformed decision"),
+                new QoderBridgeException(QoderBridgeException.Cause.NOT_FOUND, "unknown request"),
+                new QoderBridgeException(QoderBridgeException.Cause.CONFLICT, "unresolved conflict"),
+                new QoderBridgeException(QoderBridgeException.Cause.SESSION_ENDED, "session gone"),
+                new QoderBridgeException(QoderBridgeException.Cause.PAYLOAD_TOO_LARGE, "body too large"),
+                new QoderBridgeException(QoderBridgeException.Cause.UNSUPPORTED_OPTIONS, "cannot express"),
+                new QoderBridgeException(QoderBridgeException.Cause.PROVIDER_ERROR, "cli failed"),
+                new QoderBridgeException(QoderBridgeException.Cause.ALREADY_RESOLVED, "already decided"));
+
+        for (int i = 0; i < 8; i++) {
+            assertThat(coordinator.deliverDecision(approvalId, true, "operator approved"))
+                    .as("rejection attempt %d", i)
+                    .isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
+            flushAndClear();
+            assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveryState())
+                    .isEqualTo(AcpPermissionCoordinator.DELIVERY_FAILED);
+            assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveredAt()).isNull();
+        }
+        // Retryable by construction: the ninth attempt is the one answer that rules on the ask.
+        assertThat(coordinator.deliverDecision(approvalId, true, "operator approved"))
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+        flushAndClear();
+        assertThat(companionRepository.findById(approvalId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+
+        verify(client, times(9)).decide(SESSION_ID, "req-rejection", true, "operator approved");
     }
 
     @Test

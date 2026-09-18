@@ -79,10 +79,10 @@ import java.util.stream.Collectors;
  * boundary (a constraint violation inside a shared transaction would poison it).
  *
  * <p><b>Delivery states.</b> {@code PENDING → DELIVERING → DELIVERED | CANCELLED | FAILED}:
- * {@code DELIVERED} is a decision the bridge accepted (its {@code ALREADY_RESOLVED}/404
- * answers included — the bridge is the source of truth), {@code CANCELLED} is an ask that was
- * expired or recovered after a restart, {@code FAILED} is a transient transport failure and
- * is the only retryable state.
+ * {@code DELIVERED} is reserved for an answer that rules on the ask itself (the bridge's
+ * {@code ALREADY_RESOLVED}), {@code CANCELLED} is an ask that was expired or recovered after a
+ * restart, and {@code FAILED} is any other delivery outcome — the host's decision was never
+ * applied — the only retryable state (R16).
  */
 @Slf4j
 @Component
@@ -96,7 +96,7 @@ public class AcpPermissionCoordinator {
     public static final String DELIVERY_DELIVERED = "DELIVERED";
     /** The ask was expired or interrupted by a restart; a cancel was delivered best-effort. */
     public static final String DELIVERY_CANCELLED = "CANCELLED";
-    /** Transient delivery failure; the decision may be delivered again. */
+    /** The bridge never applied the host's decision; observable and retryable. */
     public static final String DELIVERY_FAILED = "FAILED";
     /** No companion row exists for the requested approval (legacy or unknown id). */
     public static final String DELIVERY_MISSING = "MISSING";
@@ -108,11 +108,9 @@ public class AcpPermissionCoordinator {
 
     /** Only tool names in the platform MCP namespace can carry a write grant. */
     private static final Pattern MCP_TOOL_NAME = Pattern.compile("^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$");
-    /** Transport causes where the bridge never answered: the only retryable delivery failures. */
-    private static final List<QoderBridgeException.Cause> TRANSIENT_CAUSES = List.of(
-            QoderBridgeException.Cause.UNREACHABLE,
-            QoderBridgeException.Cause.TIMEOUT,
-            QoderBridgeException.Cause.INTERRUPTED);
+    /** Causes that mean the bridge ruled on the ask itself: the only non-transport delivery success. */
+    private static final List<QoderBridgeException.Cause> ASK_RULED_CAUSES = List.of(
+            QoderBridgeException.Cause.ALREADY_RESOLVED);
     /** Bound of a stored preview (the full redacted input stays in {@code displayJson}). */
     private static final int MAX_DISPLAY_PREVIEW_CHARS = 4096;
     /** Bounds of the identity fields, matching the companion's column widths. */
@@ -297,7 +295,7 @@ public class AcpPermissionCoordinator {
                     .approvalType(Approval.ApprovalType.TOOL_CALL)
                     .askType(Approval.AskType.APPROVAL)
                     .source(ApprovalSource.ACP_PERMISSION)
-                    .reason("ACP permission request: " + effective.name())
+                    .reason("ACP permission request: " + sanitizeName(effective.name()))
                     .content(content)
                     .contentKind(Approval.ContentKind.MARKDOWN)
                     .optionsJson(optionsJson)
@@ -396,9 +394,11 @@ public class AcpPermissionCoordinator {
     }
 
     /**
-     * One delivery attempt to the run's live bridge. Any HTTP answer (ALREADY_RESOLVED, 404,
-     * 422, ...) means the bridge ruled on the request and counts as delivered; only transport
-     * failures ({@link #TRANSIENT_CAUSES}) leave the delivery retryable (R8).
+     * One delivery attempt to the run's live bridge. Only an answer that rules on the ask itself
+     * — {@code 409 ALREADY_RESOLVED}, i.e. the request is already decided — counts as delivered.
+     * Every other cause, transport or not, means the host's decision was never applied: a 401 /
+     * 400 / 413 / 5xx rejects the host's own call, so the companion stays {@code FAILED},
+     * observable and retryable (R16, narrowing R8).
      */
     private boolean deliverToBridge(Claim claim, boolean approved, String reason) {
         QoderBridgeClient client = liveRuns.getOrDefault(claim.runId(), NO_LIVE_RUN).client();
@@ -413,7 +413,7 @@ public class AcpPermissionCoordinator {
         } catch (QoderBridgeException e) {
             log.warn("Decision delivery for ask {} answered with {}: {}",
                     claim.bridgeRequestId(), e.cause(), e.getMessage());
-            return !TRANSIENT_CAUSES.contains(e.cause());
+            return ASK_RULED_CAUSES.contains(e.cause());
         } catch (Exception e) {
             log.warn("Decision delivery for ask {} failed: {}", claim.bridgeRequestId(), e.getMessage());
             return false;
@@ -675,7 +675,7 @@ public class AcpPermissionCoordinator {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("rawInputTruncated", effective.truncated());
         node.put("grantable", effective.grantable());
-        node.put("toolName", effective.name());
+        node.put("toolName", sanitizeName(effective.name()));
         node.put("rawInput", redact(effective.previewInput()));
         node.set("options", readJson(optionsJson(options)));
         return writeJson(node);
@@ -683,7 +683,8 @@ public class AcpPermissionCoordinator {
 
     private static String renderContent(EffectiveAsk effective, List<PermissionOption> options) {
         StringBuilder content = new StringBuilder();
-        content.append("**ACP permission request** — tool `").append(effective.name()).append("`\n\n");
+        content.append("**ACP permission request** — tool `").append(sanitizeName(effective.name()))
+                .append("`\n\n");
         content.append("Requested input:\n\n");
         for (String line : previewLines(redact(effective.previewInput()))) {
             content.append("    ").append(line).append('\n');
@@ -712,7 +713,7 @@ public class AcpPermissionCoordinator {
         StringBuilder clean = new StringBuilder(preview.length());
         for (int i = 0; i < preview.length(); i++) {
             char c = preview.charAt(i);
-            clean.append(c == '\n' || c == '\t' || c >= 0x20 ? c : ' ');
+            clean.append(c == '\n' || c == '\t' || (c >= 0x20 && c != 0x7f) ? c : ' ');
         }
         return List.of(clean.toString().split("\n", -1));
     }
@@ -720,7 +721,10 @@ public class AcpPermissionCoordinator {
     /**
      * Host-side redaction of stored display text. The bridge already redacts the session
      * secrets it knows; this covers the host's own tokens and secret-shaped values so the
-     * operator-facing record never carries them (the digest always covers the true bytes).
+     * operator-facing record never carries them. Redaction changes only these display copies:
+     * the authorization digest is computed over the bytes as received (possibly already redacted
+     * by the bridge, possibly truncated), so a later genuine write carrying the original secret
+     * value no longer matches the digest and fails the grant closed — the safe direction.
      */
     private static String redact(String text) {
         if (text == null || text.isEmpty()) {

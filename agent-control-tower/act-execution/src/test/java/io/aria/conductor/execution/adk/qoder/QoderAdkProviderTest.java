@@ -358,6 +358,33 @@ class QoderAdkProviderTest {
     }
 
     @Test
+    void mcpEnabledWithoutAUsablePort_warnsAndPassesNoServers() {
+        // Enabled but unwireable (no usable port): the misconfiguration must be operator-visible
+        // instead of silently degrading to an MCP-less run.
+        mcpProperties.setEnabled(true);
+        mcpProperties.setPort(0);
+        UUID runId = UUID.randomUUID();
+        Logger logger = (Logger) LoggerFactory.getLogger(QoderAdkProvider.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            executeHappyRun(runId, new TaskContext(1, Duration.ofMinutes(2)));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
+                ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
+        verify(client).createSession(request.capture());
+        assertThat(request.getValue().mcpServers()).isEmpty();
+        verify(client, never()).probe(anyString(), anyList());
+        verify(runScopedCredentialService, never()).issue(any(), any());
+        assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+                .anyMatch(message -> message.contains("MCP is enabled but the worker entry cannot be wired"));
+    }
+
+    @Test
     void runEnd_revokesTheWorkerCredentialAndTheRunGrants() {
         UUID runId = UUID.randomUUID();
 

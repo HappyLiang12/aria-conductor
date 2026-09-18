@@ -290,6 +290,10 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             if (workerMcpEnabled()) {
                 workerToken = runScopedCredentialService.issue(runId, runDeadline);
                 mcpServers = workerMcpServers(client, runId, workerToken);
+            } else if (mcpProperties != null && mcpProperties.isEnabled()) {
+                log.warn("Qoder run {}: MCP is enabled but the worker entry cannot be wired"
+                                + " (port={}, credential service present={}) — the run proceeds without MCP tools",
+                        runId, mcpProperties.getPort(), runScopedCredentialService != null);
             }
             if (permissionCoordinator != null) {
                 permissionCoordinator.bindRun(runId, client, runDeadline);

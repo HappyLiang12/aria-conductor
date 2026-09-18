@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
-import { describeDecisionError, hasAllowOnce, isAcpAsk, isAskExpired } from '../utils/acpAsk';
+import {
+  describeDecisionError,
+  hasAllowOnce,
+  isAcpAsk,
+  isAskExpired,
+  isUndecidableAcpAsk,
+} from '../utils/acpAsk';
 import type { Approval } from '../types';
 import DiffPreview from './DiffPreview';
 
@@ -94,6 +100,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
           const acp = isAcpAsk(approval);
           const expired = isAskExpired(approval);
           const pending = approveMutation.isPending || rejectMutation.isPending;
+          // F3/R4: the backend refuses an approval the bridge truncated (or whose
+          // display record cannot prove decidability) with a typed 409
+          // UNDECIDABLE_ASK, so Allow once must not be offered enabled here
+          // either. Deny still works.
+          const undecidable = acp && isUndecidableAcpAsk(approval);
           return (
             <div key={approval.id} className={`qitem${isFirst ? ' highlight' : ''}`}>
               <div className="h">
@@ -131,7 +142,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                 <button
                   className="btn primary"
                   style={{ flex: 1 }}
-                  disabled={pending || (acp && (expired || !hasAllowOnce(approval)))}
+                  disabled={pending || (acp && (expired || !hasAllowOnce(approval))) || undecidable}
                   onClick={() => approveMutation.mutate(approval)}
                 >
                   {approveMutation.isPending && approveMutation.variables?.id === approval.id
@@ -151,6 +162,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                     : 'Deny'}
                 </button>
               </div>
+              {undecidable && (
+                <div className="acp-hint">
+                  This ask cannot be approved: its input is incomplete or unreadable. Deny still works.
+                </div>
+              )}
               {rowError?.askId === approval.id && (
                 <div className="kanban-form-error">{rowError.text}</div>
               )}

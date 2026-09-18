@@ -16,6 +16,7 @@ import {
   hasAllowOnce,
   isAcpAsk,
   isAskExpired,
+  isUndecidableAcpAsk,
 } from '../utils/acpAsk';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
 import type {
@@ -436,11 +437,16 @@ export default function OpsPage() {
                   const stale = ageMs > 5 * 60_000;
                   const busy = approveM.isPending || rejectM.isPending;
                   const expired = acp && isAskExpired(a);
+                  // F3/R4: the backend refuses an approval the bridge truncated (or
+                  // whose display record cannot prove decidability) with a typed 409
+                  // UNDECIDABLE_ASK, so Allow once must not be offered enabled here
+                  // either. Deny still works.
+                  const undecidable = acp && isUndecidableAcpAsk(a);
                   const toolLabel = acp ? acpToolLabel(a) : null;
                   const fallbackTitle =
                     a.reason?.trim() ||
                     (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off');
-                  const allowDisabled = busy || (acp && (expired || !hasAllowOnce(a)));
+                  const allowDisabled = busy || (acp && (expired || !hasAllowOnce(a))) || undecidable;
                   const denyDisabled = busy || (acp && expired);
                   return (
                     <div
@@ -508,6 +514,11 @@ export default function OpsPage() {
                           {acp ? 'Deny' : '✕ Deny'}
                         </button>
                       </div>
+                      {undecidable && (
+                        <div className="acp-hint" style={{ marginTop: 6 }}>
+                          This ask cannot be approved: its input is incomplete or unreadable. Deny still works.
+                        </div>
+                      )}
                     </div>
                   );
                 })}

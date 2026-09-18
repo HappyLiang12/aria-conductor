@@ -84,6 +84,29 @@ export function hasAllowOnce(ask: Approval): boolean {
   return parseAcpDisplay(ask)?.options.some((o) => o.kind === 'allow_once') ?? false;
 }
 
+/**
+ * Whether an ACP ask is undecidable for approval (F3/R4). Mirrors the backend
+ * predicate (`AcpPermissionCoordinator.isTruncated`, consulted only on the ACP
+ * path — callers gate with `isAcpAsk`): it fails closed, so a blank or
+ * unparseable display record counts as truncated, and so does an absent (or
+ * non-boolean) `rawInputTruncated` flag. Only an explicit `false` — the one
+ * value the backend reads as decidable — may offer Allow once.
+ *
+ * `parseAcpDisplay` collapses an absent flag to `false`, so the raw record is
+ * consulted here for the tri-state; this reads the control flag only and never
+ * re-renders the redacted payload.
+ */
+export function isUndecidableAcpAsk(ask: Approval): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(ask.displayJson ?? '');
+  } catch {
+    return true;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return true;
+  return (parsed as Record<string, unknown>).rawInputTruncated !== false;
+}
+
 /** Unparseable/missing expiry is treated as not expired (never block a decide). */
 export function isAskExpired(ask: Approval): boolean {
   const parsed = Date.parse(ask.expiresAt);

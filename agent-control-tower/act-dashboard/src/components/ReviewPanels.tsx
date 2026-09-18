@@ -8,6 +8,7 @@ import {
   hasAllowOnce,
   isAcpAsk,
   isAskExpired,
+  isUndecidableAcpAsk,
   parseAcpDisplay,
 } from '../utils/acpAsk';
 import { formatTimestamp } from '../utils/formatTime';
@@ -16,25 +17,6 @@ import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus } from
 interface PanelProps {
   item: KanbanItem;
   pendingAsks: Approval[];
-}
-
-/**
- * Whether an ACP ask is undecidable for approval (F3/R4). Mirrors the backend predicate
- * (`AcpPermissionCoordinator.isTruncated`), which fails closed: a blank/unparseable display
- * record counts as truncated, and so does an absent (or non-boolean) `rawInputTruncated` flag.
- * Only an explicit `false` — the one value the backend reads as decidable — offers Allow once.
- * `parseAcpDisplay` collapses an absent flag to `false`, so the raw record is consulted here for
- * the tri-state; this reads the control flag only and never re-renders the redacted payload.
- */
-function isUndecidableAcpAsk(ask: Approval): boolean {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(ask.displayJson ?? '');
-  } catch {
-    return true;
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return true;
-  return (parsed as Record<string, unknown>).rawInputTruncated !== false;
 }
 
 /** Ask decision surface - used by the collapsed drawer and the ReviewWorkspace rail. */

@@ -246,12 +246,17 @@ test('S2: write attempt asks, allow once executes, second write asks again', asy
   await expect
     .poll(async () => (await askDetail(request, ask1.id)).data?.status, { timeout: 90_000 })
     .toBe('APPROVED');
+  // status=APPROVED is durable at decision time; delivery to the bridge is the next step and is
+  // briefly observable as DELIVERING (sampled once in the S2 run-3 attempt), so poll the
+  // delivery state instead of sampling it (same idiom as the S9 delivery poll).
+  await expect
+    .poll(async () => (await askDetail(request, ask1.id)).data?.deliveryState, { timeout: 60_000 })
+    .toBe('DELIVERED');
   const decided1 = await askDetail(request, ask1.id);
   console.log(
     `[S2] ask1 decided: status=${decided1.data?.status} deliveryState=${decided1.data?.deliveryState}`
     + ` decision-recorded reason=${JSON.stringify(decided1.data?.reason)}`,
   );
-  expect(decided1.data?.deliveryState).toBe('DELIVERED');
 
   // File side effect, observed host-side inside the run's sandbox container.
   const write1 = await waitForSandboxFile(containerId, filePath, 180_000);
@@ -317,19 +322,26 @@ test('S3: deny produces no side effect and does not cancel the run', async ({ pa
   expect((await transitionKanban(request, card.id, 'REVIEW')).status).toBe(200);
   const zone = await openCardDecisionPanel(page, card.id);
   await expect(zone.locator('.pill.acp')).toContainText('ACP permission');
-  const deny = zone.getByRole('button', { name: 'Deny', exact: true });
+  // The card carries its legacy task-gate ask beside the ACP ask and both render a Deny button,
+  // so the locator must stay inside the ACP card (run-3 attempt 1 died on the strict-mode
+  // violation); .acp-card is the ACP ask card in ReviewPanels.tsx.
+  const deny = zone.locator('.acp-card').getByRole('button', { name: 'Deny', exact: true });
   await expect(deny).toBeEnabled();
   await deny.click();
 
   await expect
     .poll(async () => (await askDetail(request, ask.id)).data?.status, { timeout: 90_000 })
     .toBe('DENIED');
+  // Same async-delivery window as S2: status is durable at decision time, the delivery settles
+  // after it, so poll instead of sampling once.
+  await expect
+    .poll(async () => (await askDetail(request, ask.id)).data?.deliveryState, { timeout: 60_000 })
+    .toBe('DELIVERED');
   const decided = await askDetail(request, ask.id);
   console.log(
     `[S3] ask decided: status=${decided.data?.status} deliveryState=${decided.data?.deliveryState}`
     + ` reason=${JSON.stringify(decided.data?.reason)}`,
   );
-  expect(decided.data?.deliveryState).toBe('DELIVERED');
 
   const probe = readFileInSandbox(containerId, filePath);
   console.log(
@@ -386,13 +398,18 @@ test('S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no sta
     ttlMs + 180_000,
     3_000,
   );
+  // C3/C2 mechanics: expiry delivers the reject/cancel to the bridge (CANCELLED per the C5 label
+  // map); that delivery settles asynchronously after the status flips, so poll it instead of
+  // reading the first EXPIRED sample once.
+  await expect
+    .poll(async () => (await askDetail(request, ask.id)).data?.deliveryState, { timeout: 60_000 })
+    .toBe('CANCELLED');
+  const expiredSettled = await askDetail(request, ask.id);
   console.log(
-    `[S4] ask expired: status=${expired.status} deliveryState=${expired.deliveryState}`
-    + ` reason=${JSON.stringify(expired.reason)} decidedAt=${expired.decidedAt}`,
+    `[S4] ask expired: status=${expiredSettled.data?.status} deliveryState=${expiredSettled.data?.deliveryState}`
+    + ` reason=${JSON.stringify(expiredSettled.data?.reason)} decidedAt=${expiredSettled.data?.decidedAt}`,
   );
-  // C3/C2 mechanics: expiry delivers the reject/cancel to the bridge (CANCELLED per the C5 label map).
-  expect(expired.deliveryState).toBe('CANCELLED');
-  expect(String(expired.reason ?? '')).toMatch(/expired/i);
+  expect(String(expiredSettled.data?.reason ?? '')).toMatch(/expired/i);
   expect((await listAsksForRun(request, run.id)).map((a) => a.status)).toContain('EXPIRED');
 
   // A later decide on the same ask must be the typed 409 — never a success, never a stale allow.

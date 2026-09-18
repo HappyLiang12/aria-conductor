@@ -8,6 +8,7 @@ import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.adk.qoder.QoderAdkProvider;
 import io.aria.conductor.execution.adk.qoder.QoderProperties;
 import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.mcp.McpProperties;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -121,7 +122,15 @@ class QoderSandboxSmokeE2ETest {
         properties.setModel(model);
         properties.setMaxTaskMinutes(5);
 
-        QoderAdkProvider provider = new QoderAdkProvider(properties, credentials, publisher);
+        // F1: the manual wiring must state its MCP configuration explicitly instead of letting
+        // the governance guard be bypassed by an absent one. The harness states the mode Qoder
+        // requires of a governed host (token); without the Spring collaborators there is no
+        // credential source, so the worker entry is not wired and the smoke runs MCP-less.
+        McpProperties mcpProperties = new McpProperties();
+        mcpProperties.setEnabled(true);
+        mcpProperties.setAuthMode("token");
+
+        QoderAdkProvider provider = new QoderAdkProvider(properties, credentials, publisher, mcpProperties);
         UUID agentId = UUID.randomUUID();
         Agent agent = Agent.builder()
                 .id(agentId)

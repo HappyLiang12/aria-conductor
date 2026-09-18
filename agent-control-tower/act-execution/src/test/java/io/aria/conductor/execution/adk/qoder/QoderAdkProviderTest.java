@@ -5,8 +5,11 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionConstraints;
 import io.aria.conductor.execution.adk.TaskExecutionException;
@@ -31,10 +34,15 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -43,8 +51,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,6 +107,7 @@ class QoderAdkProviderTest {
     @Mock RunScopedCredentialService runScopedCredentialService;
     @Mock WriteGrantService writeGrantService;
     @Mock AcpPermissionCoordinator permissionCoordinator;
+    @Mock RunRepository runRepository;
 
     QoderProperties properties;
     McpProperties mcpProperties;
@@ -135,7 +146,8 @@ class QoderAdkProviderTest {
                     clientToken.set(token);
                     return client;
                 },
-                mcpProperties, runScopedCredentialService, writeGrantService, permissionCoordinator);
+                mcpProperties, runScopedCredentialService, writeGrantService, permissionCoordinator,
+                runRepository);
         provider.setBridgeReadyTimeoutForTest(Duration.ofMillis(400));
         provider.setBridgeReadyPollIntervalForTest(Duration.ofMillis(10));
         provider.setStopGraceForTest(Duration.ofMillis(50));
@@ -537,6 +549,10 @@ class QoderAdkProviderTest {
             return BRIDGE_SESSION;
         }).when(client).createSession(any());
         streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+        // The live run's row proves it is not terminal: the terminal-aware slot guard added for
+        // the kanban re-dispatch must still reject here, never hand the slot over.
+        lenient().when(runRepository.findById(firstRun)).thenReturn(Optional.of(
+                Run.builder().id(firstRun).agentId(agentId).status(RunStatus.RUNNING).build()));
 
         Thread first = new Thread(() -> provider.executeTask(agent(agentId), firstRun, PROMPT_TEXT,
                 new TaskContext(1, Duration.ofMinutes(2))), "first-run");
@@ -549,6 +565,8 @@ class QoderAdkProviderTest {
                 .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR))
                 .hasMessageContaining("active run");
+        // The rejection changed nothing: the live run still owns the slot.
+        assertThat(provider.activeRunsForTest()).containsEntry(agentId, firstRun);
 
         releaseFirstRun.countDown();
         first.join(10_000);
@@ -1653,5 +1671,279 @@ class QoderAdkProviderTest {
                 .as("the provider deadline must not restart the granted window after preparation")
                 .isLessThan(2200L)
                 .isGreaterThan(1500L);
+    }
+
+    // ---- G4 item 1: the per-agent slot guard is terminal-aware --------------------------------
+
+    /**
+     * F9 acceptance on the qoder path: the kanban stop flips the previous run's row to CANCELLED
+     * synchronously, while its provider call keeps the agent's single-run slot until the abort
+     * finishes (async engine abort, ~1s poll, then up to the 15s stop grace). A re-dispatched run
+     * landing in that window must take the slot over instead of failing with the busy error, and
+     * the winding-down run's teardown must not evict the successor's registration.
+     */
+    @Test
+    void executeTask_previousRunCancelledButStillWindingDown_takesOverTheSlotInsteadOfRejecting() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID oldRun = UUID.randomUUID();
+        UUID newRun = UUID.randomUUID();
+        // The kanban stop already flipped the old run's row to CANCELLED; the engine's async
+        // abort has not torn its provider call down yet, so the slot is still held.
+        lenient().when(runRepository.findById(oldRun)).thenReturn(Optional.of(
+                Run.builder().id(oldRun).agentId(agentId).status(RunStatus.CANCELLED).build()));
+        CountDownLatch oldStreamOpen = new CountDownLatch(1);
+        CountDownLatch releaseOldStream = new CountDownLatch(1);
+        CountDownLatch releaseNewStream = new CountDownLatch(1);
+        AtomicInteger streamReads = new AtomicInteger();
+        doAnswer(invocation -> {
+            Consumer<QoderBridgeClient.BridgeEvent> consumer = invocation.getArgument(0);
+            switch (streamReads.getAndIncrement()) {
+                case 0 -> {
+                    // The old run's pump stays open: its executeTask has not returned.
+                    oldStreamOpen.countDown();
+                    releaseOldStream.await(10, TimeUnit.SECONDS);
+                }
+                case 1 -> {
+                    consumer.accept(sessionStarted(1, "efficient"));
+                    releaseNewStream.await(10, TimeUnit.SECONDS);
+                    consumer.accept(completed(2, "end_turn"));
+                }
+                default -> { }
+            }
+            return null;
+        }).when(eventStream).read(any());
+
+        AtomicReference<Throwable> oldFailure = new AtomicReference<>();
+        Thread old = new Thread(() -> {
+            try {
+                provider.executeTask(agent(agentId), oldRun, PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+            } catch (Throwable t) {
+                oldFailure.set(t);
+            }
+        }, "winding-down-run");
+        old.start();
+        assertThat(oldStreamOpen.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // The re-dispatched run lands while the old one is still winding down.
+        AtomicReference<TaskResult> fresh = new AtomicReference<>();
+        AtomicReference<Throwable> freshFailure = new AtomicReference<>();
+        Thread reDispatched = new Thread(() -> {
+            try {
+                fresh.set(provider.executeTask(agent(agentId), newRun, PROMPT_TEXT,
+                        new TaskContext(1, Duration.ofMinutes(2))));
+            } catch (Throwable t) {
+                freshFailure.set(t);
+            }
+        }, "re-dispatched-run");
+        reDispatched.start();
+        waitUntil(() -> freshFailure.get() != null || provider.runSessionsForTest().containsKey(newRun));
+
+        assertThat(freshFailure.get())
+                .as("the re-dispatched run must take over the terminal run's slot, not lose the race")
+                .isNull();
+        assertThat(provider.activeRunsForTest()).containsEntry(agentId, newRun);
+
+        // The old run's teardown (its executeTask returns once its stream ends) removes only its
+        // own slot entry: the successor's registration survives.
+        releaseOldStream.countDown();
+        old.join(10_000);
+        assertThat(old.isAlive()).isFalse();
+        assertThat(oldFailure.get()).isInstanceOf(TaskExecutionException.class)
+                .satisfies(t -> assertThat(((TaskExecutionException) t).cause())
+                        .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR));
+        assertThat(provider.activeRunsForTest())
+                .as("the old run's teardown removes its own entry by value, never the successor's")
+                .containsEntry(agentId, newRun);
+
+        // The new run finishes normally and releases the slot.
+        releaseNewStream.countDown();
+        reDispatched.join(10_000);
+        assertThat(reDispatched.isAlive()).isFalse();
+        assertThat(freshFailure.get()).isNull();
+        assertThat(fresh.get()).isNotNull();
+        assertThat(fresh.get().runId()).isEqualTo(newRun);
+        assertThat(provider.activeRunsForTest()).doesNotContainKey(agentId);
+    }
+
+    // ---- G4 item 2: the pending-abort record is atomic with the run's registration ------------
+
+    /**
+     * The check-then-write of the pending-abort record has a window: the run's finally may remove
+     * the records before the write lands, leaking the entry for the provider's lifetime — and in
+     * the sibling ordering the record can outlive the runner's last launch boundary and report a
+     * spurious ABORTED whose stop was never sent. The pin is the trapping-map witness (the
+     * `WriteGrantServiceTest` F2 pattern): the write must run inside the registration's own
+     * per-key map operation, the one critical section the run's cleanup also enters.
+     */
+    @Test
+    void abortTask_beforeAnySession_recordsThePendingAbortInsideTheRegistrationsPerKeyOperation() throws Exception {
+        AbortRecordingWitness witness = installAbortRecordingWitness();
+        UUID runId = UUID.randomUUID();
+        provider.runRegistrationsForTest().put(runId, Boolean.TRUE); // the run is preparing (F5)
+
+        provider.abortTask(runId);
+
+        assertThat(witness.recordsInsideTheirRegistrationOperation())
+                .as("the pending-abort record must be written inside the registration's per-key operation;"
+                        + " a write outside it is the window where the run's cleanup removes it first")
+                .containsExactly(Boolean.TRUE);
+    }
+
+    @Test
+    void abortTask_withAClientButNoSession_recordsThePendingAbortInsideTheRegistrationOperation() throws Exception {
+        AbortRecordingWitness witness = installAbortRecordingWitness();
+        UUID runId = UUID.randomUUID();
+        provider.runRegistrationsForTest().put(runId, Boolean.TRUE);
+        provider.runClientsForTest().put(runId, client); // the bridge call is in flight, no session yet
+
+        provider.abortTask(runId);
+
+        assertThat(witness.recordsInsideTheirRegistrationOperation())
+                .as("the pre-existing session-creation branch must apply the same discipline")
+                .containsExactly(Boolean.TRUE);
+    }
+
+    /**
+     * The sibling ordering of the same window: the record lands while the launch boundary is
+     * crossing, so the runner's next check never sees it. The abort must deliver the stop itself
+     * instead of settling for a record the runner has already passed (which would later report
+     * ABORTED without any stop having reached the bridge).
+     */
+    @Test
+    void abortTask_whenTheSessionAppearsWhileTheAbortIsRecorded_deliversTheStop() throws Exception {
+        UUID runId = UUID.randomUUID();
+        provider.runRegistrationsForTest().put(runId, Boolean.TRUE);
+        provider.runClientsForTest().put(runId, client);
+        Map<UUID, String> sessions = provider.runSessionsForTest();
+        sessions.put(runId, BRIDGE_SESSION);
+        // The abort's first read of the session map misses the session once: the record is then
+        // written while the runner has already crossed its post-createSession boundary.
+        installMissFirstSessionGet(runId, sessions);
+
+        provider.abortTask(runId);
+
+        verify(client).cancel(BRIDGE_SESSION);
+    }
+
+    /**
+     * Witness for the item-2 atomicity pins (the trapping-map pattern of the F2 pin in
+     * {@code WriteGrantServiceTest}): the registration map double marks the per-key operation that
+     * is active while a {@code computeIfPresent} on the registration runs, and the pending-abort
+     * map double records for every write whether it ran inside the registration's own operation
+     * on the same key.
+     */
+    private static final class AbortRecordingWitness {
+
+        private final Deque<UUID> activeRegistrationOperations = new ArrayDeque<>();
+        private final List<Boolean> abortRecords = new ArrayList<>();
+
+        Map<UUID, Boolean> registrationMap() {
+            return new ConcurrentHashMap<>() {
+                @Override
+                public Boolean computeIfPresent(UUID key,
+                                                BiFunction<? super UUID, ? super Boolean,
+                                                        ? extends Boolean> remappingFunction) {
+                    activeRegistrationOperations.push(key);
+                    try {
+                        return super.computeIfPresent(key, remappingFunction);
+                    } finally {
+                        activeRegistrationOperations.pop();
+                    }
+                }
+            };
+        }
+
+        Map<UUID, Boolean> abortMap() {
+            return new ConcurrentHashMap<>() {
+                @Override
+                public Boolean put(UUID key, Boolean value) {
+                    abortRecords.add(key.equals(activeRegistrationOperations.peek()));
+                    return super.put(key, value);
+                }
+            };
+        }
+
+        List<Boolean> recordsInsideTheirRegistrationOperation() {
+            return List.copyOf(abortRecords);
+        }
+    }
+
+    /** Install the witness doubles over the provider's registration / pending-abort maps. */
+    private AbortRecordingWitness installAbortRecordingWitness() throws Exception {
+        AbortRecordingWitness witness = new AbortRecordingWitness();
+        setProviderField("registeredRuns", witness.registrationMap());
+        setProviderField("runAborted", witness.abortMap());
+        return witness;
+    }
+
+    /**
+     * Replace the provider's session map with a double whose first read of {@code missKey} answers
+     * "no session yet" and delegates everything else: the deterministic stand-in for the runner's
+     * {@code runSessions.put} landing between the abort's two reads.
+     */
+    private void installMissFirstSessionGet(UUID missKey, Map<UUID, String> sessions) throws Exception {
+        Map<UUID, String> doubleMap = new ConcurrentHashMap<>() {
+            private final AtomicBoolean missed = new AtomicBoolean();
+
+            @Override
+            public String get(Object key) {
+                if (missKey.equals(key) && missed.compareAndSet(false, true)) {
+                    return null;
+                }
+                return sessions.get(key);
+            }
+
+            @Override
+            public String put(UUID key, String value) {
+                return sessions.put(key, value);
+            }
+
+            @Override
+            public String remove(Object key) {
+                return sessions.remove(key);
+            }
+
+            @Override
+            public boolean containsKey(Object key) {
+                return sessions.containsKey(key);
+            }
+        };
+        setProviderField("runSessions", doubleMap);
+    }
+
+    private void setProviderField(String name, Object value) throws Exception {
+        Field field = QoderAdkProvider.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(provider, value);
+    }
+
+    // ---- G4 item 3: an unstated MCP configuration cannot run silently -------------------------
+
+    /**
+     * F1 for manual wirings: a provider constructed without {@code McpProperties} cannot be
+     * checked against the none-mode hazard, so it refuses at both entries instead of letting its
+     * sandbox run against an unknown host configuration.
+     */
+    @Test
+    void executeTask_withoutAnExplicitMcpConfiguration_isRefusedBeforeAnythingStarts() {
+        QoderAdkProvider unstated = new QoderAdkProvider(properties, sandboxLifecycle, credentialService,
+                publisher, (url, token) -> client, null, runScopedCredentialService, writeGrantService,
+                permissionCoordinator, runRepository);
+        UUID agentId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> unstated.executeTask(agent(agentId), UUID.randomUUID(), PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR))
+                .hasMessageContaining("MCP configuration");
+
+        assertThatThrownBy(() -> unstated.prepareAgent(agentId, agent(agentId)))
+                .isInstanceOf(TaskExecutionException.class)
+                .hasMessageContaining("MCP configuration");
+
+        // The refusal sits at the earliest boundary: no sandbox, no bridge, no session starts.
+        verify(sandboxLifecycle, never()).createSandbox(any(), anyString(), anyMap());
+        assertThat(unstated.instancesForTest()).isEmpty();
     }
 }

@@ -1,7 +1,10 @@
 package io.aria.conductor.execution.adk.qoder;
 
+import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.adk.AbstractAdkProvider;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionConstraints;
@@ -57,7 +60,9 @@ import java.util.function.Function;
  * <p>Isolation model: one sandbox per agent (created in {@link #prepareAgent}, reused
  * across runs, killed by {@link #shutdownAgent}/{@link #shutdownAll}), one bridge
  * session per run. A second concurrent run for the same agent is rejected with a typed
- * provider error instead of being interleaved into the first run's session.
+ * provider error instead of being interleaved into the first run's session; a previous
+ * run that is already terminal in the run store hands its slot over, since its
+ * provider-side teardown can trail the cancellation by the engine's async abort.
  *
  * <p>Credential model: the Qoder PAT is read from {@link RuntimeCredentialService} at
  * sandbox preparation and delivered ONLY through the sandbox container environment
@@ -132,6 +137,11 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     /** Host-side ACP permission coordinator (C2); null keeps the pump's raw-ask sink silent. */
     private final AcpPermissionCoordinator permissionCoordinator;
     /**
+     * Run store consulted by the per-agent slot guard to prove a previous run finished; null
+     * (manual wirings) keeps the guard fail-closed — a conflict is never a handover there.
+     */
+    private final RunRepository runRepository;
+    /**
      * Source of sandbox-reachable host candidates for the MCP probe (R11). Overridable in
      * tests; the injected override ({@code aria.mcp.sandbox-host-address}) wins inside.
      */
@@ -168,31 +178,36 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                             ApplicationEventPublisher eventPublisher, McpProperties mcpProperties,
                             RunScopedCredentialService runScopedCredentialService,
                             WriteGrantService writeGrantService,
-                            AcpPermissionCoordinator permissionCoordinator) {
+                            AcpPermissionCoordinator permissionCoordinator,
+                            RunRepository runRepository) {
         this(properties, new SandboxLifecycle(properties.getSandboxServerUrl(), properties.getSandboxApiKey()),
                 credentialService, eventPublisher, null, mcpProperties, runScopedCredentialService,
-                writeGrantService, permissionCoordinator);
+                writeGrantService, permissionCoordinator, runRepository);
     }
 
     /**
-     * Manual-wiring constructor (used by the sandbox smoke test): the caller supplies the
-     * fully built {@link SandboxLifecycle}; bridge clients are created and owned by the provider.
-     * Without Spring collaborators the worker MCP entry stays off (no credential source).
+     * Manual-wiring constructor: the caller supplies the fully built {@link SandboxLifecycle}
+     * and states the MCP configuration explicitly — {@code McpProperties} is required, because
+     * the F1 guard must evaluate the wiring's MCP mode instead of being bypassed by an absent
+     * configuration. Bridge clients are created and owned by the provider; without the Spring
+     * collaborators the worker MCP entry stays off (no credential source).
      */
     public QoderAdkProvider(QoderProperties properties, SandboxLifecycle sandboxLifecycle,
-                            RuntimeCredentialService credentialService, ApplicationEventPublisher eventPublisher) {
-        this(properties, sandboxLifecycle, credentialService, eventPublisher, null, null, null, null, null);
+                            RuntimeCredentialService credentialService, ApplicationEventPublisher eventPublisher,
+                            McpProperties mcpProperties) {
+        this(properties, sandboxLifecycle, credentialService, eventPublisher, null, mcpProperties,
+                null, null, null, null);
     }
 
     /**
      * Minimal-wiring constructor (sandbox smoke test): the shared {@link SandboxLifecycle} is
-     * built from the qoder properties, and the absent MCP/approval collaborators keep the
-     * worker MCP entry and the ACP permission sink off.
+     * built from the qoder properties and the MCP configuration is stated explicitly (F1); the
+     * absent MCP/approval collaborators keep the worker MCP entry and the ACP permission sink off.
      */
     public QoderAdkProvider(QoderProperties properties, RuntimeCredentialService credentialService,
-                            ApplicationEventPublisher eventPublisher) {
+                            ApplicationEventPublisher eventPublisher, McpProperties mcpProperties) {
         this(properties, new SandboxLifecycle(properties.getSandboxServerUrl(), properties.getSandboxApiKey()),
-                credentialService, eventPublisher, null, null, null, null, null);
+                credentialService, eventPublisher, null, mcpProperties, null, null, null, null);
     }
 
     /**
@@ -205,7 +220,8 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                      McpProperties mcpProperties,
                      RunScopedCredentialService runScopedCredentialService,
                      WriteGrantService writeGrantService,
-                     AcpPermissionCoordinator permissionCoordinator) {
+                     AcpPermissionCoordinator permissionCoordinator,
+                     RunRepository runRepository) {
         this.properties = properties;
         this.sandboxLifecycle = sandboxLifecycle;
         this.credentialService = credentialService;
@@ -216,6 +232,7 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         this.runScopedCredentialService = runScopedCredentialService;
         this.writeGrantService = writeGrantService;
         this.permissionCoordinator = permissionCoordinator;
+        this.runRepository = runRepository;
     }
 
     @Override
@@ -254,18 +271,72 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         }
         requireGovernedMcpConfiguration();
         UUID agentId = agent.getId();
-        // One run per agent: a second concurrent run would race the first run's single
-        // bridge session, so it is rejected with a typed error instead of interleaving.
-        UUID previous = activeRuns.putIfAbsent(agentId, runId);
-        if (previous != null) {
-            throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
-                    "Agent " + agentId + " already has an active run (" + previous + ")"
-                            + " — Qoder allows one run per agent at a time");
-        }
+        claimAgentSlot(agentId, runId);
         try {
             return runTask(agent, agentId, runId, taskPrompt, context);
         } finally {
             activeRuns.remove(agentId, runId);
+        }
+    }
+
+    /**
+     * Claim the agent's single-run slot: one run per agent, because a second concurrent run
+     * would race the first run's single bridge session.
+     *
+     * <p>The slot is released only when the previous run's {@code executeTask} returns, which can
+     * trail the run's cancellation by up to {@link #STOP_GRACE}: the engine's abort is
+     * {@code @Async} after the cancelling commit, the loop polls about once a second, and the
+     * stop then waits for the pump. A re-dispatched run (kanban request-changes cancels the
+     * previous attempt and starts a fresh one) can therefore meet a slot whose previous run is
+     * already terminal in the run store but still winding down. The guard is terminal-aware: a
+     * provably finished previous run hands the slot over, while a genuinely live run is rejected
+     * exactly as before (the run store cannot prove it finished).
+     *
+     * <p>The handover is value-conditional ({@link Map#replace(Object, Object, Object)}), so it
+     * can never displace a concurrent launch's claim, and the previous run's teardown releases
+     * the slot by value ({@code activeRuns.remove(agentId, itsOwnRunId)}), so it can never evict
+     * the successor's registration.
+     */
+    private void claimAgentSlot(UUID agentId, UUID runId) {
+        while (true) {
+            UUID previous = activeRuns.putIfAbsent(agentId, runId);
+            if (previous == null) {
+                return;
+            }
+            if (!isProvablyFinished(previous)) {
+                throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
+                        "Agent " + agentId + " already has an active run (" + previous + ")"
+                                + " — Qoder allows one run per agent at a time");
+            }
+            // The previous run is terminal but its executeTask has not returned yet: take the
+            // slot over, but only while it still maps to that same previous run.
+            if (activeRuns.replace(agentId, previous, runId)) {
+                log.info("Qoder agent {} slot taken over from terminal run {} by run {}",
+                        agentId, previous, runId);
+                return;
+            }
+        }
+    }
+
+    /**
+     * True only when the run store proves the run finished (a terminal row). Absent or unreadable
+     * state — a missing row, a store failure or a manual wiring without a run store — fails
+     * closed: the conflict stays a rejection and is never a handover to a possibly live run.
+     */
+    private boolean isProvablyFinished(UUID runId) {
+        if (runRepository == null) {
+            return false;
+        }
+        try {
+            return runRepository.findById(runId)
+                    .map(Run::getStatus)
+                    .map(status -> status == RunStatus.COMPLETED || status == RunStatus.FAILED
+                            || status == RunStatus.CANCELLED || status == RunStatus.ABORTED)
+                    .orElse(false);
+        } catch (RuntimeException e) {
+            log.warn("Qoder slot guard: could not read run {} to prove the previous run finished"
+                    + " — keeping the busy rejection: {}", runId, e.getMessage());
+            return false;
         }
     }
 
@@ -446,31 +517,57 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     @Override
     public void abortTask(UUID runId) {
         QoderBridgeClient client = runClients.get(runId);
-        if (client == null) {
-            if (!registeredRuns.containsKey(runId)) {
-                // Run not even registered yet — nothing to abort.
-                log.debug("No in-flight Qoder task found for run {}", runId);
-                return;
-            }
-            // F5: the run is registered for cancellation but its sandbox is still being
-            // prepared: record the pending abort that runTask honours right after
-            // preparation, before any session is created or prompt is sent.
-            runAborted.put(runId, Boolean.TRUE);
-            log.info("Qoder abort requested for run {} during sandbox preparation — pending", runId);
+        String sessionId = client == null ? null : runSessions.get(runId);
+        if (sessionId != null) {
+            // Mark first: the runner thread must report this run as ABORTED (not as a
+            // provider failure) when its event stream ends in reaction to the cancel. The
+            // mark is written only while the run is still registered (see recordPendingAbort);
+            // the stop itself is delivered below.
+            recordPendingAbort(runId);
+            stopRun(runId, sessionId, client, runInstances.get(runId));
             return;
         }
-        String sessionId = runSessions.get(runId);
-        if (sessionId == null) {
-            // Session not created yet (sandbox-prep / session-creation window): record
-            // a pending abort that executeTask honors right after createSession.
-            runAborted.put(runId, Boolean.TRUE);
-            log.info("Qoder abort requested for run {} before session creation — pending", runId);
+        // No session yet (sandbox preparation or the session-creation window): record the
+        // pending abort that runTask honours at its next launch boundary, before any prompt.
+        if (!recordPendingAbort(runId)) {
+            // Run not registered (already over) — nothing to abort, and nothing to record.
+            log.debug("No in-flight Qoder task found for run {}", runId);
             return;
         }
-        // Mark first: the runner thread must report this run as ABORTED (not as a
-        // provider failure) when its event stream ends in reaction to the cancel.
-        runAborted.put(runId, Boolean.TRUE);
-        stopRun(runId, sessionId, client, runInstances.get(runId));
+        // The launch boundary may have been crossed while the record was written: the runner
+        // only consumes records that exist at its boundary check, so a session that appeared
+        // since the read above must be stopped right here — otherwise the run would later be
+        // reported ABORTED without any stop having reached the bridge.
+        QoderBridgeClient lateClient = runClients.get(runId);
+        String lateSession = lateClient == null ? null : runSessions.get(runId);
+        if (lateSession != null) {
+            log.info("Qoder abort requested for run {} — session {} appeared while the abort was"
+                    + " recorded; delivering the stop", runId, lateSession);
+            stopRun(runId, lateSession, lateClient, runInstances.get(runId));
+            return;
+        }
+        log.info("Qoder abort requested for run {} before its session existed — pending", runId);
+    }
+
+    /**
+     * Record the pending abort atomically with the run's cancellation registration: the write
+     * happens inside the registration's own per-key map operation, so the check-then-write
+     * interleavings are gone. A record can no longer land after the run's end has removed its
+     * registration (which leaked the entry for the provider's lifetime), an ended run can no
+     * longer gain a record (which could later read as a spurious ABORTED whose stop was never
+     * delivered), and the record is always removed by the run's own cleanup — it always runs
+     * after the registration removal the record had to observe.
+     *
+     * @return false when the run is not registered anymore (already over — nothing to abort)
+     */
+    private boolean recordPendingAbort(UUID runId) {
+        boolean[] recorded = new boolean[1];
+        registeredRuns.computeIfPresent(runId, (id, registered) -> {
+            runAborted.put(runId, Boolean.TRUE);
+            recorded[0] = true;
+            return registered;
+        });
+        return recorded[0];
     }
 
     /**
@@ -970,9 +1067,21 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * governance and the one-use write grants entirely. The refusal happens at the run /
      * prepare entry, before any sandbox, CLI process, session or prompt exists. MCP disabled
      * entirely and token mode are both unaffected.
+     *
+     * <p>A wiring that does not state its MCP configuration (null {@link McpProperties}, the
+     * manual-wiring bypass) cannot be checked against that hazard and is therefore refused
+     * too: unknown configuration must not silently run. Manual wirings pass an explicit
+     * {@code McpProperties} (disabled or token) like the Spring wiring does.
      */
     private void requireGovernedMcpConfiguration() {
-        if (mcpProperties == null || !mcpProperties.isEnabled() || mcpProperties.isTokenMode()) {
+        if (mcpProperties == null) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
+                    "Qoder refuses to run without an explicit MCP configuration: this wiring does not"
+                            + " state the host's MCP auth mode, so the /mcp endpoint cannot be verified"
+                            + " as unreachable for the sandbox. Wire aria.mcp.* (or an explicitly"
+                            + " disabled McpProperties) for Qoder agents.");
+        }
+        if (!mcpProperties.isEnabled() || mcpProperties.isTokenMode()) {
             return;
         }
         throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
@@ -1069,6 +1178,11 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     /** Test-only: expose the runs registered for cancellation while their sandbox is prepared. */
     Map<UUID, Boolean> runRegistrationsForTest() {
         return registeredRuns;
+    }
+
+    /** Test-only: expose the per-agent single-run slot map (agentId → runId in flight). */
+    Map<UUID, UUID> activeRunsForTest() {
+        return activeRuns;
     }
 
     /** Test-only: shrink the bridge ready-wait budget. */

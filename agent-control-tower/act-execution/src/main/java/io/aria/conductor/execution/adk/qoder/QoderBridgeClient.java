@@ -307,7 +307,15 @@ public class QoderBridgeClient implements AutoCloseable {
      */
     public record ProbeResult(boolean reachable, Integer status, String detail) { }
 
-    /** {@code POST /sessions} request body (C0.2). */
+    /**
+     * {@code POST /sessions} request body (C0.2).
+     *
+     * <p>{@code deadlineSeconds} is the window the bridge still has, i.e. what is LEFT of the
+     * run's deadline when the request is sent — the bridge anchors it at receipt
+     * ({@code now + deadlineSeconds}), so passing the full window again would restart the run
+     * window after sandbox preparation (G7). The host resolves the absolute deadline once and
+     * derives this value from it; it is never a second, independently chosen number.
+     */
     public record CreateSessionRequest(String runId, String agentId, String cwd, String model,
                                        Long deadlineSeconds, List<McpServer> mcpServers) { }
 

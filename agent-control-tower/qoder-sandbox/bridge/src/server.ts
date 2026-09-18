@@ -25,8 +25,13 @@
  *    liveness. The headers (a worker credential) and any response body never reach the answer
  *    or a log line, and redirects are never followed.
  *
- * Recorded decisions of this task (see the B3b report): the deadline source is the
- * server-side default capped by the session run deadline; a missing/blank `after` replays
+ * Recorded decisions of this task (see the B3b report): the deadline source is the value the
+ * provider forwards in `APPROVAL_TIMEOUT_MS` — the host's approval window PADDED by the provider's
+ * documented margin (G8) — read by `main.ts` and handed over as `permissionDeadlineMs` (G7),
+ * capped by the session run deadline. The host anchors an ask's expiry when it persists the ask,
+ * after the bridge handled the frame, so the padded window keeps the bridge's local deadline from
+ * preceding the host's expiry: the host expires an ask it holds first, and the bridge's local
+ * reject only fires for an ask the host no longer answers; a missing/blank `after` replays
  * the whole retained buffer; unmatched (method, path) pairs are 404; unknown-session bodies
  * use `{"error":"NOT_FOUND"}`; `runId`/`agentId` are accepted but not used for routing;
  * `reason` on a decision is accepted and ignored (the ACP permission reply has no slot for
@@ -66,8 +71,15 @@ export const MAX_RAW_INPUT_CHARS = 65536;
 /** C2 ruling R1: the `POST /probe` timeout used when the caller sends none. */
 export const DEFAULT_PROBE_TIMEOUT_MS = 3000;
 
-/** Default permission deadline: the A5 gate held a pending request for 5 minutes. */
-export const DEFAULT_PERMISSION_DEADLINE_MS = 15 * 60 * 1000;
+/**
+ * Fallback permission deadline. G8: aligned with the host's documented default
+ * (`approvals.timeout-ms` = 1800000 ms = 30 min), so a bridge started WITHOUT a host and a host
+ * running its default window can never disagree about how long an ask may wait. A host-started
+ * bridge always receives the host's window (padded by the provider's margin) through
+ * `APPROVAL_TIMEOUT_MS` (`main.ts`), so this constant only governs host-less runs — the sandbox
+ * smoke tests and the image boot check — where no host ask exists to disagree with.
+ */
+export const DEFAULT_PERMISSION_DEADLINE_MS = 30 * 60 * 1000;
 
 /**
  * Node stores a timer delay as a 32-bit signed integer: a larger delay overflows and the timer
@@ -113,7 +125,13 @@ export interface BridgeServerOptions {
   token: string;
   /** One line per request: route, status and session id at most, never a body. */
   log?: (line: string) => void;
-  /** Overrides `DEFAULT_PERMISSION_DEADLINE_MS` (tests inject a short one). */
+  /**
+   * The host's approval window PLUS the provider's documented margin (G8): the value the host
+   * expires every ask with is `approvals.timeout-ms`, forwarded as `APPROVAL_TIMEOUT_MS` by
+   * `main.ts` after `QoderAdkProvider` padded it (the host anchors its expiry at persist time,
+   * after the bridge handled the frame, so the raw window would let the bridge reject first).
+   * Applied per ask as `min(now + window, session run deadline)`; a test may inject a shorter one.
+   */
   permissionDeadlineMs?: number;
   /** Spawn-plan options forwarded to the default `AcpClient` factory. */
   acpClientOptions?: AcpClientOptions;

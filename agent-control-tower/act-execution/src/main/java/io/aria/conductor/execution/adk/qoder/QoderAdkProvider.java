@@ -23,6 +23,7 @@ import io.aria.conductor.execution.sandbox.SandboxLifecycle;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
@@ -62,30 +63,59 @@ import java.util.function.Function;
  * session per run. A second concurrent run for the same agent is rejected with a typed
  * provider error instead of being interleaved into the first run's session; a previous
  * run that is already terminal in the run store hands its slot over, since its
- * provider-side teardown can trail the cancellation by the engine's async abort.
+ * provider-side teardown can trail the cancellation by the engine's async abort — but only
+ * after the take-over has terminated it (idempotent cancel, the bounded stop proof, and, when
+ * that proof stays out, the same ownership-gated last-resort kill that detaches the sandbox),
+ * so the successor never opens a second {@code qodercli} in a workspace the predecessor may
+ * still be executing in.
  *
  * <p>Credential model: the Qoder PAT is read from {@link RuntimeCredentialService} at
  * sandbox preparation and delivered ONLY through the sandbox container environment
  * ({@code QODER_PERSONAL_ACCESS_TOKEN}); the bridge requires a non-empty
  * {@code BRIDGE_TOKEN} (fail closed), so every sandbox gets a fresh random token that
  * is handed to {@link QoderBridgeClient} as its bearer value. Neither value is ever
- * logged or written to a file.
+ * logged or written to a file. The container environment is fixed at creation, so a reused
+ * sandbox keeps serving the credential of its own era: every launch re-validates the stored
+ * PAT against the one-way hash stamped on the instance and recreates an idle sandbox whose
+ * credential changed ({@link #mayReuseForCurrentCredential}), while a sandbox with a run in
+ * flight is never disturbed (the rotation applies to the next run).
  *
  * <p>Worker MCP entry (R11, C4): when MCP is enabled the run's {@code session/new} carries one
  * {@code mcpServers} entry named {@code aria} — the host endpoint the sandbox itself proved it
  * can reach — authenticated with a run-scoped worker credential instead of the platform token.
  * The credential and every one-use write grant of the run are revoked when the run ends.
+ * MCP enabled in a non-token auth mode is refused before anything starts
+ * ({@link #requireGovernedMcpConfiguration}): outside token mode the {@code /mcp} endpoint
+ * admits a header-less sandbox caller as the operator identity, which would bypass worker
+ * governance and the one-use write grants entirely. A wiring that does not state its MCP
+ * configuration at all is refused for the same reason.
  *
  * <p>Terminal semantics: a run finishes only on an explicit {@code completed}/{@code failed}
  * bridge event. A clean server-side end of the event stream without a terminal event is
  * NOT a completion — it is reported as a typed provider failure.
  *
  * <p>Deadline model (C0.6): the caller-provided {@link TaskContext#maxDuration()} is
- * honored; a {@code null} duration falls back to {@code qoder.max-task-minutes}. On
+ * honored; a {@code null} duration falls back to {@code qoder.max-task-minutes}. The
+ * absolute deadline is resolved once, before sandbox preparation, and handed to the
+ * coordinator and to the run-scoped credential unchanged; the bridge's session deadline is
+ * built from the window REMAINING at session creation, so the preparation time cannot restart
+ * it. The provider also forwards the host's approval window ({@code approvals.timeout-ms},
+ * sandbox environment {@code APPROVAL_TIMEOUT_MS}) into the bridge it starts, padded by the
+ * documented {@link #APPROVAL_WINDOW_SLACK_MS} margin. The host anchors an ask's expiry when it
+ * PERSISTS the ask — after the bridge already handled the frame — so the raw window would let
+ * the bridge's local deadline precede the host's expiry by the delivery-plus-commit transit,
+ * which is where an approval the host recorded as APPROVED used to be answered {@code expired}
+ * and stay retryable forever. Padded by the margin the host is the first to expire an ask it
+ * still holds (the transit and the sandbox/host clock skew stay inside it), and the bridge's
+ * local reject keeps its one remaining job: releasing a CLI whose host is gone (the F4
+ * residual). The residual direction that remains — the bridge's deadline later than the host's —
+ * is the safe one: the host never delivers a decision for an ask it has already expired. On
  * timeout the bridge session is cancelled first and the agent's sandbox is killed only
  * as the last bounded fallback when the stop cannot be proven — and only by a run that
- * still owns the agent's slot, so a superseded run can never tear down the shared
- * sandbox or bridge client of its successor.
+ * still owns the agent's slot (proving ownership, detaching the instance registry and giving the
+ * slot up are ONE per-key critical section, so a successor can neither lose the sandbox it has
+ * just taken nor observe — let alone reuse — one that is being destroyed), so a superseded run
+ * can never tear down the shared sandbox or bridge client of its successor.
  */
 @Slf4j
 @Component
@@ -100,6 +130,29 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     private static final String PAT_ENV = "QODER_PERSONAL_ACCESS_TOKEN";
     private static final String BRIDGE_TOKEN_ENV = "BRIDGE_TOKEN";
     private static final String PORT_ENV = "PORT";
+    /**
+     * Sandbox environment key carrying the host's approval window to the bridge (G7). The bridge
+     * is started from this environment (image CMD or {@link #BRIDGE_START_COMMAND}), so the value
+     * that bounds the host's ask also bounds the bridge's per-ask deadline.
+     */
+    private static final String APPROVAL_WINDOW_ENV = "APPROVAL_TIMEOUT_MS";
+    /**
+     * G8 finding 3: the margin added to the host's approval window before it rides
+     * {@link #APPROVAL_WINDOW_ENV} into the bridge.
+     *
+     * <p>The host anchors an ask's expiry when it PERSISTS the ask — strictly after the bridge
+     * handled the frame — so forwarding the raw window lets the bridge's local deadline (anchored
+     * at frame handling) precede the host's expiry by the delivery-plus-commit transit (plus clock
+     * skew). In exactly that gap an operator approval is recorded APPROVED, mints its one-use
+     * grant, and the bridge answers {@code expired}: a decision that stays {@code DELIVERY_FAILED}
+     * and is retried forever. Padded by this margin the bridge's local deadline is
+     * {@code handleTime + window + margin} against the host's {@code persistTime + window}, i.e.
+     * never earlier than the host's expiry as long as the transit and the sandbox/host clock skew
+     * stay inside the margin — the host always expires first, and the bridge's local reject keeps
+     * only its F4 job (releasing a CLI whose host is gone). A few seconds cover a transit of
+     * milliseconds even on a slow host commit.
+     */
+    static final long APPROVAL_WINDOW_SLACK_MS = 5_000L;
     /** Max time to wait for the bridge {@code /health} to answer after sandbox creation. */
     private static final Duration READY_TIMEOUT = Duration.ofSeconds(60);
     /** Health poll interval while waiting for bridge readiness. */
@@ -148,6 +201,19 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * tests; the injected override ({@code aria.mcp.sandbox-host-address}) wins inside.
      */
     private Function<String, SandboxHostResolver> hostResolverFactory = SandboxHostResolver::fromSystemInterfaces;
+
+    /**
+     * The host's approval window ({@code approvals.timeout-ms}) — the same property
+     * {@code AcpPermissionCoordinator} bounds every ask with. The provider starts the bridge, so
+     * this value rides the sandbox environment into it ({@link #APPROVAL_WINDOW_ENV}) padded by
+     * {@link #APPROVAL_WINDOW_SLACK_MS}, and both sides clamp an ask to one window instead of two
+     * independent defaults — with the padding keeping the host the first to expire an ask it holds
+     * (see {@link #APPROVAL_WINDOW_SLACK_MS}). Field-injected on purpose: the manual-wiring and
+     * test constructors keep their shape, and the initializer states the property's documented
+     * default for every wiring Spring does not configure.
+     */
+    @Value("${approvals.timeout-ms:1800000}")
+    private long approvalWindowMs = 1_800_000L;
 
     private final Map<UUID, QoderInstance> instances = new ConcurrentHashMap<>();
     private final Map<UUID, String> runSessions = new ConcurrentHashMap<>();
@@ -291,8 +357,10 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * stop then waits for the pump. A re-dispatched run (kanban request-changes cancels the
      * previous attempt and starts a fresh one) can therefore meet a slot whose previous run is
      * already terminal in the run store but still winding down. The guard is terminal-aware: a
-     * provably finished previous run hands the slot over, while a genuinely live run is rejected
-     * exactly as before (the run store cannot prove it finished).
+     * provably finished previous run hands the slot over — after its session has been terminated
+     * by {@link #stopPredecessorBeforeTakeOver}, because a terminal ROW alone does not prove the
+     * predecessor left the shared workspace — while a genuinely live run is rejected exactly as
+     * before (the run store cannot prove it finished).
      *
      * <p>The handover is value-conditional ({@link Map#replace(Object, Object, Object)}), so it
      * can never displace a concurrent launch's claim, and the previous run's teardown releases
@@ -310,14 +378,67 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                         "Agent " + agentId + " already has an active run (" + previous + ")"
                                 + " — Qoder allows one run per agent at a time");
             }
-            // The previous run is terminal but its executeTask has not returned yet: take the
-            // slot over, but only while it still maps to that same previous run.
+            // G7 Major 1: the terminal row only proves the kanban gave up on the predecessor. Its
+            // bridge session and qodercli child are stopped when the engine's asynchronous abort
+            // reaches abortTask, so the predecessor is terminated HERE — before this run may
+            // create a session in the sandbox the predecessor may still be executing in.
+            stopPredecessorBeforeTakeOver(agentId, previous, runId);
+            // The previous run's executeTask has not returned yet: take the slot over, but only
+            // while it still maps to that same previous run.
             if (activeRuns.replace(agentId, previous, runId)) {
                 log.info("Qoder agent {} slot taken over from terminal run {} by run {}",
                         agentId, previous, runId);
                 return;
             }
         }
+    }
+
+    /**
+     * Take-over safety (G7 Major 1): terminate a terminal predecessor before the successor may
+     * create its session in the agent's sandbox.
+     *
+     * <p>A terminal run ROW only proves the kanban gave up on the run; its bridge session and its
+     * {@code qodercli} child are stopped when the engine's asynchronous abort reaches
+     * {@link #abortTask}, which trails the terminal row by the engine's poll interval (about a
+     * second) plus the stop grace. Until then the terminal run may still be executing in
+     * {@link #SANDBOX_CWD}, so a successor that reuses the instance would put two CLI children
+     * into one workspace — exactly what the one-run-per-agent guard exists to prevent.
+     *
+     * <p>The stop runs while the predecessor still owns the agent's slot, so the existing
+     * {@link #stopRun} keeps its exact semantics: the idempotent cancel, the bounded stop proof
+     * and — only when that proof stays out — the ownership-gated last-resort sandbox kill. The
+     * successor is not in the workspace yet, so that kill can never end a successor's stream;
+     * the successor then prepares a fresh sandbox instead of the detached one, and either outcome
+     * leaves it with no shared workspace (the pump stopped, or the instance is no longer the
+     * agent's registered one). A predecessor that has not created a session yet has nothing to
+     * stop, but it may still create one at its launch boundary: the pending abort recorded here
+     * is consumed at that boundary, so the session is cancelled before any prompt is issued.
+     */
+    private void stopPredecessorBeforeTakeOver(UUID agentId, UUID previous, UUID successor) {
+        String sessionId = runSessions.get(previous);
+        QoderBridgeClient client = runClients.get(previous);
+        if (sessionId == null || client == null) {
+            boolean recorded = recordPendingAbort(previous);
+            // G8 finding 2: the log is UNCONDITIONAL. The G7 form spoke only when the record could
+            // be written, so a predecessor sitting in the gap between claiming its slot and
+            // reaching registeredRuns.put was neither recorded nor announced — the successor
+            // proceeded silently while that predecessor could still create a session in the shared
+            // sandbox. With no registration to write into, the predecessor's own launch-boundary
+            // row re-reads (requireRunNotTerminal) are what stop it before any prompt.
+            log.info("Qoder take-over for agent {}: terminal run {} has no session yet — {} (successor run {})",
+                    agentId, previous,
+                    recorded
+                            ? "recorded its abort, consumed at its launch boundary before any prompt"
+                            : "it has not registered for cancellation yet; its own launch-boundary row"
+                                    + " re-reads stop it before any prompt",
+                    successor);
+            return;
+        }
+        QoderInstance inst = runInstances.get(previous);
+        log.info("Qoder take-over for agent {}: run {} terminates terminal predecessor run {} (session {})"
+                        + " in sandbox {} before entering it", agentId, successor, previous, sessionId,
+                inst == null ? "(unregistered)" : inst.sandboxId());
+        stopRun(previous, sessionId, client, inst);
     }
 
     /**
@@ -339,6 +460,26 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             log.warn("Qoder slot guard: could not read run {} to prove the previous run finished"
                     + " — keeping the busy rejection: {}", runId, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * G8 finding 2: at a launch boundary (after preparation, after session creation, immediately
+     * before the prompt), re-read the run's OWN row and abort the run when it is provably terminal.
+     *
+     * <p>The kanban's stop flips the run row terminal first; the engine's asynchronous abort may
+     * trail it by a poll interval, and a predecessor that sits in the gap between claiming its
+     * slot and reaching {@code registeredRuns.put} cannot even receive a pending-abort record —
+     * so the row re-read is that predecessor's second chance. Whatever set the terminal row, the
+     * run stops before it creates a session or issues a prompt. Only a PROVABLY terminal row
+     * aborts (a missing row, a store failure or a manual wiring without a store is no proof —
+     * the same fail-closed direction as the slot guard, where only proof of completion permits a
+     * hand-over), so an unknown status can never kill a healthy run.
+     */
+    private void requireRunNotTerminal(UUID runId) {
+        if (isProvablyFinished(runId)) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                    "Run " + runId + " is terminal in the run store — aborting at its launch boundary");
         }
     }
 
@@ -371,6 +512,8 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                 throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
                         "Run " + runId + " was cancelled during sandbox preparation");
             }
+            // G8 finding 2: the first launch boundary — the row re-read right after preparation.
+            requireRunNotTerminal(runId);
             client = inst.client();
             // Register the client before createSession so a cancel landing in the
             // session-creation window is recorded (pending abort) and honored immediately
@@ -395,9 +538,14 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                 coordinatorBound = true;
             }
             try {
+                // G7: the bridge anchors the session deadline at receipt (`now + deadlineSeconds`),
+                // so it must receive what is LEFT of the host's window — a restarted full window
+                // would hand the bridge a deadline the host does not share (and, through the
+                // per-ask clamp, an ask deadline past the host's own expiry).
+                Duration sessionWindow = Duration.ofNanos(Math.max(1L, deadlineNanos - System.nanoTime()));
                 sessionId = client.createSession(new QoderBridgeClient.CreateSessionRequest(
                         "run-" + runId, agentId.toString(), SANDBOX_CWD, properties.getModel(),
-                        deadlineSeconds(deadline), mcpServers));
+                        deadlineSeconds(sessionWindow), mcpServers));
             } catch (QoderBridgeException e) {
                 throw mapBridgeFailure(runId, e);
             }
@@ -409,6 +557,9 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                 throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
                         "Run " + runId + " cancelled before execution started");
             }
+            // G8 finding 2: the second launch boundary — the row re-read right after session
+            // creation; the run-end cleanup cancels the session this boundary refuses to use.
+            requireRunNotTerminal(runId);
             log.info("Qoder task {} started for agent {} (session {})", runId, agentId, sessionId);
 
             // The raw-ask sink is the only path by which a permission_request reaches the host's
@@ -424,6 +575,9 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             // Renew the sandbox TTL while the long-lived run blocks — the SDK's own heartbeat
             // fires too late at the 30-minute TTL boundary (R3-F2).
             renewExecutor = startRenewHeartbeat(inst);
+            // G8 finding 2: the third launch boundary — the row re-read immediately before the
+            // prompt, so a run the kanban gave up on never issues its first prompt.
+            requireRunNotTerminal(runId);
             try {
                 try {
                     client.prompt(sessionId, taskPrompt);
@@ -577,6 +731,16 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * event stream to end; only when that cannot be proven — and the run still owns the
      * agent's slot, so the shared sandbox is provably not serving a successor — is the
      * agent's sandbox killed as the last bounded fallback (design §5.3).
+     *
+     * <p>G8 finding 1: proving ownership, detaching the instance registry and giving the slot up
+     * are ONE per-key critical section ({@code activeRuns.compute}), and the destroy/close work
+     * stays OUTSIDE it (no sandbox I/O under the map's bin lock). The G7 form released the slot
+     * with the conditional removal first and detached the registry only afterwards, so a
+     * re-dispatch claiming the freed slot could still read the registered instance inside
+     * {@link #getOrPrepareInstance}, pass the reachability probe and reuse the sandbox that was
+     * being destroyed. With the detach inside the critical section a successor can only win the
+     * slot once the instance is gone: its own {@code getOrPrepareInstance} finds no instance and
+     * prepares a fresh sandbox instead of adopting the doomed one.
      */
     private void stopRun(UUID runId, String sessionId, QoderBridgeClient client, QoderInstance inst) {
         cancelSession(client, sessionId, runId);
@@ -594,22 +758,44 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             return;
         }
         if (inst == null) {
+            // Nothing is registered to kill, and the agent's next run prepares a sandbox of its
+            // own: no shared workspace is left behind.
+            log.warn("Qoder run {} did not stop within {}ms of cancel and holds no registered sandbox",
+                    runId, stopGrace.toMillis());
             return;
         }
         // After a slot hand-over both runs hold this same instance (the terminal predecessor's
         // teardown trails its cancellation): killing the sandbox and closing the bridge client
         // would end the successor's stream and lose its sandbox. The agent's slot is the
         // ownership proof — only a run that still owns it may run the last-resort kill.
-        UUID slotOwner = activeRuns.get(inst.agentId());
-        if (!runId.equals(slotOwner)) {
+        //
+        // G7 Minor 3 / G8 finding 1: the proof, the instance-registry detach and the slot release
+        // are ONE atomic step. The per-key critical section gives the slot up only while it still
+        // names this run, and only after the instance was detached: a successor that claimed the
+        // slot can never lose the sandbox it has just taken, and it can never reuse the one being
+        // destroyed. A plain read before the kill left the first window open (G6); releasing the
+        // slot before the detach left the second (G7/G8).
+        boolean[] ownsInstance = new boolean[1];
+        UUID[] ownerAtDecision = new UUID[1];
+        activeRuns.compute(inst.agentId(), (agentId, owner) -> {
+            if (!runId.equals(owner)) {
+                ownerAtDecision[0] = owner; // captured inside the critical section, never re-read
+                return owner; // superseded: the slot names another run — never release it
+            }
+            instances.remove(agentId, inst);
+            ownsInstance[0] = true;
+            return null; // release the slot only after the instance registry was detached
+        });
+        if (!ownsInstance[0]) {
             log.warn("Qoder run {} did not stop within {}ms of cancel — skipping the last-resort kill of"
                             + " sandbox {}: the agent's slot now belongs to run {} (this run was superseded)",
-                    runId, stopGrace.toMillis(), inst.sandboxId(), slotOwner);
+                    runId, stopGrace.toMillis(), inst.sandboxId(), ownerAtDecision[0]);
             return;
         }
         log.warn("Qoder run {} did not stop within {}ms of cancel — killing sandbox {} as the last bounded fallback",
                 runId, stopGrace.toMillis(), inst.sandboxId());
-        killAndForgetInstance(inst);
+        destroyInstance(inst.sandboxId());
+        closeIfOwned(inst.client());
     }
 
     private void cancelSession(QoderBridgeClient client, String sessionId, UUID runId) {
@@ -773,7 +959,14 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         Map<String, String> env = Map.of(
                 PAT_ENV, pat,
                 BRIDGE_TOKEN_ENV, bridgeToken,
-                PORT_ENV, String.valueOf(properties.getPort()));
+                PORT_ENV, String.valueOf(properties.getPort()),
+                // G7/G8: the bridge clamps every per-ask deadline to the host's window PLUS the
+                // documented margin. The host anchors its expiry when it persists the ask (after
+                // the bridge handled the frame), so the raw window would let the bridge's local
+                // deadline precede the host's expiry by the delivery-plus-commit transit and deny
+                // an ask the host still holds; with the margin the host always expires first and
+                // the bridge's local reject only fires for an ask the host no longer answers.
+                APPROVAL_WINDOW_ENV, String.valueOf(approvalWindowMs + APPROVAL_WINDOW_SLACK_MS));
         String sandboxId = sandboxLifecycle.createSandbox(agentId, properties.getImage(), env);
         QoderBridgeClient client = null;
         try {

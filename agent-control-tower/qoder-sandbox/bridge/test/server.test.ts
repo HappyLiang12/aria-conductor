@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { AcpClient, type AcpClientOptions, type AcpEvent, type PermissionDecision } from '../src/acp-client.js';
 import {
+  DEFAULT_PERMISSION_DEADLINE_MS,
   MAX_BODY_BYTES,
   MAX_TIMER_DELAY_MS,
   PINNED_CLI_VERSION,
@@ -328,6 +329,29 @@ async function startScriptedBridge(
   return bridge;
 }
 
+/**
+ * G7: start a bridge the way the sandbox entry point does — `readBridgeConfig` decides the token,
+ * the port and the host's approval window (`APPROVAL_TIMEOUT_MS`), and the server is built from
+ * exactly that configuration. A test that passes its window here exercises the production path
+ * (environment → config → per-ask deadline), not just the `createBridgeServer` option.
+ */
+async function startConfiguredBridge(
+  create: () => BridgeAcpClient,
+  env: NodeJS.ProcessEnv,
+): Promise<BridgeServer> {
+  const config = readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, ...env });
+  const bridge = createBridgeServer({
+    token: config.token,
+    permissionDeadlineMs: config.permissionDeadlineMs,
+    log: line => logLines.push(line),
+    acpClientOptions: { env: { ...CHILD_ENV } },
+    createAcpClient: create,
+  });
+  createdServers.push(bridge);
+  await bridge.listen(0, '127.0.0.1');
+  return bridge;
+}
+
 /** Poll `predicate` until it holds, for timer-driven behaviour whose firing is the assertion. */
 async function waitUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -589,7 +613,7 @@ describe('session lifecycle over the C0.2 contract', () => {
     await stream.waitFor('session_started');
     await post(bridge, `/sessions/${sessionId}/prompt`, { text: PROMPT });
     const permission = await stream.waitFor('permission_request');
-    // deadlineSeconds=1 wins over the 15 min default: a permission may not outlive its run.
+    // deadlineSeconds=1 wins over the 30 min default: a permission may not outlive its run.
     expect(Date.parse(String(permission.expiresAt)) - Date.now()).toBeLessThanOrEqual(1_500);
   });
 
@@ -991,6 +1015,75 @@ describe('permission decisions (C0.2 permissions row)', () => {
     const response = await post(bridge, `/sessions/${sessionId}/permissions/whatever`, { approved: 'yes' });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'INVALID_REQUEST' });
+  });
+});
+
+describe('host approval window (G7 finding 2, G8 finding 3)', () => {
+  /**
+   * The G7 hole: the host expires an ask at `min(now + approvals.timeout-ms, runDeadline)` while
+   * the bridge used to deny the CLI at its own 15-minute default — up to 15 minutes earlier than
+   * the host, which was never told. An approval arriving in that window was recorded APPROVED,
+   * minted a one-use grant, was answered `expired` and stayed retryable forever.
+   *
+   * G8 finding 3: the host anchors its expiry when it PERSISTS the ask, after the bridge handled
+   * the frame, so the host's window alone would still let the bridge's local deadline precede the
+   * host's expiry by the delivery-plus-commit transit. The provider therefore forwards the host's
+   * window PADDED by its documented margin (`QoderAdkProvider.APPROVAL_WINDOW_SLACK_MS`), and the
+   * session run deadline stays the outer bound: the nearer of the two wins, with the host always
+   * the first to expire an ask it still holds.
+   */
+  const WINDOW_ENV = 'APPROVAL_TIMEOUT_MS';
+
+  /** One scripted ask (both selectable kinds), emitted right after the session is created. */
+  function askClient(): ScriptedClient {
+    return new ScriptedClient(scripted => {
+      scripted.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+      scripted.emit({
+        type: 'permission_request',
+        requestId: 'p1',
+        toolCallId: 'call_1',
+        toolName: 'Write',
+        title: null,
+        options: [
+          { optionId: 'o1', kind: 'allow_once', name: 'Allow' },
+          { optionId: 'o2', kind: 'reject_once', name: 'Reject' },
+        ],
+        params: { toolCall: { rawInput: { file_path: '/workspace/x.txt' } } },
+      });
+    });
+  }
+
+  it('clamps every ask to the host window and releases the waiting CLI at that deadline', async () => {
+    const window = 300;
+    const client = askClient();
+    const bridge = await startConfiguredBridge(() => client, { [WINDOW_ENV]: String(window) });
+
+    const askedAt = Date.now();
+    const created = await createSession(bridge, { deadlineSeconds: 600 });
+    expect(created.status).toBe(201);
+    const stream = await openEvents(bridge, String(created.body?.bridgeSessionId));
+    const permission = await stream.waitFor('permission_request');
+    // The published deadline is the host's window (600 s of session deadline are further away).
+    expect(Date.parse(String(permission.expiresAt)) - askedAt).toBeLessThanOrEqual(window + 250);
+
+    await waitUntil(() => client.decisions.length > 0);
+    const releasedAt = Date.now();
+    // The local reject at the deadline is the release the waiting CLI sees (F4 residual): it must
+    // land at the host window, not at the bridge's old 15-minute default.
+    expect(client.decisions).toEqual([['p1', false]]);
+    expect(releasedAt - askedAt).toBeGreaterThanOrEqual(window - 50);
+    expect(releasedAt - askedAt).toBeLessThan(window + 1_000);
+  });
+
+  it('keeps the session deadline as the outer bound when it is nearer than the window', async () => {
+    const client = askClient();
+    // A 5 s window over a 1 s session deadline: the session deadline must win.
+    const bridge = await startConfiguredBridge(() => client, { [WINDOW_ENV]: '5000' });
+    const created = await createSession(bridge, { deadlineSeconds: 1 });
+
+    const stream = await openEvents(bridge, String(created.body?.bridgeSessionId));
+    const permission = await stream.waitFor('permission_request');
+    expect(Date.parse(String(permission.expiresAt)) - Date.now()).toBeLessThanOrEqual(1_500);
   });
 });
 
@@ -1711,13 +1804,42 @@ describe('main configuration (fail-closed start)', () => {
     expect(DEFAULT_BRIDGE_PORT).toBe(4097);
     expect(() => readBridgeConfig({})).toThrowError(/BRIDGE_TOKEN/);
     expect(() => readBridgeConfig({ BRIDGE_TOKEN: '' })).toThrowError(/BRIDGE_TOKEN/);
-    expect(readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN })).toEqual({ token: BRIDGE_TOKEN, port: 4097 });
-    expect(readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, PORT: '4123' })).toEqual({ token: BRIDGE_TOKEN, port: 4123 });
+    expect(readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN })).toEqual({
+      token: BRIDGE_TOKEN,
+      port: 4097,
+      permissionDeadlineMs: DEFAULT_PERMISSION_DEADLINE_MS,
+    });
+    expect(readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, PORT: '4123' })).toEqual({
+      token: BRIDGE_TOKEN,
+      port: 4123,
+      permissionDeadlineMs: DEFAULT_PERMISSION_DEADLINE_MS,
+    });
   });
 
   it('rejects a PORT that is not a usable port', () => {
     for (const port of ['0', '-1', '65536', 'http', '80.5']) {
       expect(() => readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, PORT: port })).toThrowError(/PORT/);
+    }
+  });
+
+  it('reads the host approval window the provider passes, falling back only when it is absent', () => {
+    // G7 finding 2: the window the host expires asks with travels in `APPROVAL_TIMEOUT_MS`
+    // (`QoderAdkProvider` sets it from `approvals.timeout-ms`, padded by its documented margin,
+    // at sandbox creation). G8 finding 4: the fallback is aligned with the host's documented
+    // default (30 min = 1800000 ms) and applies ONLY to bridges started without a host (sandbox
+    // smoke tests, the image boot check) — a host-started bridge always receives the env, so the
+    // fallback can never disagree with a host that uses its default window.
+    expect(DEFAULT_PERMISSION_DEADLINE_MS).toBe(30 * 60 * 1000);
+    expect(readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, APPROVAL_TIMEOUT_MS: '250' }))
+      .toEqual({ token: BRIDGE_TOKEN, port: 4097, permissionDeadlineMs: 250 });
+    expect(readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, APPROVAL_TIMEOUT_MS: '  ' }).permissionDeadlineMs)
+      .toBe(DEFAULT_PERMISSION_DEADLINE_MS);
+  });
+
+  it('refuses a malformed approval window instead of enforcing a silently different deadline', () => {
+    for (const value of ['0', '-1', '2.5', 'soon', '1800000ms']) {
+      expect(() => readBridgeConfig({ BRIDGE_TOKEN: BRIDGE_TOKEN, APPROVAL_TIMEOUT_MS: value }))
+        .toThrowError(/APPROVAL_TIMEOUT_MS/);
     }
   });
 });

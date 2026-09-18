@@ -265,6 +265,15 @@ class QoderAdkProviderTest {
     void executeTask_completesOnExplicitTerminalEvent_andReturnsOutputAndUsage() {
         UUID agentId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
+        // G8 pinning note: a controlled preparation delay makes the remaining-window arithmetic
+        // deterministic AND drift-detecting. The pre-G7 code sent the full caller window (120 s);
+        // sending what is LEFT of it (120 s minus ~1.0 s of preparation) yields exactly 119 s for
+        // any preparation time in the documented (1..2) s band, so the exact assertion below
+        // fails on the full-window arithmetic instead of accepting both.
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            Thread.sleep(1000);
+            return BRIDGE_URL;
+        });
         streamPlays(
                 sessionStarted(1, "efficient"),
                 event(2, "agent_message", "{\"text\":\"ok\"}"),
@@ -292,7 +301,10 @@ class QoderAdkProviderTest {
         assertThat(request.getValue().cwd()).isEqualTo("/workspace");
         assertThat(request.getValue().model()).isEqualTo("efficient");
         assertThat(request.getValue().mcpServers()).isEmpty();
-        assertThat(request.getValue().deadlineSeconds()).isEqualTo(120L);
+        // G7/G8: the bridge receives what is LEFT of the caller's 2-minute window (it anchors the
+        // deadline at receipt), pinned to the exact remaining-window value the 1.0 s preparation
+        // yields; the pre-G7 full-window code sent 120 s and fails here.
+        assertThat(request.getValue().deadlineSeconds()).isEqualTo(119L);
         verify(client).prompt(eq(BRIDGE_SESSION), startsWith(PROMPT_TEXT));
         // The client was pointed at the resolved sandbox endpoint with a non-PAT bridge token.
         assertThat(clientUrl.get()).isEqualTo(BRIDGE_URL);
@@ -458,6 +470,12 @@ class QoderAdkProviderTest {
     void executeTask_nullMaxDuration_fallsBackToQoderMaxTaskMinutes() {
         properties.setMaxTaskMinutes(7);
         UUID runId = UUID.randomUUID();
+        // G8 pinning note: same controlled preparation delay as the caller-window pin above; the
+        // pre-G7 full-window code sent 420 s and fails the exact assertion below.
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            Thread.sleep(1000);
+            return BRIDGE_URL;
+        });
         streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
 
         provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT, new TaskContext(1, null));
@@ -465,7 +483,8 @@ class QoderAdkProviderTest {
         ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
                 ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
         verify(client).createSession(request.capture());
-        assertThat(request.getValue().deadlineSeconds()).isEqualTo(7 * 60L);
+        // G7/G8: the remaining part of the 7-minute fallback window, not a restarted one.
+        assertThat(request.getValue().deadlineSeconds()).isEqualTo(419L);
     }
 
     @Test
@@ -1348,10 +1367,11 @@ class QoderAdkProviderTest {
 
     @Test
     void executeTask_prepTime_countsAgainstTheCallerDeadline() {
-        // Sandbox prep (here: endpoint resolution) takes longer than the whole caller window.
+        // Sandbox prep (here: endpoint resolution) takes at least the whole caller window: the
+        // 1 s stub sleep alone equals it, and the surrounding prep work makes it strictly longer.
         streamStaysOpen();
         when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
-            Thread.sleep(1500);
+            Thread.sleep(1000);
             return BRIDGE_URL;
         });
         long startedNanos = System.nanoTime();
@@ -1364,7 +1384,7 @@ class QoderAdkProviderTest {
 
         long elapsedMillis = (System.nanoTime() - startedNanos) / 1_000_000;
         assertThat(elapsedMillis)
-                .as("prep time must count against the caller's window (window 1000ms + prep 1500ms)")
+                .as("prep time must count against the caller's window (window 1000ms + prep 1000ms)")
                 .isLessThan(2000L);
     }
 
@@ -1704,15 +1724,26 @@ class QoderAdkProviderTest {
         UUID agentId = UUID.randomUUID();
         UUID oldRun = UUID.randomUUID();
         UUID newRun = UUID.randomUUID();
-        // The previous run's row is already terminal in the run store (the kanban stop flipped it
-        // to CANCELLED, or the run finished as COMPLETED/FAILED/ABORTED); its provider call has
-        // not been torn down yet, so the slot is still held.
-        lenient().when(runRepository.findById(oldRun)).thenReturn(Optional.of(
-                Run.builder().id(oldRun).agentId(agentId).status(terminalStatus).build()));
+        // The previous run's provider call has not been torn down yet, so it still holds the slot
+        // while its row goes terminal. The row flips AFTER the run passed its launch boundaries —
+        // the real sequence (the kanban gives up on a run that is already executing); a row that
+        // were terminal from the start would now abort the run at its own boundary checks
+        // (G8 finding 2), which is a different scenario.
+        AtomicReference<RunStatus> oldStatus = new AtomicReference<>(RunStatus.RUNNING);
+        lenient().when(runRepository.findById(oldRun)).thenAnswer(invocation -> Optional.of(
+                Run.builder().id(oldRun).agentId(agentId).status(oldStatus.get()).build()));
         CountDownLatch oldStreamOpen = new CountDownLatch(1);
+        CountDownLatch oldPromptDelivered = new CountDownLatch(1);
         CountDownLatch releaseOldStream = new CountDownLatch(1);
         CountDownLatch releaseNewStream = new CountDownLatch(1);
         AtomicInteger streamReads = new AtomicInteger();
+        // The prompt is the run's last launch boundary: waiting for it makes the status flip below
+        // deterministic (the pump's reader thread may open the stream before the runner crossed
+        // its pre-prompt row re-read, so the stream alone is not proof the boundaries were passed).
+        doAnswer(invocation -> {
+            oldPromptDelivered.countDown();
+            return null;
+        }).when(client).prompt(anyString(), anyString());
         doAnswer(invocation -> {
             Consumer<QoderBridgeClient.BridgeEvent> consumer = invocation.getArgument(0);
             switch (streamReads.getAndIncrement()) {
@@ -1741,6 +1772,10 @@ class QoderAdkProviderTest {
         }, "winding-down-run");
         old.start();
         assertThat(oldStreamOpen.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(oldPromptDelivered.await(10, TimeUnit.SECONDS)).isTrue();
+        // The kanban's stop flips the row to a terminal status while the run winds down — after the
+        // run passed every launch boundary, so the flip cannot abort the run itself.
+        oldStatus.set(terminalStatus);
 
         // The re-dispatched run lands while the old one is still winding down.
         AtomicReference<TaskResult> fresh = new AtomicReference<>();
@@ -2002,9 +2037,13 @@ class QoderAdkProviderTest {
     }
 
     private void setProviderField(String name, Object value) throws Exception {
+        setProviderField(provider, name, value);
+    }
+
+    private static void setProviderField(QoderAdkProvider target, String name, Object value) throws Exception {
         Field field = QoderAdkProvider.class.getDeclaredField(name);
         field.setAccessible(true);
-        field.set(provider, value);
+        field.set(target, value);
     }
 
     // ---- G4 item 3: an unstated MCP configuration cannot run silently -------------------------
@@ -2035,5 +2074,478 @@ class QoderAdkProviderTest {
         // The refusal sits at the earliest boundary: no sandbox, no bridge, no session starts.
         verify(sandboxLifecycle, never()).createSandbox(any(), anyString(), anyMap());
         assertThat(unstated.instancesForTest()).isEmpty();
+    }
+
+    // ---- G7 finding 1: the take-over stops the predecessor before the successor enters --------
+
+    /**
+     * G7 Major 1: a terminal run ROW is not proof that the predecessor left the shared sandbox —
+     * its bridge session and its {@code qodercli} child are stopped only once the engine's
+     * asynchronous abort reaches the provider (about a poll interval after the terminal commit).
+     * The successor must therefore terminate the predecessor before it creates a session of its
+     * own; otherwise two CLI children share one {@code /workspace} for the abort window, which is
+     * exactly what the one-run-per-agent guard exists to prevent.
+     *
+     * <p>The predecessor's event stream is held open on a latch: while its pump is unstopped the
+     * successor must not create a session, and once the stream ends the successor proceeds in the
+     * same — now exclusive — sandbox (the stop was proven, so no kill).
+     */
+    @Test
+    void executeTask_takeOver_doesNotCreateTheSuccessorsSessionBeforeThePredecessorIsStopped()
+            throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID oldRun = UUID.randomUUID();
+        UUID newRun = UUID.randomUUID();
+        // The predecessor is executing (the stream below is held open) when its row goes terminal:
+        // the row flips only after the run passed its launch boundaries, exactly the real sequence
+        // (a row terminal from the start would abort the predecessor at its own boundary checks now).
+        AtomicReference<RunStatus> oldStatus = new AtomicReference<>(RunStatus.RUNNING);
+        lenient().when(runRepository.findById(oldRun)).thenAnswer(invocation -> Optional.of(
+                Run.builder().id(oldRun).agentId(agentId).status(oldStatus.get()).build()));
+        // The stop proof must be awaited: the class-wide 50 ms test grace would turn the latch
+        // hold into the last-resort kill, which is a different pin (see the sibling tests).
+        provider.setStopGraceForTest(Duration.ofSeconds(5));
+        CountDownLatch oldStreamOpen = new CountDownLatch(1);
+        CountDownLatch oldPromptDelivered = new CountDownLatch(1);
+        CountDownLatch releaseOldStream = new CountDownLatch(1);
+        CountDownLatch predecessorCancelDelivered = new CountDownLatch(1);
+        AtomicInteger sessionCreations = new AtomicInteger();
+        AtomicInteger streamReads = new AtomicInteger();
+        when(client.createSession(any())).thenAnswer(invocation -> {
+            sessionCreations.incrementAndGet();
+            return BRIDGE_SESSION;
+        });
+        when(client.cancel(BRIDGE_SESSION)).thenAnswer(invocation -> {
+            predecessorCancelDelivered.countDown();
+            return true;
+        });
+        // The prompt is the predecessor's last launch boundary; waiting for it makes the row flip
+        // below deterministic (the pump's reader can open the stream before the runner crossed its
+        // pre-prompt row re-read, so the open stream alone is not proof the boundaries were passed).
+        doAnswer(invocation -> {
+            oldPromptDelivered.countDown();
+            return null;
+        }).when(client).prompt(anyString(), anyString());
+        doAnswer(invocation -> {
+            Consumer<QoderBridgeClient.BridgeEvent> consumer = invocation.getArgument(0);
+            switch (streamReads.getAndIncrement()) {
+                case 0 -> {
+                    // The predecessor is still executing: its pump has not been stopped.
+                    oldStreamOpen.countDown();
+                    releaseOldStream.await(30, TimeUnit.SECONDS);
+                }
+                case 1 -> {
+                    consumer.accept(sessionStarted(1, "efficient"));
+                    consumer.accept(completed(2, "end_turn"));
+                }
+                default -> { }
+            }
+            return null;
+        }).when(eventStream).read(any());
+
+        AtomicReference<Throwable> oldFailure = new AtomicReference<>();
+        Thread predecessor = new Thread(() -> {
+            try {
+                provider.executeTask(agent(agentId), oldRun, PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+            } catch (Throwable t) {
+                oldFailure.set(t);
+            }
+        }, "g7-predecessor");
+        predecessor.start();
+        assertThat(oldStreamOpen.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(oldPromptDelivered.await(10, TimeUnit.SECONDS)).isTrue();
+        // The kanban gives up on the executing predecessor: its row goes terminal now (after every
+        // launch boundary, so the flip cannot abort the predecessor itself).
+        oldStatus.set(RunStatus.CANCELLED);
+
+        AtomicReference<TaskResult> successorResult = new AtomicReference<>();
+        AtomicReference<Throwable> successorFailure = new AtomicReference<>();
+        Thread successor = new Thread(() -> {
+            try {
+                successorResult.set(provider.executeTask(agent(agentId), newRun, PROMPT_TEXT,
+                        new TaskContext(1, Duration.ofMinutes(2))));
+            } catch (Throwable t) {
+                successorFailure.set(t);
+            }
+        }, "g7-successor");
+        successor.start();
+
+        // Bounded settle: the successor had every chance to enter the sandbox while the
+        // predecessor's pump is still running (it does — one session before the fix).
+        Thread.sleep(250);
+        assertThat(sessionCreations.get())
+                .as("the successor must not create a second session/CLI while the predecessor's pump"
+                        + " is still unstopped — one Qoder CLI per workspace")
+                .isEqualTo(1);
+        assertThat(predecessorCancelDelivered.await(10, TimeUnit.SECONDS))
+                .as("the take-over must deliver the predecessor's idempotent cancel")
+                .isTrue();
+
+        // The predecessor's stream ends: its stop is proven and the successor proceeds.
+        releaseOldStream.countDown();
+        waitUntil(() -> sessionCreations.get() == 2);
+        successor.join(10_000);
+        assertThat(successor.isAlive()).isFalse();
+        assertThat(successorFailure.get()).isNull();
+        assertThat(successorResult.get()).isNotNull();
+        assertThat(successorResult.get().runId()).isEqualTo(newRun);
+        // The stop was proven, so the successor re-entered the same sandbox: no kill was needed.
+        verify(sandboxLifecycle, never()).killSandbox(anyString());
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), eq(IMAGE), anyMap());
+
+        predecessor.join(10_000);
+        assertThat(predecessor.isAlive()).isFalse();
+        assertThat(oldFailure.get()).isInstanceOf(TaskExecutionException.class);
+        assertThat(provider.activeRunsForTest()).doesNotContainKey(agentId);
+    }
+
+    // ---- G7 finding 3 / G8 finding 1: ownership, detach and slot release are ONE step ---------
+
+    /**
+     * G7 Minor 3, tightened by G8 finding 1: the G6 guard used to read {@code activeRuns.get(...)}
+     * and then kill, so a successor claiming the slot between that read and the kill lost the
+     * sandbox it had just taken. The G7 fix answered the ownership question with the
+     * value-conditional removal, but released the slot BEFORE detaching the instance registry, so a
+     * re-dispatch claiming the freed slot could still read the registered instance in
+     * {@code getOrPrepareInstance}, pass the reachability probe and reuse the sandbox that was
+     * being destroyed.
+     *
+     * <p>Ownership, the instance-registry detach and the slot release are therefore ONE per-key
+     * critical section: the slot map proves the slot still names this run, detaches the registry
+     * inside it and gives the slot up only afterwards; the destroy/close work stays outside. The
+     * pin is a trapping pair of maps that makes the interleaving observable without racing threads:
+     * the registry records the slot state at the detach, the slot map records the registry state at
+     * the release, and a bare {@code get} on the ownership path is recorded as its own event. The
+     * expected trace is exactly (1) detach while the slot still names the run, then (2) release
+     * with the instance already detached; the pre-G8 order records the reverse and fails here.
+     */
+    @Test
+    void abortTask_lastResortKill_detachesTheInstanceInsideTheOwnershipCriticalSection() throws Exception {
+        QoderAdkProvider owning = owningClientsProvider();
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        QoderAdkProvider.QoderInstance inst = instance(agentId);
+        LastResortOrderWitness witness = new LastResortOrderWitness(agentId, runId);
+        setProviderField(owning, "activeRuns", witness.slot());
+        setProviderField(owning, "instances", witness.instances());
+        owning.instancesForTest().put(agentId, inst);
+        owning.runInstancesForTest().put(runId, inst);
+        owning.runClientsForTest().put(runId, client);
+        owning.runSessionsForTest().put(runId, BRIDGE_SESSION);
+        owning.runPumpsForTest().put(runId, pump);
+        when(pump.awaitStopped(any(Duration.class))).thenReturn(false);
+
+        owning.abortTask(runId);
+
+        assertThat(witness.events())
+                .as("the detach must happen inside the slot's critical section: the instance is"
+                        + " detached while the slot still names the run, and the slot is released only"
+                        + " with the instance already detached — any other order leaves a window where a"
+                        + " re-dispatch can reuse the sandbox being destroyed")
+                .containsExactly(
+                        "slot.ownership",
+                        "instance.remove:slot=run",
+                        "slot.release:instance=detached");
+        // The kill still runs for the run the slot names, and the slot and the registry are both
+        // given up in that same step.
+        verify(sandboxLifecycle).killSandbox(SANDBOX_ID);
+        verify(client).close();
+        assertThat(owning.activeRunsForTest()).doesNotContainKey(agentId);
+        assertThat(owning.instancesForTest()).doesNotContainKey(agentId);
+    }
+
+    /**
+     * Witness for the G8 finding-1 pin (the trapping-map pattern of the G4 item-2 and G7 item-3
+     * pins): the slot map records the ownership operation and, at the moment the slot is given up,
+     * the instance-registry state; the registry records its detach together with the slot state at
+     * that instant. A bare {@code get} on the ownership path is recorded as its own event, so it
+     * fails the exact trace instead of hiding inside it.
+     */
+    private static final class LastResortOrderWitness {
+
+        private final UUID agentId;
+        private final UUID runId;
+        private final List<String> events = new CopyOnWriteArrayList<>();
+        private final AtomicBoolean released = new AtomicBoolean();
+        /** Tracked instead of read back: a registry read would itself be a witness event. */
+        private final AtomicBoolean instanceDetached = new AtomicBoolean();
+
+        private final Map<UUID, UUID> slot = new ConcurrentHashMap<>() {
+            @Override
+            public UUID get(Object key) {
+                if (agentId.equals(key)) {
+                    events.add("slot.get");
+                }
+                return super.get(key);
+            }
+
+            @Override
+            public UUID compute(UUID key,
+                                BiFunction<? super UUID, ? super UUID, ? extends UUID> remappingFunction) {
+                if (!agentId.equals(key)) {
+                    return super.compute(key, remappingFunction);
+                }
+                events.add("slot.ownership");
+                return super.compute(key, (owner, current) -> {
+                    UUID next = remappingFunction.apply(owner, current);
+                    if (next == null) {
+                        released.set(true);
+                        events.add("slot.release:instance="
+                                + (instanceDetached.get() ? "detached" : "registered"));
+                    }
+                    return next;
+                });
+            }
+
+            @Override
+            public boolean remove(Object key, Object value) {
+                boolean removed = super.remove(key, value);
+                if (agentId.equals(key) && removed) {
+                    events.add("slot.remove");
+                    released.set(true);
+                }
+                return removed;
+            }
+        };
+
+        private final Map<UUID, QoderAdkProvider.QoderInstance> instances = new ConcurrentHashMap<>() {
+            @Override
+            public boolean remove(Object key, Object value) {
+                boolean removed = super.remove(key, value);
+                if (removed) {
+                    instanceDetached.set(true);
+                }
+                if (agentId.equals(key)) {
+                    events.add("instance.remove:slot=" + (released.get() ? "released" : "run"));
+                }
+                return removed;
+            }
+
+            @Override
+            public QoderAdkProvider.QoderInstance get(Object key) {
+                QoderAdkProvider.QoderInstance value = super.get(key);
+                if (agentId.equals(key)) {
+                    events.add("instance.get:" + (value == null ? "absent" : "registered"));
+                }
+                return value;
+            }
+        };
+
+        LastResortOrderWitness(UUID agentId, UUID runId) {
+            this.agentId = agentId;
+            this.runId = runId;
+            slot.put(agentId, runId);
+        }
+
+        Map<UUID, UUID> slot() {
+            return slot;
+        }
+
+        Map<UUID, QoderAdkProvider.QoderInstance> instances() {
+            return instances;
+        }
+
+        List<String> events() {
+            return List.copyOf(events);
+        }
+    }
+
+    // ---- G7 finding 2: one approval window for the bridge and the host ------------------------
+
+    /**
+     * G7 Major 2 with the G8 finding-3 margin: the host expires every ask at
+     * {@code min(now + approvals.timeout-ms, runDeadline)} anchored when it PERSISTS the ask,
+     * while the bridge anchors its local deadline at frame handling — strictly earlier — so the
+     * raw window let the bridge deny an ask the host still held (the APPROVED-then-{@code expired}
+     * retry loop). The provider therefore forwards the host's window PLUS the documented margin
+     * ({@code APPROVAL_WINDOW_SLACK_MS} = 5000 ms): the bridge's local deadline is then
+     * {@code handleTime + window + margin} against the host's {@code persistTime + window}, i.e.
+     * never earlier than the host's expiry as long as the delivery-plus-commit transit and the
+     * sandbox/host clock skew stay inside the margin. The exact forwarded value is pinned here.
+     */
+    @Test
+    void prepareAgent_passesTheHostsApprovalWindowPlusTheDocumentedMarginIntoTheSandboxEnvironment() {
+        UUID agentId = UUID.randomUUID();
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, String>> env = ArgumentCaptor.forClass(Map.class);
+        verify(sandboxLifecycle).createSandbox(eq(agentId), eq(IMAGE), env.capture());
+        assertThat(env.getValue())
+                .as("the bridge clamps every per-ask deadline to the host window PADDED by the"
+                        + " documented margin, so the host (anchoring at persist time) always expires"
+                        + " before the bridge's local deadline fires")
+                .containsEntry("APPROVAL_TIMEOUT_MS", "1805000");
+    }
+
+    /**
+     * The configured value — never only the documented fallback — plus the same margin is what the
+     * bridge receives: the property is the single source of the window, the margin is the fixed
+     * transit/skew allowance on top of it.
+     */
+    @Test
+    void prepareAgent_configuredApprovalWindow_replacesTheDocumentedDefault() throws Exception {
+        setProviderField(provider, "approvalWindowMs", 1_234_567L);
+        UUID agentId = UUID.randomUUID();
+
+        provider.prepareAgent(agentId, agent(agentId));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, String>> env = ArgumentCaptor.forClass(Map.class);
+        verify(sandboxLifecycle).createSandbox(eq(agentId), eq(IMAGE), env.capture());
+        assertThat(env.getValue()).containsEntry("APPROVAL_TIMEOUT_MS", "1239567");
+    }
+
+    /**
+     * G7 Major 2, second half: the provider used to hand the bridge the FULL run window and the
+     * bridge anchors it at session creation, so the session deadline drifted by the whole
+     * preparation time. The bridge must receive the REMAINING window instead: anchored at receipt
+     * it lands on the host's absolute run deadline, and the bridge's session clamp then agrees
+     * with the host's ask clamp.
+     */
+    @Test
+    void executeTask_sessionDeadline_isTheRemainingWindow_neverRestartedAtSessionCreation() {
+        // Preparation consumes 1.2 s of the 2 s window: the bridge must be told 1 s (the ceiling
+        // of the 0.8 s left), never the original 2 s.
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            Thread.sleep(1200);
+            return BRIDGE_URL;
+        });
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+        UUID runId = UUID.randomUUID();
+
+        provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMillis(2000)));
+
+        ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
+                ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
+        verify(client).createSession(request.capture());
+        assertThat(request.getValue().deadlineSeconds())
+                .as("the bridge must anchor its session deadline to the host's absolute run deadline")
+                .isEqualTo(1L);
+    }
+
+    // ---- G8 finding 2: the silent take-over and the launch-boundary row re-reads --------------
+
+    /**
+     * G8 finding 2a — the silent interleaving: a terminal predecessor whose pending abort cannot be
+     * RECORDED — it sits in the gap between claiming its slot and reaching
+     * {@code registeredRuns.put}, so there is no registration to write the record into — used to be
+     * neither recorded nor announced. The successor proceeded silently while that predecessor could
+     * still create a session in the sandbox it was about to enter. The take-over log is
+     * unconditional; what stops the unregistered predecessor is its own launch-boundary row re-read
+     * (the pins below), which the logged message states.
+     */
+    @Test
+    void executeTask_takeOver_ofAPredecessorWithoutASession_logsTheUnrecordedHandOver() {
+        UUID agentId = UUID.randomUUID();
+        UUID oldRun = UUID.randomUUID();
+        UUID newRun = UUID.randomUUID();
+        lenient().when(runRepository.findById(oldRun)).thenReturn(Optional.of(
+                Run.builder().id(oldRun).agentId(agentId).status(RunStatus.CANCELLED).build()));
+        // The predecessor claimed the slot but has not reached its cancellation registration yet:
+        // the pending abort cannot be recorded, and the take-over must still say so.
+        provider.activeRunsForTest().put(agentId, oldRun);
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+        Logger logger = (Logger) LoggerFactory.getLogger(QoderAdkProvider.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            TaskResult result = provider.executeTask(agent(agentId), newRun, PROMPT_TEXT,
+                    new TaskContext(1, Duration.ofMinutes(2)));
+
+            assertThat(result.runId()).isEqualTo(newRun);
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+                .as("the take-over of an unregistered terminal predecessor must never be silent")
+                .anyMatch(message -> message.contains("has no session yet")
+                        && message.contains("has not registered for cancellation"));
+        assertThat(provider.activeRunsForTest()).doesNotContainKey(agentId);
+    }
+
+    /**
+     * G8 finding 2b — the first launch boundary: a run whose row went terminal while its sandbox
+     * was being prepared must abort there and never create a session (or a prompt): the terminal
+     * row is the predecessor's own second chance when no pending-abort record could be delivered.
+     */
+    @Test
+    void executeTask_rowWentTerminalDuringPreparation_abortsBeforeCreatingTheSession() {
+        UUID runId = UUID.randomUUID();
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            when(runRepository.findById(runId)).thenReturn(Optional.of(
+                    Run.builder().id(runId).status(RunStatus.CANCELLED).build()));
+            return BRIDGE_URL;
+        });
+
+        assertThatThrownBy(() -> provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.ABORTED))
+                .hasMessageContaining("launch boundary");
+
+        verify(client, never()).createSession(any());
+        verify(client, never()).prompt(anyString(), anyString());
+        verify(client, never()).cancel(anyString());
+        verify(sandboxLifecycle, never()).killSandbox(anyString());
+        assertThat(provider.runRegistrationsForTest()).doesNotContainKey(runId);
+    }
+
+    /**
+     * G8 finding 2c — the second launch boundary: a row that went terminal while the bridge session
+     * was being created must abort before any prompt. The session already exists, so the run-end
+     * cleanup cancels it (nothing executes in the sandbox).
+     */
+    @Test
+    void executeTask_rowWentTerminalDuringSessionCreation_abortsBeforeThePrompt() {
+        UUID runId = UUID.randomUUID();
+        doAnswer(invocation -> {
+            when(runRepository.findById(runId)).thenReturn(Optional.of(
+                    Run.builder().id(runId).status(RunStatus.CANCELLED).build()));
+            return BRIDGE_SESSION;
+        }).when(client).createSession(any());
+
+        assertThatThrownBy(() -> provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.ABORTED))
+                .hasMessageContaining("launch boundary");
+
+        verify(client, never()).prompt(anyString(), anyString());
+        verify(client).cancel(BRIDGE_SESSION);
+        assertThat(provider.runSessionsForTest()).doesNotContainKey(runId);
+    }
+
+    /**
+     * G8 finding 2d — the boundary SITES: the run's own row is re-read at every launch boundary
+     * (after preparation, after session creation, immediately before the prompt), so a prompt can
+     * never be issued without the row having been checked right before it. The behavioural pins
+     * above prove the two synchronously reachable reads have teeth; this pin records all three
+     * sites so a prompt without its preceding re-read fails deterministically.
+     */
+    @Test
+    void executeTask_reReadsTheRunRowAtEveryLaunchBoundary_beforeThePrompt() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        List<String> order = new CopyOnWriteArrayList<>();
+        when(runRepository.findById(runId)).thenAnswer(invocation -> {
+            order.add("runRow");
+            return Optional.empty();
+        });
+        doAnswer(invocation -> {
+            order.add("prompt");
+            return null;
+        }).when(client).prompt(anyString(), anyString());
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+
+        provider.executeTask(agent(agentId), runId, PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+
+        assertThat(order).containsExactly("runRow", "runRow", "runRow", "prompt");
     }
 }

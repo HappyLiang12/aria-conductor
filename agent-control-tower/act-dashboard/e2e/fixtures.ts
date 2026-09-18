@@ -101,8 +101,13 @@ export interface SeedKanbanOpts {
   labels?: string;
   /** Pins the dispatch agent: AgentPickerService matches this string against agent names. */
   agentTemplateId?: string;
-  /** Landing column; TODO (default) or BACKLOG (queued, never auto-dispatches). */
-  status?: 'TODO' | 'BACKLOG';
+  /**
+   * Landing column. TODO (default) auto-dispatches on create; BACKLOG queues without
+   * dispatching; IN_PROGRESS and REVIEW match KanbanService.CREATABLE_STATUSES and let a
+   * spec seed a card in a column the transition matrix cannot reach directly
+   * (REVIEW is only reachable from IN_PROGRESS).
+   */
+  status?: 'TODO' | 'BACKLOG' | 'IN_PROGRESS' | 'REVIEW';
 }
 
 /** POST /kanban/items — new items land in TODO (rendered in the Todo column). */

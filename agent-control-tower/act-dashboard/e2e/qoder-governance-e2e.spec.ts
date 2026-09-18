@@ -765,9 +765,11 @@ test('S12: UI smoke — board, Review surface, Providers and Ops render with zer
     failedBackendRequests.push(`FAILED ${req.method()} ${req.url()} (${req.failure()?.errorText})`);
   });
 
-  // Board with one REVIEW card so the Review surface has a real target.
-  const card = await seedKanbanItem(request, { title: `s12-${uniqueName('card')}` });
-  expect((await transitionKanban(request, card.id, 'REVIEW')).status).toBe(200);
+  // Board with one REVIEW card so the Review surface has a real target. The card is born
+  // in REVIEW: REVIEW is reachable only from IN_PROGRESS, and a freshly seeded TODO card
+  // races the create-time auto-dispatch and loses it (S12.run2 answered 400
+  // "Invalid kanban transition: TODO -> REVIEW" on both attempts).
+  const card = await seedKanbanItem(request, { title: `s12-${uniqueName('card')}`, status: 'REVIEW' });
 
   // 1. Board.
   await page.goto('/');

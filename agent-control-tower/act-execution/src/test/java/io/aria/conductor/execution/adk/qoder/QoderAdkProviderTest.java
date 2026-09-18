@@ -86,6 +86,7 @@ class QoderAdkProviderTest {
     private static final String BRIDGE_URL = "http://127.0.0.1:40369/proxy/4097";
     private static final String BRIDGE_SESSION = "bridge-session-1";
     private static final String PAT = "synthetic-pat-value";
+    private static final String ROTATED_PAT = "synthetic-pat-rotated-value";
     private static final String PROMPT_TEXT = "do the thing";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -287,6 +288,10 @@ class QoderAdkProviderTest {
     private void enableMcp() {
         mcpProperties.setEnabled(true);
         mcpProperties.setPort(8080);
+        // The governed provider only runs with MCP enabled in token mode (F1): the worker
+        // entry is the authenticated channel, while a non-token mode would admit the
+        // sandbox's header-less callers as the operator identity.
+        mcpProperties.setAuthMode("token");
     }
 
     /** Pin the host-candidate source so the probe order is deterministic. */
@@ -360,8 +365,10 @@ class QoderAdkProviderTest {
     @Test
     void mcpEnabledWithoutAUsablePort_warnsAndPassesNoServers() {
         // Enabled but unwireable (no usable port): the misconfiguration must be operator-visible
-        // instead of silently degrading to an MCP-less run.
+        // instead of silently degrading to an MCP-less run. Token mode is required to reach this
+        // path — in a non-token mode the provider refuses the run outright (F1).
         mcpProperties.setEnabled(true);
+        mcpProperties.setAuthMode("token");
         mcpProperties.setPort(0);
         UUID runId = UUID.randomUUID();
         Logger logger = (Logger) LoggerFactory.getLogger(QoderAdkProvider.class);
@@ -1383,5 +1390,268 @@ class QoderAdkProviderTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(
                         "no qoder.usage progress event published: " + describe(published)));
+    }
+
+    // ---- G1b F1: the governed provider refuses a non-token MCP configuration ----------
+    //
+    // Design lines 309-311: the unauthenticated operator mode must be unreachable from Qoder
+    // sandboxes. With MCP enabled in a non-token auth mode the /mcp endpoint admits a
+    // header-less caller as the operator identity, so the governed provider refuses the run
+    // outright instead of letting its sandbox hold an operator-equivalent route.
+
+    @Test
+    void executeTask_mcpEnabledWithANonTokenAuthMode_refusesWithATypedErrorAndStartsNothing() {
+        // mcpProperties keeps its deployment default authMode "none" here. A resolvable MCP
+        // candidate is irrelevant: the refusal is about the endpoint's operator admittance.
+        mcpProperties.setEnabled(true);
+        mcpProperties.setPort(8080);
+        hostCandidates("172.30.112.1");
+        UUID runId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR))
+                .hasMessageContaining("aria.mcp.auth-mode=token");
+
+        // The refusal sits at the earliest boundary: no sandbox, no CLI process, no session,
+        // no prompt and no run-scoped credential ever existed for this configuration.
+        verify(sandboxLifecycle, never()).createSandbox(any(), anyString(), anyMap());
+        verifyNoInteractions(client);
+        verify(runScopedCredentialService, never()).issue(any(), any());
+        assertThat(provider.instancesForTest()).isEmpty();
+    }
+
+    @Test
+    void prepareAgent_mcpEnabledWithANonTokenAuthMode_refusesBeforeCreatingASandbox() {
+        mcpProperties.setEnabled(true);
+        mcpProperties.setPort(8080);
+        UUID agentId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> provider.prepareAgent(agentId, agent(agentId)))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR))
+                .hasMessageContaining("aria.mcp.auth-mode=token");
+
+        // Refusing at the prepare entry means the sandbox, its bridge process and its CLI never start.
+        verify(sandboxLifecycle, never()).createSandbox(any(), anyString(), anyMap());
+        assertThat(provider.instancesForTest()).isEmpty();
+    }
+
+    @Test
+    void executeTask_mcpEnabledWithTokenAuthMode_startsTheRunNormally() {
+        enableMcp();
+        hostCandidates("10.0.0.5");
+        UUID runId = UUID.randomUUID();
+        when(runScopedCredentialService.issue(eq(runId), any(Instant.class))).thenReturn("wcp_test_worker_token");
+        when(client.probe(anyString(), anyList()))
+                .thenReturn(new QoderBridgeClient.ProbeResult(true, 200, "json-rpc result"));
+
+        TaskResult result = executeHappyRun(runId, new TaskContext(1, Duration.ofMinutes(2)));
+
+        assertThat(result.aborted()).isFalse();
+        assertThat(result.finalOutput()).isEqualTo("ok");
+        verify(client).createSession(any());
+    }
+
+    @Test
+    void executeTask_mcpDisabledWithANonTokenAuthMode_stillStartsTheRun() {
+        // The refusal stays narrow: with MCP disabled there is no worker channel to protect,
+        // so the auth mode is irrelevant and the run proceeds.
+        mcpProperties.setEnabled(false);
+        TaskResult result = executeHappyRun(UUID.randomUUID(), new TaskContext(1, Duration.ofMinutes(2)));
+        assertThat(result.finalOutput()).isEqualTo("ok");
+        verify(client, never()).probe(anyString(), anyList());
+    }
+
+    // ---- G1b F5: a cancel landing during sandbox preparation ---------------------------
+
+    @Test
+    void executeTask_abortDuringSandboxPreparation_isHonored_andNeverCreatesASession() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        CountDownLatch prepEntered = new CountDownLatch(1);
+        CountDownLatch releasePrep = new CountDownLatch(1);
+        // Hold the sandbox preparation (endpoint resolution) so the abort lands inside it.
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            prepEntered.countDown();
+            releasePrep.await(10, TimeUnit.SECONDS);
+            return BRIDGE_URL;
+        });
+
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread run = new Thread(() -> {
+            try {
+                provider.executeTask(agent, runId, PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        }, "preparing-run");
+        run.start();
+        assertThat(prepEntered.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // The engine's abort lands while the runner is still blocked in preparation.
+        provider.abortTask(runId);
+        releasePrep.countDown();
+        run.join(10_000);
+        assertThat(run.isAlive()).isFalse();
+
+        assertThat(failure.get()).isInstanceOf(TaskExecutionException.class)
+                .satisfies(t -> assertThat(((TaskExecutionException) t).cause())
+                        .isEqualTo(TaskExecutionException.Cause.ABORTED));
+        // A run cancelled during preparation must never reach the bridge session or the prompt.
+        verify(client, never()).createSession(any());
+        verify(client, never()).prompt(anyString(), anyString());
+        verify(client, never()).cancel(anyString());
+        verify(sandboxLifecycle, never()).killSandbox(anyString());
+        // No registration survives the aborted run.
+        assertThat(provider.runRegistrationsForTest()).doesNotContainKey(runId);
+        assertThat(provider.runSessionsForTest()).doesNotContainKey(runId);
+        assertThat(provider.runClientsForTest()).doesNotContainKey(runId);
+    }
+
+    @Test
+    void executeTask_registersTheRunForCancellationBeforePreparation_andCleansUpOnExit() throws Exception {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        CountDownLatch prepEntered = new CountDownLatch(1);
+        CountDownLatch releasePrep = new CountDownLatch(1);
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            prepEntered.countDown();
+            releasePrep.await(10, TimeUnit.SECONDS);
+            return BRIDGE_URL;
+        });
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+
+        AtomicReference<TaskResult> result = new AtomicReference<>();
+        Thread run = new Thread(() -> result.set(provider.executeTask(agent, runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)))), "registered-run");
+        run.start();
+        assertThat(prepEntered.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // While preparation is still in flight the run is already registered for cancellation.
+        assertThat(provider.runRegistrationsForTest()).containsKey(runId);
+
+        releasePrep.countDown();
+        run.join(10_000);
+        assertThat(run.isAlive()).isFalse();
+        assertThat(result.get()).isNotNull();
+        // The run completed normally and its cancellation registration was cleaned up.
+        assertThat(provider.runRegistrationsForTest()).doesNotContainKey(runId);
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), eq(IMAGE), anyMap());
+    }
+
+    // ---- G1b F6: credential identity of a reused sandbox -------------------------------
+
+    @Test
+    void executeTask_deletedCredential_refusesTheNextRunWithoutCreatingASession() {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent); // sandbox prepared while the PAT existed
+        when(credentialService.read("qoder")).thenThrow(new RuntimeCredentialException(
+                RuntimeCredentialException.Cause.NOT_CONFIGURED,
+                "No runtime credential configured for provider qoder"));
+        UUID runId = UUID.randomUUID();
+
+        assertThatThrownBy(() -> provider.executeTask(agent, runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2))))
+                .isInstanceOf(TaskExecutionException.class)
+                .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
+                        .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR))
+                .hasMessageContaining("credential");
+
+        // Remove revokes future launches: the reused sandbox is not re-entered, and no new
+        // session, prompt or sandbox is created for the refused run.
+        verify(client, never()).createSession(any());
+        verify(client, never()).prompt(anyString(), anyString());
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), anyString(), anyMap());
+        assertThat(provider.instancesForTest()).containsKey(agentId);
+    }
+
+    @Test
+    void executeTask_rotatedCredential_recreatesTheIdleSandboxBeforeTheNextRun() {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent); // sandbox sb-1 built with the original PAT
+        when(credentialService.read("qoder")).thenReturn(ROTATED_PAT);
+        when(sandboxLifecycle.createSandbox(any(), eq(IMAGE), anyMap())).thenReturn("sb-2");
+        when(sandboxLifecycle.getSandboxUrl("sb-2", 4097)).thenReturn(BRIDGE_URL);
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+
+        provider.executeTask(agent, UUID.randomUUID(), PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+
+        // The idle sandbox built with the stale credential is destroyed before the new run.
+        verify(sandboxLifecycle).killSandbox(SANDBOX_ID);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, String>> env = ArgumentCaptor.forClass(Map.class);
+        verify(sandboxLifecycle, times(2)).createSandbox(eq(agentId), eq(IMAGE), env.capture());
+        assertThat(env.getAllValues().get(0))
+                .containsEntry("QODER_PERSONAL_ACCESS_TOKEN", PAT);
+        assertThat(env.getAllValues().get(1))
+                .as("the new run's sandbox must be created with the rotated credential")
+                .containsEntry("QODER_PERSONAL_ACCESS_TOKEN", ROTATED_PAT);
+        assertThat(provider.instancesForTest().get(agentId).sandboxId()).isEqualTo("sb-2");
+    }
+
+    @Test
+    void executeTask_unchangedCredential_reusesTheHealthySandboxForTheNextRun() {
+        UUID agentId = UUID.randomUUID();
+        Agent agent = agent(agentId);
+        provider.prepareAgent(agentId, agent);
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+
+        provider.executeTask(agent, UUID.randomUUID(), PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+        provider.executeTask(agent, UUID.randomUUID(), PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+
+        // The credential re-validation must not regress the sanctioned one-sandbox reuse.
+        verify(sandboxLifecycle, times(1)).createSandbox(any(), eq(IMAGE), anyMap());
+        verify(sandboxLifecycle, never()).killSandbox(anyString());
+    }
+
+    @Test
+    void preparedInstance_stampsTheCredentialIdentity_asAOneWayHash_neverThePat() {
+        UUID agentId = UUID.randomUUID();
+        provider.prepareAgent(agentId, agent(agentId));
+
+        QoderAdkProvider.QoderInstance instance = provider.instancesForTest().get(agentId);
+        assertThat(instance.patHash())
+                .as("a SHA-256 hex digest of the PAT — never the PAT itself")
+                .hasSize(64)
+                .isNotEqualTo(PAT)
+                .doesNotContain(PAT);
+        assertThat(instance.toString())
+                .contains("patHash=<redacted>")
+                .doesNotContain(instance.patHash());
+    }
+
+    // ---- G1b deadline: the provider deadline is the host-granted absolute deadline -----
+
+    @Test
+    void executeTask_runDeadline_isTheHostGrantedDeadline_notRestartedAfterPreparation() {
+        // Preparation consumes ~600ms of the 2000ms window: the deadline handed to the
+        // coordinator must be the absolute grant (entry + 2000ms), not a clock restarted
+        // after preparation (which would lag the host's granted deadline by the prep time).
+        when(sandboxLifecycle.getSandboxUrl(SANDBOX_ID, 4097)).thenAnswer(invocation -> {
+            Thread.sleep(600);
+            return BRIDGE_URL;
+        });
+        streamPlays(sessionStarted(1, "efficient"), completed(2, "end_turn"));
+        UUID runId = UUID.randomUUID();
+        Instant entered = Instant.now();
+
+        provider.executeTask(agent(UUID.randomUUID()), runId, PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMillis(2000)));
+
+        ArgumentCaptor<Instant> deadline = ArgumentCaptor.forClass(Instant.class);
+        verify(permissionCoordinator).bindRun(eq(runId), eq(client), deadline.capture());
+        long declaredMillis = Duration.between(entered, deadline.getValue()).toMillis();
+        assertThat(declaredMillis)
+                .as("the provider deadline must not restart the granted window after preparation")
+                .isLessThan(2200L)
+                .isGreaterThan(1500L);
     }
 }

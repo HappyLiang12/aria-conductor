@@ -23,6 +23,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -141,6 +144,8 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     private final Map<UUID, QoderProgressPump> runPumps = new ConcurrentHashMap<>();
     /** Pending aborts recorded while a run's session was not yet created (see {@link #abortTask}). */
     private final Map<UUID, Boolean> runAborted = new ConcurrentHashMap<>();
+    /** Runs registered for cancellation before sandbox preparation (F5); consulted by {@link #abortTask}. */
+    private final Map<UUID, Boolean> registeredRuns = new ConcurrentHashMap<>();
     /** agentId → runId of the run currently in flight (one run per agent, busy rejection). */
     private final Map<UUID, UUID> activeRuns = new ConcurrentHashMap<>();
     /** In-flight sandbox preparations, keyed by agentId — concurrent callers share one prepare. */
@@ -231,6 +236,7 @@ public class QoderAdkProvider extends AbstractAdkProvider {
 
     @Override
     public void prepareAgent(UUID agentId, Agent agent) {
+        requireGovernedMcpConfiguration();
         getOrPrepareInstance(agentId, agent);
     }
 
@@ -246,6 +252,7 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
                     "agent and runId must not be null");
         }
+        requireGovernedMcpConfiguration();
         UUID agentId = agent.getId();
         // One run per agent: a second concurrent run would race the first run's single
         // bridge session, so it is rejected with a typed error instead of interleaving.
@@ -264,24 +271,39 @@ public class QoderAdkProvider extends AbstractAdkProvider {
 
     private TaskResult runTask(Agent agent, UUID agentId, UUID runId, String taskPrompt, TaskContext context) {
         // C0.6: the caller's window covers the whole call — resolve the deadline before
-        // sandbox prep so the (up to ~150s) preparation time cannot escape it.
+        // sandbox prep so the (up to ~150s) preparation time cannot escape it. The same
+        // absolute deadline is handed to the coordinator and to the run-scoped credential:
+        // their windows must derive from the host's grant, not restart after preparation.
         Duration deadline = resolveMaxDuration(context);
         long deadlineNanos = System.nanoTime() + deadline.toNanos();
-        QoderInstance inst = getOrPrepareInstance(agentId, agent);
-        QoderBridgeClient client = inst.client();
-        // Register the client before createSession so a cancel landing in the
-        // sandbox-prep / session-creation window is recorded (pending abort) and
-        // honored immediately after the session exists. The try starts right after
-        // these registrations so its finally covers EVERY exit path (including a
-        // createSession failure and the pre-execution abort throw) — no leak.
-        runClients.put(runId, client);
-        runInstances.put(runId, inst);
+        Instant runDeadline = Instant.now().plus(deadline);
+        // F5: register the run for cancellation BEFORE preparation starts, so an abort that
+        // lands while the sandbox is still being prepared is recorded (pending abort) and
+        // honoured at the next launch boundary instead of being dropped. The try starts
+        // right after the registration so its finally covers EVERY exit path (preparation
+        // failure, createSession failure, the pre-execution abort throw, the normal end) —
+        // no registration can leak.
+        registeredRuns.put(runId, Boolean.TRUE);
+        QoderInstance inst = null;
+        QoderBridgeClient client = null;
         String sessionId = null;
         QoderProgressPump pump = null;
         ScheduledExecutorService renewExecutor = null;
         boolean coordinatorBound = false;
         try {
-            Instant runDeadline = Instant.now().plus(deadline);
+            inst = getOrPrepareInstance(agentId, agent);
+            // F5: an abort recorded during preparation terminates the run here, before a
+            // session exists — a cancelled run never creates a session and never prompts.
+            if (runAborted.remove(runId) != null) {
+                throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                        "Run " + runId + " was cancelled during sandbox preparation");
+            }
+            client = inst.client();
+            // Register the client before createSession so a cancel landing in the
+            // session-creation window is recorded (pending abort) and honored immediately
+            // after the session exists.
+            runClients.put(runId, client);
+            runInstances.put(runId, inst);
             // R11: the worker MCP entry is registered only after the sandbox itself proved it can
             // reach the host (probe from inside, never from here) and it authenticates with a
             // run-scoped credential, so the sandbox never sees a long-lived platform token.
@@ -369,6 +391,8 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                 }
             }
         } finally {
+            // F5: the cancellation registration dies with the run on every exit path.
+            registeredRuns.remove(runId);
             // Design §3.1: the bridge keeps a session (and its qodercli child) alive after
             // prompt_result, so the run's end must terminate it — otherwise every finished
             // run leaks one session + child into the agent's sandbox. The bridge's cancel
@@ -423,8 +447,16 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     public void abortTask(UUID runId) {
         QoderBridgeClient client = runClients.get(runId);
         if (client == null) {
-            // Run not even registered yet — nothing to abort (still in sandbox prep).
-            log.debug("No in-flight Qoder task found for run {}", runId);
+            if (!registeredRuns.containsKey(runId)) {
+                // Run not even registered yet — nothing to abort.
+                log.debug("No in-flight Qoder task found for run {}", runId);
+                return;
+            }
+            // F5: the run is registered for cancellation but its sandbox is still being
+            // prepared: record the pending abort that runTask honours right after
+            // preparation, before any session is created or prompt is sent.
+            runAborted.put(runId, Boolean.TRUE);
+            log.info("Qoder abort requested for run {} during sandbox preparation — pending", runId);
             return;
         }
         String sessionId = runSessions.get(runId);
@@ -551,10 +583,13 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         QoderInstance existing = instances.get(agentId);
         if (existing != null) {
             if (isBridgeReachable(existing)) {
-                return existing;
+                if (mayReuseForCurrentCredential(existing)) {
+                    return existing;
+                }
+            } else {
+                log.warn("Existing Qoder instance for agent {} is unhealthy, rebuilding...", agentId);
+                killAndForgetInstance(existing);
             }
-            log.warn("Existing Qoder instance for agent {} is unhealthy, rebuilding...", agentId);
-            killAndForgetInstance(existing);
         }
         // Concurrent runs for the same agent share a single sandbox preparation.
         // Ownership is decided atomically inside `preparing.compute` and the completed
@@ -616,8 +651,10 @@ public class QoderAdkProvider extends AbstractAdkProvider {
 
     private QoderInstance prepareInstance(UUID agentId, Agent agent) {
         // Read the PAT before any sandbox is created: a missing credential is a typed
-        // provider error, not a sandbox leak.
+        // provider error, not a sandbox leak. The instance is stamped with the PAT's
+        // one-way hash only, never the PAT itself (F6).
         String pat = readPat();
+        String patHash = credentialHash(pat);
         // Per-sandbox random bridge bearer token: the bridge fails closed without one,
         // and the token must never be the PAT (the bridge is reachable from the host).
         String bridgeToken = newBridgeToken();
@@ -631,7 +668,7 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             String bridgeUrl = sandboxLifecycle.getSandboxUrl(sandboxId, properties.getPort());
             client = clientFactory.apply(bridgeUrl, bridgeToken);
             waitForBridgeReady(client, sandboxId, agentId);
-            QoderInstance instance = new QoderInstance(agentId, sandboxId, bridgeUrl, bridgeToken, client);
+            QoderInstance instance = new QoderInstance(agentId, sandboxId, bridgeUrl, bridgeToken, patHash, client);
             instances.put(agentId, instance);
             log.info("Qoder bridge ready for agent {} (sandbox {}) at {}", agentId, sandboxId, bridgeUrl);
             return instance;
@@ -657,6 +694,66 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         } catch (RuntimeCredentialException e) {
             throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
                     "Qoder runtime credential is unavailable: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * F6 credential gate for a healthy, registered instance: may it serve the next launch
+     * under the currently stored credential?
+     *
+     * <p>The PAT rides the sandbox container environment, which is fixed at creation time,
+     * so a reused sandbox keeps serving the credential of its own era. Re-validated against
+     * the one-way credential hash stamped on the instance:
+     * <ul>
+     *   <li>the current credential is absent — {@link #readPatHash()} fails the launch with
+     *       a typed provider error (remove revokes future launches);</li>
+     *   <li>the credential is unchanged — the sanctioned reuse path;</li>
+     *   <li>the credential changed — the idle sandbox is recreated so the next run's CLI
+     *       process inherits the new value;</li>
+     *   <li>a session is already running on the instance — it is never disturbed (an
+     *       explicit cancel is the only way to end a running session), the rotation applies
+     *       to the next run.</li>
+     * </ul>
+     *
+     * @return true when the instance stays as-is (reuse or a run in flight), false when it
+     *         was destroyed and a fresh preparation is required
+     */
+    private boolean mayReuseForCurrentCredential(QoderInstance existing) {
+        if (readPatHash().equals(existing.patHash())) {
+            return true;
+        }
+        if (hasInFlightRun(existing)) {
+            log.warn("Qoder credential changed for agent {} but sandbox {} has a run in flight"
+                            + " — that session keeps its credential; the change applies to the next run",
+                    existing.agentId(), existing.sandboxId());
+            return true;
+        }
+        log.info("Qoder credential changed for agent {} — recreating the idle sandbox {} so the"
+                + " next run uses the new credential", existing.agentId(), existing.sandboxId());
+        killAndForgetInstance(existing);
+        return false;
+    }
+
+    /** True when a run currently registered to this provider is bound to the instance. */
+    private boolean hasInFlightRun(QoderInstance inst) {
+        return runInstances.containsValue(inst);
+    }
+
+    /** The credential identity of the currently stored PAT; a missing credential fails closed. */
+    private String readPatHash() {
+        return credentialHash(readPat());
+    }
+
+    /**
+     * One-way identity of a credential value (SHA-256 hex). Only the hash is ever stamped
+     * on an instance or compared — the PAT itself is never stored, logged or echoed.
+     */
+    private static String credentialHash(String pat) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(pat.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable in this JVM", e);
         }
     }
 
@@ -866,6 +963,25 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     // ---- worker MCP entry (R11) ----
 
     /**
+     * Design lines 309-311: the unauthenticated operator mode must be unreachable from Qoder
+     * sandboxes, otherwise the governed provider refuses to start. The bridge hands the
+     * sandbox the {@code /mcp} endpoint, and outside token mode that endpoint admits a
+     * header-less caller as the operator identity — the sandbox could bypass worker
+     * governance and the one-use write grants entirely. The refusal happens at the run /
+     * prepare entry, before any sandbox, CLI process, session or prompt exists. MCP disabled
+     * entirely and token mode are both unaffected.
+     */
+    private void requireGovernedMcpConfiguration() {
+        if (mcpProperties == null || !mcpProperties.isEnabled() || mcpProperties.isTokenMode()) {
+            return;
+        }
+        throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
+                "Qoder refuses to run with MCP enabled in auth mode '" + mcpProperties.getAuthMode()
+                        + "': the /mcp endpoint would admit the sandbox as the operator identity."
+                        + " Set aria.mcp.auth-mode=token (or disable MCP entirely) for Qoder agents.");
+    }
+
+    /**
      * The worker MCP entry needs MCP enabled and a credential source; a manual wiring without
      * the Spring collaborators runs without MCP rather than registering an anonymous entry.
      */
@@ -950,6 +1066,11 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         return preparing;
     }
 
+    /** Test-only: expose the runs registered for cancellation while their sandbox is prepared. */
+    Map<UUID, Boolean> runRegistrationsForTest() {
+        return registeredRuns;
+    }
+
     /** Test-only: shrink the bridge ready-wait budget. */
     void setBridgeReadyTimeoutForTest(Duration timeout) {
         this.bridgeReadyTimeout = timeout;
@@ -982,10 +1103,11 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * @param sandboxId   OpenSandbox sandbox id
      * @param bridgeUrl   host-reachable base URL of the in-sandbox bridge
      * @param bridgeToken per-sandbox bearer token (never logged)
+     * @param patHash     one-way hash of the credential the sandbox was built with (F6)
      * @param client      bridge client targeting this instance
      */
     record QoderInstance(UUID agentId, String sandboxId, String bridgeUrl, String bridgeToken,
-                         QoderBridgeClient client) {
+                         String patHash, QoderBridgeClient client) {
 
         /** Redacting toString: the generated one would print the bridge bearer token. */
         @Override
@@ -994,6 +1116,7 @@ public class QoderAdkProvider extends AbstractAdkProvider {
                     + ", sandboxId=" + sandboxId
                     + ", bridgeUrl=" + bridgeUrl
                     + ", bridgeToken=<redacted>"
+                    + ", patHash=<redacted>"
                     + ", client=" + client + "]";
         }
     }

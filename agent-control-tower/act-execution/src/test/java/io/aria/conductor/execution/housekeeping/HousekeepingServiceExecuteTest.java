@@ -8,6 +8,7 @@ import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
@@ -210,6 +211,28 @@ class HousekeepingServiceExecuteTest {
         service.execute(new HousekeepingRequest(List.of("approvals"), false, Exclusions.empty(), true));
 
         verify(approvalGate).decideApproval(eq(old.getId()), eq(false), anyString());
+    }
+
+    /**
+     * R20.4: ACP asks are owned by the ACP permission coordinator. Housekeeping deciding them
+     * through the legacy gate would flip the status without the companion/delivery effects, so
+     * they are never targets of the approvals category.
+     */
+    @Test
+    void approvalsCategory_skipsAcpPermissionRows() {
+        Instant now = Instant.now();
+        // Old enough to be a housekeeping target: only the ACP source filter removes the row.
+        Approval acp = new Approval();
+        acp.setId(UUID.randomUUID());
+        acp.setRunId(UUID.randomUUID());
+        acp.setStatus(ApprovalStatus.PENDING);
+        acp.setRequestedAt(now.minus(25, ChronoUnit.HOURS));
+        acp.setSource(ApprovalSource.ACP_PERMISSION);
+        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of(acp));
+
+        service.execute(new HousekeepingRequest(List.of("approvals"), false, Exclusions.empty(), true));
+
+        verify(approvalGate, never()).decideApproval(any(), anyBoolean(), anyString());
     }
 
     @Test

@@ -9,6 +9,7 @@ import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
@@ -194,6 +195,9 @@ public class HousekeepingService {
     private List<CategoryItem> approvalsTargets(Exclusions ex, Instant now) {
         Instant cutoff = now.minus(APPROVAL_MAX_AGE);
         return approvalRepository.findByStatus(ApprovalStatus.PENDING).stream()
+                // R20.4: ACP permission asks expire through the ACP coordinator
+                // (run-end sweep / expiry checker), never through the legacy gate.
+                .filter(a -> a.getSource() != ApprovalSource.ACP_PERMISSION)
                 .filter(a -> a.getRequestedAt() != null && a.getRequestedAt().isBefore(cutoff))
                 .filter(a -> !runIsActive(a.getRunId()))
                 .filter(a -> !ex.approvalIds().contains(a.getId().toString()))

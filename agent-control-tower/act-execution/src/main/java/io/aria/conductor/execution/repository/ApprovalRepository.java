@@ -36,6 +36,28 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
            "where a.id = :id and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING")
     int expirePendingById(@Param("id") UUID id, @Param("reason") String reason, @Param("now") Instant now);
 
+    /**
+     * Atomic PENDING → decided transition for the ACP decision path (C3): only the caller whose
+     * conditional update matches wins, so a decision, the expiry sweep and the run-end sweep can
+     * never both apply (the losers read 0). The deadline is checked server-side in the same
+     * statement, so a decision landing after expiry loses even when its own clock pre-check
+     * passed. Single-statement bulk update, no entity load; callers must be @Transactional and
+     * results bypass the persistence context. {@code clearAutomatically} because the loser
+     * re-reads the row to classify its rejection: without it, a caller with an ambient
+     * persistence context (open-in-view) would be handed its own stale PENDING instance.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("update Approval a set a.status = :status, a.reason = :reason, a.decidedAt = :now " +
+           "where a.id = :id and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
+           "and (a.expiresAt is null or a.expiresAt >= :now)")
+    int decidePendingById(@Param("id") UUID id,
+                          @Param("status") ApprovalStatus status,
+                          @Param("reason") String reason,
+                          @Param("now") Instant now);
+
+    /** Run-end sweep: the PENDING ACP asks of one run, by approval row (R23). */
+    List<Approval> findByRunIdAndStatusAndSource(UUID runId, ApprovalStatus status, ApprovalSource source);
+
     /** HITL ask surface: asks linked to a kanban card. */
     List<Approval> findByKanbanItemId(String kanbanItemId);
 

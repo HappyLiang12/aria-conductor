@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
@@ -666,6 +667,165 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
         assertThat(coordinator.digestForDecision(UUID.randomUUID())).isEmpty();
         assertThat(coordinator.deliverDecision(UUID.randomUUID(), true, "n/a"))
                 .isEqualTo(AcpPermissionCoordinator.DELIVERY_MISSING);
+    }
+
+    // ---- run end and restart reconciliation (R23) ------------------------------
+
+    @Test
+    void runIsActive_isPublicAndFollowsTheRunLifecycle() throws Exception {
+        // R23 makes the liveness probe public so C3 can gate operator-driven retries on it.
+        assertThat(AcpPermissionCoordinator.class.getMethod("runIsActive", UUID.class)).isNotNull();
+        UUID running = committedRun(RunStatus.RUNNING);
+        UUID done = committedRun(RunStatus.COMPLETED);
+        assertThat(coordinator.runIsActive(running)).isTrue();
+        assertThat(coordinator.runIsActive(done)).isFalse();
+        assertThat(coordinator.runIsActive(UUID.randomUUID())).isFalse();
+    }
+
+    @Test
+    void cancelPendingForRun_expiresOnlyThatRunsPendingAcpAsks() {
+        UUID runA = committedRun(RunStatus.RUNNING);
+        UUID runB = committedRun(RunStatus.RUNNING);
+        bindRun(runA, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        bindRun(runB, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runA, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-a", json(Map.of("path", "/a"))));
+        coordinator.handlePermissionEvent(runB, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-b", json(Map.of("path", "/b"))));
+        UUID legacyId = UUID.randomUUID();
+        commit(() -> approvalRepository.saveAndFlush(TestDataBuilder.anApproval()
+                .withId(legacyId).withRunId(runA).withStatus(ApprovalStatus.PENDING).build()));
+        when(client.decide(SESSION_ID, "req-a", false, AcpPermissionCoordinator.REASON_RUN_ENDED))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+
+        int expired = coordinator.cancelPendingForRun(runA, AcpPermissionCoordinator.REASON_RUN_ENDED);
+        flushAndClear();
+
+        assertThat(expired).isEqualTo(1);
+        UUID askA = companion(runA, "req-a").getApprovalId();
+        Approval approvalA = approvalRepository.findById(askA).orElseThrow();
+        assertThat(approvalA.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(approvalA.getReason()).isEqualTo(AcpPermissionCoordinator.REASON_RUN_ENDED);
+        assertThat(companionRepository.findById(askA).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_CANCELLED);
+        // The other run's ask and the legacy row are not this sweep's business.
+        assertThat(approvalRepository.findById(companion(runB, "req-b").getApprovalId()).orElseThrow()
+                .getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(approvalRepository.findById(legacyId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.PENDING);
+        verify(client, times(1)).decide(SESSION_ID, "req-a", false,
+                AcpPermissionCoordinator.REASON_RUN_ENDED);
+    }
+
+    @Test
+    void onRunCompleted_cancelsTheRunsPendingAcpAsks_andNoOpsForARunWithoutAsks() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-end", json(Map.of("path", "/end"))));
+
+        coordinator.onRunCompleted(new RunCompletedEvent(this, runId, null, RunStatus.COMPLETED));
+
+        UUID askId = companion(runId, "req-end").getApprovalId();
+        Approval ask = approvalRepository.findById(askId).orElseThrow();
+        assertThat(ask.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(ask.getReason()).isEqualTo("run ended before decision");
+        assertThat(companionRepository.findById(askId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_CANCELLED);
+        // A run that has no asks left is a silent no-op, not an error.
+        UUID cleanRun = committedRun(RunStatus.COMPLETED);
+        coordinator.onRunCompleted(new RunCompletedEvent(this, cleanRun, null, RunStatus.COMPLETED));
+        assertThat(approvalRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void reconcileStuckDeliveries_marksStuckRowsCancelled_andLeavesSettledRowsAndTheDecisionRecordAlone() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-stuck", json(Map.of("path", "/stuck"))));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-done", json(Map.of("path", "/done"))));
+        UUID stuckId = companion(runId, "req-stuck").getApprovalId();
+        UUID doneId = companion(runId, "req-done").getApprovalId();
+        // A decided approval recorded through the repository's conditional transition (C3's
+        // own writer): the reconciliation must not rewrite the decision, only the delivery.
+        commit(() -> approvalRepository.decidePendingById(stuckId, ApprovalStatus.APPROVED,
+                "operator approved", FAKE_NOW));
+        when(client.decide(SESSION_ID, "req-stuck", true, "operator approved"))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+        when(client.decide(SESSION_ID, "req-done", true, "operator approved"))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+        coordinator.deliverDecision(stuckId, true, "operator approved");
+        coordinator.deliverDecision(doneId, true, "operator approved");
+        // The process died between the DELIVERING claim and the settling write.
+        commit(() -> companionRepository.findById(stuckId).ifPresent(row -> {
+            row.setDeliveryState(AcpPermissionCoordinator.DELIVERY_DELIVERING);
+            companionRepository.saveAndFlush(row);
+        }));
+        assertThat(companionRepository.findByDeliveryState(AcpPermissionCoordinator.DELIVERY_DELIVERING))
+                .hasSize(1);
+
+        coordinator.reconcileStuckDeliveries();
+        flushAndClear();
+
+        assertThat(companionRepository.findByDeliveryState(AcpPermissionCoordinator.DELIVERY_DELIVERING))
+                .isEmpty();
+        assertThat(companionRepository.findById(stuckId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_CANCELLED);
+        // Only the dead delivery is settled: the decision record still stands.
+        assertThat(approvalRepository.findById(stuckId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(companionRepository.findById(doneId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_DELIVERED);
+    }
+
+    @Test
+    void restartReconciliation_first_convergesTheCrashingAskToExpiredAndCancelled() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-crash", json(Map.of("path", "/crash"))));
+        UUID askId = stuckMidDelivery(runId, "req-crash");
+
+        coordinator.reconcileStuckDeliveries();
+        coordinator.expireInterruptedPendingApprovals();
+        flushAndClear();
+
+        assertThat(approvalRepository.findById(askId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(companionRepository.findById(askId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_CANCELLED);
+    }
+
+    @Test
+    void restartRecoveryRemainingFirst_convergesTheCrashingAskToExpiredAndCancelled() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                standardFrame("req-crash", json(Map.of("path", "/crash"))));
+        UUID askId = stuckMidDelivery(runId, "req-crash");
+
+        // The C2 recovery first leaves the mid-delivery row DELIVERING (its cancel claim is
+        // already owned); the reconciliation then settles it. Order-independent convergence.
+        coordinator.expireInterruptedPendingApprovals();
+        coordinator.reconcileStuckDeliveries();
+        flushAndClear();
+
+        assertThat(approvalRepository.findById(askId).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(companionRepository.findById(askId).orElseThrow().getDeliveryState())
+                .isEqualTo(AcpPermissionCoordinator.DELIVERY_CANCELLED);
+    }
+
+    /** Commits an ask whose companion was left mid-delivery (the process died mid-claim). */
+    private UUID stuckMidDelivery(UUID runId, String requestId) {
+        UUID askId = companion(runId, requestId).getApprovalId();
+        commit(() -> companionRepository.findById(askId).ifPresent(row -> {
+            row.setDeliveryState(AcpPermissionCoordinator.DELIVERY_DELIVERING);
+            companionRepository.saveAndFlush(row);
+        }));
+        return askId;
     }
 
     /** Fake clock the coordinator reads its "now" from; the sweep runs on the real clock. */

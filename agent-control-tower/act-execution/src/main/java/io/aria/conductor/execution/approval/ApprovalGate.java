@@ -2,6 +2,7 @@ package io.aria.conductor.execution.approval;
 
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
@@ -326,10 +327,14 @@ public class ApprovalGate {
      * <p>Only TOOL_CALL approvals are cancelled: SPEC_REVIEW approvals are created after
      * the BA run has already completed (by {@code SpecReviewCoordinator}) and their
      * lifecycle is governed by the spec-approval flow, not the originating run.
+     *
+     * <p>R20.5: ACP permission asks are likewise left alone — their lifecycle belongs to
+     * {@code AcpPermissionCoordinator.cancelPendingForRun}.
      */
     public void cancelAllPendingForRun(UUID runId) {
         approvalRepository.findByRunId(runId).stream()
                 .filter(a -> a.getStatus() == ApprovalStatus.PENDING)
+                .filter(a -> a.getSource() != ApprovalSource.ACP_PERMISSION)
                 .filter(a -> a.getApprovalType() == null
                         || a.getApprovalType() == Approval.ApprovalType.TOOL_CALL)
                 .forEach(a -> {

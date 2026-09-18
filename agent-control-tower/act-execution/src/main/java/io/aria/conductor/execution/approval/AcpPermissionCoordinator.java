@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
@@ -106,6 +107,8 @@ public class AcpPermissionCoordinator {
     public static final String REASON_EXPIRED = "expired before decision";
     /** Expiry reason recorded by the startup recovery (R9). */
     public static final String REASON_RESTART_INTERRUPTED = "restart-interrupted (no session replay)";
+    /** Expiry reason recorded when the run ended before the operator decided (R23). */
+    public static final String REASON_RUN_ENDED = "run ended before decision";
 
     /** Only tool names in the platform MCP namespace can carry a write grant. */
     private static final Pattern MCP_TOOL_NAME = Pattern.compile("^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$");
@@ -340,7 +343,8 @@ public class AcpPermissionCoordinator {
         return row.getToolName().equals(effective.name()) && row.getRequestDigest().equals(effective.digest());
     }
 
-    private boolean runIsActive(UUID runId) {
+    /** Public since C3 gates operator-driven retries on the run's liveness (R23). */
+    public boolean runIsActive(UUID runId) {
         return runRepository.findById(runId).map(run -> !isTerminal(run.getStatus())).orElse(false);
     }
 
@@ -506,6 +510,68 @@ public class AcpPermissionCoordinator {
             });
         }
         return true;
+    }
+
+    /**
+     * Expire every PENDING ACP ask of one run (R23): the run is over, its session is gone, so the
+     * cancel is delivered best-effort through the same idempotent primitive and a missing bridge
+     * is expected. Legacy rows of the run are not this sweep's business. Returns the number of
+     * asks this call expired — a call racing a decision (or a second sweep) expires nothing.
+     */
+    public int cancelPendingForRun(UUID runId, String reason) {
+        if (runId == null) {
+            return 0;
+        }
+        List<Approval> pending = inTransaction(() -> approvalRepository.findByRunIdAndStatusAndSource(
+                runId, ApprovalStatus.PENDING, ApprovalSource.ACP_PERMISSION));
+        if (pending == null || pending.isEmpty()) {
+            return 0;
+        }
+        int expired = 0;
+        for (Approval approval : pending) {
+            if (expireWithReason(approval.getId(), reason)) {
+                expired++;
+            }
+        }
+        return expired;
+    }
+
+    /**
+     * Run finished: nothing can decide the run's live asks anymore, and their sessions are being
+     * torn down — so every PENDING ask of the run is expired and its cancel delivered best-effort.
+     */
+    @EventListener
+    public void onRunCompleted(RunCompletedEvent event) {
+        if (event == null || event.getRunId() == null) {
+            return;
+        }
+        int expired = cancelPendingForRun(event.getRunId(), REASON_RUN_ENDED);
+        if (expired > 0) {
+            log.info("ACP run end: expired {} pending permission ask(s) of run {}", expired, event.getRunId());
+        }
+    }
+
+    /**
+     * Restart reconciliation (M1 closure, R23): a companion row still {@code DELIVERING} belongs
+     * to a process that died mid-delivery — no worker owns it anymore and no session can be
+     * replayed, so the dead delivery is settled as {@code CANCELLED}. The approval's decision
+     * record is deliberately left untouched: a decision that was made stays made, and a later
+     * operator repeat reports the recorded state instead of delivering again. Order-independent
+     * with {@link #expireInterruptedPendingApprovals()}: whichever startup listener runs first,
+     * every interrupted ask converges to a terminal approval plus a terminal delivery state.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void reconcileStuckDeliveries() {
+        List<AcpPermissionRequest> stuck = inTransaction(() ->
+                companionRepository.findByDeliveryState(DELIVERY_DELIVERING));
+        if (stuck == null || stuck.isEmpty()) {
+            return;
+        }
+        log.warn("ACP restart reconciliation: settling {} interrupted delivery(ies) as cancelled", stuck.size());
+        inTransaction(() -> {
+            companionRepository.markStuckDeliveringCancelled();
+            return null;
+        });
     }
 
     /**

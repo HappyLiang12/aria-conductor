@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
+import { dispatchSeededCard, seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
 
 /**
  * Kanban board E2E (HITL redesign board: Backlog / Todo / In Progress / Review / Done).
@@ -73,10 +73,8 @@ test.describe('Kanban board (Overview governed flow)', () => {
       agentTemplateId: agent.name,
     });
 
-    const dispatched = await transitionKanban(request, item.id, 'IN_PROGRESS', {
-      comment: 'e2e dispatch',
-    });
-    expect(dispatched.status).toBe(200);
+    // Same auto-dispatch race as the other specs; the comment was decorative (never asserted).
+    await dispatchSeededCard(request, item.id);
 
     await page.reload();
     await page.waitForLoadState('networkidle');

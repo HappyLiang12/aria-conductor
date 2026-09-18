@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
+  dispatchSeededCard,
   pollUntil,
   seedAdkAgent,
   seedKanbanItem,
-  transitionKanban,
   uniqueName,
 } from './fixtures';
 
@@ -31,7 +31,9 @@ test('approving from the Operations surface resolves the ask', async ({ page, re
     title: `opsap-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  expect((await transitionKanban(request, card.id, 'IN_PROGRESS')).status).toBe(200);
+  // TODO→IN_PROGRESS is a dispatch; the auto-dispatch listener races this explicit move with
+  // the same dispatch and the loser answers 409 (0a18d96). The contract is the linked run.
+  await dispatchSeededCard(request, card.id);
 
   const asks = await pollUntil<any[]>(
     request,

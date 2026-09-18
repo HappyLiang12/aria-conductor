@@ -5,15 +5,24 @@ import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
+import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
+import io.aria.conductor.execution.adk.qoder.QoderBridgeClient;
+import io.aria.conductor.execution.approval.AcpPermissionCoordinator;
 import io.aria.conductor.execution.listener.RunKanbanAutoCreator;
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +33,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +46,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.RETURNS_DEFAULTS;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -45,12 +57,13 @@ import static org.mockito.Mockito.when;
 /**
  * Unit tests for {@link KanbanTransitionService}: every kanban transition must
  * trigger the matching run side effect (spec 4) — pickup dispatches a run,
- * dragging to TODO or BACKLOG pauses the linked run, request-changes
- * re-dispatches with the operator feedback, cancel denies open asks and cancels
- * the run. Eligibility failures are pre-validated by the evaluator before the
- * createRun proxy is crossed (no rollback-only surprises) and answered with a
- * 4xx rejection — a synchronous action carries its answer in the response, so
- * no lastError is written; unexpected createRun failures propagate.
+ * dragging to TODO or BACKLOG pauses the linked run, request-changes ends the
+ * previous run and re-dispatches with the operator feedback, cancel denies open
+ * asks and cancels the run. Eligibility failures are pre-validated by the
+ * evaluator before the createRun proxy is crossed (no rollback-only surprises)
+ * and answered with a 4xx rejection — a synchronous action carries its answer in
+ * the response, so no lastError is written; unexpected createRun failures
+ * propagate.
  */
 class KanbanTransitionServiceTest {
 
@@ -713,6 +726,154 @@ class KanbanTransitionServiceTest {
 
         verify(approvalRepository).markStaleByKanbanItemId(eq("c1"), any());
         assertThat(card.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
+        verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+    }
+
+    // ---- behavior 9: request-changes ends the previous execution (F9) ----
+
+    /**
+     * F9: the one state that can hold a pending ACP ask is a live run blocked on that ask,
+     * and the same run holds its agent's single-run slot — so request-changes must end the
+     * previous attempt before re-dispatching, or the ask stays PENDING (its owner, the
+     * run-end sweep, never fires) and the re-dispatched run cannot start.
+     *
+     * <p>A real {@link RunService} and a real {@link AcpPermissionCoordinator} sit behind the
+     * mocks (the publisher lambda plays Spring's event dispatch), so the test pins the whole
+     * chain rather than a single call: transition -> cancelRun -> RunCompletedEvent -> expire
+     * the ask with the run-ended reason and deliver the cancel to the bridge -> card moved to
+     * Todo and re-dispatched onto the fresh run.
+     */
+    @Test
+    void requestChanges_endsThePreviousRunSoItsPendingAcpAskExpiresBeforeTheRedispatch() {
+        UUID newRunId = UUID.fromString("33333333-3333-3333-3333-333333333333");
+        UUID askId = UUID.fromString("44444444-4444-4444-4444-444444444444");
+        String bridgeSessionId = "bridge-session-1";
+        String bridgeRequestId = "req-1";
+
+        // The card sits in REVIEW (the only status request-changes is reachable from) while
+        // its run is still live, blocked on a pending ACP ask.
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setLinkedAgentId(AGENT_ID.toString());
+        card.setLinkedRunId(RUN_ID.toString());
+        Run oldRun = Run.builder().id(RUN_ID).agentId(AGENT_ID).status(RunStatus.RUNNING).build();
+        when(runRepository.findById(RUN_ID)).thenReturn(Optional.of(oldRun));
+        // A real RunService returns what the repository saved; the mock stands in for the id
+        // the entities @PrePersist assigns in production.
+        when(runRepository.save(any(Run.class))).thenAnswer(inv -> {
+            Run saved = inv.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(newRunId);
+            }
+            return saved;
+        });
+
+        // The old run's pending ask, with the run still bound to its live bridge.
+        Approval ask = Approval.builder().id(askId).runId(RUN_ID)
+                .status(ApprovalStatus.PENDING).source(ApprovalSource.ACP_PERMISSION).build();
+        when(approvalRepository.findByRunIdAndStatusAndSource(RUN_ID, ApprovalStatus.PENDING,
+                ApprovalSource.ACP_PERMISSION)).thenReturn(List.of(ask));
+        when(approvalRepository.expirePendingById(eq(askId),
+                eq(AcpPermissionCoordinator.REASON_RUN_ENDED), any())).thenReturn(1);
+        AcpPermissionRequest companion = AcpPermissionRequest.builder()
+                .approvalId(askId).runId(RUN_ID).bridgeSessionId(bridgeSessionId)
+                .bridgeRequestId(bridgeRequestId)
+                .deliveryState(AcpPermissionCoordinator.DELIVERY_PENDING).build();
+        AcpPermissionRequestRepository companionRepository = mock(AcpPermissionRequestRepository.class);
+        when(companionRepository.findById(askId)).thenReturn(Optional.of(companion));
+        QoderBridgeClient bridge = mock(QoderBridgeClient.class);
+        when(bridge.decide(bridgeSessionId, bridgeRequestId, false,
+                AcpPermissionCoordinator.REASON_RUN_ENDED))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        // The coordinator's own publisher is never used on this path: the test records no ask.
+        AcpPermissionCoordinator coordinator = new AcpPermissionCoordinator(approvalRepository,
+                companionRepository, runRepository, event -> { }, transactionManager,
+                new ToolPolicyRegistry(), 1_800_000L);
+        coordinator.bindRun(RUN_ID, bridge, Instant.now().plus(Duration.ofMinutes(45)));
+        // findAgentOrThrow is package-private in act-agent, so the mock answers it by name.
+        AgentService agentService = mock(AgentService.class, invocation -> {
+            if ("findAgentOrThrow".equals(invocation.getMethod().getName())) {
+                return agentWithStatus(invocation.getArgument(0), HealthStatus.HEALTHY);
+            }
+            return RETURNS_DEFAULTS.answer(invocation);
+        });
+        RunService realRunService = new RunService(runRepository, agentService, event -> {
+            if (event instanceof RunCompletedEvent completed) {
+                coordinator.onRunCompleted(completed);
+            }
+        });
+        KanbanTransitionService realService = new KanbanTransitionService(kanbanRepository, kanbanService,
+                realRunService, runRepository, agentRepository, agentPicker, eligibility,
+                approvalRepository, eventPublisher);
+
+        KanbanItem moved = realService.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).feedback("use semicolons").comment("changes requested").build());
+
+        // The previous attempt ended — that ending is what fires the run-end sweep.
+        assertThat(oldRun.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        // The ask expired with the run-ended reason and the cancel reached the bridge.
+        verify(approvalRepository).expirePendingById(eq(askId),
+                eq(AcpPermissionCoordinator.REASON_RUN_ENDED), any());
+        assertThat(companion.getDeliveryState()).isEqualTo(AcpPermissionCoordinator.DELIVERY_CANCELLED);
+        verify(bridge).decide(bridgeSessionId, bridgeRequestId, false,
+                AcpPermissionCoordinator.REASON_RUN_ENDED);
+        // Stop the old run -> sweep/expire -> move to Todo -> dispatch the new run.
+        InOrder ordering = inOrder(approvalRepository, kanbanService);
+        ordering.verify(approvalRepository).expirePendingById(eq(askId),
+                eq(AcpPermissionCoordinator.REASON_RUN_ENDED), any());
+        ordering.verify(approvalRepository).markStaleByKanbanItemId(eq("c1"), any());
+        ordering.verify(kanbanService).transition("c1", KanbanStatus.TODO, "changes requested");
+        ordering.verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, "changes requested");
+        // The card left REVIEW on the fresh run; the old run is no longer in the chain.
+        assertThat(moved.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
+        assertThat(card.getLinkedRunId()).isEqualTo(newRunId.toString());
+    }
+
+    @Test
+    void requestChanges_withAlreadyFinishedRun_leavesItAloneAndStillRedispatches() {
+        // The ordinary review path: the run that produced the work already finished, so there
+        // is nothing left to stop — and no double-cancel error either.
+        UUID freshRunId = UUID.fromString("55555555-5555-5555-5555-555555555555");
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+        card.setLinkedRunId(RUN_ID.toString());
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().id(RUN_ID).status(RunStatus.COMPLETED).build()));
+        // The re-dispatched run must carry a distinct id: with createRun returning the id the
+        // card already links, "moved onto the fresh run" asserted nothing.
+        when(runService.createRun(any(CreateRunRequest.class)))
+                .thenReturn(RunResponse.builder().id(freshRunId).build());
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).feedback("redo").build());
+
+        verify(runService, never()).cancelRun(any());
+        verify(runService, never()).pauseRun(any());
+        verify(approvalRepository).markStaleByKanbanItemId(eq("c1"), any());
+        verify(runService).createRun(any(CreateRunRequest.class));
+        verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
+        verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
+        assertThat(card.getLinkedRunId()).isEqualTo(freshRunId.toString());
+    }
+
+    @Test
+    void requestChanges_withoutLinkedRun_skipsTheStopAndStillRedispatches() {
+        card.setStatus(KanbanStatus.REVIEW);
+        card.setAssignee("BA Agent");
+        card.setLinkedAgentId(AGENT_ID.toString());
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).feedback("redo").build());
+
+        verify(runRepository, never()).findById(any());
+        verify(runService, never()).cancelRun(any());
+        verify(runService, never()).pauseRun(any());
+        verify(approvalRepository).markStaleByKanbanItemId(eq("c1"), any());
+        verify(runService).createRun(any(CreateRunRequest.class));
         verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);
     }

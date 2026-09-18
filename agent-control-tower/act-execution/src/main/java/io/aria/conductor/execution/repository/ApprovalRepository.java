@@ -70,11 +70,16 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
 
     /** Bulk deny of a card's PENDING asks (work cancelled): single-statement
      *  bulk update, no entity load; callers must be @Transactional and results
-     *  bypass the persistence context. */
+     *  bypass the persistence context. Only {@code LEGACY_GATE} rows are swept:
+     *  rows with {@code source = ACP_PERMISSION} are owned by
+     *  {@code AcpPermissionCoordinator} ({@code cancelPendingForRun} / the run-end
+     *  listener) and must never be mutated by a legacy card sweep — a card
+     *  transition would otherwise diverge an ask from its companion with no delivery. */
     @Modifying
     @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.DENIED, " +
            "a.reason = :reason, a.decidedAt = :now " +
-           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING")
+           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
+           "and a.source = io.aria.conductor.common.model.ApprovalSource.LEGACY_GATE")
     int denyPendingByKanbanItemId(@Param("itemId") String itemId,
                                   @Param("reason") String reason,
                                   @Param("now") Instant now);
@@ -83,11 +88,17 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
      *  the work back with changes. Single-statement bulk update, no entity
      *  load; callers must be @Transactional and results bypass the persistence
      *  context. Represents the spec's CHANGES_REQUESTED ask state via
-     *  EXPIRED + reason (ApprovalStatus has no dedicated value). */
+     *  EXPIRED + reason (ApprovalStatus has no dedicated value). Only
+     *  {@code LEGACY_GATE} rows are swept: rows with {@code source = ACP_PERMISSION}
+     *  are owned by {@code AcpPermissionCoordinator} ({@code cancelPendingForRun} /
+     *  the run-end listener) and must never be mutated by a legacy card sweep — a
+     *  card transition would otherwise diverge an ask from its companion with no
+     *  delivery. */
     @Modifying
     @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
            "a.reason = 'superseded by request changes', a.decidedAt = :now " +
-           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING")
+           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
+           "and a.source = io.aria.conductor.common.model.ApprovalSource.LEGACY_GATE")
     int markStaleByKanbanItemId(@Param("itemId") String itemId, @Param("now") Instant now);
 
     /** Housekeeping S1: single-statement bulk delete (set-based, no entity load). */

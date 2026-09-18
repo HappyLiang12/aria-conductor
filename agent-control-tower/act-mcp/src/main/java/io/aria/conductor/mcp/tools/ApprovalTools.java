@@ -35,7 +35,7 @@ public class ApprovalTools implements McpTool {
     }
 
     @Tool(name = "decide_approval",
-            description = "Decide a PENDING approval gate (approve or deny). Non-PENDING approvals are ignored by the gate (idempotent).")
+            description = "Decide an approval (approve or deny). Legacy gates ignore non-PENDING repeats (idempotent). ACP permission asks return a typed error code (EXPIRED, ALREADY_DECIDED, UNSUPPORTED_OPTIONS, INCONSISTENT_ASK) when they cannot take the decision.")
     public String decideApproval(
             @ToolParam(description = "Approval id") UUID approvalId,
             @ToolParam(description = "true = approve, false = deny") boolean approved,

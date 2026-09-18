@@ -28,13 +28,16 @@ import java.util.function.Consumer;
  *       the terminal signal for {@link #awaitTerminal(Duration)}. Usage is accumulated
  *       honestly: unknown counters stay {@code null} (rendered {@code n/a}) instead of
  *       fabricating placeholder zeros (design §4.2, acceptance item 10).</li>
+ *   <li>hands every raw {@code permission_request} frame to the optional {@link PermissionAsk}
+ *       sink (R11) so the host can persist a first-class approval record; the mapped event
+ *       cannot carry the ask.</li>
  * </ul>
  *
  * <p>Terminal semantics (frozen): only an explicit {@code completed}/{@code failed} bridge
  * event ends the run. A clean server-side EOF without one is reported as
  * {@link WaitStatus#STREAM_ENDED} — completion must be signalled, never inferred.
  *
- * <p>The sink (event publisher) is isolated: a throw from it never affects the run.
+ * <p>Both sinks are isolated: a throw from either never affects the run.
  */
 @Slf4j
 public class QoderProgressPump {
@@ -64,9 +67,21 @@ public class QoderProgressPump {
     /** Result of {@link #awaitTerminal(Duration)}. */
     public record WaitResult(WaitStatus status, TerminalOutcome outcome) { }
 
+    /**
+     * A raw {@code permission_request} frame, exactly as the bridge delivered it.
+     *
+     * <p>The mapped {@link RunProgressEvent} cannot carry the ask (it has no field for the
+     * request identity, options or {@code rawInput}); the raw payload is required host-side to
+     * persist the approval record and to recompute the authorization digest from data the
+     * operator actually saw (R2, R4). The payload is the bridge's parsed JSON, never re-shaped.
+     */
+    public record PermissionAsk(long sequence, JsonNode payload) { }
+
     private final UUID runId;
     private final UUID agentId;
     private final Consumer<RunProgressEvent> sink;
+    /** Optional raw-ask sink (R11): {@code null} means this pump serves no permission coordinator. */
+    private final Consumer<PermissionAsk> permissionSink;
     private final QoderBridgeClient.EventStream stream;
 
     private final StringBuilder output = new StringBuilder();
@@ -83,11 +98,16 @@ public class QoderProgressPump {
     private volatile Integer outputTokens;
     private volatile Thread reader;
 
+    /**
+     * @param permissionSink raw {@code permission_request} frames, or {@code null} to ignore them
+     *                       (manual/legacy constructions without an ACP permission coordinator)
+     */
     public QoderProgressPump(QoderBridgeClient client, String bridgeSessionId, UUID runId, UUID agentId,
-                             Consumer<RunProgressEvent> sink) {
+                             Consumer<RunProgressEvent> sink, Consumer<PermissionAsk> permissionSink) {
         this.runId = runId;
         this.agentId = agentId;
         this.sink = sink;
+        this.permissionSink = permissionSink;
         this.stream = client.openEventStream(bridgeSessionId);
     }
 
@@ -214,6 +234,7 @@ public class QoderProgressPump {
             }
             case "permission_request" -> {
                 String toolName = payload.path("toolName").asText(null);
+                publishPermission(seq, payload);
                 publish(seq, RunProgressEvent.Kind.STATUS,
                         "permission_request " + (toolName == null ? "(unknown tool)" : toolName)
                                 + " — " + payload.path("title").asText(""), toolName);
@@ -300,6 +321,23 @@ public class QoderProgressPump {
             sink.accept(new RunProgressEvent(this, runId, agentId, 0, kind, content, toolName, seq));
         } catch (Exception e) {
             log.warn("Qoder progress sink failed for run {} (pump continues): {}", runId, e.getMessage());
+        }
+    }
+
+    /**
+     * Hand a raw ask to the permission sink, isolated exactly like {@link #publish}: the
+     * coordinator persists to the database and may fail for reasons a progress stream must not
+     * inherit (the run must survive a failing approval record, and the human decision stays
+     * available for the frames that did land).
+     */
+    private void publishPermission(long seq, JsonNode payload) {
+        if (permissionSink == null) {
+            return;
+        }
+        try {
+            permissionSink.accept(new PermissionAsk(seq, payload));
+        } catch (Exception e) {
+            log.warn("Qoder permission sink failed for run {} (pump continues): {}", runId, e.getMessage());
         }
     }
 }

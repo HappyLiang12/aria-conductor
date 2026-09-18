@@ -40,6 +40,7 @@ import java.util.function.Consumer;
  *   <li>{@code GET /sessions/{id}/events?after=N} — SSE event stream ({@link #openEventStream})</li>
  *   <li>{@code POST /sessions/{id}/permissions/{requestId}} — deliver a decision ({@link #decide})</li>
  *   <li>{@code POST /sessions/{id}/cancel} — cancel the run ({@link #cancel})</li>
+ *   <li>{@code POST /probe} — sandbox-side reachability probe of one MCP candidate ({@link #probe})</li>
  * </ul>
  *
  * <p>Every route except {@code /health} carries {@code Authorization: Bearer <bridgeToken>}; the
@@ -58,6 +59,9 @@ public class QoderBridgeClient implements AutoCloseable {
 
     /** {@code /health} must fail fast: it is a liveness probe, not a task wait. */
     public static final Duration HEALTH_TIMEOUT = Duration.ofSeconds(5);
+
+    /** How long the bridge lets one candidate MCP endpoint answer the probe (R1 default). */
+    public static final int PROBE_TIMEOUT_MS = 3000;
 
     private final String baseUrl;
     private final String bridgeToken;
@@ -250,12 +254,58 @@ public class QoderBridgeClient implements AutoCloseable {
         return parseJson(response.body(), "POST " + path).path("terminated").asBoolean(false);
     }
 
+    /**
+     * Probe one candidate MCP URL through the bridge ({@code POST /probe}, R1): the bridge
+     * performs a single MCP {@code initialize} POST from inside the sandbox, so reachability is
+     * judged from where the CLI will actually call, not from the host.
+     *
+     * @param url     one candidate MCP endpoint ({@code http://<sandbox-host>:<port>/mcp})
+     * @param headers headers the probe request carries (the worker credential, exactly as the
+     *                session will send it)
+     * @return the bridge's verdict; {@code reachable} is true when any HTTP response arrived
+     *         within the probe timeout (an HTTP 503 still proves the port is live)
+     * @throws QoderBridgeException {@code UNREACHABLE} when the bridge itself cannot be reached,
+     *                              {@code TIMEOUT} when the bridge answer outlasts this client's
+     *                              request timeout, or the typed bridge error for a rejected call
+     */
+    public ProbeResult probe(String url, List<Header> headers) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("url", url);
+        ArrayNode headerNodes = body.putArray("headers");
+        for (Header header : emptyIfNull(headers)) {
+            ObjectNode node = headerNodes.addObject();
+            node.put("name", header.name());
+            node.put("value", header.value());
+        }
+        body.put("timeoutMs", PROBE_TIMEOUT_MS);
+        String path = "/probe";
+        // The bridge waits up to the probe timeout for the MCP answer, then answers; give the
+        // host-to-bridge call headroom so the bridge's own verdict always wins over a local timeout.
+        HttpResponse<String> response = send("POST", path, toJson(body),
+                Duration.ofMillis(PROBE_TIMEOUT_MS + 5_000), true);
+        if (response.statusCode() / 100 != 2) {
+            throw errorFor(response.statusCode(), response.body(), "POST " + path);
+        }
+        JsonNode node = parseJson(response.body(), "POST " + path);
+        return new ProbeResult(
+                node.path("reachable").asBoolean(false),
+                node.path("status").isIntegralNumber() ? node.path("status").asInt() : null,
+                node.path("detail").asText(null));
+    }
+
     // ------------------------------------------------------------------------------------
     // Wire types
     // ------------------------------------------------------------------------------------
 
     /** {@code GET /health} response body. */
     public record Health(String status, String cliVersion) { }
+
+    /**
+     * {@code POST /probe} response body (R1). {@code status} is the raw HTTP status the sandbox
+     * observed ({@code null} when nothing answered within the timeout); {@code detail} is a short
+     * bridge-composed description (never request content).
+     */
+    public record ProbeResult(boolean reachable, Integer status, String detail) { }
 
     /** {@code POST /sessions} request body (C0.2). */
     public record CreateSessionRequest(String runId, String agentId, String cwd, String model,

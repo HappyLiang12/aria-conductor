@@ -32,6 +32,7 @@ class ApprovalExpiryCheckerSddTest {
 
     @Mock private ApprovalRepository approvalRepository;
     @Mock private ApprovalGate approvalGate;
+    @Mock private AcpPermissionCoordinator acpPermissionCoordinator;
 
     @Test
     void expiredSpecReviewApproval_isMarkedExpired_andChainStaysWaiting() {
@@ -45,7 +46,8 @@ class ApprovalExpiryCheckerSddTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of(specReview));
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate).checkExpiredApprovals();
+        new ApprovalExpiryChecker(approvalRepository, approvalGate, acpPermissionCoordinator)
+                .checkExpiredApprovals();
 
         // The generic sweep expired the SPEC_REVIEW approval like any other overdue PENDING row.
         assertThat(specReview.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);

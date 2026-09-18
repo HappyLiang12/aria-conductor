@@ -9,10 +9,18 @@ import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
 public interface AcpPermissionRequestRepository extends JpaRepository<AcpPermissionRequest, UUID> {
+
+    /**
+     * Correlation lookup for the ACP coordinator's dedupe path — the same pair the unique
+     * constraint guards, so this is the only way to recognise a re-delivered bridge event.
+     */
+    Optional<AcpPermissionRequest> findByBridgeSessionIdAndBridgeRequestId(String bridgeSessionId,
+                                                                           String bridgeRequestId);
 
     /** Batch lookup for the DTO list path (ApprovalQueryService) — avoids an N+1. */
     List<AcpPermissionRequest> findByApprovalIdIn(Collection<UUID> ids);

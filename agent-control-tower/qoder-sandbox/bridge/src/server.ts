@@ -15,6 +15,10 @@
  *  - Decisions are resolved against the bridge's own pending map (which owns the
  *    deadline), so `delivered | already_resolved | expired | unknown` and the
  *    `ALREADY_RESOLVED` conflict are answered without re-entering the ACP client.
+ *  - `POST /probe` (C2 ruling R1) performs one MCP `initialize` POST from inside the sandbox
+ *    to a caller-named URL with exactly the caller-supplied headers; any HTTP response proves
+ *    liveness. The headers (a worker credential) and any response body never reach the answer
+ *    or a log line, and redirects are never followed.
  *
  * Recorded decisions of this task (see the B3b report): the deadline source is the
  * server-side default capped by the session run deadline; a missing/blank `after` replays
@@ -24,7 +28,8 @@
  * it); an ended session stays registered (bounded) so a late reader can still replay it.
  */
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 
 import {
   AcpClient,
@@ -50,6 +55,12 @@ export const PINNED_CLI_VERSION = '1.1.41';
 /** C0.2: request bodies larger than 1 MiB are rejected with 413. */
 export const MAX_BODY_BYTES = 1024 * 1024;
 
+/** C2 ruling R1 (C0.2 amendment A1): the `permission_request.rawInput` character bound. */
+export const MAX_RAW_INPUT_CHARS = 65536;
+
+/** C2 ruling R1: the `POST /probe` timeout used when the caller sends none. */
+export const DEFAULT_PROBE_TIMEOUT_MS = 3000;
+
 /** Default permission deadline: the A5 gate held a pending request for 5 minutes. */
 export const DEFAULT_PERMISSION_DEADLINE_MS = 15 * 60 * 1000;
 
@@ -61,6 +72,12 @@ const MAX_RETAINED_ENDED_SESSIONS = 32;
 
 const MAX_PREVIEW_CHARS = 256;
 const MAX_ERROR_REASON_CHARS = 512;
+
+/** The probe reads at most this much of a 2xx body, and only to classify a JSON-RPC result. */
+const MAX_PROBE_BODY_BYTES = 16 * 1024;
+
+/** RFC 7230 token: Node's HTTP client throws a synchronous error on any other header name. */
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 const SECRET_PLACEHOLDER = '[redacted]';
 
@@ -189,6 +206,10 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     }
 
     const segments = url.pathname.split('/').filter(part => part !== '');
+    if (segments[0] === 'probe' && segments.length === 1 && method === 'POST') {
+      await probe(req, res);
+      return { status: 200, sessionId: null };
+    }
     if (segments[0] === 'sessions' && segments.length === 1 && method === 'POST') {
       return createSession(req, res);
     }
@@ -215,7 +236,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
         return { status: 200, sessionId };
       }
     }
-    // C0.2 defines exactly six (method, path) pairs; anything else is not a route.
+    // C0.2 (as amended by C2 ruling R1) defines exactly seven (method, path) pairs;
+    // anything else is not a route.
     throw new HttpError(404, { error: 'NOT_FOUND' });
   }
 
@@ -384,6 +406,13 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
     sendJson(res, 200, { outcome: 'delivered' });
   }
 
+  /** C2 ruling R1: one sandbox-side reachability check of one candidate MCP endpoint. */
+  async function probe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const request = validateProbeRequest(await readJsonBody(req));
+    const result = await probeMcpEndpoint(request);
+    sendJson(res, 200, { reachable: result.reachable, status: result.status, detail: result.detail });
+  }
+
   // ------------------------------------------------------------------------------------
   // ACP event projection (the recorded C0.2 -> client mapping)
   // ------------------------------------------------------------------------------------
@@ -403,6 +432,7 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
         session.decisions.set(event.requestId, { state: 'pending', approved: null, expiresAt });
         pruneDecisionMemory(session);
         const params = event.params as { toolCall?: { rawInput?: unknown } } | undefined;
+        const rawInput = boundedRawInput(session, params?.toolCall?.rawInput);
         session.stream.append('permission_request', {
           requestId: event.requestId,
           toolCallId: event.toolCallId,
@@ -410,6 +440,8 @@ export function createBridgeServer(options: BridgeServerOptions): BridgeServer {
           title: event.title === null ? null : redact(session, event.title),
           redactedPreview: buildPreview(session, params?.toolCall?.rawInput),
           inputDigest: inputDigest(params?.toolCall?.rawInput),
+          rawInput: rawInput.text,
+          rawInputTruncated: rawInput.truncated,
           options: event.options.map(option => ({
             optionId: option.optionId,
             kind: option.kind,
@@ -712,17 +744,27 @@ function validateMcpServers(value: unknown): McpServerSpec[] {
     const record = requireRecord(entry);
     const name = requireText(record.name);
     const url = requireText(record.url);
-    const headers: Array<{ name: string; value: string }> = [];
-    if (record.headers !== undefined && record.headers !== null) {
-      if (!Array.isArray(record.headers)) {
-        throw new HttpError(400, { error: 'INVALID_REQUEST' });
-      }
-      for (const header of record.headers) {
-        const headerRecord = requireRecord(header);
-        headers.push({ name: requireText(headerRecord.name), value: requireText(headerRecord.value) });
-      }
-    }
+    const headers =
+      record.headers === undefined || record.headers === null ? [] : validateHeaders(record.headers);
     return { name, url, headers };
+  });
+}
+
+/** Header list shared by `mcpServers[].headers` and the R1 `POST /probe` request. */
+function validateHeaders(value: unknown): Array<{ name: string; value: string }> {
+  if (!Array.isArray(value)) {
+    throw new HttpError(400, { error: 'INVALID_REQUEST' });
+  }
+  return value.map(header => {
+    const record = requireRecord(header);
+    const name = requireText(record.name);
+    const headerValue = requireText(record.value);
+    // Node's HTTP client rejects a non-token name and a CR/LF value with a synchronous
+    // throw; rejecting both here keeps a malformed header a 400 instead of a 500.
+    if (!HEADER_NAME_PATTERN.test(name) || /[\r\n]/.test(headerValue)) {
+      throw new HttpError(400, { error: 'INVALID_REQUEST' });
+    }
+    return { name, value: headerValue };
   });
 }
 
@@ -735,6 +777,37 @@ function resolveDeadlineAt(value: unknown): number {
     throw new HttpError(400, { error: 'INVALID_REQUEST' });
   }
   return Date.now() + value * 1000;
+}
+
+/**
+ * C2 ruling R1: `POST /probe` body. `headers` is optional (absent means no caller header) but
+ * must be a list of usable HTTP headers when present; `timeoutMs` defaults to 3000.
+ */
+interface ProbeRequest {
+  readonly url: URL;
+  readonly headers: Array<{ name: string; value: string }>;
+  readonly timeoutMs: number;
+}
+
+function validateProbeRequest(body: unknown): ProbeRequest {
+  const record = requireRecord(body);
+  const rawUrl = requireText(record.url);
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new HttpError(400, { error: 'INVALID_REQUEST' });
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new HttpError(400, { error: 'INVALID_REQUEST' });
+  }
+  const headers = record.headers === undefined || record.headers === null ? [] : validateHeaders(record.headers);
+  const timeoutMs =
+    record.timeoutMs === undefined || record.timeoutMs === null ? DEFAULT_PROBE_TIMEOUT_MS : record.timeoutMs;
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new HttpError(400, { error: 'INVALID_REQUEST' });
+  }
+  return { url, headers, timeoutMs };
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -773,6 +846,121 @@ function mapCreateFailure(error: unknown, secrets: readonly string[]): HttpError
       return new HttpError(400, { error: 'UNKNOWN_MODEL' });
     default:
       return new HttpError(502, { error: code === 'GOVERNANCE_STOP' ? 'GOVERNANCE_STOP' : 'SESSION_CREATE_FAILED', reason });
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// MCP probe (C2 ruling R1)
+// ---------------------------------------------------------------------------------------
+
+interface ProbeResult {
+  readonly reachable: boolean;
+  readonly status: number | null;
+  readonly detail: string;
+}
+
+/**
+ * One MCP `initialize` POST from inside the sandbox. Any HTTP response proves the endpoint is
+ * live; a connection/DNS/TLS failure or the timeout proves the opposite. Redirects are never
+ * followed: a 3xx already proves liveness, and the probe must not replay the worker
+ * credential to an origin the caller did not name. Neither the caller's headers nor the
+ * response body ever appear in the verdict, and nothing here is logged.
+ */
+function probeMcpEndpoint(request: ProbeRequest): Promise<ProbeResult> {
+  return new Promise<ProbeResult>(resolve => {
+    let settled = false;
+    let observedStatus: number | null = null;
+    let timer: NodeJS.Timeout | undefined;
+    const settle = (result: ProbeResult): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
+    const requestFn = request.url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const call = requestFn(
+      request.url,
+      {
+        method: 'POST',
+        headers: {
+          ...Object.fromEntries(request.headers.map(header => [header.name, header.value])),
+          'content-type': 'application/json',
+        },
+      },
+      response => {
+        const status = response.statusCode ?? null;
+        observedStatus = status;
+        const base = `HTTP ${status}`;
+        if (status === null || status < 200 || status >= 300) {
+          response.resume(); // drain without buffering; the body is never echoed
+          settle({ reachable: true, status, detail: base });
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size <= MAX_PROBE_BODY_BYTES) {
+            chunks.push(chunk);
+          }
+        });
+        response.on('end', () => {
+          const detail = isJsonRpcResult(Buffer.concat(chunks)) ? `${base} (JSON-RPC result)` : base;
+          settle({ reachable: true, status, detail });
+        });
+        response.on('error', () => settle({ reachable: true, status, detail: base }));
+      },
+    );
+    timer = setTimeout(() => {
+      call.destroy();
+      if (observedStatus === null) {
+        settle({ reachable: false, status: null, detail: `timeout after ${request.timeoutMs}ms` });
+      } else {
+        // Headers answered before the deadline: liveness is proven, only the body lagged.
+        settle({ reachable: true, status: observedStatus, detail: `HTTP ${observedStatus}` });
+      }
+    }, request.timeoutMs);
+    call.on('error', (error: NodeJS.ErrnoException) => {
+      // Codes only: a message can embed the caller's URL, and headers/body never belong here.
+      settle({
+        reachable: false,
+        status: null,
+        detail: error.code === undefined ? 'connection failed' : `connect ${error.code}`,
+      });
+    });
+    call.end(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          // The version the A3 stub negotiated (e2e/qoder/slice-a/03-mcp-auth.mjs:168); any
+          // answer proves reachability, so the value is informational.
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'aria-bridge-probe', version: '0.1.0' },
+        },
+      }),
+    );
+  });
+}
+
+function isJsonRpcResult(body: Buffer): boolean {
+  try {
+    const parsed = JSON.parse(body.toString('utf8')) as unknown;
+    return (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>).jsonrpc === '2.0' &&
+      'result' in parsed
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -858,6 +1046,26 @@ function buildPreview(session: BridgeSession, rawInput: unknown): string | null 
   // Redact BEFORE truncating: slicing first could cut a secret in half and emit an
   // un-redactable prefix (the B3a F4 split-token lesson, applied to previews).
   return truncate(redact(session, text), MAX_PREVIEW_CHARS);
+}
+
+/**
+ * C2 ruling R1: the bounded raw tool input the host recomputes its own preview and digest
+ * from. Strings pass through as-is, everything else is serialized; redaction runs before
+ * truncation for the same reason as `buildPreview`.
+ */
+function boundedRawInput(session: BridgeSession, rawInput: unknown): { text: string | null; truncated: boolean } {
+  if (rawInput === undefined || rawInput === null) {
+    return { text: null, truncated: false };
+  }
+  const serialized = typeof rawInput === 'string' ? rawInput : safeJson(rawInput);
+  if (serialized === null) {
+    return { text: null, truncated: false };
+  }
+  const redacted = redact(session, serialized);
+  if (redacted.length > MAX_RAW_INPUT_CHARS) {
+    return { text: redacted.slice(0, MAX_RAW_INPUT_CHARS), truncated: true };
+  }
+  return { text: redacted, truncated: false };
 }
 
 /** Hash of the tool input, so the host can correlate an ask without republishing it. */

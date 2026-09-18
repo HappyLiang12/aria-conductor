@@ -7,10 +7,15 @@ import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionConstraints;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
+import io.aria.conductor.execution.approval.AcpPermissionCoordinator;
+import io.aria.conductor.execution.approval.RunScopedCredentialService;
+import io.aria.conductor.execution.approval.WriteGrantService;
 import io.aria.conductor.execution.credential.RuntimeCredentialException;
 import io.aria.conductor.execution.credential.RuntimeCredentialService;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmResponse;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.SandboxHostResolver;
 import io.aria.conductor.execution.sandbox.SandboxLifecycle;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +25,7 @@ import org.springframework.stereotype.Component;
 
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -34,6 +40,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * Qoder agent provider — one Qoder CLI bridge per agent, running inside an
@@ -54,8 +61,12 @@ import java.util.function.BiFunction;
  * ({@code QODER_PERSONAL_ACCESS_TOKEN}); the bridge requires a non-empty
  * {@code BRIDGE_TOKEN} (fail closed), so every sandbox gets a fresh random token that
  * is handed to {@link QoderBridgeClient} as its bearer value. Neither value is ever
- * logged or written to a file, and session {@code mcpServers} stays empty in this
- * slice (C4 wires the scoped worker token).
+ * logged or written to a file.
+ *
+ * <p>Worker MCP entry (R11, C4): when MCP is enabled the run's {@code session/new} carries one
+ * {@code mcpServers} entry named {@code aria} — the host endpoint the sandbox itself proved it
+ * can reach — authenticated with a run-scoped worker credential instead of the platform token.
+ * The credential and every one-use write grant of the run are revoked when the run ends.
  *
  * <p>Terminal semantics: a run finishes only on an explicit {@code completed}/{@code failed}
  * bridge event. A clean server-side end of the event stream without a terminal event is
@@ -106,6 +117,22 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     private final BiFunction<String, String, QoderBridgeClient> clientFactory;
     /** True only when this provider created (and therefore must close) its bridge clients. */
     private final boolean ownsClients;
+    /**
+     * {@code aria.mcp.*} — the worker MCP entry is registered only when MCP is enabled AND the
+     * credential/grant/coordinator collaborators exist; null (manual wirings) keeps it off.
+     */
+    private final McpProperties mcpProperties;
+    /** Issues the run-scoped worker credential the MCP entry authenticates with (R11). */
+    private final RunScopedCredentialService runScopedCredentialService;
+    /** One-use write grants bound to a run — revoked when the run ends (C4). */
+    private final WriteGrantService writeGrantService;
+    /** Host-side ACP permission coordinator (C2); null keeps the pump's raw-ask sink silent. */
+    private final AcpPermissionCoordinator permissionCoordinator;
+    /**
+     * Source of sandbox-reachable host candidates for the MCP probe (R11). Overridable in
+     * tests; the injected override ({@code aria.mcp.sandbox-host-address}) wins inside.
+     */
+    private Function<String, SandboxHostResolver> hostResolverFactory = SandboxHostResolver::fromSystemInterfaces;
 
     private final Map<UUID, QoderInstance> instances = new ConcurrentHashMap<>();
     private final Map<UUID, String> runSessions = new ConcurrentHashMap<>();
@@ -133,18 +160,34 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     /** Spring constructor — creates the shared sandbox lifecycle from the qoder properties. */
     @Autowired
     public QoderAdkProvider(QoderProperties properties, RuntimeCredentialService credentialService,
-                            ApplicationEventPublisher eventPublisher) {
+                            ApplicationEventPublisher eventPublisher, McpProperties mcpProperties,
+                            RunScopedCredentialService runScopedCredentialService,
+                            WriteGrantService writeGrantService,
+                            AcpPermissionCoordinator permissionCoordinator) {
         this(properties, new SandboxLifecycle(properties.getSandboxServerUrl(), properties.getSandboxApiKey()),
-                credentialService, eventPublisher, null);
+                credentialService, eventPublisher, null, mcpProperties, runScopedCredentialService,
+                writeGrantService, permissionCoordinator);
     }
 
     /**
      * Manual-wiring constructor (used by the sandbox smoke test): the caller supplies the
      * fully built {@link SandboxLifecycle}; bridge clients are created and owned by the provider.
+     * Without Spring collaborators the worker MCP entry stays off (no credential source).
      */
     public QoderAdkProvider(QoderProperties properties, SandboxLifecycle sandboxLifecycle,
                             RuntimeCredentialService credentialService, ApplicationEventPublisher eventPublisher) {
-        this(properties, sandboxLifecycle, credentialService, eventPublisher, null);
+        this(properties, sandboxLifecycle, credentialService, eventPublisher, null, null, null, null, null);
+    }
+
+    /**
+     * Minimal-wiring constructor (sandbox smoke test): the shared {@link SandboxLifecycle} is
+     * built from the qoder properties, and the absent MCP/approval collaborators keep the
+     * worker MCP entry and the ACP permission sink off.
+     */
+    public QoderAdkProvider(QoderProperties properties, RuntimeCredentialService credentialService,
+                            ApplicationEventPublisher eventPublisher) {
+        this(properties, new SandboxLifecycle(properties.getSandboxServerUrl(), properties.getSandboxApiKey()),
+                credentialService, eventPublisher, null, null, null, null, null);
     }
 
     /**
@@ -153,13 +196,21 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      */
     QoderAdkProvider(QoderProperties properties, SandboxLifecycle sandboxLifecycle,
                      RuntimeCredentialService credentialService, ApplicationEventPublisher eventPublisher,
-                     BiFunction<String, String, QoderBridgeClient> clientFactory) {
+                     BiFunction<String, String, QoderBridgeClient> clientFactory,
+                     McpProperties mcpProperties,
+                     RunScopedCredentialService runScopedCredentialService,
+                     WriteGrantService writeGrantService,
+                     AcpPermissionCoordinator permissionCoordinator) {
         this.properties = properties;
         this.sandboxLifecycle = sandboxLifecycle;
         this.credentialService = credentialService;
         this.eventPublisher = eventPublisher;
         this.clientFactory = clientFactory != null ? clientFactory : QoderBridgeClient::new;
         this.ownsClients = clientFactory == null;
+        this.mcpProperties = mcpProperties;
+        this.runScopedCredentialService = runScopedCredentialService;
+        this.writeGrantService = writeGrantService;
+        this.permissionCoordinator = permissionCoordinator;
     }
 
     @Override
@@ -228,11 +279,26 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         String sessionId = null;
         QoderProgressPump pump = null;
         ScheduledExecutorService renewExecutor = null;
+        boolean coordinatorBound = false;
         try {
+            Instant runDeadline = Instant.now().plus(deadline);
+            // R11: the worker MCP entry is registered only after the sandbox itself proved it can
+            // reach the host (probe from inside, never from here) and it authenticates with a
+            // run-scoped credential, so the sandbox never sees a long-lived platform token.
+            String workerToken = null;
+            List<QoderBridgeClient.McpServer> mcpServers = List.of();
+            if (workerMcpEnabled()) {
+                workerToken = runScopedCredentialService.issue(runId, runDeadline);
+                mcpServers = workerMcpServers(client, runId, workerToken);
+            }
+            if (permissionCoordinator != null) {
+                permissionCoordinator.bindRun(runId, client, runDeadline);
+                coordinatorBound = true;
+            }
             try {
                 sessionId = client.createSession(new QoderBridgeClient.CreateSessionRequest(
                         "run-" + runId, agentId.toString(), SANDBOX_CWD, properties.getModel(),
-                        deadlineSeconds(deadline), List.of()));
+                        deadlineSeconds(deadline), mcpServers));
             } catch (QoderBridgeException e) {
                 throw mapBridgeFailure(runId, e);
             }
@@ -246,7 +312,14 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             }
             log.info("Qoder task {} started for agent {} (session {})", runId, agentId, sessionId);
 
-            pump = new QoderProgressPump(client, sessionId, runId, agentId, this::publishProgress);
+            // The raw-ask sink is the only path by which a permission_request reaches the host's
+            // ACP coordinator: the mapped progress events cannot carry the ask. A null coordinator
+            // leaves the sink null (silent), mirroring the manual wirings.
+            String bridgeSession = sessionId;
+            pump = new QoderProgressPump(client, bridgeSession, runId, agentId, this::publishProgress,
+                    permissionCoordinator == null ? null
+                            : ask -> permissionCoordinator.handlePermissionEvent(
+                                    runId, agentId, bridgeSession, ask.payload()));
             runPumps.put(runId, pump);
             pump.start();
             // Renew the sandbox TTL while the long-lived run blocks — the SDK's own heartbeat
@@ -306,6 +379,17 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             runClients.remove(runId);
             runInstances.remove(runId);
             runAborted.remove(runId);
+            // The run is over: no ask can be delivered to its session anymore, and neither the
+            // worker credential nor any one-use write grant may outlive it (C4/R11).
+            if (coordinatorBound) {
+                permissionCoordinator.unbindRun(runId);
+            }
+            if (runScopedCredentialService != null) {
+                runScopedCredentialService.revoke(runId);
+            }
+            if (writeGrantService != null) {
+                writeGrantService.revoke(runId);
+            }
         }
     }
 
@@ -775,6 +859,60 @@ public class QoderAdkProvider extends AbstractAdkProvider {
         return new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR, message.toString());
     }
 
+    // ---- worker MCP entry (R11) ----
+
+    /**
+     * The worker MCP entry needs MCP enabled and a credential source; a manual wiring without
+     * the Spring collaborators runs without MCP rather than registering an anonymous entry.
+     */
+    private boolean workerMcpEnabled() {
+        return mcpProperties != null && mcpProperties.isEnabled()
+                && runScopedCredentialService != null && mcpProperties.getPort() > 0;
+    }
+
+    /**
+     * Probe the sandbox-reachable host candidates and build the worker MCP entry for the first
+     * one that answers with HTTP 2xx from inside the sandbox (R11). Every candidate is probed
+     * with the worker credential exactly as the session will send it, so an accepted candidate
+     * has proven both reachability and the credential's acceptance. No candidate accepted →
+     * absent entry: a fail-closed run without MCP is preferable to an anonymous entry the
+     * sandbox could use to reach the platform MCP surface unauthenticated.
+     */
+    private List<QoderBridgeClient.McpServer> workerMcpServers(QoderBridgeClient client, UUID runId,
+                                                               String workerToken) {
+        List<String> candidates =
+                hostResolverFactory.apply(mcpProperties.getSandboxHostAddress()).resolveOrdered();
+        if (candidates.isEmpty()) {
+            log.warn("Qoder run {}: no sandbox-reachable host candidate for the MCP entry —"
+                    + " the run proceeds without MCP tools", runId);
+            return List.of();
+        }
+        List<QoderBridgeClient.Header> headers =
+                List.of(new QoderBridgeClient.Header("Authorization", "Bearer " + workerToken));
+        for (String host : candidates) {
+            String url = "http://" + host + ":" + mcpProperties.getPort() + "/mcp";
+            QoderBridgeClient.ProbeResult probe;
+            try {
+                probe = client.probe(url, headers);
+            } catch (QoderBridgeException e) {
+                // A probe that never reached the bridge says nothing about the candidate; the
+                // bridge being down will fail createSession anyway, so keep iterating.
+                log.warn("Qoder run {}: MCP probe of {} answered with {}: {}",
+                        runId, url, e.cause(), e.getMessage());
+                continue;
+            }
+            if (probe.reachable() && probe.status() != null && probe.status() / 100 == 2) {
+                log.info("Qoder run {}: sandbox reaches the MCP endpoint at {}", runId, url);
+                return List.of(new QoderBridgeClient.McpServer("aria", url, headers));
+            }
+            log.warn("Qoder run {}: MCP candidate {} unusable (reachable={}, status={}, detail={})",
+                    runId, url, probe.reachable(), probe.status(), probe.detail());
+        }
+        log.warn("Qoder run {}: no MCP candidate answered 2xx from inside the sandbox —"
+                + " the run proceeds without MCP tools", runId);
+        return List.of();
+    }
+
     // ---- test-only accessors ----
 
     /** Test-only: expose the live per-agent instance registry. */
@@ -825,6 +963,11 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     /** Test-only: shrink the cancel-to-kill grace. */
     void setStopGraceForTest(Duration grace) {
         this.stopGrace = grace;
+    }
+
+    /** Test-only: pin the host-candidate source so the MCP probe order is deterministic. */
+    void setHostResolverFactoryForTest(Function<String, SandboxHostResolver> factory) {
+        this.hostResolverFactory = factory;
     }
 
     /**

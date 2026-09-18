@@ -500,6 +500,63 @@ class QoderBridgeClientTest {
     }
 
     // ------------------------------------------------------------------------------------
+    // POST /probe (R1)
+    // ------------------------------------------------------------------------------------
+
+    @Test
+    void probe_postsTheUrlAndHeaders_andParsesAJsonRpcResult() {
+        on("POST /probe", exchange -> sendJson(exchange, 200,
+                "{\"reachable\":true,\"status\":200,\"detail\":\"json-rpc result\"}"));
+
+        QoderBridgeClient.ProbeResult result = client.probe("http://172.30.112.1:8080/mcp",
+                List.of(new QoderBridgeClient.Header("Authorization", "Bearer wcp_test_worker_token")));
+
+        assertThat(result).isEqualTo(
+                new QoderBridgeClient.ProbeResult(true, 200, "json-rpc result"));
+        RecordedRequest request = onlyRequest();
+        assertThat(request.method()).isEqualTo("POST");
+        assertThat(request.path()).isEqualTo("/probe");
+        assertThat(request.headers()).containsEntry("authorization", "Bearer " + TOKEN);
+        assertThat(json(request.body())).isEqualTo(json("{\"url\":\"http://172.30.112.1:8080/mcp\","
+                + "\"headers\":[{\"name\":\"Authorization\",\"value\":\"Bearer wcp_test_worker_token\"}],"
+                + "\"timeoutMs\":3000}"));
+    }
+
+    @Test
+    void probe_reportsANon2xxAnswerAsReachableWithoutAResult() {
+        on("POST /probe", exchange -> sendJson(exchange, 200,
+                "{\"reachable\":true,\"status\":503,\"detail\":\"http 503 without a json-rpc result\"}"));
+
+        QoderBridgeClient.ProbeResult result = client.probe("http://10.0.0.5:8080/mcp", List.of());
+
+        // Any HTTP response means the port is live; only a JSON-RPC body marks it usable.
+        assertThat(result.reachable()).isTrue();
+        assertThat(result.status()).isEqualTo(503);
+        assertThat(result.detail()).isEqualTo("http 503 without a json-rpc result");
+    }
+
+    @Test
+    void probe_reportsAnUnreachableCandidateWithANullStatus() {
+        on("POST /probe", exchange -> sendJson(exchange, 200,
+                "{\"reachable\":false,\"status\":null,\"detail\":\"probe timed out after 3000ms\"}"));
+
+        QoderBridgeClient.ProbeResult result = client.probe("http://172.30.112.1:8080/mcp", List.of());
+
+        assertThat(result.reachable()).isFalse();
+        assertThat(result.status()).isNull();
+        assertThat(result.detail()).isEqualTo("probe timed out after 3000ms");
+    }
+
+    @Test
+    void probe_mapsABridgeFailureToATypedException() {
+        on("POST /probe", exchange -> sendJson(exchange, 400, "{\"error\":\"BAD_REQUEST\"}"));
+
+        assertThatThrownBy(() -> client.probe("http://172.30.112.1:8080/mcp", List.of()))
+                .isInstanceOf(QoderBridgeException.class)
+                .hasMessageContaining("BAD_REQUEST");
+    }
+
+    // ------------------------------------------------------------------------------------
     // construction and configuration defaults
     // ------------------------------------------------------------------------------------
 

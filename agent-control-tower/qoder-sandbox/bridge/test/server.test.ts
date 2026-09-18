@@ -10,15 +10,21 @@
  * case needs CLI text that carries the token (the fixture never echoes it). The deadline
  * case stays on the real client and only injects the deadline length.
  *
- * All credentials here are synthetic (`test-bridge-token`, `test-worker-token`), never a
- * real PAT. The suite asserts that neither ever appears in an HTTP body, an SSE frame or a
- * log line.
+ * All credentials here are synthetic (`test-bridge-token`, `test-worker-token`,
+ * `test-token-1`), never a real PAT. The suite asserts that none ever appears in an HTTP
+ * body, an SSE frame or a log line.
+ *
+ * C2 ruling R1 adds two suites: the bounded `permission_request.rawInput` evidence and
+ * `POST /probe`. Both also inject a scripted client (no CLI spawns); the probe cases run
+ * against a local `http` server on an ephemeral 127.0.0.1 port and never touch a real host.
  */
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { AcpClient, type AcpClientOptions, type AcpEvent, type PermissionDecision } from '../src/acp-client.js';
@@ -235,6 +241,7 @@ const createdServers: BridgeServer[] = [];
 const createdClients: AcpClient[] = [];
 const createdStreams: SseStream[] = [];
 const createdDirs: string[] = [];
+const createdTargets: ProbeTarget[] = [];
 const logLines: string[] = [];
 
 function fixtureClient(scenario: string, overrides: Partial<AcpClientOptions> = {}): AcpClient {
@@ -280,6 +287,9 @@ async function startScriptedBridge(create: () => BridgeAcpClient): Promise<Bridg
 }
 
 afterEach(async () => {
+  for (const target of createdTargets.splice(0)) {
+    await target.close();
+  }
   for (const stream of createdStreams.splice(0)) {
     await stream.close();
   }
@@ -371,6 +381,42 @@ async function openEventsUrl(url: string, authorization = AUTHORIZATION): Promis
 }
 
 // ---------------------------------------------------------------------------------------
+// Local probe target (POST /probe tests stay hermetic: never a real host)
+// ---------------------------------------------------------------------------------------
+
+interface ProbeTarget {
+  readonly port: number;
+  close(): Promise<void>;
+}
+
+async function startTarget(handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<ProbeTarget> {
+  const server: Server = createHttpServer(handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  const address = server.address();
+  if (address === null || typeof address !== 'object') {
+    throw new Error('probe target did not bind a port');
+  }
+  let closed = false;
+  const target: ProbeTarget = {
+    port: address.port,
+    async close(): Promise<void> {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      // A never-answering handler leaves a socket attached; close() alone would wait for it.
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    },
+  };
+  createdTargets.push(target);
+  return target;
+}
+
+// ---------------------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------------------
 
@@ -430,6 +476,10 @@ describe('session lifecycle over the C0.2 contract', () => {
     expect(await prompted.json()).toEqual({ accepted: true });
 
     const permission = await stream.waitFor('permission_request');
+    // The fixture's permission carries a fixed rawInput, so the R1 evidence is asserted
+    // verbatim: serialized as a string, not truncated, and the legacy preview/digest still
+    // describe the whole input (the amendment is additive).
+    const fixtureRawInput = JSON.stringify({ file_path: '/workspace/hello.txt', content: 'hi' });
     expect(permission).toEqual({
       sequence: 3,
       type: 'permission_request',
@@ -437,8 +487,10 @@ describe('session lifecycle over the C0.2 contract', () => {
       toolCallId: 'call_1',
       toolName: 'Write',
       title: null,
-      redactedPreview: expect.stringContaining('/workspace/hello.txt'),
-      inputDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      redactedPreview: fixtureRawInput,
+      inputDigest: createHash('sha256').update(fixtureRawInput).digest('hex'),
+      rawInput: fixtureRawInput,
+      rawInputTruncated: false,
       options: OPTION_MENU,
       expiresAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
     });
@@ -754,6 +806,66 @@ describe('permission decisions (C0.2 permissions row)', () => {
   });
 });
 
+describe('permission rawInput evidence (C2 ruling R1)', () => {
+  /** A scripted ask with a known rawInput: no CLI spawn, no fixture drift. */
+  async function scriptedPermission(rawInput: unknown): Promise<Record<string, unknown>> {
+    const bridge = await startScriptedBridge(
+      () =>
+        new ScriptedClient(client => {
+          client.emit({ type: 'session_created', sessionId: 'acp-1', currentModeId: 'default', availableModels: [] });
+          client.emit({
+            type: 'permission_request',
+            requestId: 'r1',
+            toolCallId: 'call_1',
+            toolName: 'Write',
+            title: null,
+            options: [{ optionId: 'o1', kind: 'allow_once', name: 'Allow' }],
+            params: { toolCall: { rawInput } },
+          });
+        }),
+    );
+    const sessionId = await createSessionId(bridge);
+    const stream = await openEvents(bridge, sessionId, 0);
+    return stream.waitFor('permission_request');
+  }
+
+  it('carries the serialized rawInput and leaves the legacy preview/digest untouched', async () => {
+    const rawInput = { file_path: '/workspace/probe.txt', content: 'hello' };
+    const serialized = JSON.stringify(rawInput);
+
+    const permission = await scriptedPermission(rawInput);
+
+    expect(permission.rawInput).toBe(serialized);
+    expect(permission.rawInputTruncated).toBe(false);
+    // Additive amendment: the legacy fields still describe the whole input.
+    expect(permission.redactedPreview).toBe(serialized);
+    expect(permission.inputDigest).toBe(createHash('sha256').update(serialized).digest('hex'));
+  });
+
+  it('emits rawInput:null and rawInputTruncated:false when the tool call carries no input', async () => {
+    const permission = await scriptedPermission(undefined);
+
+    expect(permission.rawInput).toBeNull();
+    expect(permission.rawInputTruncated).toBe(false);
+    expect(permission.redactedPreview).toBeNull();
+  });
+
+  it('truncates an oversize rawInput to exactly 65536 characters and flags the truncation', async () => {
+    const rawInput = { blob: 'x'.repeat(70_000) };
+    const serialized = JSON.stringify(rawInput);
+    expect(serialized.length).toBeGreaterThan(65_536);
+
+    const permission = await scriptedPermission(rawInput);
+
+    expect(typeof permission.rawInput).toBe('string');
+    expect((permission.rawInput as string).length).toBe(65_536);
+    expect(permission.rawInputTruncated).toBe(true);
+    // Unaffected: the legacy fields are still derived from the whole input.
+    expect(permission.redactedPreview).toBe(`${serialized.slice(0, 256)}...`);
+    expect(permission.inputDigest).toBe(createHash('sha256').update(serialized).digest('hex'));
+  });
+});
+
 describe('cancel (C0.2 cancel row)', () => {
   it('terminates the CLI, rejects pending requests, ends the stream and refuses later prompts', async () => {
     const bridge = await startBridge('cancel');
@@ -827,6 +939,150 @@ describe('request bounds', () => {
 
     const response = await post(bridge, '/sessions', atCap);
     expect(response.status).toBe(201);
+  });
+});
+
+describe('POST /probe (C2 ruling R1)', () => {
+  it('performs one MCP initialize POST and answers reachable for a 2xx JSON-RPC result', async () => {
+    const seen: Array<{ authorization: string | undefined; body: string }> = [];
+    const target = await startTarget((req, res) => {
+      let body = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        seen.push({ authorization: req.headers.authorization, body });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05' } }));
+      });
+    });
+    const bridge = await startScriptedBridge(() => new ScriptedClient());
+
+    const response = await post(bridge, '/probe', {
+      url: `http://127.0.0.1:${target.port}/mcp`,
+      headers: [{ name: 'Authorization', value: 'Bearer test-token-1' }],
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toEqual({ reachable: true, status: 200, detail: 'HTTP 200 (JSON-RPC result)' });
+    // Exactly one outbound POST, carrying exactly the caller's credential and an MCP initialize.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.authorization).toBe('Bearer test-token-1');
+    expect(JSON.parse(String(seen[0]?.body))).toMatchObject({
+      method: 'initialize',
+      params: { protocolVersion: expect.any(String) },
+    });
+    // The bridge answer never echoes the credential the probe carried.
+    expect(JSON.stringify(body)).not.toContain('test-token-1');
+  });
+
+  it('treats any HTTP answer as liveness, 401 included', async () => {
+    const target = await startTarget((_req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end('{"error":"credential required"}');
+    });
+    const bridge = await startScriptedBridge(() => new ScriptedClient());
+
+    const response = await post(bridge, '/probe', {
+      url: `http://127.0.0.1:${target.port}/mcp`,
+      headers: [{ name: 'Authorization', value: 'Bearer test-token-1' }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: true, status: 401, detail: 'HTTP 401' });
+  });
+
+  it('reports a refused connection as unreachable with a null status', async () => {
+    const target = await startTarget((_req, res) => res.end('{}'));
+    const deadPort = target.port;
+    await target.close();
+    const bridge = await startScriptedBridge(() => new ScriptedClient());
+
+    const response = await post(bridge, '/probe', {
+      url: `http://127.0.0.1:${deadPort}/mcp`,
+      headers: [{ name: 'Authorization', value: 'Bearer test-token-1' }],
+      timeoutMs: 2_000,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: false, status: null, detail: 'connect ECONNREFUSED' });
+  });
+
+  it('gives up at timeoutMs, reports a null status and names the timeout', async () => {
+    // Accepts the connection and never writes a byte back.
+    const target = await startTarget(() => undefined);
+    const bridge = await startScriptedBridge(() => new ScriptedClient());
+
+    const response = await post(bridge, '/probe', {
+      url: `http://127.0.0.1:${target.port}/mcp`,
+      headers: [{ name: 'Authorization', value: 'Bearer test-token-1' }],
+      timeoutMs: 250,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: false, status: null, detail: 'timeout after 250ms' });
+    // R1 fixes the caller-less default at 3000 ms; asserted on the exported constant because
+    // a real 3 s wait would only slow the suite down.
+    const { DEFAULT_PROBE_TIMEOUT_MS } = await import('../src/server.js');
+    expect(DEFAULT_PROBE_TIMEOUT_MS).toBe(3_000);
+  });
+
+  it('rejects a probe without the bearer before any outbound request', async () => {
+    let outbound = 0;
+    const target = await startTarget((_req, res) => {
+      outbound += 1;
+      res.end('{}');
+    });
+    const bridge = await startScriptedBridge(() => new ScriptedClient());
+    const probeBody = { url: `http://127.0.0.1:${target.port}/mcp`, headers: [] };
+
+    const anonymous = await fetch(`${base(bridge)}/probe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(probeBody),
+    });
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.json()).toEqual({ error: 'UNAUTHORIZED' });
+
+    const wrong = await post(bridge, '/probe', probeBody, 'Bearer test-bridge-token-wrong');
+    expect(wrong.status).toBe(401);
+    expect(await wrong.json()).toEqual({ error: 'UNAUTHORIZED' });
+    expect(outbound).toBe(0);
+  });
+
+  it('rejects a malformed probe body with the shared error style', async () => {
+    const bridge = await startScriptedBridge(() => new ScriptedClient());
+    const url = 'http://127.0.0.1:1/mcp';
+    const malformed: unknown[] = [
+      {},
+      { url: '', headers: [] },
+      { url: 'not-a-url', headers: [] },
+      { url: 'ftp://127.0.0.1/mcp', headers: [] },
+      { url, headers: 'Authorization: Bearer test-token-1' },
+      { url, headers: [{ name: 'Authorization' }] },
+      { url, headers: [{ name: 'Authorization', value: '' }] },
+      { url, headers: [{ name: 'Bad Name', value: 'x' }] },
+      { url, headers: [{ name: 'Authorization', value: 'x\r\ny' }] },
+      { url, headers: [], timeoutMs: 0 },
+      { url, headers: [], timeoutMs: -5 },
+      { url, headers: [], timeoutMs: 'soon' },
+    ];
+    for (const body of malformed) {
+      const response = await post(bridge, '/probe', body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+      expect(await response.json(), JSON.stringify(body)).toEqual({ error: 'INVALID_REQUEST' });
+    }
+
+    // The 1 MiB cap applies to /probe like to the other body-carrying routes.
+    const oversize = await post(
+      bridge,
+      '/probe',
+      `{"url":"${url}","headers":[],"padding":"${'x'.repeat(MAX_BODY_BYTES + 1_024)}"}`,
+    );
+    expect(oversize.status).toBe(413);
+    expect(await oversize.json()).toEqual({ error: 'PAYLOAD_TOO_LARGE' });
   });
 });
 

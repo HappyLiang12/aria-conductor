@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.repository;
 
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -19,6 +20,21 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
     List<Approval> findByRunId(UUID runId);
     List<Approval> findByStatusAndExpiresAtBefore(ApprovalStatus status, Instant expiresAtBefore);
     List<Approval> findByStatusAndApprovalType(ApprovalStatus status, Approval.ApprovalType type);
+
+    /** Source-scoped scan: the ACP startup recovery walks only {@code ACP_PERMISSION} rows. */
+    List<Approval> findByStatusAndSource(ApprovalStatus status, ApprovalSource source);
+
+    /**
+     * Atomic PENDING → EXPIRED transition for the ACP expiry path: only the caller whose
+     * conditional update matches proceeds to deliver the cancel, so a decision that landed
+     * first can never be rewritten (returns 0 for it). Single-statement bulk update, no
+     * entity load; callers must be @Transactional and results bypass the persistence context.
+     */
+    @Modifying
+    @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
+           "a.reason = :reason, a.decidedAt = :now " +
+           "where a.id = :id and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING")
+    int expirePendingById(@Param("id") UUID id, @Param("reason") String reason, @Param("now") Instant now);
 
     /** HITL ask surface: asks linked to a kanban card. */
     List<Approval> findByKanbanItemId(String kanbanItemId);

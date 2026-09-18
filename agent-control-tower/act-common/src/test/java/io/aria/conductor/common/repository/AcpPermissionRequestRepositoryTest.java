@@ -82,6 +82,24 @@ class AcpPermissionRequestRepositoryTest {
     }
 
     @Test
+    void findByBridgeSessionIdAndBridgeRequestId_returnsTheCorrelatedRow() {
+        UUID approvalId = UUID.randomUUID();
+        repository.saveAllAndFlush(List.of(
+                request(approvalId, UUID.randomUUID(), "session-1", "request-1"),
+                request(UUID.randomUUID(), UUID.randomUUID(), "session-2", "request-2")));
+
+        assertThat(repository.findByBridgeSessionIdAndBridgeRequestId("session-1", "request-1"))
+                .get()
+                .extracting(AcpPermissionRequest::getApprovalId)
+                .isEqualTo(approvalId);
+        // The correlation is the pair: half a match must not find the row.
+        assertThat(repository.findByBridgeSessionIdAndBridgeRequestId("session-1", "request-2"))
+                .isEmpty();
+        assertThat(repository.findByBridgeSessionIdAndBridgeRequestId("session-2", "request-1"))
+                .isEmpty();
+    }
+
+    @Test
     void findByApprovalIdIn_returnsOnlyTheRequestedIds() {
         UUID approval1 = UUID.randomUUID();
         UUID approval2 = UUID.randomUUID();

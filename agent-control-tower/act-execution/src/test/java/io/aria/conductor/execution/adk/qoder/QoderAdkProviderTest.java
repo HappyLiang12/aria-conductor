@@ -11,9 +11,14 @@ import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionConstraints;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
+import io.aria.conductor.execution.approval.AcpPermissionCoordinator;
+import io.aria.conductor.execution.approval.RunScopedCredentialService;
+import io.aria.conductor.execution.approval.WriteGrantService;
 import io.aria.conductor.execution.credential.RuntimeCredentialException;
 import io.aria.conductor.execution.credential.RuntimeCredentialService;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.SandboxHostResolver;
 import io.aria.conductor.execution.sandbox.SandboxLifecycle;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -44,6 +50,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -51,6 +58,7 @@ import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -85,8 +93,12 @@ class QoderAdkProviderTest {
     @Mock QoderBridgeClient client;
     @Mock QoderBridgeClient.EventStream eventStream;
     @Mock RuntimeCredentialService credentialService;
+    @Mock RunScopedCredentialService runScopedCredentialService;
+    @Mock WriteGrantService writeGrantService;
+    @Mock AcpPermissionCoordinator permissionCoordinator;
 
     QoderProperties properties;
+    McpProperties mcpProperties;
     QoderAdkProvider provider;
     ApplicationEventPublisher publisher;
     List<RunProgressEvent> published;
@@ -102,6 +114,10 @@ class QoderAdkProviderTest {
         properties.setModel("efficient");
         properties.setMaxTaskMinutes(45);
         properties.setSandboxRenewInterval(Duration.ofMinutes(5));
+        // The worker/MCP wiring is opt-in per test: disabled here keeps the legacy tests on
+        // the MCP-less path.
+        mcpProperties = new McpProperties();
+        mcpProperties.setEnabled(false);
 
         published = new CopyOnWriteArrayList<>();
         publisher = event -> {
@@ -117,7 +133,8 @@ class QoderAdkProviderTest {
                     clientUrl.set(url);
                     clientToken.set(token);
                     return client;
-                });
+                },
+                mcpProperties, runScopedCredentialService, writeGrantService, permissionCoordinator);
         provider.setBridgeReadyTimeoutForTest(Duration.ofMillis(400));
         provider.setBridgeReadyPollIntervalForTest(Duration.ofMillis(10));
         provider.setStopGraceForTest(Duration.ofMillis(50));
@@ -249,7 +266,7 @@ class QoderAdkProviderTest {
         // Both counters arrived as measured numbers: the pair counts as reported usage.
         assertThat(result.usageReported()).isTrue();
 
-        // One sandbox per agent, one bridge session per run, empty MCP list in slice B.
+        // One sandbox per agent, one bridge session per run; MCP is disabled in this test.
         ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
                 ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
         verify(client).createSession(request.capture());
@@ -263,6 +280,128 @@ class QoderAdkProviderTest {
         // The client was pointed at the resolved sandbox endpoint with a non-PAT bridge token.
         assertThat(clientUrl.get()).isEqualTo(BRIDGE_URL);
         assertThat(clientToken.get()).isNotBlank().isNotEqualTo(PAT);
+    }
+
+    // ---- MCP worker wiring and the permission sink (R11) ---------------------
+
+    private void enableMcp() {
+        mcpProperties.setEnabled(true);
+        mcpProperties.setPort(8080);
+    }
+
+    /** Pin the host-candidate source so the probe order is deterministic. */
+    private void hostCandidates(String... addresses) {
+        List<SandboxHostResolver.Candidate> fixed = java.util.Arrays.stream(addresses)
+                .map(address -> new SandboxHostResolver.Candidate("nic-" + address, address))
+                .toList();
+        provider.setHostResolverFactoryForTest(override -> SandboxHostResolver.over(fixed, override));
+    }
+
+    @Test
+    void mcpEnabled_probesCandidates_andPassesTheAriaServerWithTheWorkerToken() {
+        enableMcp();
+        hostCandidates("172.30.112.1", "10.0.0.5");
+        UUID runId = UUID.randomUUID();
+        when(runScopedCredentialService.issue(eq(runId), any(Instant.class))).thenReturn("wcp_test_worker_token");
+        when(client.probe(eq("http://172.30.112.1:8080/mcp"), anyList()))
+                .thenReturn(new QoderBridgeClient.ProbeResult(true, 503, "http 503 without a json-rpc result"));
+        when(client.probe(eq("http://10.0.0.5:8080/mcp"), anyList()))
+                .thenReturn(new QoderBridgeClient.ProbeResult(true, 200, "json-rpc result"));
+
+        executeHappyRun(runId, new TaskContext(1, Duration.ofMinutes(2)));
+
+        ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
+                ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
+        verify(client).createSession(request.capture());
+        assertThat(request.getValue().mcpServers()).hasSize(1);
+        QoderBridgeClient.McpServer server = request.getValue().mcpServers().get(0);
+        assertThat(server.name()).isEqualTo("aria");
+        // The first candidate answered non-2xx and was skipped; the second one wins.
+        assertThat(server.url()).isEqualTo("http://10.0.0.5:8080/mcp");
+        assertThat(server.headers()).containsExactly(
+                new QoderBridgeClient.Header("Authorization", "Bearer wcp_test_worker_token"));
+        verify(client).probe(eq("http://172.30.112.1:8080/mcp"), anyList());
+        verify(client).probe(eq("http://10.0.0.5:8080/mcp"), anyList());
+    }
+
+    @Test
+    void mcpEnabled_noReachableCandidate_leavesTheSessionEmpty_andRevokesTheCredential() {
+        enableMcp();
+        hostCandidates("172.30.112.1");
+        UUID runId = UUID.randomUUID();
+        when(runScopedCredentialService.issue(eq(runId), any(Instant.class))).thenReturn("wcp_test_unused");
+        when(client.probe(anyString(), anyList()))
+                .thenReturn(new QoderBridgeClient.ProbeResult(false, null, "probe timed out after 3000ms"));
+
+        executeHappyRun(runId, new TaskContext(1, Duration.ofMinutes(2)));
+
+        ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
+                ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
+        verify(client).createSession(request.capture());
+        // Fail closed: never an anonymous MCP entry, and the unused credential is revoked.
+        assertThat(request.getValue().mcpServers()).isEmpty();
+        verify(runScopedCredentialService).revoke(runId);
+    }
+
+    @Test
+    void mcpDisabled_neverProbes_andPassesNoServers() {
+        UUID runId = UUID.randomUUID();
+
+        executeHappyRun(runId, new TaskContext(1, Duration.ofMinutes(2)));
+
+        ArgumentCaptor<QoderBridgeClient.CreateSessionRequest> request =
+                ArgumentCaptor.forClass(QoderBridgeClient.CreateSessionRequest.class);
+        verify(client).createSession(request.capture());
+        assertThat(request.getValue().mcpServers()).isEmpty();
+        verify(client, never()).probe(anyString(), anyList());
+        verify(runScopedCredentialService, never()).issue(any(), any());
+    }
+
+    @Test
+    void runEnd_revokesTheWorkerCredentialAndTheRunGrants() {
+        UUID runId = UUID.randomUUID();
+
+        executeHappyRun(runId, new TaskContext(1, Duration.ofMinutes(2)));
+
+        verify(runScopedCredentialService).revoke(runId);
+        verify(writeGrantService).revoke(runId);
+    }
+
+    @Test
+    void permissionAsk_reachesTheCoordinator_withTheRunAgentAndSessionIdentity() {
+        UUID agentId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        String permissionPayload = "{\"requestId\":\"req-1\",\"toolCallId\":\"call_1\","
+                + "\"toolName\":\"mcp__aria__write_file\",\"rawInput\":\"{}\",\"rawInputTruncated\":false,"
+                + "\"options\":[{\"optionId\":\"a\",\"kind\":\"allow_once\",\"name\":\"Allow\"}]}";
+        streamPlays(sessionStarted(1, "efficient"),
+                event(2, "permission_request", permissionPayload),
+                completed(3, "end_turn"));
+
+        provider.executeTask(agent(agentId), runId, PROMPT_TEXT, new TaskContext(1, Duration.ofMinutes(2)));
+
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(permissionCoordinator).handlePermissionEvent(eq(runId), eq(agentId), eq(BRIDGE_SESSION),
+                payload.capture());
+        assertThat(payload.getValue().path("requestId").asText()).isEqualTo("req-1");
+    }
+
+    @Test
+    void aThrowingCoordinator_neverAffectsTheRun() {
+        doThrow(new IllegalStateException("coordinator boom")).when(permissionCoordinator)
+                .handlePermissionEvent(any(), any(), anyString(), any());
+        String permissionPayload = "{\"requestId\":\"req-1\",\"toolCallId\":\"call_1\","
+                + "\"toolName\":\"mcp__aria__write_file\",\"rawInput\":\"{}\",\"rawInputTruncated\":false,"
+                + "\"options\":[{\"optionId\":\"a\",\"kind\":\"allow_once\",\"name\":\"Allow\"}]}";
+        streamPlays(sessionStarted(1, "efficient"),
+                event(2, "agent_message", "{\"text\":\"ok\"}"),
+                event(3, "permission_request", permissionPayload),
+                completed(4, "end_turn"));
+
+        TaskResult result = provider.executeTask(agent(UUID.randomUUID()), UUID.randomUUID(), PROMPT_TEXT,
+                new TaskContext(1, Duration.ofMinutes(2)));
+
+        assertThat(result.finalOutput()).isEqualTo("ok");
     }
 
     @Test

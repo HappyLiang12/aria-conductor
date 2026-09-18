@@ -18,6 +18,7 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeClient;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeException;
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.test.DataJpaTestBase;
 import io.aria.conductor.test.TestDataBuilder;
@@ -45,6 +46,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -97,7 +99,7 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
 
     private AcpPermissionCoordinator coordinator(long timeoutMs) {
         return new AcpPermissionCoordinator(approvalRepository, companionRepository, runRepository,
-                events::add, transactionManager, timeoutMs, clock);
+                events::add, transactionManager, new ToolPolicyRegistry(), timeoutMs, clock);
     }
 
     /** Commit work in its own transaction: the coordinator never reads uncommitted fixtures. */
@@ -431,6 +433,246 @@ class AcpPermissionCoordinatorTest extends DataJpaTestBase {
                 frame("req-hostile", "call_hostile", hostileName, json(Map.of("path", "/x\u007f")),
                         false, "allow_once", "reject_once"));
         assertThat(publishedApprovalEvents()).hasSize(1);
+    }
+
+    // ---- platform read auto-allow at the intake (R65) -------------------------
+
+    @Test
+    void reviewedPlatformRead_isAutoAllowed_hostSide_withNoAsk() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        // The operator-visible reason is pinned here: it is what the bridge records for the
+        // decision, so a silent reword must fail this test.
+        when(client.decide(eq(SESSION_ID), eq("req-read"), eq(true),
+                contains("auto-allowed: reviewed read-only platform tool mcp__aria__list_knowledge")))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.DELIVERED);
+        JsonNode payload = frame("req-read", "call_read", "mcp__aria__list_knowledge",
+                json(Map.of("limit", 5)), false, "allow_once", "reject_once");
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID, payload);
+
+        verify(client).decide(eq(SESSION_ID), eq("req-read"), eq(true),
+                contains("auto-allowed: reviewed read-only platform tool mcp__aria__list_knowledge"));
+        assertThat(approvalCount()).isZero();
+        assertThat(companionRepository.count()).isZero();
+        assertThat(publishedApprovalEvents()).isEmpty();
+    }
+
+    @Test
+    void autoAllowedRead_alreadyResolvedOutcome_countsAsHandled() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        when(client.decide(eq(SESSION_ID), eq("req-read-ar"), eq(true), anyString()))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.ALREADY_RESOLVED);
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-ar", "call_read_ar", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        verify(client).decide(eq(SESSION_ID), eq("req-read-ar"), eq(true), anyString());
+        assertThat(approvalCount()).isZero();
+        assertThat(companionRepository.count()).isZero();
+        assertThat(publishedApprovalEvents()).isEmpty();
+    }
+
+    @Test
+    void autoAllowedRead_expiredAndUnknownOutcomes_countAsHandled() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        when(client.decide(eq(SESSION_ID), eq("req-read-exp"), eq(true), anyString()))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.EXPIRED);
+        when(client.decide(eq(SESSION_ID), eq("req-read-unknown"), eq(true), anyString()))
+                .thenReturn(QoderBridgeClient.DecisionOutcome.UNKNOWN);
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-exp", "call_read_exp", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-unknown", "call_read_unknown", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        verify(client).decide(eq(SESSION_ID), eq("req-read-exp"), eq(true), anyString());
+        verify(client).decide(eq(SESSION_ID), eq("req-read-unknown"), eq(true), anyString());
+        assertThat(approvalCount()).isZero();
+        assertThat(companionRepository.count()).isZero();
+        assertThat(publishedApprovalEvents()).isEmpty();
+    }
+
+    @Test
+    void autoAllowedRead_bridgeThrowsAlreadyResolved_countsAsHandled() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        when(client.decide(eq(SESSION_ID), eq("req-read-resolved"), eq(true), anyString()))
+                .thenThrow(new QoderBridgeException(QoderBridgeException.Cause.ALREADY_RESOLVED,
+                        "already decided"));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-resolved", "call_read_resolved", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        verify(client).decide(eq(SESSION_ID), eq("req-read-resolved"), eq(true), anyString());
+        assertThat(approvalCount()).isZero();
+        assertThat(companionRepository.count()).isZero();
+        assertThat(publishedApprovalEvents()).isEmpty();
+    }
+
+    @Test
+    void autoAllowFailure_otherBridgeCause_fallsBackToAnAsk() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+        when(client.decide(eq(SESSION_ID), eq("req-read-boom"), eq(true), anyString()))
+                .thenThrow(new QoderBridgeException(QoderBridgeException.Cause.PROVIDER_ERROR,
+                        "cli failed"));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-boom", "call_read_boom", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        // The auto-allow was attempted and failed; the read still reaches the operator.
+        verify(client).decide(eq(SESSION_ID), eq("req-read-boom"), eq(true), anyString());
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        assertThat(companion(runId, "req-read-boom").getToolName()).isEqualTo("mcp__aria__list_knowledge");
+    }
+
+    @Test
+    void readWithoutALiveClient_fallsBackToAnAsk() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-nolive", "call_read_nolive", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void readWithABoundRunMissingItsClient_fallsBackToAnAsk() throws Exception {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        seedLiveRunWithoutClient(runId);
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-read-deadclient", "call_read_deadclient", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        // Bound but clientless: the run cannot answer the read host-side, so it fails closed.
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    /**
+     * Seeds the defensive {@code liveRun != null, client() == null} shape. {@link
+     * AcpPermissionCoordinator#bindRun} drops a null client before mapping the run, so no public
+     * call can produce it; the private run map is seeded directly instead — the same seam style
+     * as {@code WriteGrantServiceTest}'s private-map swap.
+     */
+    @SuppressWarnings("unchecked")
+    private void seedLiveRunWithoutClient(UUID runId) throws Exception {
+        java.lang.reflect.Field field = AcpPermissionCoordinator.class.getDeclaredField("liveRuns");
+        field.setAccessible(true);
+        Class<?> liveRunClass = Class.forName(
+                "io.aria.conductor.execution.approval.AcpPermissionCoordinator$LiveRun");
+        java.lang.reflect.Constructor<?> ctor =
+                liveRunClass.getDeclaredConstructor(QoderBridgeClient.class, Instant.class);
+        ctor.setAccessible(true);
+        ((java.util.concurrent.ConcurrentMap<UUID, Object>) field.get(coordinator))
+                .put(runId, ctor.newInstance(new Object[] {null, null}));
+    }
+
+    @Test
+    void writeTool_isNotAutoAllowed() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-write", "call_write", "mcp__aria__store_knowledge",
+                        json(Map.of("title", "x")), false, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void operatorOnlyTool_isNotAutoAllowed() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-operator", "call_operator", "mcp__aria__decide_approval",
+                        json(Map.of("approvalId", "x")), false, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void unknownPlatformTool_isNotAutoAllowed() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-notool", "call_notool", "mcp__aria__no_such_tool",
+                        json(Map.of("x", 1)), false, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void otherServerTool_isNotAutoAllowed() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-otherserver", "call_otherserver", "mcp__other__list_knowledge",
+                        json(Map.of("limit", 5)), false, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void truncatedRead_isNotAutoAllowed() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-trunc", "call_trunc", "mcp__aria__list_knowledge",
+                        json(Map.of("limit", 5)), true, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void nonMcpLocalTool_isNotAutoAllowed() {
+        UUID runId = committedRun(RunStatus.RUNNING);
+        bindRun(runId, client, FAKE_NOW.plus(Duration.ofMinutes(45)));
+
+        coordinator.handlePermissionEvent(runId, UUID.randomUUID(), SESSION_ID,
+                frame("req-local", "call_local", "read_file",
+                        json(Map.of("path", "/workspace/x")), false, "allow_once", "reject_once"));
+
+        assertThat(approvalCount()).isEqualTo(1);
+        assertThat(companionRepository.count()).isEqualTo(1);
+        assertThat(publishedApprovalEvents()).hasSize(1);
+        verify(client, never()).decide(anyString(), anyString(), anyBoolean(), anyString());
     }
 
     // ---- expiry, delivery, restart recovery -----------------------------------

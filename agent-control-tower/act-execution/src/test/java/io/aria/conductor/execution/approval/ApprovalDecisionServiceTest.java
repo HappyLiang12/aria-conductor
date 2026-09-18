@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeClient;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeException;
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.test.DataJpaTestBase;
 import io.aria.conductor.test.TestDataBuilder;
@@ -82,7 +83,7 @@ class ApprovalDecisionServiceTest extends DataJpaTestBase {
     @BeforeEach
     void setUp() {
         coordinator = new AcpPermissionCoordinator(approvalRepository, companionRepository, runRepository,
-                events::add, transactionManager, TIMEOUT_MS, clock);
+                events::add, transactionManager, new ToolPolicyRegistry(), TIMEOUT_MS, clock);
         writeGrants = new WriteGrantService(clock);
         service = new ApprovalDecisionService(approvalRepository, companionRepository, approvalGate,
                 coordinator, writeGrants, events::add, transactionManager, clock);

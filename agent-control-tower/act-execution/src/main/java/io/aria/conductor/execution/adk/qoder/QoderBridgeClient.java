@@ -311,6 +311,12 @@ public class QoderBridgeClient implements AutoCloseable {
     public record CreateSessionRequest(String runId, String agentId, String cwd, String model,
                                        Long deadlineSeconds, List<McpServer> mcpServers) { }
 
+    /**
+     * The MCP server name the host presents to the Qoder CLI; the CLI names those tools
+     * {@code mcp__aria__<tool>} on the ACP wire ({@code QoderAdkProvider} session config).
+     */
+    public static final String PLATFORM_SERVER_NAME = "aria";
+
     /** One MCP server the CLI may call, with the headers the bridge must keep redacted. */
     public record McpServer(String name, String url, List<Header> headers) { }
 

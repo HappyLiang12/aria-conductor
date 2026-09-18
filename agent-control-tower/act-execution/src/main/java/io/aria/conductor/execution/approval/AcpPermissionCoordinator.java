@@ -16,6 +16,7 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeClient;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeException;
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -112,6 +113,9 @@ public class AcpPermissionCoordinator {
 
     /** Only tool names in the platform MCP namespace can carry a write grant. */
     private static final Pattern MCP_TOOL_NAME = Pattern.compile("^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$");
+    /** Platform-server read tool names: {@code mcp__<platform server>__<tool>}. */
+    private static final Pattern PLATFORM_READ_TOOL = Pattern.compile(
+            "^mcp__" + Pattern.quote(QoderBridgeClient.PLATFORM_SERVER_NAME) + "__([A-Za-z0-9_-]+)$");
     /** Causes that mean the bridge ruled on the ask itself: the only non-transport delivery success. */
     private static final List<QoderBridgeException.Cause> ASK_RULED_CAUSES = List.of(
             QoderBridgeException.Cause.ALREADY_RESOLVED);
@@ -142,6 +146,7 @@ public class AcpPermissionCoordinator {
     private final RunRepository runRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transaction;
+    private final ToolPolicyRegistry toolPolicyRegistry;
     private final Duration approvalTimeout;
     private final Clock clock;
     /** Live bridge clients of in-flight runs, so a decision can be delivered to its session. */
@@ -153,9 +158,10 @@ public class AcpPermissionCoordinator {
                                     RunRepository runRepository,
                                     ApplicationEventPublisher eventPublisher,
                                     PlatformTransactionManager transactionManager,
+                                    ToolPolicyRegistry toolPolicyRegistry,
                                     @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this(approvalRepository, companionRepository, runRepository, eventPublisher, transactionManager,
-                approvalTimeoutMs, Clock.systemUTC());
+                toolPolicyRegistry, approvalTimeoutMs, Clock.systemUTC());
     }
 
     /** Deterministic-collaborator constructor for tests (fake clock, explicit timeout). */
@@ -164,10 +170,12 @@ public class AcpPermissionCoordinator {
                              RunRepository runRepository,
                              ApplicationEventPublisher eventPublisher,
                              PlatformTransactionManager transactionManager,
+                             ToolPolicyRegistry toolPolicyRegistry,
                              long approvalTimeoutMs,
                              Clock clock) {
         if (approvalRepository == null || companionRepository == null || runRepository == null
-                || eventPublisher == null || transactionManager == null || clock == null) {
+                || eventPublisher == null || transactionManager == null || toolPolicyRegistry == null
+                || clock == null) {
             throw new IllegalArgumentException("all collaborators are required");
         }
         if (approvalTimeoutMs <= 0) {
@@ -179,6 +187,7 @@ public class AcpPermissionCoordinator {
         this.eventPublisher = eventPublisher;
         this.transaction = new TransactionTemplate(transactionManager);
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.toolPolicyRegistry = toolPolicyRegistry;
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
         this.clock = clock;
     }
@@ -264,6 +273,10 @@ public class AcpPermissionCoordinator {
                 return;
             }
 
+            if (autoAllowReviewedRead(runId, bridgeSessionId, requestId, effective)) {
+                return;
+            }
+
             try {
                 insertAsk(runId, agentId, bridgeSessionId, requestId, toolCallId, options, effective);
             } catch (DataIntegrityViolationException e) {
@@ -283,6 +296,51 @@ public class AcpPermissionCoordinator {
             // The pump must never see a coordinator failure (R11); the ask is left undecided and
             // the run's own expiry path will clean it up.
             log.error("ACP permission handling failed for run {}: {}", runId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Design decision table (spec :24 + §6.1): reviewed read-only platform tools run without an
+     * operator ask — the CLI stays in default permission mode, so the intake answers those reads
+     * itself. Everything not provably a reviewed read falls through to the ordinary ask path.
+     *
+     * @return true when the permission was answered (or is no longer answerable) host-side
+     */
+    private boolean autoAllowReviewedRead(UUID runId, String bridgeSessionId, String requestId,
+                                          EffectiveAsk effective) {
+        if (effective.truncated() || !effective.grantable()) {
+            return false;
+        }
+        Matcher platformTool = PLATFORM_READ_TOOL.matcher(effective.name());
+        if (!platformTool.matches()) {
+            return false;
+        }
+        Optional<ToolPolicyRegistry.Policy> policy = toolPolicyRegistry.lookup(platformTool.group(1));
+        if (policy.isEmpty() || policy.get().category() != ToolPolicyRegistry.Category.WORKER_READ) {
+            return false;
+        }
+        LiveRun liveRun = liveRuns.get(runId);
+        if (liveRun == null || liveRun.client() == null) {
+            return false;
+        }
+        try {
+            QoderBridgeClient.DecisionOutcome outcome = liveRun.client().decide(bridgeSessionId,
+                    requestId, true, "auto-allowed: reviewed read-only platform tool " + effective.name());
+            log.info("ACP auto-allow: {} {} for session {} (requestId={})",
+                    effective.name(), outcome, bridgeSessionId, requestId);
+            return true;
+        } catch (QoderBridgeException e) {
+            if (e.cause() == QoderBridgeException.Cause.ALREADY_RESOLVED) {
+                log.info("ACP auto-allow: {} was already resolved for session {} (requestId={})",
+                        effective.name(), bridgeSessionId, requestId);
+                return true;
+            }
+            log.warn("ACP auto-allow of {} failed ({}); falling back to an operator ask",
+                    effective.name(), e.cause());
+            return false;
+        } catch (RuntimeException e) {
+            log.warn("ACP auto-allow of {} failed; falling back to an operator ask", effective.name(), e);
+            return false;
         }
     }
 

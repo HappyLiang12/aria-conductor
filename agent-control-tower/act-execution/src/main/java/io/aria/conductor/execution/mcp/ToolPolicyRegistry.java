@@ -1,4 +1,4 @@
-package io.aria.conductor.mcp.tools;
+package io.aria.conductor.execution.mcp;
 
 import org.springframework.stereotype.Component;
 
@@ -28,6 +28,9 @@ import java.util.Optional;
  * <p>The full table with the citation of every worker-allowed entry is the
  * review artifact in task-C4-report.md; {@code ToolPolicyRegistryTest} keeps it
  * reconciled in both directions with the live {@code @Tool} methods.
+ *
+ * <p>The class lives in act-execution because both of its consumers share this one table: worker
+ * governance at the MCP server boundary and the ACP permission intake in {@code execution.approval}.
  */
 @Component
 public class ToolPolicyRegistry {

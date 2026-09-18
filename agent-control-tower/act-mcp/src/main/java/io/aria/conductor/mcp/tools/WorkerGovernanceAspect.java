@@ -2,6 +2,7 @@ package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.execution.approval.WorkerScope;
 import io.aria.conductor.execution.approval.WriteGrantService;
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.mcp.McpCallerContext;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;

@@ -1,7 +1,7 @@
 package io.aria.conductor.mcp;
 
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.mcp.tools.McpTool;
-import io.aria.conductor.mcp.tools.ToolPolicyRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.beans.factory.config.BeanDefinition;

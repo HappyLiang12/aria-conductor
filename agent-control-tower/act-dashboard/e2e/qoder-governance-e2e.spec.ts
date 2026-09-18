@@ -25,7 +25,7 @@
  *   - S7 integration-evidence half: a LIVE worker token reaching the tool seam is
  *     denied `decide_approval` with the OPERATOR_ONLY code — in-repo evidence:
  *     McpWorkerEndpointIntegrationTest.java:261-267 (streamable HTTP, real worker
- *     token) + ToolPolicyRegistry.java:119-121 (pinned denial) +
+ *     token) + ToolPolicyRegistry.java:122-124 (pinned denial) +
  *     ToolPolicyRegistryTest.java:159. The brief cites "McpEndpointIntegrationTest.java"
  *     for this; that file covers the operator handshake/tool inventory and is used
  *     here as the operator-parity test only (the worker-denial class is
@@ -399,7 +399,7 @@ test('S7: worker self-approval denied — decide_approval unreachable with an un
     + ' (transport), ask unchanged. Integration-test half (NOT E2E): a LIVE worker token'
     + ' reaches the tool seam and is denied OPERATOR_ONLY —'
     + ' act-mcp/src/test/java/io/aria/conductor/mcp/McpWorkerEndpointIntegrationTest.java:261-267'
-    + ' (decide_approval → OPERATOR_ONLY), pinned by ToolPolicyRegistry.java:119-121 and'
+    + ' (decide_approval → OPERATOR_ONLY), pinned by ToolPolicyRegistry.java:122-124 and'
     + ' ToolPolicyRegistryTest.java:159.',
   );
 
@@ -436,7 +436,7 @@ test('S8: one-use write-grant replay — operator replay control + forged worker
   const sessionId = await mcpOpenSession(request, platformToken);
 
   // Identical WORKER_WRITE invocation, twice. `create_kanban_item` is a reviewed
-  // WORKER_WRITE row (ToolPolicyRegistry.java:103-104) with no dispatch side effect
+  // WORKER_WRITE row (ToolPolicyRegistry.java:106-107) with no dispatch side effect
   // (no agentTemplateId), so its only observable is the created card itself.
   const title = `s8-replay-${uniqueName('card')}`;
   const args = { title };

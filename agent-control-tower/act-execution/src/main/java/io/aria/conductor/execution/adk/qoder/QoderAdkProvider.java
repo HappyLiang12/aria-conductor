@@ -907,7 +907,8 @@ public class QoderAdkProvider extends AbstractAdkProvider {
             }
             if (probe.reachable() && probe.status() != null && probe.status() / 100 == 2) {
                 log.info("Qoder run {}: sandbox reaches the MCP endpoint at {}", runId, url);
-                return List.of(new QoderBridgeClient.McpServer("aria", url, headers));
+                return List.of(new QoderBridgeClient.McpServer(QoderBridgeClient.PLATFORM_SERVER_NAME,
+                        url, headers));
             }
             log.warn("Qoder run {}: MCP candidate {} unusable (reachable={}, status={}, detail={})",
                     runId, url, probe.reachable(), probe.status(), probe.detail());

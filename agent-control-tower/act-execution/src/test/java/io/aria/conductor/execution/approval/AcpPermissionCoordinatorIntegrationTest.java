@@ -17,6 +17,7 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.adk.qoder.QoderBridgeClient;
+import io.aria.conductor.execution.mcp.ToolPolicyRegistry;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.test.DataJpaTestBase;
 import io.aria.conductor.test.TestDataBuilder;
@@ -85,7 +86,7 @@ class AcpPermissionCoordinatorIntegrationTest extends DataJpaTestBase {
     @BeforeEach
     void setUp() {
         coordinator = new AcpPermissionCoordinator(approvalRepository, companionRepository, runRepository,
-                events::add, transactionManager, TIMEOUT_MS, Clock.systemUTC());
+                events::add, transactionManager, new ToolPolicyRegistry(), TIMEOUT_MS, Clock.systemUTC());
         checker = new ApprovalExpiryChecker(approvalRepository, approvalGate, coordinator);
     }
 

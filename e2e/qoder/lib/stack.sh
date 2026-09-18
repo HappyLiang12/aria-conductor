@@ -82,8 +82,14 @@ api_post_empty() { # path, outfile -> http code
     -X POST "$API_URL/api/v1$1"
 }
 
-backend_health_code() { # outfile -> http code or 000
-  curl -sS --connect-timeout 5 --max-time 15 -o "$1" -w '%{http_code}' "$API_URL/actuator/health" 2>/dev/null || echo "000"
+backend_health_code() { # outfile -> http code or 000 (exactly one token, always)
+  # A refused connect still prints 000 through -w and exits non-zero; the old
+  # `|| echo 000` fallback appended a second token ("000000"), which then matched
+  # neither `= "000"` nor `-ge 500` in wait_backend_down and made S10 report
+  # "the backend still answers" while every poll showed a refused connection.
+  local code
+  code="$(curl -sS --connect-timeout 5 --max-time 15 -o "$1" -w '%{http_code}' "$API_URL/actuator/health" 2>/dev/null)" || true
+  printf '%s' "${code:-000}"
 }
 
 # ---------------------------------------------------------------------------

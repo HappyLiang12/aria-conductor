@@ -631,7 +631,14 @@ test('S11: platform-MCP read runs without an ask, the write waits for approval, 
   ).toMatch(/store_knowledge/);
   expect(acpOptions(ask).some((o) => o.kind === 'allow_once')).toBe(true);
 
-  // ── Read half: executed without an ask ─────────────────────────────────────
+  // ── Read half: no ask (the auto-allow); execution asserted at the end ──────
+  // qodercli flushes a tool-call batch's `tool_call_update` notifications when the
+  // batch resolves, not when each call finishes: in E5's S11 attempt 1 the read's
+  // TOOL_RESULT landed 120s after the read executed (MCP audit 19:23:47 local,
+  // progress row 19:25:47 — the instant the write's unanswered ask resolved at TTL
+  // expiry; S11.run5.log). Sampling the progress stream here races that flush, so
+  // the execution half is asserted in the audit section below, once the turn has
+  // resolved.
   const asksNow = await listAsksForRun(request, run.id);
   const readAsks = asksNow.filter((a) => String(a.toolName ?? '').includes('list_knowledge'));
   expect(
@@ -640,17 +647,6 @@ test('S11: platform-MCP read runs without an ask, the write waits for approval, 
       asksNow.map((a) => `${a.toolName}:${a.status}`),
     )}`,
   ).toBe(0);
-  const beforeProgress = await runProgress(request, run.id);
-  expect(beforeProgress.status).toBe(200);
-  const readExecuted = progressToolEntries(beforeProgress.data, 'TOOL_RESULT', ['list_knowledge']);
-  console.log(
-    `[S11] read execution entries (TOOL_RESULT list_knowledge): ${readExecuted.length}`
-    + ` ${JSON.stringify(readExecuted.map((e: any) => e.content)?.slice(0, 3))}`,
-  );
-  expect(
-    readExecuted.length,
-    'the read must EXECUTE (a TOOL_RESULT progress entry) while producing no ask',
-  ).toBeGreaterThan(0);
 
   // ── Write half: unexecuted before the decision ─────────────────────────────
   const knowledgeBefore = await requestJson<any[]>(request, 'GET', '/knowledge');
@@ -688,12 +684,34 @@ test('S11: platform-MCP read runs without an ask, the write waits for approval, 
   expect(items.length).toBe(1);
 
   // ── Audit: run-correlated execution records ────────────────────────────────
-  const afterProgress = await runProgress(request, run.id);
-  const writeExecuted = progressToolEntries(afterProgress.data, 'TOOL_RESULT', ['store_knowledge']);
+  // Poll for both entries: the CLI flushes tool-call updates at batch resolution
+  // (see the read-half note), so a single sample right after the side effect can
+  // still race the flush. A timed-out poll falls back to one last sample so the
+  // failure message carries the real entry counts.
+  const settled = await pollUntil<any[]>(
+    request,
+    `/runs/${run.id}/progress?afterSeq=0`,
+    (entries) => Array.isArray(entries)
+      && progressToolEntries(entries, 'TOOL_RESULT', ['list_knowledge']).length > 0
+      && progressToolEntries(entries, 'TOOL_RESULT', ['store_knowledge']).length > 0,
+    120_000,
+    3_000,
+  ).catch(() => null);
+  const afterProgress = settled ?? (await runProgress(request, run.id)).data;
+  const readExecuted = progressToolEntries(afterProgress, 'TOOL_RESULT', ['list_knowledge']);
+  const writeExecuted = progressToolEntries(afterProgress, 'TOOL_RESULT', ['store_knowledge']);
+  console.log(
+    `[S11] read execution entries (TOOL_RESULT list_knowledge): ${readExecuted.length}`
+    + ` ${JSON.stringify(readExecuted.map((e: any) => e.content)?.slice(0, 3))}`,
+  );
   console.log(
     `[S11] write execution entries (TOOL_RESULT store_knowledge): ${writeExecuted.length}`
     + ` ${JSON.stringify(writeExecuted.map((e: any) => e.content)?.slice(0, 3))}`,
   );
+  expect(
+    readExecuted.length,
+    'the read must EXECUTE (a TOOL_RESULT progress entry) while producing no ask',
+  ).toBeGreaterThan(0);
   expect(
     writeExecuted.length,
     'the approved write must execute (a TOOL_RESULT progress entry) after delivery',
@@ -741,9 +759,16 @@ test('S12: UI smoke — board, Review surface, Providers and Ops render with zer
   // warnings (if any) are printed for the report. Backend failures are any 4xx/5xx
   // response from the backend origin — there are no intentional negative calls in
   // this scenario (a keyless stack's 503 on the credential route is a stack-config
-  // failure and deliberately NOT permitted here).
+  // failure and deliberately NOT permitted here). Client-cancelled requests
+  // (net::ERR_ABORTED) are classified separately and never asserted: this spec
+  // navigates with full-document `page.goto`, which cancels in-flight background
+  // GETs (the /providers health polls, the board's list queries) — a cancellation
+  // by our own navigation says nothing about the backend (S12.run3 attempt 1 and
+  // S12.run5 both caught exactly those routes while the same routes answered 200
+  // elsewhere in the same runs).
   const consoleErrors: string[] = [];
   const failedBackendRequests: string[] = [];
+  const cancelledRequests: string[] = [];
   const consoleWarnings: string[] = [];
   // Non-vacuity guard (F1): count the requests the filter matched; a zero count after
   // the smoke steps fails loudly instead of silently passing on a broken filter.
@@ -762,7 +787,12 @@ test('S12: UI smoke — board, Review surface, Providers and Ops render with zer
   page.on('requestfailed', (req) => {
     if (!isBackendUrl(req.url())) return;
     backendRequestCount += 1;
-    failedBackendRequests.push(`FAILED ${req.method()} ${req.url()} (${req.failure()?.errorText})`);
+    const errorText = req.failure()?.errorText ?? '<no failure text>';
+    if (errorText === 'net::ERR_ABORTED') {
+      cancelledRequests.push(`CANCELLED ${req.method()} ${req.url()}`);
+      return;
+    }
+    failedBackendRequests.push(`FAILED ${req.method()} ${req.url()} (${errorText})`);
   });
 
   // Board with one REVIEW card so the Review surface has a real target. The card is born
@@ -806,8 +836,14 @@ test('S12: UI smoke — board, Review surface, Providers and Ops render with zer
     );
   }
   console.log(
-    `[S12] console errors=${consoleErrors.length} failed backend requests=${failedBackendRequests.length}`,
+    `[S12] console errors=${consoleErrors.length} failed backend requests=${failedBackendRequests.length}`
+    + ` client-cancelled requests=${cancelledRequests.length}`,
   );
+  if (cancelledRequests.length > 0) {
+    console.log(
+      `[S12] client-cancelled requests recorded (not asserted): ${JSON.stringify(cancelledRequests.slice(0, 10))}`,
+    );
+  }
   expect(consoleErrors, `console errors on the touched routes: ${JSON.stringify(consoleErrors)}`).toHaveLength(0);
   console.log(`[S12] backend-URL requests matched by the filter: ${backendRequestCount}`);
   expect(

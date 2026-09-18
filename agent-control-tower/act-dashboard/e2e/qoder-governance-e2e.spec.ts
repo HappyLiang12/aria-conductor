@@ -56,6 +56,7 @@ import {
   uniqueName,
 } from './fixtures';
 import {
+  BASE_URL,
   E2E_ENABLED,
   askDetail,
   assertZeroCreditModel,
@@ -98,6 +99,17 @@ test.beforeAll(async ({ request }) => {
  */
 const BACKEND_ORIGIN = (process.env.API_URL || 'http://localhost:8080').replace(/\/+$/, '');
 const MCP_ENDPOINT = `${BACKEND_ORIGIN}/mcp`;
+
+/**
+ * True when a URL addresses the backend. Browser-issued calls carry the dashboard
+ * origin (the axios client uses a relative baseURL, src/api/client.ts:3-6, and the
+ * Vite dev server proxies /api to the backend, vite.config.ts:14) — NOT
+ * BACKEND_ORIGIN; context-API calls (request.*) do hit BACKEND_ORIGIN directly.
+ * S12's failed-request filter must match both shapes or it records nothing.
+ */
+const isBackendUrl = (u: string) =>
+  u.startsWith(BACKEND_ORIGIN)
+  || (u.startsWith(BASE_URL) && (u.includes('/api/') || u.includes('/actuator/') || u.includes('/mcp')));
 
 /** Accepted initialize protocol versions, newest first (tried in order). */
 const MCP_PROTOCOL_VERSIONS = ['2025-03-26', '2024-11-05'];
@@ -717,19 +729,24 @@ test('S12: UI smoke — board, Review surface, Providers and Ops render with zer
   const consoleErrors: string[] = [];
   const failedBackendRequests: string[] = [];
   const consoleWarnings: string[] = [];
+  // Non-vacuity guard (F1): count the requests the filter matched; a zero count after
+  // the smoke steps fails loudly instead of silently passing on a broken filter.
+  let backendRequestCount = 0;
   page.on('console', (msg) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
     else if (msg.type() === 'warning') consoleWarnings.push(msg.text());
   });
   page.on('response', (resp) => {
-    if (resp.url().startsWith(BACKEND_ORIGIN) && resp.status() >= 400) {
+    if (!isBackendUrl(resp.url())) return;
+    backendRequestCount += 1;
+    if (resp.status() >= 400) {
       failedBackendRequests.push(`${resp.status()} ${resp.request().method()} ${resp.url()}`);
     }
   });
   page.on('requestfailed', (req) => {
-    if (req.url().startsWith(BACKEND_ORIGIN)) {
-      failedBackendRequests.push(`FAILED ${req.method()} ${req.url()} (${req.failure()?.errorText})`);
-    }
+    if (!isBackendUrl(req.url())) return;
+    backendRequestCount += 1;
+    failedBackendRequests.push(`FAILED ${req.method()} ${req.url()} (${req.failure()?.errorText})`);
   });
 
   // Board with one REVIEW card so the Review surface has a real target.
@@ -774,6 +791,13 @@ test('S12: UI smoke — board, Review surface, Providers and Ops render with zer
     `[S12] console errors=${consoleErrors.length} failed backend requests=${failedBackendRequests.length}`,
   );
   expect(consoleErrors, `console errors on the touched routes: ${JSON.stringify(consoleErrors)}`).toHaveLength(0);
+  console.log(`[S12] backend-URL requests matched by the filter: ${backendRequestCount}`);
+  expect(
+    backendRequestCount,
+    'the S12 backend-URL filter matched ZERO requests — the "no failed backend requests"'
+    + ' assertion below would be vacuous. Browser-issued calls carry the dashboard origin'
+    + ` (proxied to the backend), not BACKEND_ORIGIN=${BACKEND_ORIGIN}; fix the filter.`,
+  ).toBeGreaterThan(0);
   expect(
     failedBackendRequests,
     `failed backend requests on the touched routes: ${JSON.stringify(failedBackendRequests)}`,

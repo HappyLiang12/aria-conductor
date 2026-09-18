@@ -31,9 +31,20 @@ put_pat() { # outfile
 }
 
 # Fails (dies) when the given response body contains the PAT. Never prints body.
+# The PAT must never reach the argv of any forked process: it is written to a chmod
+# 600 temp file and handed to grep as a pattern FILE (same mechanism as the leak scan).
 assert_body_free_of_pat() { # file, what
-  local file="$1" what="$2"
-  if [ -s "$file" ] && grep -F -q -- "$QODER_E2E_PAT" "$file"; then
+  local file="$1" what="$2" patfile found=0
+  if [ -s "$file" ]; then
+    patfile="$(mktemp "${TMPDIR:-/tmp}/c6b-pat-assert.XXXXXX")" || die "cannot create the PAT pattern file for the body check"
+    chmod 600 "$patfile" 2>/dev/null || true
+    trap 'rm -f "$patfile"' RETURN
+    printf '%s' "$QODER_E2E_PAT" >"$patfile"
+    if grep -F -q -f "$patfile" "$file"; then found=1; fi
+    rm -f "$patfile"
+    trap - RETURN
+  fi
+  if [ "$found" -eq 1 ]; then
     die "$what echoed the PAT back — refusing to continue (never log a credential response verbatim)"
   fi
 }
@@ -91,9 +102,17 @@ preflight_checks() {
   fi
   assert_body_free_of_pat "$wf/cred0.json" "the credential GET response" || return 1
 
-  local configured
+  local configured masked want_masked reloaded=""
   configured="$(json_get "$wf/cred0.json" configured)"
-  if [ "$configured" != "true" ]; then
+  masked="$(json_get "$wf/cred0.json" patMasked)"
+  # The store must hold THIS run's PAT, not merely some credential: a leftover
+  # credential would make S6's mask assertion fail even though masking works.
+  # Compare tails only — the value and the tail are never logged.
+  want_masked="****${QODER_E2E_PAT: -4}"
+  if [ "$configured" = "true" ] && [ "$masked" != "$want_masked" ]; then
+    reloaded="yes"
+  fi
+  if [ "$configured" != "true" ] || [ -n "$reloaded" ]; then
     log_cmd "PUT $(credential_url)   (body piped via stdin from \$QODER_E2E_PAT — never argv, never echoed)"
     code="$(put_pat "$wf/cred_put.json" || true)"
     step_note "credential PUT: HTTP ${code:-<transport error>} body=$(head -c 300 "$wf/cred_put.json" 2>/dev/null)"
@@ -107,6 +126,9 @@ preflight_checks() {
     configured="$(json_get "$wf/cred1.json" configured)"
     cred_file="$wf/cred1.json"
     step_note "credential re-check: HTTP ${code:-<transport error>} configured=$configured"
+    if [ -n "$reloaded" ]; then
+      step_note "credential store did not hold the run PAT — reloaded (value never logged)"
+    fi
   fi
   if [ "$configured" != "true" ]; then
     step_fail "the qoder runtime credential is not configured after loading QODER_E2E_PAT (design §6.1 / plan C0.4)"
@@ -134,8 +156,10 @@ preflight_checks() {
 
 print_start_command_hint() {
   step_note "stack is not up — documented start command (from the repository root):"
-  step_note "  QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
-  err "start the stack first (from the repository root): QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
+  step_note "  PACK_CREDENTIAL_KEY=... APPROVALS_TIMEOUT_MS=120000 QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
+  step_note "  PACK_CREDENTIAL_KEY is required for the credential API (without it every credential route answers 503 KEY_NOT_CONFIGURED)"
+  step_note "  APPROVALS_TIMEOUT_MS must be <= 180000 for S4 (the expiry scenario needs a short approval TTL)"
+  err "start the stack first (from the repository root): PACK_CREDENTIAL_KEY=... APPROVALS_TIMEOUT_MS=120000 QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
 }
 
 # ---------------------------------------------------------------------------

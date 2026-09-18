@@ -280,8 +280,17 @@ scenario_s5_cancel_during_pending() {
   if [ -n "$cid" ]; then
     step_note "4. new sandbox container for this run: $cid"
   else
-    cid="$(head -1 "$wf/ids.after.txt" | tr -d '\r')"
-    step_note "4. no NEW container since the baseline; using the first container from the image instead: ${cid:-<none>}"
+    # F7: never guess between several candidates — a wrong pick would point the
+    # graceful-stop proof (and every later exec probe) at another run's sandbox.
+    local candidates candidate_count
+    candidates="$(tr -d '\r' <"$wf/ids.after.txt" | sed '/^[[:space:]]*$/d')"
+    candidate_count="$(printf '%s\n' "$candidates" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+    if [ "${candidate_count:-0}" -gt 1 ]; then
+      step_fail "no NEW sandbox container appeared for this run, and ${candidate_count} containers match image $QODER_SANDBOX_IMAGE — the fallback is ambiguous, refusing to guess; candidates: $(printf '%s' "$candidates" | tr '\n' ' ')"
+      return 1
+    fi
+    cid="$(printf '%s' "$candidates" | head -1)"
+    step_note "4. no NEW container since the baseline; single candidate from the image, using it: ${cid:-<none>}"
   fi
   if [ -z "$cid" ]; then
     step_note "fallback_kill=yes (no sandbox container from $QODER_SANDBOX_IMAGE exists while the ask is pending — the sandbox was already gone)"

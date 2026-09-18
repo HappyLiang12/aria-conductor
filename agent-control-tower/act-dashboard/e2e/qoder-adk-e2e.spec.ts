@@ -409,7 +409,14 @@ test('S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no sta
     `[S4] ask expired: status=${expiredSettled.data?.status} deliveryState=${expiredSettled.data?.deliveryState}`
     + ` reason=${JSON.stringify(expiredSettled.data?.reason)} decidedAt=${expiredSettled.data?.decidedAt}`,
   );
-  expect(String(expiredSettled.data?.reason ?? '')).toMatch(/expired/i);
+  // Both expiry paths are legitimate: the deadline sweep records "expired before decision"; the
+  // run-end sweep records "run ended before decision" when the CLI's turn ends before the TTL
+  // (the bash harness accepts both, e2e/qoder/lib/scenarios.sh:367-372). S4's criteria are the
+  // EXPIRED status, the delivered cancellation and the typed 409 — not which sweep won.
+  expect(
+    ['expired before decision', 'run ended before decision'],
+    `S4: unexpected expiry reason '${expiredSettled.data?.reason}'`,
+  ).toContain(String(expiredSettled.data?.reason ?? ''));
   expect((await listAsksForRun(request, run.id)).map((a) => a.status)).toContain('EXPIRED');
 
   // A later decide on the same ask must be the typed 409 — never a success, never a stale allow.

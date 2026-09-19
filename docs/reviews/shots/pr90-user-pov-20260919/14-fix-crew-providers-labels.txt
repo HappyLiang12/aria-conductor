@@ -1,0 +1,1936 @@
+Browser tab: 1551191682, Title: "Aria Conductor", URL: "http://localhost:5273/crew".
+0 AXWebArea Aria Conductor, URL: localhost:5273/crew
+	1 container, ID: root
+		2 container
+			3 heading Aria Conductor ARIA CONDUCTOR · LOCAL, Value: 1
+				4 text Aria Conductor
+				5 text ARIA CONDUCTOR · LOCAL
+			6 text 96
+			7 text Agents
+			8 text 2 of 3 Providers Healthy
+			9 text 96
+			10 text ACTIVE AGENTS
+			11 text 0
+			12 text RUNNING RUNS
+			13 text 17
+			14 text APPROVALS PENDING
+			15 text 198
+			16 text TOKENS TODAY
+			17 container Current time
+				18 text 16:16:19
+			19 button Notifications (679 unread)
+				20 text 🔔
+				21 text 99+
+			22 button Toggle theme
+				23 text ☀ Light
+		24 container Main views
+			25 button Overview
+			26 button Crew
+			27 button Providers
+			28 button Runs
+			29 button Knowledge
+			30 button Reports
+			31 button Chat
+			32 button Workflows
+			33 button Ops
+			34 button Jobs
+			35 button Open configuration
+				36 text Configure
+		37 container
+			38 container
+				39 heading 👥 Crew, Value: 1
+					40 text 👥 Crew
+				41 text Active agents, workload signals, and a hiring catalog of pre-configured roles.
+				42 button 🧹 Select Leftovers (38)
+					43 text 🧹 Select Leftovers (
+					44 text 38
+					45 text )
+				46 button + Add Agent
+				47 container
+					48 heading ROSTER COST · TODAY, Value: 2
+						49 text ROSTER COST
+						50 text · TODAY
+					51 container
+						52 text ACTIVE
+						53 text 102
+						54 text 96
+						55 text reachable ·
+						56 text 0
+						57 text idle
+					58 container
+						59 text TOKENS · TODAY
+						60 text 0
+						61 text aggregate across crew
+					62 container
+						63 text ESTIMATED SPEND
+						64 text $
+						65 text 0.00
+						66 text @ ~$0.012 / 1k tokens
+					67 container
+						68 text HIRING SLOTS
+						69 text 0
+						70 text soft cap · adjustable in Settings
+				71 container
+					72 heading ACTIVE AGENTS · 102 ON CREW, Value: 2
+						73 text ACTIVE AGENTS
+						74 text ·
+						75 text 102
+						76 text ON CREW
+					77 button Open details for SDD BA Agent
+						78 text SA
+						79 text SDD BA Agent
+						80 text BA
+						81 checkbox (settable, integer) Description: select SDD BA Agent, Value: 0
+						82 text Active
+						83 text ACTIVITY · TODAY
+						84 container
+						85 text 0
+						86 text /6
+						87 text TOKENS · TODAY
+						88 text 0
+						89 text SPEND · TODAY
+						90 text $0.00
+						91 text NATIVE
+						92 text native
+						93 button 🔧 Tools, Help: Assign tools
+					94 button Open details for SDD DEV Agent
+						95 text SA
+						96 text SDD DEV Agent
+						97 text DEV
+						98 checkbox (settable, integer) Description: select SDD DEV Agent, Value: 0
+						99 text Active
+						100 text ACTIVITY · TODAY
+						101 container
+						102 text 0
+						103 text /6
+						104 text TOKENS · TODAY
+						105 text 0
+						106 text SPEND · TODAY
+						107 text $0.00
+						108 text NATIVE
+						109 text native
+						110 button 🔧 Tools, Help: Assign tools
+					111 button Open details for SDD QA Agent
+						112 text SA
+						113 text SDD QA Agent
+						114 text QA
+						115 checkbox (settable, integer) Description: select SDD QA Agent, Value: 0
+						116 text Active
+						117 text ACTIVITY · TODAY
+						118 container
+						119 text 0
+						120 text /6
+						121 text TOKENS · TODAY
+						122 text 0
+						123 text SPEND · TODAY
+						124 text $0.00
+						125 text NATIVE
+						126 text native
+						127 button 🔧 Tools, Help: Assign tools
+					128 button Open details for c6b-s5-20260918-184323
+						129 text C6
+						130 text c6b-s5-20260918-184323
+						131 text DEV
+						132 checkbox (settable, integer) Description: select c6b-s5-20260918-184323, Value: 0
+						133 text Active
+						134 text ACTIVITY · TODAY
+						135 container
+						136 text 0
+						137 text /6
+						138 text TOKENS · TODAY
+						139 text 0
+						140 text SPEND · TODAY
+						141 text $0.00
+						142 text efficient
+						143 text native
+						144 button 🔧 Tools, Help: Assign tools
+					145 button Open details for c6b-s10-20260918-184450
+						146 text C6
+						147 text c6b-s10-20260918-184450
+						148 text DEV
+						149 checkbox (settable, integer) Description: select c6b-s10-20260918-184450, Value: 0
+						150 text Active
+						151 text ACTIVITY · TODAY
+						152 container
+						153 text 0
+						154 text /6
+						155 text TOKENS · TODAY
+						156 text 0
+						157 text SPEND · TODAY
+						158 text $0.00
+						159 text efficient
+						160 text native
+						161 button 🔧 Tools, Help: Assign tools
+					162 button Open details for Rec-1789757752359
+						163 text RE
+						164 text Rec-1789757752359
+						165 text DEV
+						166 checkbox (settable, integer) Description: select Rec-1789757752359, Value: 0
+						167 text Active
+						168 text ACTIVITY · TODAY
+						169 container
+						170 text 0
+						171 text /6
+						172 text TOKENS · TODAY
+						173 text 0
+						174 text SPEND · TODAY
+						175 text $0.00
+						176 text ali-copilot
+						177 text alibaba
+						178 button 🔧 Tools, Help: Assign tools
+					179 button Open details for RecApply-1789757756681
+						180 text RE
+						181 text RecApply-1789757756681
+						182 text DEV
+						183 checkbox (settable, integer) Description: select RecApply-1789757756681, Value: 0
+						184 text Active
+						185 text ACTIVITY · TODAY
+						186 container
+						187 text 0
+						188 text /6
+						189 text TOKENS · TODAY
+						190 text 0
+						191 text SPEND · TODAY
+						192 text $0.00
+						193 text ali-copilot
+						194 text alibaba
+						195 button 🔧 Tools, Help: Assign tools
+					196 button Open details for Developer Agent
+						197 text DA
+						198 text Developer Agent
+						199 text DEV
+						200 checkbox (settable, integer) Description: select Developer Agent, Value: 0
+						201 text Active
+						202 text ACTIVITY · TODAY
+						203 container
+						204 text 0
+						205 text /6
+						206 text TOKENS · TODAY
+						207 text 0
+						208 text SPEND · TODAY
+						209 text $0.00
+						210 text ali-copilot
+						211 text alibaba
+						212 button 🔧 Tools, Help: Assign tools
+					213 button Open details for Developer Agent
+						214 text DA
+						215 text Developer Agent
+						216 text DEV
+						217 checkbox (settable, integer) Description: select Developer Agent, Value: 0
+						218 text Active
+						219 text ACTIVITY · TODAY
+						220 container
+						221 text 0
+						222 text /6
+						223 text TOKENS · TODAY
+						224 text 0
+						225 text SPEND · TODAY
+						226 text $0.00
+						227 text ali-copilot
+						228 text alibaba
+						229 button 🔧 Tools, Help: Assign tools
+					230 button Open details for WfDfAgent-1789758120435
+						231 text WF
+						232 text WfDfAgent-1789758120435
+						233 text NATIVE
+						234 checkbox (settable, integer) Description: select WfDfAgent-1789758120435, Value: 0
+						235 text Active
+						236 text ACTIVITY · TODAY
+						237 container
+						238 text 0
+						239 text /6
+						240 text TOKENS · TODAY
+						241 text 0
+						242 text SPEND · TODAY
+						243 text $0.00
+						244 text NATIVE
+						245 text native
+						246 button 🔧 Tools, Help: Assign tools
+					247 button Open details for WfE2EAgent-1789758132290
+						248 text WF
+						249 text WfE2EAgent-1789758132290
+						250 text NATIVE
+						251 checkbox (settable, integer) Description: select WfE2EAgent-1789758132290, Value: 0
+						252 text Active
+						253 text ACTIVITY · TODAY
+						254 container
+						255 text 0
+						256 text /6
+						257 text TOKENS · TODAY
+						258 text 0
+						259 text SPEND · TODAY
+						260 text $0.00
+						261 text NATIVE
+						262 text native
+						263 button 🔧 Tools, Help: Assign tools
+					264 button Open details for WfSmAgent-1789758136414
+						265 text WF
+						266 text WfSmAgent-1789758136414
+						267 text NATIVE
+						268 checkbox (settable, integer) Description: select WfSmAgent-1789758136414, Value: 0
+						269 text Active
+						270 text ACTIVITY · TODAY
+						271 container
+						272 text 0
+						273 text /6
+						274 text TOKENS · TODAY
+						275 text 0
+						276 text SPEND · TODAY
+						277 text $0.00
+						278 text NATIVE
+						279 text native
+						280 button 🔧 Tools, Help: Assign tools
+					281 button Open details for WfTplAgent-1789758161170
+						282 text WF
+						283 text WfTplAgent-1789758161170
+						284 text NATIVE
+						285 checkbox (settable, integer) Description: select WfTplAgent-1789758161170, Value: 0
+						286 text Active
+						287 text ACTIVITY · TODAY
+						288 container
+						289 text 0
+						290 text /6
+						291 text TOKENS · TODAY
+						292 text 0
+						293 text SPEND · TODAY
+						294 text $0.00
+						295 text NATIVE
+						296 text native
+						297 button 🔧 Tools, Help: Assign tools
+					298 button Open details for WfUiAgent-1789758166454
+						299 text WF
+						300 text WfUiAgent-1789758166454
+						301 text NATIVE
+						302 checkbox (settable, integer) Description: select WfUiAgent-1789758166454, Value: 0
+						303 text Active
+						304 text ACTIVITY · TODAY
+						305 container
+						306 text 0
+						307 text /6
+						308 text TOKENS · TODAY
+						309 text 0
+						310 text SPEND · TODAY
+						311 text $0.00
+						312 text NATIVE
+						313 text native
+						314 button 🔧 Tools, Help: Assign tools
+					315 button Open details for WfE2EAgent-1789758186149
+						316 text WF
+						317 text WfE2EAgent-1789758186149
+						318 text NATIVE
+						319 checkbox (settable, integer) Description: select WfE2EAgent-1789758186149, Value: 0
+						320 text Active
+						321 text ACTIVITY · TODAY
+						322 container
+						323 text 0
+						324 text /6
+						325 text TOKENS · TODAY
+						326 text 0
+						327 text SPEND · TODAY
+						328 text $0.00
+						329 text NATIVE
+						330 text native
+						331 button 🔧 Tools, Help: Assign tools
+					332 button Open details for WfSmAgent-1789758186185
+						333 text WF
+						334 text WfSmAgent-1789758186185
+						335 text NATIVE
+						336 checkbox (settable, integer) Description: select WfSmAgent-1789758186185, Value: 0
+						337 text Active
+						338 text ACTIVITY · TODAY
+						339 container
+						340 text 0
+						341 text /6
+						342 text TOKENS · TODAY
+						343 text 0
+						344 text SPEND · TODAY
+						345 text $0.00
+						346 text NATIVE
+						347 text native
+						348 button 🔧 Tools, Help: Assign tools
+					349 button Open details for WfValAgent-1789758229037
+						350 text WF
+						351 text WfValAgent-1789758229037
+						352 text NATIVE
+						353 checkbox (settable, integer) Description: select WfValAgent-1789758229037, Value: 0
+						354 text Active
+						355 text ACTIVITY · TODAY
+						356 container
+						357 text 0
+						358 text /6
+						359 text TOKENS · TODAY
+						360 text 0
+						361 text SPEND · TODAY
+						362 text $0.00
+						363 text NATIVE
+						364 text native
+						365 button 🔧 Tools, Help: Assign tools
+					366 button Open details for WfYamlAgent-1789758234999
+						367 text WF
+						368 text WfYamlAgent-1789758234999
+						369 text NATIVE
+						370 checkbox (settable, integer) Description: select WfYamlAgent-1789758234999, Value: 0
+						371 text Active
+						372 text ACTIVITY · TODAY
+						373 container
+						374 text 0
+						375 text /6
+						376 text TOKENS · TODAY
+						377 text 0
+						378 text SPEND · TODAY
+						379 text $0.00
+						380 text NATIVE
+						381 text native
+						382 button 🔧 Tools, Help: Assign tools
+					383 button Open details for E2E-BA-1789758249649-6797
+						384 text E2
+						385 text E2E-BA-1789758249649-6797
+						386 text NATIVE
+						387 checkbox (settable, integer) Description: select E2E-BA-1789758249649-6797, Value: 0
+						388 text Active
+						389 text ACTIVITY · TODAY
+						390 container
+						391 text 0
+						392 text /6
+						393 text TOKENS · TODAY
+						394 text 0
+						395 text SPEND · TODAY
+						396 text $0.00
+						397 text NATIVE
+						398 text native
+						399 button 🔧 Tools, Help: Assign tools
+					400 button Open details for E2E-Dev-1789758249660-2967
+						401 text E2
+						402 text E2E-Dev-1789758249660-2967
+						403 text NATIVE
+						404 checkbox (settable, integer) Description: select E2E-Dev-1789758249660-2967, Value: 0
+						405 text Active
+						406 text ACTIVITY · TODAY
+						407 container
+						408 text 0
+						409 text /6
+						410 text TOKENS · TODAY
+						411 text 0
+						412 text SPEND · TODAY
+						413 text $0.00
+						414 text NATIVE
+						415 text native
+						416 button 🔧 Tools, Help: Assign tools
+					417 button Open details for E2E-QA-1789758249670-7443
+						418 text E2
+						419 text E2E-QA-1789758249670-7443
+						420 text NATIVE
+						421 checkbox (settable, integer) Description: select E2E-QA-1789758249670-7443, Value: 0
+						422 text Active
+						423 text ACTIVITY · TODAY
+						424 container
+						425 text 0
+						426 text /6
+						427 text TOKENS · TODAY
+						428 text 0
+						429 text SPEND · TODAY
+						430 text $0.00
+						431 text NATIVE
+						432 text native
+						433 button 🔧 Tools, Help: Assign tools
+					434 button Open details for E2E-Iso-B-1789758249850-7222
+						435 text E2
+						436 text E2E-Iso-B-1789758249850-7222
+						437 text NATIVE
+						438 checkbox (settable, integer) Description: select E2E-Iso-B-1789758249850-7222, Value: 0
+						439 text Active
+						440 text ACTIVITY · TODAY
+						441 container
+						442 text 0
+						443 text /6
+						444 text TOKENS · TODAY
+						445 text 0
+						446 text SPEND · TODAY
+						447 text $0.00
+						448 text NATIVE
+						449 text native
+						450 button 🔧 Tools, Help: Assign tools
+					451 button Open details for E2E-Iso-A-1789758249848-6698
+						452 text E2
+						453 text E2E-Iso-A-1789758249848-6698
+						454 text NATIVE
+						455 checkbox (settable, integer) Description: select E2E-Iso-A-1789758249848-6698, Value: 0
+						456 text Active
+						457 text ACTIVITY · TODAY
+						458 container
+						459 text 0
+						460 text /6
+						461 text TOKENS · TODAY
+						462 text 0
+						463 text SPEND · TODAY
+						464 text $0.00
+						465 text NATIVE
+						466 text native
+						467 button 🔧 Tools, Help: Assign tools
+					468 button Open details for WfSmAgent-1789758347804
+						469 text WF
+						470 text WfSmAgent-1789758347804
+						471 text NATIVE
+						472 checkbox (settable, integer) Description: select WfSmAgent-1789758347804, Value: 0
+						473 text Active
+						474 text ACTIVITY · TODAY
+						475 container
+						476 text 0
+						477 text /6
+						478 text TOKENS · TODAY
+						479 text 0
+						480 text SPEND · TODAY
+						481 text $0.00
+						482 text NATIVE
+						483 text native
+						484 button 🔧 Tools, Help: Assign tools
+					485 button Open details for WfE2EAgent-1789758347769
+						486 text WF
+						487 text WfE2EAgent-1789758347769
+						488 text NATIVE
+						489 checkbox (settable, integer) Description: select WfE2EAgent-1789758347769, Value: 0
+						490 text Active
+						491 text ACTIVITY · TODAY
+						492 container
+						493 text 0
+						494 text /6
+						495 text TOKENS · TODAY
+						496 text 0
+						497 text SPEND · TODAY
+						498 text $0.00
+						499 text NATIVE
+						500 text native
+						501 button 🔧 Tools, Help: Assign tools
+					502 button Open details for Rec-1789758453648
+						503 text RE
+						504 text Rec-1789758453648
+						505 text DEV
+						506 checkbox (settable, integer) Description: select Rec-1789758453648, Value: 0
+						507 text Active
+						508 text ACTIVITY · TODAY
+						509 container
+						510 text 0
+						511 text /6
+						512 text TOKENS · TODAY
+						513 text 0
+						514 text SPEND · TODAY
+						515 text $0.00
+						516 text ali-copilot
+						517 text alibaba
+						518 button 🔧 Tools, Help: Assign tools
+					519 button Open details for RecApply-1789758462156
+						520 text RE
+						521 text RecApply-1789758462156
+						522 text DEV
+						523 checkbox (settable, integer) Description: select RecApply-1789758462156, Value: 0
+						524 text Active
+						525 text ACTIVITY · TODAY
+						526 container
+						527 text 0
+						528 text /6
+						529 text TOKENS · TODAY
+						530 text 0
+						531 text SPEND · TODAY
+						532 text $0.00
+						533 text ali-copilot
+						534 text alibaba
+						535 button 🔧 Tools, Help: Assign tools
+					536 button Open details for RecApply-1789758647416
+						537 text RE
+						538 text RecApply-1789758647416
+						539 text DEV
+						540 checkbox (settable, integer) Description: select RecApply-1789758647416, Value: 0
+						541 text Active
+						542 text ACTIVITY · TODAY
+						543 container
+						544 text 0
+						545 text /6
+						546 text TOKENS · TODAY
+						547 text 0
+						548 text SPEND · TODAY
+						549 text $0.00
+						550 text ali-copilot
+						551 text alibaba
+						552 button 🔧 Tools, Help: Assign tools
+					553 button Open details for Developer Agent
+						554 text DA
+						555 text Developer Agent
+						556 text DEV
+						557 checkbox (settable, integer) Description: select Developer Agent, Value: 0
+						558 text Active
+						559 text ACTIVITY · TODAY
+						560 container
+						561 text 0
+						562 text /6
+						563 text TOKENS · TODAY
+						564 text 0
+						565 text SPEND · TODAY
+						566 text $0.00
+						567 text ali-copilot
+						568 text alibaba
+						569 button 🔧 Tools, Help: Assign tools
+					570 button Open details for Developer Agent
+						571 text DA
+						572 text Developer Agent
+						573 text DEV
+						574 checkbox (settable, integer) Description: select Developer Agent, Value: 0
+						575 text Active
+						576 text ACTIVITY · TODAY
+						577 container
+						578 text 0
+						579 text /6
+						580 text TOKENS · TODAY
+						581 text 0
+						582 text SPEND · TODAY
+						583 text $0.00
+						584 text ali-copilot
+						585 text alibaba
+						586 button 🔧 Tools, Help: Assign tools
+					587 button Open details for WfDfAgent-1789759102064
+						588 text WF
+						589 text WfDfAgent-1789759102064
+						590 text NATIVE
+						591 checkbox (settable, integer) Description: select WfDfAgent-1789759102064, Value: 0
+						592 text Active
+						593 text ACTIVITY · TODAY
+						594 container
+						595 text 0
+						596 text /6
+						597 text TOKENS · TODAY
+						598 text 0
+						599 text SPEND · TODAY
+						600 text $0.00
+						601 text NATIVE
+						602 text native
+						603 button 🔧 Tools, Help: Assign tools
+					604 button Open details for WfE2EAgent-1789759118171
+						605 text WF
+						606 text WfE2EAgent-1789759118171
+						607 text NATIVE
+						608 checkbox (settable, integer) Description: select WfE2EAgent-1789759118171, Value: 0
+						609 text Active
+						610 text ACTIVITY · TODAY
+						611 container
+						612 text 0
+						613 text /6
+						614 text TOKENS · TODAY
+						615 text 0
+						616 text SPEND · TODAY
+						617 text $0.00
+						618 text NATIVE
+						619 text native
+						620 button 🔧 Tools, Help: Assign tools
+					621 button Open details for WfSmAgent-1789759120287
+						622 text WF
+						623 text WfSmAgent-1789759120287
+						624 text NATIVE
+						625 checkbox (settable, integer) Description: select WfSmAgent-1789759120287, Value: 0
+						626 text Active
+						627 text ACTIVITY · TODAY
+						628 container
+						629 text 0
+						630 text /6
+						631 text TOKENS · TODAY
+						632 text 0
+						633 text SPEND · TODAY
+						634 text $0.00
+						635 text NATIVE
+						636 text native
+						637 button 🔧 Tools, Help: Assign tools
+					638 button Open details for WfTplAgent-1789759156191
+						639 text WF
+						640 text WfTplAgent-1789759156191
+						641 text NATIVE
+						642 checkbox (settable, integer) Description: select WfTplAgent-1789759156191, Value: 0
+						643 text Active
+						644 text ACTIVITY · TODAY
+						645 container
+						646 text 0
+						647 text /6
+						648 text TOKENS · TODAY
+						649 text 0
+						650 text SPEND · TODAY
+						651 text $0.00
+						652 text NATIVE
+						653 text native
+						654 button 🔧 Tools, Help: Assign tools
+					655 button Open details for WfUiAgent-1789759160894
+						656 text WF
+						657 text WfUiAgent-1789759160894
+						658 text NATIVE
+						659 checkbox (settable, integer) Description: select WfUiAgent-1789759160894, Value: 0
+						660 text Active
+						661 text ACTIVITY · TODAY
+						662 container
+						663 text 0
+						664 text /6
+						665 text TOKENS · TODAY
+						666 text 0
+						667 text SPEND · TODAY
+						668 text $0.00
+						669 text NATIVE
+						670 text native
+						671 button 🔧 Tools, Help: Assign tools
+					672 button Open details for WfValAgent-1789759168353
+						673 text WF
+						674 text WfValAgent-1789759168353
+						675 text NATIVE
+						676 checkbox (settable, integer) Description: select WfValAgent-1789759168353, Value: 0
+						677 text Active
+						678 text ACTIVITY · TODAY
+						679 container
+						680 text 0
+						681 text /6
+						682 text TOKENS · TODAY
+						683 text 0
+						684 text SPEND · TODAY
+						685 text $0.00
+						686 text NATIVE
+						687 text native
+						688 button 🔧 Tools, Help: Assign tools
+					689 button Open details for WfYamlAgent-1789759177768
+						690 text WF
+						691 text WfYamlAgent-1789759177768
+						692 text NATIVE
+						693 checkbox (settable, integer) Description: select WfYamlAgent-1789759177768, Value: 0
+						694 text Active
+						695 text ACTIVITY · TODAY
+						696 container
+						697 text 0
+						698 text /6
+						699 text TOKENS · TODAY
+						700 text 0
+						701 text SPEND · TODAY
+						702 text $0.00
+						703 text NATIVE
+						704 text native
+						705 button 🔧 Tools, Help: Assign tools
+					706 button Open details for E2E-BA-1789759243794-1202
+						707 text E2
+						708 text E2E-BA-1789759243794-1202
+						709 text NATIVE
+						710 checkbox (settable, integer) Description: select E2E-BA-1789759243794-1202, Value: 0
+						711 text Active
+						712 text ACTIVITY · TODAY
+						713 container
+						714 text 0
+						715 text /6
+						716 text TOKENS · TODAY
+						717 text 0
+						718 text SPEND · TODAY
+						719 text $0.00
+						720 text NATIVE
+						721 text native
+						722 button 🔧 Tools, Help: Assign tools
+					723 button Open details for E2E-Dev-1789759243820-357
+						724 text E2
+						725 text E2E-Dev-1789759243820-357
+						726 text NATIVE
+						727 checkbox (settable, integer) Description: select E2E-Dev-1789759243820-357, Value: 0
+						728 text Active
+						729 text ACTIVITY · TODAY
+						730 container
+						731 text 0
+						732 text /6
+						733 text TOKENS · TODAY
+						734 text 0
+						735 text SPEND · TODAY
+						736 text $0.00
+						737 text NATIVE
+						738 text native
+						739 button 🔧 Tools, Help: Assign tools
+					740 button Open details for E2E-QA-1789759243829-1543
+						741 text E2
+						742 text E2E-QA-1789759243829-1543
+						743 text NATIVE
+						744 checkbox (settable, integer) Description: select E2E-QA-1789759243829-1543, Value: 0
+						745 text Active
+						746 text ACTIVITY · TODAY
+						747 container
+						748 text 0
+						749 text /6
+						750 text TOKENS · TODAY
+						751 text 0
+						752 text SPEND · TODAY
+						753 text $0.00
+						754 text NATIVE
+						755 text native
+						756 button 🔧 Tools, Help: Assign tools
+					757 button Open details for E2E-Iso-A-1789759244035-6180
+						758 text E2
+						759 text E2E-Iso-A-1789759244035-6180
+						760 text NATIVE
+						761 checkbox (settable, integer) Description: select E2E-Iso-A-1789759244035-6180, Value: 0
+						762 text Active
+						763 text ACTIVITY · TODAY
+						764 container
+						765 text 0
+						766 text /6
+						767 text TOKENS · TODAY
+						768 text 0
+						769 text SPEND · TODAY
+						770 text $0.00
+						771 text NATIVE
+						772 text native
+						773 button 🔧 Tools, Help: Assign tools
+					774 button Open details for E2E-Iso-B-1789759244036-6148
+						775 text E2
+						776 text E2E-Iso-B-1789759244036-6148
+						777 text NATIVE
+						778 checkbox (settable, integer) Description: select E2E-Iso-B-1789759244036-6148, Value: 0
+						779 text Active
+						780 text ACTIVITY · TODAY
+						781 container
+						782 text 0
+						783 text /6
+						784 text TOKENS · TODAY
+						785 text 0
+						786 text SPEND · TODAY
+						787 text $0.00
+						788 text NATIVE
+						789 text native
+						790 button 🔧 Tools, Help: Assign tools
+					791 button Open details for c6b-s5-20260918-210137
+						792 text C6
+						793 text c6b-s5-20260918-210137
+						794 text DEV
+						795 checkbox (settable, integer) Description: select c6b-s5-20260918-210137, Value: 0
+						796 text Active
+						797 text ACTIVITY · TODAY
+						798 container
+						799 text 0
+						800 text /6
+						801 text TOKENS · TODAY
+						802 text 0
+						803 text SPEND · TODAY
+						804 text $0.00
+						805 text efficient
+						806 text native
+						807 button 🔧 Tools, Help: Assign tools
+					808 button Open details for c6b-s10-20260918-211613
+						809 text C6
+						810 text c6b-s10-20260918-211613
+						811 text DEV
+						812 checkbox (settable, integer) Description: select c6b-s10-20260918-211613, Value: 0
+						813 text Active
+						814 text ACTIVITY · TODAY
+						815 container
+						816 text 0
+						817 text /6
+						818 text TOKENS · TODAY
+						819 text 0
+						820 text SPEND · TODAY
+						821 text $0.00
+						822 text efficient
+						823 text native
+						824 button 🔧 Tools, Help: Assign tools
+					825 button Open details for Rec-1789767589847
+						826 text RE
+						827 text Rec-1789767589847
+						828 text DEV
+						829 checkbox (settable, integer) Description: select Rec-1789767589847, Value: 0
+						830 text Active
+						831 text ACTIVITY · TODAY
+						832 container
+						833 text 0
+						834 text /6
+						835 text TOKENS · TODAY
+						836 text 0
+						837 text SPEND · TODAY
+						838 text $0.00
+						839 text ali-copilot
+						840 text alibaba
+						841 button 🔧 Tools, Help: Assign tools
+					842 button Open details for RecApply-1789767612704
+						843 text RE
+						844 text RecApply-1789767612704
+						845 text DEV
+						846 checkbox (settable, integer) Description: select RecApply-1789767612704, Value: 0
+						847 text Active
+						848 text ACTIVITY · TODAY
+						849 container
+						850 text 0
+						851 text /6
+						852 text TOKENS · TODAY
+						853 text 0
+						854 text SPEND · TODAY
+						855 text $0.00
+						856 text ali-copilot
+						857 text alibaba
+						858 button 🔧 Tools, Help: Assign tools
+					859 button Open details for QA Agent
+						860 text QA
+						861 text QA Agent
+						862 text QA
+						863 checkbox (settable, integer) Description: select QA Agent, Value: 0
+						864 text Active
+						865 text ACTIVITY · TODAY
+						866 container
+						867 text 0
+						868 text /6
+						869 text TOKENS · TODAY
+						870 text 0
+						871 text SPEND · TODAY
+						872 text $0.00
+						873 text ali-copilot
+						874 text alibaba
+						875 button 🔧 Tools, Help: Assign tools
+					876 button Open details for QA Agent
+						877 text QA
+						878 text QA Agent
+						879 text QA
+						880 checkbox (settable, integer) Description: select QA Agent, Value: 0
+						881 text Active
+						882 text ACTIVITY · TODAY
+						883 container
+						884 text 0
+						885 text /6
+						886 text TOKENS · TODAY
+						887 text 0
+						888 text SPEND · TODAY
+						889 text $0.00
+						890 text ali-copilot
+						891 text alibaba
+						892 button 🔧 Tools, Help: Assign tools
+					893 button Open details for e2e-agent-1789767946593-8463
+						894 text E2
+						895 text e2e-agent-1789767946593-8463
+						896 text NATIVE
+						897 checkbox (settable, integer) Description: select e2e-agent-1789767946593-8463, Value: 0
+						898 text Active
+						899 text ACTIVITY · TODAY
+						900 container
+						901 text 0
+						902 text /6
+						903 text TOKENS · TODAY
+						904 text 0
+						905 text SPEND · TODAY
+						906 text $0.00
+						907 text NATIVE
+						908 text native
+						909 button 🔧 Tools, Help: Assign tools
+					910 button Open details for e2e-agent-1789767955897-1365
+						911 text E2
+						912 text e2e-agent-1789767955897-1365
+						913 text NATIVE
+						914 checkbox (settable, integer) Description: select e2e-agent-1789767955897-1365, Value: 0
+						915 text Active
+						916 text ACTIVITY · TODAY
+						917 container
+						918 text 0
+						919 text /6
+						920 text TOKENS · TODAY
+						921 text 0
+						922 text SPEND · TODAY
+						923 text $0.00
+						924 text NATIVE
+						925 text native
+						926 button 🔧 Tools, Help: Assign tools
+					927 button Open details for e2e-agent-1789767959967-8297
+						928 text E2
+						929 text e2e-agent-1789767959967-8297
+						930 text NATIVE
+						931 checkbox (settable, integer) Description: select e2e-agent-1789767959967-8297, Value: 0
+						932 text Active
+						933 text ACTIVITY · TODAY
+						934 container
+						935 text 0
+						936 text /6
+						937 text TOKENS · TODAY
+						938 text 0
+						939 text SPEND · TODAY
+						940 text $0.00
+						941 text NATIVE
+						942 text native
+						943 button 🔧 Tools, Help: Assign tools
+					944 button Open details for e2e-agent-1789767971290-194
+						945 text E2
+						946 text e2e-agent-1789767971290-194
+						947 text NATIVE
+						948 checkbox (settable, integer) Description: select e2e-agent-1789767971290-194, Value: 0
+						949 text Active
+						950 text ACTIVITY · TODAY
+						951 container
+						952 text 0
+						953 text /6
+						954 text TOKENS · TODAY
+						955 text 0
+						956 text SPEND · TODAY
+						957 text $0.00
+						958 text NATIVE
+						959 text native
+						960 button 🔧 Tools, Help: Assign tools
+					961 button Open details for e2e-agent-1789767978117-4292
+						962 text E2
+						963 text e2e-agent-1789767978117-4292
+						964 text NATIVE
+						965 checkbox (settable, integer) Description: select e2e-agent-1789767978117-4292, Value: 0
+						966 text Active
+						967 text ACTIVITY · TODAY
+						968 container
+						969 text 0
+						970 text /6
+						971 text TOKENS · TODAY
+						972 text 0
+						973 text SPEND · TODAY
+						974 text $0.00
+						975 text NATIVE
+						976 text native
+						977 button 🔧 Tools, Help: Assign tools
+					978 button Open details for e2e-agent-1789767988303-3267
+						979 text E2
+						980 text e2e-agent-1789767988303-3267
+						981 text NATIVE
+						982 checkbox (settable, integer) Description: select e2e-agent-1789767988303-3267, Value: 0
+						983 text Active
+						984 text ACTIVITY · TODAY
+						985 container
+						986 text 0
+						987 text /6
+						988 text TOKENS · TODAY
+						989 text 0
+						990 text SPEND · TODAY
+						991 text $0.00
+						992 text NATIVE
+						993 text native
+						994 button 🔧 Tools, Help: Assign tools
+					995 button Open details for e2e-agent-1789767998159-897
+						996 text E2
+						997 text e2e-agent-1789767998159-897
+						998 text NATIVE
+						999 checkbox (settable, integer) Description: select e2e-agent-1789767998159-897, Value: 0
+						1000 text Active
+						1001 text ACTIVITY · TODAY
+						1002 container
+						1003 text 0
+						1004 text /6
+						1005 text TOKENS · TODAY
+						1006 text 0
+						1007 text SPEND · TODAY
+						1008 text $0.00
+						1009 text NATIVE
+						1010 text native
+						1011 button 🔧 Tools, Help: Assign tools
+					1012 button Open details for e2e-oc-hitl-1789767999717-8015
+						1013 text E2
+						1014 text e2e-oc-hitl-1789767999717-8015
+						1015 text DEV
+						1016 checkbox (settable, integer) Description: select e2e-oc-hitl-1789767999717-8015, Value: 0
+						1017 text Active
+						1018 text ACTIVITY · TODAY
+						1019 container
+						1020 text 0
+						1021 text /6
+						1022 text TOKENS · TODAY
+						1023 text 0
+						1024 text SPEND · TODAY
+						1025 text $0.00
+						1026 text deepseek-chat
+						1027 text native
+						1028 button 🔧 Tools, Help: Assign tools
+					1029 button Open details for e2e-agent-1789768030192-1502
+						1030 text E2
+						1031 text e2e-agent-1789768030192-1502
+						1032 text NATIVE
+						1033 checkbox (settable, integer) Description: select e2e-agent-1789768030192-1502, Value: 0
+						1034 text Active
+						1035 text ACTIVITY · TODAY
+						1036 container
+						1037 text 0
+						1038 text /6
+						1039 text TOKENS · TODAY
+						1040 text 0
+						1041 text SPEND · TODAY
+						1042 text $0.00
+						1043 text NATIVE
+						1044 text native
+						1045 button 🔧 Tools, Help: Assign tools
+					1046 button Open details for e2e-oc-opsap-1789768047026-3547
+						1047 text E2
+						1048 text e2e-oc-opsap-1789768047026-3547
+						1049 text DEV
+						1050 checkbox (settable, integer) Description: select e2e-oc-opsap-1789768047026-3547, Value: 0
+						1051 text Active
+						1052 text ACTIVITY · TODAY
+						1053 container
+						1054 text 0
+						1055 text /6
+						1056 text TOKENS · TODAY
+						1057 text 0
+						1058 text SPEND · TODAY
+						1059 text $0.00
+						1060 text deepseek-chat
+						1061 text native
+						1062 button 🔧 Tools, Help: Assign tools
+					1063 button Open details for e2e-agent-1789768066859-240
+						1064 text E2
+						1065 text e2e-agent-1789768066859-240
+						1066 text NATIVE
+						1067 checkbox (settable, integer) Description: select e2e-agent-1789768066859-240, Value: 0
+						1068 text Active
+						1069 text ACTIVITY · TODAY
+						1070 container
+						1071 text 0
+						1072 text /6
+						1073 text TOKENS · TODAY
+						1074 text 0
+						1075 text SPEND · TODAY
+						1076 text $0.00
+						1077 text NATIVE
+						1078 text native
+						1079 button 🔧 Tools, Help: Assign tools
+					1080 button Open details for e2e-agent-1789768093709-7118
+						1081 text E2
+						1082 text e2e-agent-1789768093709-7118
+						1083 text NATIVE
+						1084 checkbox (settable, integer) Description: select e2e-agent-1789768093709-7118, Value: 0
+						1085 text Active
+						1086 text ACTIVITY · TODAY
+						1087 container
+						1088 text 0
+						1089 text /6
+						1090 text TOKENS · TODAY
+						1091 text 0
+						1092 text SPEND · TODAY
+						1093 text $0.00
+						1094 text NATIVE
+						1095 text native
+						1096 button 🔧 Tools, Help: Assign tools
+					1097 button Open details for e2e-agent-1789768099969-8723
+						1098 text E2
+						1099 text e2e-agent-1789768099969-8723
+						1100 text NATIVE
+						1101 checkbox (settable, integer) Description: select e2e-agent-1789768099969-8723, Value: 0
+						1102 text Active
+						1103 text ACTIVITY · TODAY
+						1104 container
+						1105 text 0
+						1106 text /6
+						1107 text TOKENS · TODAY
+						1108 text 0
+						1109 text SPEND · TODAY
+						1110 text $0.00
+						1111 text NATIVE
+						1112 text native
+						1113 button 🔧 Tools, Help: Assign tools
+					1114 button Open details for e2e-oc-uidz-1789768112085-1125
+						1115 text E2
+						1116 text e2e-oc-uidz-1789768112085-1125
+						1117 text DEV
+						1118 checkbox (settable, integer) Description: select e2e-oc-uidz-1789768112085-1125, Value: 0
+						1119 text Active
+						1120 text ACTIVITY · TODAY
+						1121 container
+						1122 text 0
+						1123 text /6
+						1124 text TOKENS · TODAY
+						1125 text 0
+						1126 text SPEND · TODAY
+						1127 text $0.00
+						1128 text deepseek-chat
+						1129 text native
+						1130 button 🔧 Tools, Help: Assign tools
+					1131 button Open details for e2e-agent-1789768126418-7734
+						1132 text E2
+						1133 text e2e-agent-1789768126418-7734
+						1134 text NATIVE
+						1135 checkbox (settable, integer) Description: select e2e-agent-1789768126418-7734, Value: 0
+						1136 text Active
+						1137 text ACTIVITY · TODAY
+						1138 container
+						1139 text 0
+						1140 text /6
+						1141 text TOKENS · TODAY
+						1142 text 0
+						1143 text SPEND · TODAY
+						1144 text $0.00
+						1145 text NATIVE
+						1146 text native
+						1147 button 🔧 Tools, Help: Assign tools
+					1148 button Open details for e2e-oc-uiaz-1789768127387-7074
+						1149 text E2
+						1150 text e2e-oc-uiaz-1789768127387-7074
+						1151 text DEV
+						1152 checkbox (settable, integer) Description: select e2e-oc-uiaz-1789768127387-7074, Value: 0
+						1153 text Active
+						1154 text ACTIVITY · TODAY
+						1155 container
+						1156 text 0
+						1157 text /6
+						1158 text TOKENS · TODAY
+						1159 text 0
+						1160 text SPEND · TODAY
+						1161 text $0.00
+						1162 text deepseek-chat
+						1163 text native
+						1164 button 🔧 Tools, Help: Assign tools
+					1165 button Open details for e2e-agent-1789768173879-1138
+						1166 text E2
+						1167 text e2e-agent-1789768173879-1138
+						1168 text NATIVE
+						1169 checkbox (settable, integer) Description: select e2e-agent-1789768173879-1138, Value: 0
+						1170 text Active
+						1171 text ACTIVITY · TODAY
+						1172 container
+						1173 text 0
+						1174 text /6
+						1175 text TOKENS · TODAY
+						1176 text 0
+						1177 text SPEND · TODAY
+						1178 text $0.00
+						1179 text NATIVE
+						1180 text native
+						1181 button 🔧 Tools, Help: Assign tools
+					1182 button Open details for WfDfAgent-1789768184601
+						1183 text WF
+						1184 text WfDfAgent-1789768184601
+						1185 text NATIVE
+						1186 checkbox (settable, integer) Description: select WfDfAgent-1789768184601, Value: 0
+						1187 text Active
+						1188 text ACTIVITY · TODAY
+						1189 container
+						1190 text 0
+						1191 text /6
+						1192 text TOKENS · TODAY
+						1193 text 0
+						1194 text SPEND · TODAY
+						1195 text $0.00
+						1196 text NATIVE
+						1197 text native
+						1198 button 🔧 Tools, Help: Assign tools
+					1199 button Open details for WfE2EAgent-1789768222873
+						1200 text WF
+						1201 text WfE2EAgent-1789768222873
+						1202 text NATIVE
+						1203 checkbox (settable, integer) Description: select WfE2EAgent-1789768222873, Value: 0
+						1204 text Active
+						1205 text ACTIVITY · TODAY
+						1206 container
+						1207 text 0
+						1208 text /6
+						1209 text TOKENS · TODAY
+						1210 text 0
+						1211 text SPEND · TODAY
+						1212 text $0.00
+						1213 text NATIVE
+						1214 text native
+						1215 button 🔧 Tools, Help: Assign tools
+					1216 button Open details for WfSmAgent-1789768233301
+						1217 text WF
+						1218 text WfSmAgent-1789768233301
+						1219 text NATIVE
+						1220 checkbox (settable, integer) Description: select WfSmAgent-1789768233301, Value: 0
+						1221 text Active
+						1222 text ACTIVITY · TODAY
+						1223 container
+						1224 text 0
+						1225 text /6
+						1226 text TOKENS · TODAY
+						1227 text 0
+						1228 text SPEND · TODAY
+						1229 text $0.00
+						1230 text NATIVE
+						1231 text native
+						1232 button 🔧 Tools, Help: Assign tools
+					1233 button Open details for WfTplAgent-1789768240995
+						1234 text WF
+						1235 text WfTplAgent-1789768240995
+						1236 text NATIVE
+						1237 checkbox (settable, integer) Description: select WfTplAgent-1789768240995, Value: 0
+						1238 text Active
+						1239 text ACTIVITY · TODAY
+						1240 container
+						1241 text 0
+						1242 text /6
+						1243 text TOKENS · TODAY
+						1244 text 0
+						1245 text SPEND · TODAY
+						1246 text $0.00
+						1247 text NATIVE
+						1248 text native
+						1249 button 🔧 Tools, Help: Assign tools
+					1250 button Open details for WfUiAgent-1789768249769
+						1251 text WF
+						1252 text WfUiAgent-1789768249769
+						1253 text NATIVE
+						1254 checkbox (settable, integer) Description: select WfUiAgent-1789768249769, Value: 0
+						1255 text Active
+						1256 text ACTIVITY · TODAY
+						1257 container
+						1258 text 0
+						1259 text /6
+						1260 text TOKENS · TODAY
+						1261 text 0
+						1262 text SPEND · TODAY
+						1263 text $0.00
+						1264 text NATIVE
+						1265 text native
+						1266 button 🔧 Tools, Help: Assign tools
+					1267 button Open details for WfValAgent-1789768267571
+						1268 text WF
+						1269 text WfValAgent-1789768267571
+						1270 text NATIVE
+						1271 checkbox (settable, integer) Description: select WfValAgent-1789768267571, Value: 0
+						1272 text Active
+						1273 text ACTIVITY · TODAY
+						1274 container
+						1275 text 0
+						1276 text /6
+						1277 text TOKENS · TODAY
+						1278 text 0
+						1279 text SPEND · TODAY
+						1280 text $0.00
+						1281 text NATIVE
+						1282 text native
+						1283 button 🔧 Tools, Help: Assign tools
+					1284 button Open details for WfYamlAgent-1789768277456
+						1285 text WF
+						1286 text WfYamlAgent-1789768277456
+						1287 text NATIVE
+						1288 checkbox (settable, integer) Description: select WfYamlAgent-1789768277456, Value: 0
+						1289 text Active
+						1290 text ACTIVITY · TODAY
+						1291 container
+						1292 text 0
+						1293 text /6
+						1294 text TOKENS · TODAY
+						1295 text 0
+						1296 text SPEND · TODAY
+						1297 text $0.00
+						1298 text NATIVE
+						1299 text native
+						1300 button 🔧 Tools, Help: Assign tools
+					1301 button Open details for WfDfAgent-1789768294815
+						1302 text WF
+						1303 text WfDfAgent-1789768294815
+						1304 text NATIVE
+						1305 checkbox (settable, integer) Description: select WfDfAgent-1789768294815, Value: 0
+						1306 text Active
+						1307 text ACTIVITY · TODAY
+						1308 container
+						1309 text 0
+						1310 text /6
+						1311 text TOKENS · TODAY
+						1312 text 0
+						1313 text SPEND · TODAY
+						1314 text $0.00
+						1315 text NATIVE
+						1316 text native
+						1317 button 🔧 Tools, Help: Assign tools
+					1318 button Open details for e2e-oc-deny-1789768323810-8336
+						1319 text E2
+						1320 text e2e-oc-deny-1789768323810-8336
+						1321 text DEV
+						1322 checkbox (settable, integer) Description: select e2e-oc-deny-1789768323810-8336, Value: 0
+						1323 text Active
+						1324 text ACTIVITY · TODAY
+						1325 container
+						1326 text 0
+						1327 text /6
+						1328 text TOKENS · TODAY
+						1329 text 0
+						1330 text SPEND · TODAY
+						1331 text $0.00
+						1332 text deepseek-chat
+						1333 text native
+						1334 button 🔧 Tools, Help: Assign tools
+					1335 button Open details for e2e-git-gate-agent-1789768326586-8502
+						1336 text E2
+						1337 text e2e-git-gate-agent-1789768326586-8502
+						1338 text DEV
+						1339 checkbox (settable, integer) Description: select e2e-git-gate-agent-1789768326586-8502, Value: 0
+						1340 text Active
+						1341 text ACTIVITY · TODAY
+						1342 container
+						1343 text 0
+						1344 text /6
+						1345 text TOKENS · TODAY
+						1346 text 0
+						1347 text SPEND · TODAY
+						1348 text $0.00
+						1349 text deepseek-chat
+						1350 text native
+						1351 button 🔧 Tools, Help: Assign tools
+					1352 button Open details for e2e-oc-changes-1789768331282-4861
+						1353 text E2
+						1354 text e2e-oc-changes-1789768331282-4861
+						1355 text DEV
+						1356 checkbox (settable, integer) Description: select e2e-oc-changes-1789768331282-4861, Value: 0
+						1357 text Active
+						1358 text ACTIVITY · TODAY
+						1359 container
+						1360 text 0
+						1361 text /6
+						1362 text TOKENS · TODAY
+						1363 text 0
+						1364 text SPEND · TODAY
+						1365 text $0.00
+						1366 text deepseek-chat
+						1367 text native
+						1368 button 🔧 Tools, Help: Assign tools
+					1369 button Open details for E2E-BA-1789768338657-4474
+						1370 text E2
+						1371 text E2E-BA-1789768338657-4474
+						1372 text NATIVE
+						1373 checkbox (settable, integer) Description: select E2E-BA-1789768338657-4474, Value: 0
+						1374 text Active
+						1375 text ACTIVITY · TODAY
+						1376 container
+						1377 text 0
+						1378 text /6
+						1379 text TOKENS · TODAY
+						1380 text 0
+						1381 text SPEND · TODAY
+						1382 text $0.00
+						1383 text NATIVE
+						1384 text native
+						1385 button 🔧 Tools, Help: Assign tools
+					1386 button Open details for E2E-Dev-1789768338706-3470
+						1387 text E2
+						1388 text E2E-Dev-1789768338706-3470
+						1389 text NATIVE
+						1390 checkbox (settable, integer) Description: select E2E-Dev-1789768338706-3470, Value: 0
+						1391 text Active
+						1392 text ACTIVITY · TODAY
+						1393 container
+						1394 text 0
+						1395 text /6
+						1396 text TOKENS · TODAY
+						1397 text 0
+						1398 text SPEND · TODAY
+						1399 text $0.00
+						1400 text NATIVE
+						1401 text native
+						1402 button 🔧 Tools, Help: Assign tools
+					1403 button Open details for E2E-QA-1789768338723-38
+						1404 text E2
+						1405 text E2E-QA-1789768338723-38
+						1406 text NATIVE
+						1407 checkbox (settable, integer) Description: select E2E-QA-1789768338723-38, Value: 0
+						1408 text Active
+						1409 text ACTIVITY · TODAY
+						1410 container
+						1411 text 0
+						1412 text /6
+						1413 text TOKENS · TODAY
+						1414 text 0
+						1415 text SPEND · TODAY
+						1416 text $0.00
+						1417 text NATIVE
+						1418 text native
+						1419 button 🔧 Tools, Help: Assign tools
+					1420 button Open details for E2E-Iso-A-1789768339161-2919
+						1421 text E2
+						1422 text E2E-Iso-A-1789768339161-2919
+						1423 text NATIVE
+						1424 checkbox (settable, integer) Description: select E2E-Iso-A-1789768339161-2919, Value: 0
+						1425 text Active
+						1426 text ACTIVITY · TODAY
+						1427 container
+						1428 text 0
+						1429 text /6
+						1430 text TOKENS · TODAY
+						1431 text 0
+						1432 text SPEND · TODAY
+						1433 text $0.00
+						1434 text NATIVE
+						1435 text native
+						1436 button 🔧 Tools, Help: Assign tools
+					1437 button Open details for E2E-Iso-B-1789768339162-2919
+						1438 text E2
+						1439 text E2E-Iso-B-1789768339162-2919
+						1440 text NATIVE
+						1441 checkbox (settable, integer) Description: select E2E-Iso-B-1789768339162-2919, Value: 0
+						1442 text Active
+						1443 text ACTIVITY · TODAY
+						1444 container
+						1445 text 0
+						1446 text /6
+						1447 text TOKENS · TODAY
+						1448 text 0
+						1449 text SPEND · TODAY
+						1450 text $0.00
+						1451 text NATIVE
+						1452 text native
+						1453 button 🔧 Tools, Help: Assign tools
+					1454 button Open details for e2e-skill-agent-1789768340087-951
+						1455 text E2
+						1456 text e2e-skill-agent-1789768340087-951
+						1457 text NATIVE
+						1458 checkbox (settable, integer) Description: select e2e-skill-agent-1789768340087-951, Value: 0
+						1459 text Active
+						1460 text ACTIVITY · TODAY
+						1461 container
+						1462 text 0
+						1463 text /6
+						1464 text TOKENS · TODAY
+						1465 text 0
+						1466 text SPEND · TODAY
+						1467 text $0.00
+						1468 text NATIVE
+						1469 text native
+						1470 button 🔧 Tools, Help: Assign tools
+					1471 button Open details for e2e-wf-agent-1789768340530-3880
+						1472 text E2
+						1473 text e2e-wf-agent-1789768340530-3880
+						1474 text NATIVE
+						1475 checkbox (settable, integer) Description: select e2e-wf-agent-1789768340530-3880, Value: 0
+						1476 text Active
+						1477 text ACTIVITY · TODAY
+						1478 container
+						1479 text 0
+						1480 text /6
+						1481 text TOKENS · TODAY
+						1482 text 0
+						1483 text SPEND · TODAY
+						1484 text $0.00
+						1485 text NATIVE
+						1486 text native
+						1487 button 🔧 Tools, Help: Assign tools
+					1488 button Open details for e2e-wf-guard-agent-1789768343024-8437
+						1489 text E2
+						1490 text e2e-wf-guard-agent-1789768343024-8437
+						1491 text NATIVE
+						1492 checkbox (settable, integer) Description: select e2e-wf-guard-agent-1789768343024-8437, Value: 0
+						1493 text Active
+						1494 text ACTIVITY · TODAY
+						1495 container
+						1496 text 0
+						1497 text /6
+						1498 text TOKENS · TODAY
+						1499 text 0
+						1500 text SPEND · TODAY
+						1501 text $0.00
+						1502 text NATIVE
+						1503 text native
+						1504 button 🔧 Tools, Help: Assign tools
+					1505 button Open details for e2e-wf-cancel-agent-1789768354214-9002
+						1506 text E2
+						1507 text e2e-wf-cancel-agent-1789768354214-9002
+						1508 text NATIVE
+						1509 checkbox (settable, integer) Description: select e2e-wf-cancel-agent-1789768354214-9002, Value: 0
+						1510 text Active
+						1511 text ACTIVITY · TODAY
+						1512 container
+						1513 text 0
+						1514 text /6
+						1515 text TOKENS · TODAY
+						1516 text 0
+						1517 text SPEND · TODAY
+						1518 text $0.00
+						1519 text NATIVE
+						1520 text native
+						1521 button 🔧 Tools, Help: Assign tools
+					1522 button Open details for e2e-wf-merge-agent-1789768363247-6870
+						1523 text E2
+						1524 text e2e-wf-merge-agent-1789768363247-6870
+						1525 text NATIVE
+						1526 checkbox (settable, integer) Description: select e2e-wf-merge-agent-1789768363247-6870, Value: 0
+						1527 text Active
+						1528 text ACTIVITY · TODAY
+						1529 container
+						1530 text 0
+						1531 text /6
+						1532 text TOKENS · TODAY
+						1533 text 0
+						1534 text SPEND · TODAY
+						1535 text $0.00
+						1536 text NATIVE
+						1537 text native
+						1538 button 🔧 Tools, Help: Assign tools
+					1539 button Open details for e2e-wf-yaml-agent-1789768375157-1985
+						1540 text E2
+						1541 text e2e-wf-yaml-agent-1789768375157-1985
+						1542 text NATIVE
+						1543 checkbox (settable, integer) Description: select e2e-wf-yaml-agent-1789768375157-1985, Value: 0
+						1544 text Active
+						1545 text ACTIVITY · TODAY
+						1546 container
+						1547 text 0
+						1548 text /6
+						1549 text TOKENS · TODAY
+						1550 text 0
+						1551 text SPEND · TODAY
+						1552 text $0.00
+						1553 text NATIVE
+						1554 text native
+						1555 button 🔧 Tools, Help: Assign tools
+					1556 button Open details for e2e-qoder-s4-1789768615850-6950
+						1557 text E2
+						1558 text e2e-qoder-s4-1789768615850-6950
+						1559 text DEV
+						1560 checkbox (settable, integer) Description: select e2e-qoder-s4-1789768615850-6950, Value: 0
+						1561 text Retired
+						1562 text No pickup
+						1563 text ACTIVITY · TODAY
+						1564 container
+						1565 text 0
+						1566 text /6
+						1567 text TOKENS · TODAY
+						1568 text 0
+						1569 text SPEND · TODAY
+						1570 text $0.00
+						1571 text ADK
+						1572 text native
+						1573 button 🔧 Tools, Help: Assign tools
+					1574 button Open details for e2e-qoder-s4-1789768774124-4859
+						1575 text E2
+						1576 text e2e-qoder-s4-1789768774124-4859
+						1577 text DEV
+						1578 checkbox (settable, integer) Description: select e2e-qoder-s4-1789768774124-4859, Value: 0
+						1579 text Retired
+						1580 text No pickup
+						1581 text ACTIVITY · TODAY
+						1582 container
+						1583 text 0
+						1584 text /6
+						1585 text TOKENS · TODAY
+						1586 text 0
+						1587 text SPEND · TODAY
+						1588 text $0.00
+						1589 text ADK
+						1590 text native
+						1591 button 🔧 Tools, Help: Assign tools
+					1592 button Open details for c6b-s5-20260918-220205
+						1593 text C6
+						1594 text c6b-s5-20260918-220205
+						1595 text DEV
+						1596 checkbox (settable, integer) Description: select c6b-s5-20260918-220205, Value: 0
+						1597 text Retired
+						1598 text No pickup
+						1599 text ACTIVITY · TODAY
+						1600 container
+						1601 text 0
+						1602 text /6
+						1603 text TOKENS · TODAY
+						1604 text 0
+						1605 text SPEND · TODAY
+						1606 text $0.00
+						1607 text efficient
+						1608 text native
+						1609 button 🔧 Tools, Help: Assign tools
+					1610 button Open details for e2e-qoder-s9-1789768969567-6684
+						1611 text E2
+						1612 text e2e-qoder-s9-1789768969567-6684
+						1613 text DEV
+						1614 checkbox (settable, integer) Description: select e2e-qoder-s9-1789768969567-6684, Value: 0
+						1615 text Retired
+						1616 text No pickup
+						1617 text ACTIVITY · TODAY
+						1618 container
+						1619 text 0
+						1620 text /6
+						1621 text TOKENS · TODAY
+						1622 text 0
+						1623 text SPEND · TODAY
+						1624 text $0.00
+						1625 text ADK
+						1626 text native
+						1627 button 🔧 Tools, Help: Assign tools
+					1628 button Open details for c6b-s10-20260918-220325
+						1629 text C6
+						1630 text c6b-s10-20260918-220325
+						1631 text DEV
+						1632 checkbox (settable, integer) Description: select c6b-s10-20260918-220325, Value: 0
+						1633 text Active
+						1634 text ACTIVITY · TODAY
+						1635 container
+						1636 text 0
+						1637 text /6
+						1638 text TOKENS · TODAY
+						1639 text 0
+						1640 text SPEND · TODAY
+						1641 text $0.00
+						1642 text efficient
+						1643 text native
+						1644 button 🔧 Tools, Help: Assign tools
+					1645 button Open details for e2e-qoder-s4-1789769417941-9935
+						1646 text E2
+						1647 text e2e-qoder-s4-1789769417941-9935
+						1648 text DEV
+						1649 checkbox (settable, integer) Description: select e2e-qoder-s4-1789769417941-9935, Value: 0
+						1650 text Active
+						1651 text ACTIVITY · TODAY
+						1652 container
+						1653 text 0
+						1654 text /6
+						1655 text TOKENS · TODAY
+						1656 text 0
+						1657 text SPEND · TODAY
+						1658 text $0.00
+						1659 text ADK
+						1660 text native
+						1661 button 🔧 Tools, Help: Assign tools
+					1662 button Open details for e2e-qoder-s4-1789769576003-5027
+						1663 text E2
+						1664 text e2e-qoder-s4-1789769576003-5027
+						1665 text DEV
+						1666 checkbox (settable, integer) Description: select e2e-qoder-s4-1789769576003-5027, Value: 0
+						1667 text Active
+						1668 text ACTIVITY · TODAY
+						1669 container
+						1670 text 0
+						1671 text /6
+						1672 text TOKENS · TODAY
+						1673 text 0
+						1674 text SPEND · TODAY
+						1675 text $0.00
+						1676 text ADK
+						1677 text native
+						1678 button 🔧 Tools, Help: Assign tools
+					1679 button Open details for c6b-s10-20260918-221526
+						1680 text C6
+						1681 text c6b-s10-20260918-221526
+						1682 text DEV
+						1683 checkbox (settable, integer) Description: select c6b-s10-20260918-221526, Value: 0
+						1684 text Active
+						1685 text ACTIVITY · TODAY
+						1686 container
+						1687 text 0
+						1688 text /6
+						1689 text TOKENS · TODAY
+						1690 text 0
+						1691 text SPEND · TODAY
+						1692 text $0.00
+						1693 text efficient
+						1694 text native
+						1695 button 🔧 Tools, Help: Assign tools
+					1696 button Open details for e2e-qoder-s4-1789770099436-7004
+						1697 text E2
+						1698 text e2e-qoder-s4-1789770099436-7004
+						1699 text DEV
+						1700 checkbox (settable, integer) Description: select e2e-qoder-s4-1789770099436-7004, Value: 0
+						1701 text Active
+						1702 text ACTIVITY · TODAY
+						1703 container
+						1704 text 0
+						1705 text /6
+						1706 text TOKENS · TODAY
+						1707 text 0
+						1708 text SPEND · TODAY
+						1709 text $0.00
+						1710 text ADK
+						1711 text native
+						1712 button 🔧 Tools, Help: Assign tools
+					1713 button Open details for e2e-qoder-s4-1789770522471-2262
+						1714 text E2
+						1715 text e2e-qoder-s4-1789770522471-2262
+						1716 text DEV
+						1717 checkbox (settable, integer) Description: select e2e-qoder-s4-1789770522471-2262, Value: 0
+						1718 text Active
+						1719 text ACTIVITY · TODAY
+						1720 container
+						1721 text 0
+						1722 text /6
+						1723 text TOKENS · TODAY
+						1724 text 0
+						1725 text SPEND · TODAY
+						1726 text $0.00
+						1727 text ADK
+						1728 text native
+						1729 button 🔧 Tools, Help: Assign tools
+					1730 button Open details for e2e-qoder-s4-1789771034038-7768
+						1731 text E2
+						1732 text e2e-qoder-s4-1789771034038-7768
+						1733 text DEV
+						1734 checkbox (settable, integer) Description: select e2e-qoder-s4-1789771034038-7768, Value: 0
+						1735 text Active
+						1736 text ACTIVITY · TODAY
+						1737 container
+						1738 text 0
+						1739 text /6
+						1740 text TOKENS · TODAY
+						1741 text 0
+						1742 text SPEND · TODAY
+						1743 text $0.00
+						1744 text ADK
+						1745 text native
+						1746 button 🔧 Tools, Help: Assign tools
+					1747 button Open details for e2e-qoder-s4-1789771459825-1503
+						1748 text E2
+						1749 text e2e-qoder-s4-1789771459825-1503
+						1750 text DEV
+						1751 checkbox (settable, integer) Description: select e2e-qoder-s4-1789771459825-1503, Value: 0
+						1752 text Active
+						1753 text ACTIVITY · TODAY
+						1754 container
+						1755 text 0
+						1756 text /6
+						1757 text TOKENS · TODAY
+						1758 text 0
+						1759 text SPEND · TODAY
+						1760 text $0.00
+						1761 text ADK
+						1762 text native
+						1763 button 🔧 Tools, Help: Assign tools
+					1764 button Open details for e2e-qoder-s4-1789772001446-9888
+						1765 text E2
+						1766 text e2e-qoder-s4-1789772001446-9888
+						1767 text DEV
+						1768 checkbox (settable, integer) Description: select e2e-qoder-s4-1789772001446-9888, Value: 0
+						1769 text Retired
+						1770 text No pickup
+						1771 text ACTIVITY · TODAY
+						1772 container
+						1773 text 0
+						1774 text /6
+						1775 text TOKENS · TODAY
+						1776 text 0
+						1777 text SPEND · TODAY
+						1778 text $0.00
+						1779 text ADK
+						1780 text native
+						1781 button 🔧 Tools, Help: Assign tools
+					1782 button Open details for PR90 UX Analyst 0919
+						1783 text P0
+						1784 text PR90 UX Analyst 0919
+						1785 text BA
+						1786 checkbox (settable, integer) Description: select PR90 UX Analyst 0919, Value: 0
+						1787 text Retired
+						1788 text No pickup
+						1789 text ACTIVITY · TODAY
+						1790 container
+						1791 text 1
+						1792 text /6
+						1793 text TOKENS · TODAY
+						1794 text 0
+						1795 text SPEND · TODAY
+						1796 text $0.00
+						1797 text efficient
+						1798 text alibaba
+						1799 button 🔧 Tools, Help: Assign tools
+					1800 button Open details for PR90 UX Reviewer 0919
+						1801 text P0
+						1802 text PR90 UX Reviewer 0919
+						1803 text QA
+						1804 checkbox (settable, integer) Description: select PR90 UX Reviewer 0919, Value: 0
+						1805 text Active
+						1806 text ACTIVITY · TODAY
+						1807 container
+						1808 text 0
+						1809 text /6
+						1810 text TOKENS · TODAY
+						1811 text 0
+						1812 text SPEND · TODAY
+						1813 text $0.00
+						1814 text efficient
+						1815 text alibaba
+						1816 button 🔧 Tools, Help: Assign tools
+				1817 container
+					1818 heading HIRE FROM CATALOG · DEPLOY A PRE-CONFIGURED ROLE, Value: 2
+						1819 text HIRE FROM CATALOG
+						1820 text · DEPLOY A PRE-CONFIGURED ROLE
+					1821 text Developer Agent
+					1822 container
+						1823 text ROLE ·
+						1824 text DEV
+					1825 text Implements features, refactors code, and reviews diffs against project conventions
+					1826 button + Deploy
+					1827 text QA Agent
+					1828 container
+						1829 text ROLE ·
+						1830 text QA
+					1831 text Authors tests, validates flows, and screens evidence packs before release
+					1832 button + Deploy
+					1833 text Business Analyst Agent
+					1834 container
+						1835 text ROLE ·
+						1836 text BA
+					1837 text Analyzes requirements, writes user stories, and produces structured specification documents
+					1838 button + Deploy
+		1839 button (expanded) Close Aria panel, Secondary Actions: Collapse
+		1840 container Aria assistant
+			1841 container
+				1842 text Aria
+				1843 text PERSONAL ASSISTANT · ALWAYS ON
+				1844 code, Help: reuse-conv-1789767597773-5291
+					1845 text reuse-co
+					1846 text ...
+				1847 button Copy conversation ID, Help: Copy conversation ID to clipboard
+					1848 text 📋
+				1849 button Clear and start new conversation, Help: Clear and start new conversation
+					1850 text Clear
+				1851 button Close Aria
+					1852 text ×
+			1853 container
+				1854 container
+					1855 text — OPERATOR COPILOT
+					1856 container
+						1857 text Good to see you.
+						1858 emphasis
+							1859 text How can I help?
+					1860 text I can brief you on agents, runs, approvals, and the knowledge base — and I can act on what you ask.
+				1861 container Suggested prompts
+					1862 button My schedule today
+					1863 button Brief me on overnight runs
+					1864 button What needs my approval?
+					1865 button Knowledge status summary
+			1866 container
+				1867 text entry area (settable) Ask Aria anything… (type / for skills)
+				1868 button (disabled) Send message
+					1869 text SEND
+			1870 text ARIA STREAMS LIVE · ACTS ON THE LIVE SYSTEM · REVIEW APPROVALS BEFORE DESTRUCTIVE MOVES.
+		1871 complementary Agent live drawer
+			1872 sectionheader
+				1873 text WF
+				1874 text NATIVE · —
+				1875 heading WfDfAgent-1789758120435, Value: 3
+					1876 text WfDfAgent-1789758120435
+				1877 text Online
+				1878 button Close
+					1879 text ✕
+			1880 container
+				1881 text STATUS
+				1882 text Idle — awaiting work
+				1883 text RUN FAILED
+				1884 text Iteration 1 failed: LangChain ADK error: Error code: 402 - {'error': {'message': 'Insufficient Balance', 'type': 'unknown_error', 'param': None, 'code': 'invalid_request_error'}}; LangChain ADK error: Error code: 402 - {'error': {'message': 'Insufficient Balance', 'type': 'unknown_error', 'param': None, 'code': 'invalid_request_error'}}
+				1885 text LIVE ACTIVITY STREAM
+				1886 text WINDOW · LAST 60 LINES · AUTO-FOLLOW
+				1887 button ▾ collapse
+				1888 text 03:02:29
+				1889 text WARN
+				1890 text Agent Progress · status
+				1891 text 03:02:29
+				1892 text WARN
+				1893 text Agent Progress · status
+				1894 text 03:02:31
+				1895 text WARN
+				1896 text Agent Progress · status
+				1897 text RESOURCES
+				1898 text ACTIVE RUNS
+				1899 text 0
+				1900 container
+					1901 text total
+					1902 text 4
+				1903 text RUNTIME
+				1904 container
+					1905 text 0
+					1906 text m
+				1907 text since current run start
+				1908 text ASSIGNED SKILLS
+				1909 text --
+				1910 text No skills assigned
+				1911 text ASSIGNED TOOLS
+				1912 text --
+				1913 text No tools assigned
+				1914 container
+					1915 DisclosureTriangle (collapsed) CONFIG, Secondary Actions: Expand
+						1916 text CONFIG
+				1917 container
+					1918 text ORDER CONSOLE
+					1919 text ⌘ + ↵ TO SEND
+				1920 text ▶ SEND INSTRUCTION TO
+				1921 text WFDFAGENT-1789758120435
+				1922 text 🎯 Focus highest priority
+				1923 text 🔁 Submit when ready
+				1924 text ⏸ Pause & wait
+				1925 text ⛔ Stop run
+				1926 text entry area (settable) Description: Order instruction
+				1927 button (disabled) Send ▶
+			1928 sectionfooter
+				1929 button (disabled) ⏸ Pause
+				1930 button (disabled) ▶ Resume
+				1931 button (disabled) ⛔ Stop
+				1932 button Close
+
+The focused UI element is 0 AXWebArea Aria Conductor, URL: localhost:5273/crew

@@ -66,10 +66,30 @@ snapshots saved in `docs/reviews/shots/pr90-user-pov-20260919/` (01–13 + `brow
     one-way PAT copy, non-billable probe wording, New Task modal with Create in Todo/Backlog, and the
     governance pipeline visual are clear and well-executed.
 
+## Fix verification round (2026-09-19 ~16:30, PR head `b1d870cb29272daf433d0d86acce3e07556450c6`)
+
+The operator updated the stack to the fix tree (`d19cbcf` Aria turns, `b1d870c` UX H2+H3) and restarted
+the backend (started 14:59:40). Re-tested the reported findings in the same browser session.
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| P0 Aria within-conversation memory | **FIXED** — seeded "remember MAGNOLIA-77", immediate recall question answered exactly `MAGNOLIA-77`; internal task-execution run `94ebb2a5` COMPLETED with that assistant turn | `17-fix-aria-memory-recalled.*`; `/api/v1/runs/94ebb2a5…/trajectory` |
+| P0 Ops "Unknown agent" + opaque `task_execution {}` | **FIXED** — asks now show the requester name (e.g. `PR90 UX Reviewer 0919`) and the run's promptSeed as context (e.g. "Return exactly PR90-REVIEWER-FIX2…", "Kanban task: PR90 UX card 0919…") | `16-fix-ops-ask-context.*` |
+| P1 Provider HEALTHY vs NOT CONFIGURED contradiction | **FIXED (labels)** — provider table now reads `SERVICE OK` / `SERVICE UNREACHABLE`; agent pills read `Active` / `Retired` instead of Online/Offline | `14-fix-providers-service-ok.*` |
+| P1 Role change silently resets ADK provider | **FIXED** — picked Qoder, then switched role to QA: provider select still `qoder` | Crew Add Agent flow (live check) |
+| P2 Kanban Assign-to lacks real agents | **FIXED** — New Task "Assign to" now groups `Catalog roles` + `Live agents` and includes `PR90 UX Analyst 0919` / `PR90 UX Reviewer 0919` | `15-fix-kanban-live-agents.*` |
+| P1 Reviewer run "Qoder bridge did not become ready within 60s" | **NOT FIXED** — re-dispatched the same agent (4944fc8a) after approval: FAILED again with the identical message (run `586521f1`). Note: the analyst agent (b3facd33) completed a Qoder run pre-restart, so the failure looks agent/slot-specific or environmental rather than global | `18-fix-bridge-failed-again.*`; `/api/v1/runs/586521f1` |
+| P2 expiry disabled buttons (UX-6) | NOT VERIFIED — the visible stale legacy asks carry no `expiresAt`, and no fresh expiry was awaited in this round | — |
+| P2 `approval.expired` toast | NOT VERIFIED — requires a fresh 2-minute expiry wait; not exercised | — |
+| Drawer silently blocks rail navigation | still observed during this session (agent drawer intercepted clicks until closed) | session notes |
+
+Side observation: dispatching the kanban card created its own governed ask (run `abf5ef37`) — the
+Kanban → dispatch → approval chain works end-to-end and now surfaces readable context.
+
 ## Not verified / limits
 
-- Backend binary provenance of the running stack (started 2026-09-18 22:16Z from the original repo;
-  sampled frontend source matches this HEAD, backend bytecode unproven).
+- Original-round stack provenance: backend binary parity unproven (see fix round for the restarted
+  stack, which serves the fix tree).
 - Zero Qoder credit usage: `efficient` pinned and observed, but no billing-side confirmation.
 - Workflows page, Jobs, Reports, Chat page, skill full approval round-trip, ACP write-permission ask
   (runs in this session only surfaced the legacy `task_execution` gate), and cross-reload chat

@@ -8,10 +8,12 @@ import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.CategoryReceipt;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.Exclusions;
@@ -72,6 +74,7 @@ class HousekeepingServiceExecuteTest {
     @Mock KanbanRepository kanbanRepository;
     @Mock AgentRepository agentRepository;
     @Mock ApprovalRepository approvalRepository;
+    @Mock AcpPermissionRequestRepository acpPermissionRequestRepository;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
     @Mock PromptCallRepository promptCallRepository;
@@ -90,9 +93,9 @@ class HousekeepingServiceExecuteTest {
     @BeforeEach
     void setUp() {
         service = new HousekeepingService(runRepository, kanbanRepository, agentRepository,
-                approvalRepository, trajectoryRepository, toolCallRepository, promptCallRepository,
-                agentSessionRepository, kanbanService, agentService, runService, approvalGate,
-                eventPublisher, tx);
+                approvalRepository, acpPermissionRequestRepository, trajectoryRepository,
+                toolCallRepository, promptCallRepository, agentSessionRepository, kanbanService,
+                agentService, runService, approvalGate, eventPublisher, tx);
         lenient().when(runRepository.findByStatusIn(anyList())).thenReturn(List.of());
         lenient().when(runRepository.findByStatus(any())).thenReturn(List.of());
         lenient().when(kanbanRepository.findByStatus(any())).thenReturn(List.of());
@@ -155,10 +158,13 @@ class HousekeepingServiceExecuteTest {
         verify(runRepository, times(2)).deleteByIdInBulk(anyList());
         // children deleted before the parent runs within each chunk
         InOrder order = Mockito.inOrder(trajectoryRepository, toolCallRepository,
-                promptCallRepository, approvalRepository, agentSessionRepository, runRepository);
+                promptCallRepository, acpPermissionRequestRepository, approvalRepository,
+                agentSessionRepository, runRepository);
         order.verify(trajectoryRepository).deleteByRunIdInBulk(anyList());
         order.verify(toolCallRepository).deleteByRunIdInBulk(anyList());
         order.verify(promptCallRepository).deleteByRunIdInBulk(anyList());
+        // ACP companion rows FK-reference approvals(id), so they must go before their parent
+        order.verify(acpPermissionRequestRepository).deleteByRunIdInBulk(anyList());
         order.verify(approvalRepository).deleteByRunIdInBulk(anyList());
         order.verify(agentSessionRepository).deleteByRunIdInBulk(anyList());
         order.verify(runRepository).deleteByIdInBulk(anyList());
@@ -205,6 +211,28 @@ class HousekeepingServiceExecuteTest {
         service.execute(new HousekeepingRequest(List.of("approvals"), false, Exclusions.empty(), true));
 
         verify(approvalGate).decideApproval(eq(old.getId()), eq(false), anyString());
+    }
+
+    /**
+     * R20.4: ACP asks are owned by the ACP permission coordinator. Housekeeping deciding them
+     * through the legacy gate would flip the status without the companion/delivery effects, so
+     * they are never targets of the approvals category.
+     */
+    @Test
+    void approvalsCategory_skipsAcpPermissionRows() {
+        Instant now = Instant.now();
+        // Old enough to be a housekeeping target: only the ACP source filter removes the row.
+        Approval acp = new Approval();
+        acp.setId(UUID.randomUUID());
+        acp.setRunId(UUID.randomUUID());
+        acp.setStatus(ApprovalStatus.PENDING);
+        acp.setRequestedAt(now.minus(25, ChronoUnit.HOURS));
+        acp.setSource(ApprovalSource.ACP_PERMISSION);
+        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of(acp));
+
+        service.execute(new HousekeepingRequest(List.of("approvals"), false, Exclusions.empty(), true));
+
+        verify(approvalGate, never()).decideApproval(any(), anyBoolean(), anyString());
     }
 
     @Test

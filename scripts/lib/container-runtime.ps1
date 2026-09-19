@@ -151,3 +151,31 @@ function Ensure-OpencodeSandboxImage {
     if ($LASTEXITCODE -ne 0) { throw "Failed to build $Tag (exit $LASTEXITCODE)" }
     return $true
 }
+
+<#
+.SYNOPSIS
+Builds the qoder sandbox image when it is not present in the engine's store.
+Returns $true when a build was issued.
+
+NOTE: the existence predicate is `image inspect`, not `image exists`. `podman image
+exists` is a podman subcommand and the docker CLI has no `image exists` at all (it
+answers "unknown command", exit 1, for every tag), so the opencode helper above would
+always re-build under docker. `image inspect` is a valid predicate for both runtimes
+(exit 0 when the image is present, non-zero otherwise). The opencode helper is left
+unchanged (out of scope for this task).
+#>
+function Ensure-QoderSandboxImage {
+    param(
+        [Parameter(Mandatory)][string]$Runtime,
+        [Parameter(Mandatory)][string]$ProjectRoot,
+        [string]$Tag = 'aria-conductor/qoder-sandbox:0.1'
+    )
+
+    & $Runtime image inspect $Tag *> $null
+    if ($LASTEXITCODE -eq 0) { return $false }
+
+    $context = Join-Path $ProjectRoot 'agent-control-tower/qoder-sandbox'
+    & $Runtime build -t $Tag $context | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to build $Tag (exit $LASTEXITCODE)" }
+    return $true
+}

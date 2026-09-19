@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
+  dispatchSeededCard,
   pollUntil,
   seedAdkAgent,
   seedKanbanItem,
@@ -43,7 +44,7 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
     title: `uidz-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  expect((await transitionKanban(request, card.id, 'IN_PROGRESS')).status).toBe(200);
+  await dispatchSeededCard(request, card.id);
 
   const asks = await pollUntil<any[]>(
     request,
@@ -153,7 +154,7 @@ test('clicking Approve in the decision zone resolves the ask', async ({ page, re
     title: `uiaz-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  expect((await transitionKanban(request, card.id, 'IN_PROGRESS')).status).toBe(200);
+  await dispatchSeededCard(request, card.id);
 
   const asks = await pollUntil<any[]>(
     request,

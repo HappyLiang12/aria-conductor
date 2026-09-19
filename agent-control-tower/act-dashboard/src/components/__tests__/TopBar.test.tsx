@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TopBar } from '../TopBar';
@@ -84,5 +84,40 @@ describe('TopBar health signals', () => {
     await waitFor(() => expect(document.body.textContent).toContain('Checking providers'));
     expect(document.body.textContent).not.toContain('Providers Unavailable');
     expect(document.body.textContent).not.toContain('Providers Healthy');
+  });
+
+  it('settles a failing provider probe without an inherited retry', async () => {
+    // The `['adk-provider-health', id]` key is shared with QoderCredentialCard
+    // and the ProvidersPage inventory table, and query-core takes the retry
+    // policy from whichever observer triggers the fetch: this always-mounted
+    // observer must pin the same `retry:false`. Fake timers make "a retry
+    // scheduled with 0 ms would have fired" deterministic.
+    vi.useFakeTimers();
+    try {
+      mockedGetAdkProviderHealth.mockRejectedValue(
+        Object.assign(new Error('Not Found'), { response: { status: 404 } }),
+      );
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 0 } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <TopBar />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      // Flush the mount probe; a 0 ms retry would be queued on the fake clock.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Past any 0 ms retry, but below the 15 s refetchInterval so no interval
+      // refetch can inflate the probe count.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(mockedGetAdkProviderHealth).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

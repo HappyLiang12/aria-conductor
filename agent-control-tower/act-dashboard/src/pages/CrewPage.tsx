@@ -58,6 +58,10 @@ export default function CrewPage() {
   const [confirmingRetire, setConfirmingRetire] = useState(false);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
+  // UX-4: the role select back-fills the template's ADK provider only while the
+  // operator has not chosen one themselves — an explicit pick (e.g. Qoder) must
+  // survive a later role change.
+  const [providerTouched, setProviderTouched] = useState(false);
 
   const toggle = (prev: Set<string>, id: string, on: boolean) => {
     const next = new Set(prev);
@@ -232,6 +236,7 @@ export default function CrewPage() {
 
   const openDialog = () => {
     setForm(EMPTY_FORM);
+    setProviderTouched(false);
     setError(null);
     setSelectedTools(new Set());
     setSelectedSkills(new Set());
@@ -414,12 +419,16 @@ export default function CrewPage() {
             onChange={(e) => {
               const role = e.target.value;
               // Template-driven form: back-fill the template's ADK provider
-              // (fallback 'langchain') when a role/template is applied.
+              // (fallback 'langchain') when a role/template is applied — but
+              // only while the provider select is untouched; once the operator
+              // picked one explicitly, a role change keeps their selection
+              // (UX-4: every catalog template pins langchain, which used to
+              // silently overwrite an explicit Qoder choice).
               const template = templates?.find((t) => t.role === role);
               setForm((prev) => ({
                 ...prev,
                 role,
-                adkProvider: template?.adkProvider || 'langchain',
+                adkProvider: providerTouched ? prev.adkProvider : template?.adkProvider || 'langchain',
               }));
             }}
           >
@@ -441,7 +450,12 @@ export default function CrewPage() {
           <select
             id="add-agent-adk-provider"
             value={form.adkProvider}
-            onChange={(e) => setForm({ ...form, adkProvider: e.target.value })}
+            onChange={(e) => {
+              // UX-4: a manual pick arms the touched-flag so later role
+              // changes stop back-filling over it.
+              setProviderTouched(true);
+              setForm({ ...form, adkProvider: e.target.value });
+            }}
           >
             {adkProviderOptions.map((p) => (
               <option key={p.id} value={p.id}>{p.displayName}</option>

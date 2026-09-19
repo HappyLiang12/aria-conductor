@@ -161,6 +161,29 @@ A `-Mode compose` stack is not torn down by `stop.ps1`; stop it with `podman com
 opencode provider, so it uses langchain (the backend runs in a container, where the OpenSandbox
 endpoints are unreachable; see the topology note in `opensandbox-config.toml`).
 
+### Qoder provider (explicit opt-in)
+
+The **qoder** provider runs the Qoder CLI in its own sandbox image and is never selected by
+default — `-Provider qoder` is an explicit opt-in:
+
+```powershell
+.\scripts\start.ps1 -Provider qoder
+```
+
+The mode selects the qoder provider and its sandbox image (`aria-conductor/qoder-sandbox:0.1`).
+On Windows `start.ps1` builds that image automatically when it is missing; the bash launcher
+does not, so build it once (the equivalent manual command):
+
+```powershell
+podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox
+```
+
+Because a qoder sandbox shares the local network with the backend, this mode pins
+`ARIA_MCP_AUTH_MODE=token` and writes the generated MCP bearer to `.run/mcp-token`, so a sandbox
+can never reach an unauthenticated operator MCP endpoint. An explicit `ARIA_MCP_AUTH_MODE=none`
+override is refused with an error — unset it (or set it to `token`) to start. The mode needs the
+local-dev topology; `-Mode compose` is langchain-only and rejects `-Provider qoder`.
+
 ## Container Runtime Selection
 
 Startup scripts and the OpenSandbox server support **podman** (the default for local dev) and **Docker**.
@@ -214,13 +237,17 @@ For local development without a container runtime:
 .\scripts\start.ps1
 
 # Or start individual services:
-./scripts/start-backend.sh     # Starts backend (OpenSandbox only for opencode provider)
+./scripts/start-backend.sh     # Starts backend (OpenSandbox for the opencode/qoder providers)
 ./scripts/start-frontend.sh    # Vite dev server
 ```
 
 The `start-backend` script defaults to the **opencode** ADK provider (the recommended path), and
-with opencode it also starts the OpenSandbox server (requires a container runtime) and passes the
-provider to the backend. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox startup.
+with opencode or qoder it also starts the OpenSandbox server (requires a container runtime) and
+passes the provider to the backend. Use `--skip-sandbox` or `-SkipSandbox` to skip OpenSandbox
+startup. The qoder provider is an explicit opt-in (`--provider=qoder`, or
+`scripts/start.ps1 -Provider qoder` on Windows); it uses the same sandbox server and additionally
+pins MCP token auth with a local token file — see *Qoder provider (explicit opt-in)* under
+*Starting the stack*.
 Opting out to the legacy **langchain** provider is explicit: `--provider=langchain`
 (Linux/macOS) or `-AdkProvider langchain` (Windows), or `ADK_PROVIDER=langchain` in the
 environment — `ADK_PROVIDER` belongs to `scripts/start-backend.{sh,ps1}` only.
@@ -337,7 +364,7 @@ The backend exposes an MCP (Model Context Protocol) server at `http://<host>:808
 
 - **Sandboxed agents**: Aria's opencode sandbox connects automatically (workers do not). Requires a sandbox-reachable host address — auto-resolved, override with `ARIA_MCP_SANDBOX_HOST_ADDRESS`.
 - **External agents**: point any MCP client at `http://<host>:8080/mcp`.
-- **Auth**: `ARIA_MCP_AUTH_MODE=none` (default — endpoint is open, like the REST API; every tool call is audit-logged) or `token` (Bearer required; set `ARIA_MCP_TOKEN`, sandbox token injected automatically).
+- **Auth**: `ARIA_MCP_AUTH_MODE=none` (default — endpoint is open, like the REST API; every tool call is audit-logged) or `token` (Bearer required; set `ARIA_MCP_TOKEN`, sandbox token injected automatically). Local **qoder** mode (`scripts/start.ps1 -Provider qoder`, `start-backend.sh --provider=qoder`) always pins `token` and writes the generated bearer to `.run/mcp-token`; an explicit `none` override is refused there.
 - **Debug**: `ARIA_MCP_DEBUG=true` adds full stack traces to tool error responses (default true on the h2 dev profile).
 - **Disable**: `ARIA_MCP_ENABLED=false` (the `test` profile disables it by default).
 

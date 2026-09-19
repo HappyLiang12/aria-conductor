@@ -54,6 +54,14 @@ opencode:
     LLM_API_KEY: ${LLM_API_KEY:${DEEPSEEK_API_KEY:}}
     GH_TOKEN: ${GITHUB_TOKEN:${GH_TOKEN:}}
 
+# Qoder provider (B4): OpenSandbox image with the pinned CLI, the compiled sandbox bridge
+# and the plugin bundle baked in. Mirrors the opencode connection config; the in-sandbox
+# bridge listens on 4097 (see agent-control-tower/qoder-sandbox/Dockerfile).
+qoder:
+  sandbox-server-url: http://localhost:8090
+  sandbox-api-key: ${OPENSANDBOX_API_KEY:}
+  image: aria-conductor/qoder-sandbox:0.1
+
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:
   mcp:

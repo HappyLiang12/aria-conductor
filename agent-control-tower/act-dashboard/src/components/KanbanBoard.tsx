@@ -537,11 +537,31 @@ export default function KanbanBoard() {
                   onChange={(e) => setDraft({ ...draft, agentTemplateId: e.target.value })}
                 >
                   <option value="">Aria auto-assign</option>
-                  {(templates ?? []).map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
+                  {/* UX-7: catalog roles and hired agents in distinguishable
+                      groups. An agent option's VALUE is the agent's NAME and it
+                      flows through the same agentTemplateId field — the
+                      dispatcher's picker resolves exact agent names first
+                      (AgentPickerService.pick). */}
+                  {(templates ?? []).length > 0 && (
+                    <optgroup label="Catalog roles">
+                      {(templates ?? []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {(agents ?? []).filter((a) => a.healthStatus !== 'RETIRED').length > 0 && (
+                    <optgroup label="Live agents">
+                      {(agents ?? [])
+                        .filter((a) => a.healthStatus !== 'RETIRED')
+                        .map((a) => (
+                          <option key={a.id} value={a.name}>
+                            {a.name}
+                          </option>
+                        ))}
+                    </optgroup>
+                  )}
                 </select>
               </label>
               {error && <div className="kanban-form-error">{error}</div>}

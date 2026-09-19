@@ -1,0 +1,156 @@
+
+Running 29 tests using 3 workers
+
+  -   2 [chromium] › e2e\aria-engine-unification.spec.ts:30:1 › Aria SSE streaming produces all expected events
+  ok  3 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:23:3 › Agent tool & skill recommendations › Add Agent pre-checks the role recommended tools (8.6s)
+  ok  1 [chromium] › e2e\aria-conversation-id-regression.spec.ts:37:1 › non-streaming chat returns runId + conversationId (1.5m)
+  ok  6 [chromium] › e2e\aria-conversation-id-regression.spec.ts:58:1 › GET /api/v1/aria/sessions returns 404 (35.9s)
+  ok  7 [chromium] › e2e\aria-conversation-id-regression.spec.ts:70:1 › DELETE /api/v1/aria/sessions/{id} returns 404 (18.2s)
+  -   8 [chromium] › e2e\aria-conversation-id-regression.spec.ts:82:1 › streaming SSE emits expected events with runId + conversationId
+  x   5 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:36:3 › Agent tool & skill recommendations › Hiring persists the recommended tools onto the new agent (2.7m)
+Non-streaming chat: runId=c8c328aa-dffe-436a-a3d6-322fd066e4cd, intent=agent.status
+  ok  4 [chromium] › e2e\aria-engine-unification.spec.ts:85:1 › Aria non-streaming chat uses Run-based flow (3.8m)
+  ok 11 [chromium] › e2e\aria-engine-unification.spec.ts:110:1 › AgentDrawer Live Activity Stream shows enhanced events (8.4s)
+Agent created: id=bf4990ec-4ba6-4a2b-8914-52d4e3365f56, config="{\"maxToolCallRounds\":3}"
+  ok 12 [chromium] › e2e\aria-engine-unification.spec.ts:136:1 › Agent creation with config.maxToolCallRounds (21.8s)
+✓ Cancel button rendered while busy
+  ok 13 [chromium] › e2e\aria-timeout-cancel.spec.ts:34:1 › Cancel button appears while Aria is busy (2.2m)
+✓ Cancel aborts request, user can send new message
+  ok 14 [chromium] › e2e\aria-timeout-cancel.spec.ts:77:1 › Clicking Cancel aborts request and allows new message (20.9s)
+  x  10 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:36:3 › Agent tool & skill recommendations › Hiring persists the recommended tools onto the new agent (retry #1) (2.5m)
+  x  16 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:65:3 › Agent tool & skill recommendations › Apply role defaults restores the recommended set in Manage (0ms)
+  x  17 [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:65:3 › Agent tool & skill recommendations › Apply role defaults restores the recommended set in Manage (retry #1) (0ms)
+  x  18 [chromium] › e2e\housekeeping-cleanup.spec.ts:20:3 › Housekeeping cleanup › Ops panel scans and shows category counts (0ms)
+  -  19 [chromium] › e2e\housekeeping-cleanup.spec.ts:42:3 › Housekeeping cleanup › kanban quick-clear removes finished cards via confirm modal
+  -  20 [chromium] › e2e\housekeeping-cleanup.spec.ts:69:3 › Housekeeping cleanup › Select Leftovers button shows count, matches sibling style, always gives feedback
+  -  21 [chromium] › e2e\housekeeping-cleanup.spec.ts:94:3 › Housekeeping cleanup › crew bulk-retire retires leftover e2e agents
+  x  22 [chromium] › e2e\housekeeping-cleanup.spec.ts:20:3 › Housekeeping cleanup › Ops panel scans and shows category counts (retry #1) (0ms)
+  -  23 [chromium] › e2e\housekeeping-cleanup.spec.ts:42:3 › Housekeeping cleanup › kanban quick-clear removes finished cards via confirm modal (retry #1)
+  -  24 [chromium] › e2e\housekeeping-cleanup.spec.ts:69:3 › Housekeeping cleanup › Select Leftovers button shows count, matches sibling style, always gives feedback (retry #1)
+  -  25 [chromium] › e2e\housekeeping-cleanup.spec.ts:94:3 › Housekeeping cleanup › crew bulk-retire retires leftover e2e agents (retry #1)
+  x  26 [chromium] › e2e\notification-bell.spec.ts:4:3 › Notification Bell › bell icon is visible in TopBar (0ms)
+  -  27 [chromium] › e2e\notification-bell.spec.ts:10:3 › Notification Bell › bell shows no-bell emoji when no unread notifications
+  -  28 [chromium] › e2e\notification-bell.spec.ts:18:3 › Notification Bell › bell shows badge when unread notifications exist
+  -  29 [chromium] › e2e\notification-bell.spec.ts:26:3 › Notification Bell › click bell opens dropdown
+  -  30 [chromium] › e2e\notification-bell.spec.ts:38:3 › Notification Bell › dropdown shows empty state when no notifications
+  -  31 [chromium] › e2e\notification-bell.spec.ts:50:3 › Notification Bell › click outside closes dropdown
+  x  32 [chromium] › e2e\notification-bell.spec.ts:4:3 › Notification Bell › bell icon is visible in TopBar (retry #1) (0ms)
+  -  33 [chromium] › e2e\notification-bell.spec.ts:10:3 › Notification Bell › bell shows no-bell emoji when no unread notifications (retry #1)
+  -  34 [chromium] › e2e\notification-bell.spec.ts:18:3 › Notification Bell › bell shows badge when unread notifications exist (retry #1)
+  -  35 [chromium] › e2e\notification-bell.spec.ts:26:3 › Notification Bell › click bell opens dropdown (retry #1)
+  -  36 [chromium] › e2e\notification-bell.spec.ts:38:3 › Notification Bell › dropdown shows empty state when no notifications (retry #1)
+  -  37 [chromium] › e2e\notification-bell.spec.ts:50:3 › Notification Bell › click outside closes dropdown (retry #1)
+  x  38 [chromium] › e2e\observability-live.spec.ts:61:3 › Track A — live observability gate (no LLM key) › drawer stream window: idle empty state, collapse toggle, WS lines, toast 5s (0ms)
+  -  39 [chromium] › e2e\observability-live.spec.ts:107:3 › Track A — live observability gate (no LLM key) › Runs live detail: trajectory panel renders with collapse toggles
+  -  40 [chromium] › e2e\observability-live.spec.ts:133:3 › Track A — live observability gate (no LLM key) › Kanban live transition: card moves columns (final state)
+  -  41 [chromium] › e2e\observability-live.spec.ts:173:3 › Track B — opencode progress replay live chain › run.progress lines + iteration display + history retention + trajectory growth
+  x  42 [chromium] › e2e\observability-live.spec.ts:61:3 › Track A — live observability gate (no LLM key) › drawer stream window: idle empty state, collapse toggle, WS lines, toast 5s (retry #1) (0ms)
+  -  43 [chromium] › e2e\observability-live.spec.ts:107:3 › Track A — live observability gate (no LLM key) › Runs live detail: trajectory panel renders with collapse toggles (retry #1)
+  -  44 [chromium] › e2e\observability-live.spec.ts:133:3 › Track A — live observability gate (no LLM key) › Kanban live transition: card moves columns (final state) (retry #1)
+  -  45 [chromium] › e2e\observability-live.spec.ts:173:3 › Track B — opencode progress replay live chain › run.progress lines + iteration display + history retention + trajectory growth (retry #1)
+✓ Silent stream close shows error message and Retry button
+  ok 15 [chromium] › e2e\aria-timeout-cancel.spec.ts:146:1 › Error message on silent stream close (8.7s)
+  ok  9 [chromium] › e2e\aria-conversation-id-regression.spec.ts:142:1 › conversationId is reused across two turns (#36) (4.6m)
+
+
+  1) [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:36:3 › Agent tool & skill recommendations › Hiring persists the recommended tools onto the new agent 
+
+    Error: expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+    Call Log:
+    - Timeout 15000ms exceeded while waiting on the predicate
+
+      42 |     await expect
+      43 |       .poll(async () => dialog.locator('input[type="checkbox"]:checked').count(), { timeout: 15_000 })
+    > 44 |       .toBeGreaterThan(0);
+         |        ^
+      45 |     const preChecked = await dialog.locator('input[type="checkbox"]:checked').count();
+      46 |
+      47 |     await dialog.locator('#add-agent-name').fill(unique);
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\agent-tool-skill-recommendations.spec.ts:44:8
+
+    Tearing down "context" exceeded the test timeout of 120000ms.
+
+    Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
+
+    Error Context: test-results\agent-tool-skill-recommend-14bf3-ed-tools-onto-the-new-agent-chromium\error-context.md
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.crew-card').filter({ hasText: 'Rec-1789744264405' })
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 15000ms
+      - waiting for locator('.crew-card').filter({ hasText: 'Rec-1789744264405' })
+
+
+      51 |     await expect(dialog).toBeHidden({ timeout: 15_000 });
+      52 |     const card = page.locator('.crew-card', { hasText: unique });
+    > 53 |     await expect(card).toBeVisible({ timeout: 15_000 });
+         |                        ^
+      54 |
+      55 |     // Open the Manage (Capabilities) dialog and confirm the tools were persisted.
+      56 |     await card.getByRole('button', { name: /tools/i }).first().click();
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\agent-tool-skill-recommendations.spec.ts:53:24
+
+    Tearing down "context" exceeded the test timeout of 120000ms.
+
+    Error: End of central directory record signature not found. Either not a zip file, or file is truncated.
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\agent-tool-skill-recommend-14bf3-ed-tools-onto-the-new-agent-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\agent-tool-skill-recommend-14bf3-ed-tools-onto-the-new-agent-chromium-retry1\error-context.md
+
+  2) [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:65:3 › Agent tool & skill recommendations › Apply role defaults restores the recommended set in Manage 
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+  3) [chromium] › e2e\housekeeping-cleanup.spec.ts:20:3 › Housekeeping cleanup › Ops panel scans and shows category counts 
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+  4) [chromium] › e2e\notification-bell.spec.ts:4:3 › Notification Bell › bell icon is visible in TopBar 
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+  5) [chromium] › e2e\observability-live.spec.ts:61:3 › Track A — live observability gate (no LLM key) › drawer stream window: idle empty state, collapse toggle, WS lines, toast 5s 
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+  Slow test file: [chromium] › e2e\aria-conversation-id-regression.spec.ts (7.1m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  5 failed
+    [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:36:3 › Agent tool & skill recommendations › Hiring persists the recommended tools onto the new agent 
+    [chromium] › e2e\agent-tool-skill-recommendations.spec.ts:65:3 › Agent tool & skill recommendations › Apply role defaults restores the recommended set in Manage 
+    [chromium] › e2e\housekeeping-cleanup.spec.ts:20:3 › Housekeeping cleanup › Ops panel scans and shows category counts 
+    [chromium] › e2e\notification-bell.spec.ts:4:3 › Notification Bell › bell icon is visible in TopBar 
+    [chromium] › e2e\observability-live.spec.ts:61:3 › Track A — live observability gate (no LLM key) › drawer stream window: idle empty state, collapse toggle, WS lines, toast 5s 
+  2 skipped
+  11 did not run
+  11 passed (7.1m)

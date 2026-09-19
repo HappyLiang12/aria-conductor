@@ -2,7 +2,8 @@ package io.aria.conductor.aria.tools.handlers;
 
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
-import io.aria.conductor.execution.approval.ApprovalGate;
+import io.aria.conductor.execution.approval.AcpDecisionRejectedException;
+import io.aria.conductor.execution.approval.ApprovalDecisionService;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,12 +16,12 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class ApprovalToolHandlerTest {
-    @Mock private ApprovalGate approvalGate;
+    @Mock private ApprovalDecisionService approvalDecisionService;
     @Mock private ApprovalRepository approvalRepository;
     private ApprovalToolHandler handler;
 
     @BeforeEach
-    void setUp() { handler = new ApprovalToolHandler(approvalGate, approvalRepository); }
+    void setUp() { handler = new ApprovalToolHandler(approvalDecisionService, approvalRepository); }
 
     @Test void listPendingShouldReturnText() {
         when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of());
@@ -31,36 +32,46 @@ class ApprovalToolHandlerTest {
     @Test void decideApproveShouldWork() {
         UUID id = UUID.randomUUID();
         String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","approve"));
-        verify(approvalGate).decideApproval(id, true, "");
+        verify(approvalDecisionService).decide(id, true, "");
         assertThat(result).contains("approved");
     }
 
     @Test void decideApprovedVariantShouldWork() {
         UUID id = UUID.randomUUID();
         String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","approved"));
-        verify(approvalGate).decideApproval(id, true, "");
+        verify(approvalDecisionService).decide(id, true, "");
         assertThat(result).contains("approved");
     }
 
     @Test void decideYesShouldWork() {
         UUID id = UUID.randomUUID();
         String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","yes"));
-        verify(approvalGate).decideApproval(id, true, "");
+        verify(approvalDecisionService).decide(id, true, "");
         assertThat(result).contains("approved");
     }
 
     @Test void decideTrueShouldWork() {
         UUID id = UUID.randomUUID();
         String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","true"));
-        verify(approvalGate).decideApproval(id, true, "");
+        verify(approvalDecisionService).decide(id, true, "");
         assertThat(result).contains("approved");
     }
 
     @Test void decideDenyShouldWork() {
         UUID id = UUID.randomUUID();
         String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","deny"));
-        verify(approvalGate).decideApproval(id, false, "");
+        verify(approvalDecisionService).decide(id, false, "");
         assertThat(result).contains("denied");
+    }
+
+    /** R20.3: the tool error carries the typed rejection's code and message. */
+    @Test void decideAcpRejectionReportsTheCodeAndTheMessage() {
+        UUID id = UUID.randomUUID();
+        doThrow(new AcpDecisionRejectedException(AcpDecisionRejectedException.Code.EXPIRED,
+                "ask expired before decision"))
+                .when(approvalDecisionService).decide(id, true, "");
+        String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","approve"));
+        assertThat(result).isEqualTo("Error: EXPIRED: ask expired before decision");
     }
 
     @Test void decideOnReviewRequestAskIsRejectedForAgents() {
@@ -74,6 +85,6 @@ class ApprovalToolHandlerTest {
                 .askType(Approval.AskType.REVIEW_REQUEST).build()));
         String result = handler.execute(Map.of("toolName","decide_approval","id",id.toString(),"decision","approve"));
         assertThat(result).contains("human");
-        verify(approvalGate, never()).decideApproval(any(), anyBoolean(), any());
+        verify(approvalDecisionService, never()).decide(any(), anyBoolean(), any());
     }
 }

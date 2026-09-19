@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { apiCall, pollRunTerminal, seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
+import { apiCall, dispatchSeededCard, pollRunTerminal, seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
 
 /**
  * Housekeeping e2e (no-LLM gate track): scan renders counts, kanban quick-clear
@@ -48,13 +48,8 @@ test.describe('Housekeeping cleanup', () => {
       title: uniqueName('e2e-hk-clear'),
       agentTemplateId: agent.name,
     });
-    const dispatched = await transitionKanban(request, done.id, 'IN_PROGRESS');
-    expect(dispatched.status).toBe(200);
-    // A pickup pre-validation failure returns 200 with the card still in TODO
-    // (lastError set) — fail fast here instead of timing out on the run poll.
-    expect(dispatched.data.status).toBe('IN_PROGRESS');
-    expect(dispatched.data.linkedRunId).toBeTruthy();
-    await pollRunTerminal(request, dispatched.data.linkedRunId, 60_000);
+    const dispatched = await dispatchSeededCard(request, done.id);
+    await pollRunTerminal(request, dispatched.linkedRunId, 60_000);
     const finished = await transitionKanban(request, done.id, 'DONE');
     expect(finished.status).toBe(200);
 

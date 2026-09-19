@@ -21,11 +21,12 @@ vi.mock('../../api/runs', () => ({
 }));
 
 import { getKanbanItem } from '../../api/kanban';
-import { listAsksByKanbanItem } from '../../api/approvals';
+import { approveApproval, listAsksByKanbanItem } from '../../api/approvals';
 import { getRun } from '../../api/runs';
 
 const mockedGetKanbanItem = vi.mocked(getKanbanItem);
 const mockedListAsks = vi.mocked(listAsksByKanbanItem);
+const mockedApprove = vi.mocked(approveApproval);
 const mockedGetRun = vi.mocked(getRun);
 
 function mkItem(over: Partial<KanbanItem> = {}): KanbanItem {
@@ -58,6 +59,32 @@ function mkAsk(over: Partial<Approval> = {}): Approval {
     kanbanItemId: 'task-1',
     ...over,
   };
+}
+
+/** displayJson exactly as AcpPermissionCoordinator builds it (JSON string). */
+function acpDisplay() {
+  return JSON.stringify({
+    rawInputTruncated: false,
+    grantable: true,
+    toolName: 'Write',
+    rawInput: 'file_path: /workspace/out.csv',
+    options: [
+      { optionId: 'opt-allow', kind: 'allow_once', name: 'Allow once' },
+      { optionId: 'opt-deny', kind: 'reject_once', name: 'Deny' },
+    ],
+  });
+}
+
+/** An ACP permission ask as `GET /approvals?kanbanItemId=` serves it. */
+function mkAcpAsk(over: Partial<Approval> = {}): Approval {
+  return mkAsk({
+    id: 'acp-1',
+    askType: 'APPROVAL',
+    source: 'ACP_PERMISSION',
+    displayJson: acpDisplay(),
+    expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    ...over,
+  });
 }
 
 function mkRun(over: Partial<Run> = {}): Run {
@@ -234,6 +261,46 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
       resolveAsks([]);
     });
     expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
+  });
+
+  it('keeps the decided-ACP outcome strip after the ask leaves PENDING (C5-fix1 F1 pin)', async () => {
+    // F1 regression pin: the decide invalidates ['kanban'], which prefix-matches
+    // ['kanban','asks',itemId]; the refetch serves the ask as decided, the card
+    // has no PENDING asks left and the parent swaps DecisionPanel for
+    // ShortApprovalView. The outcome strip is derived from the card's ask list
+    // (server truth), so it must survive the panel unmount — against the
+    // pre-fix panel-local strip this test fails.
+    const user = userEvent.setup();
+    mockedListAsks
+      .mockResolvedValueOnce([mkAcpAsk()])
+      .mockResolvedValue([
+        mkAcpAsk({
+          status: 'APPROVED',
+          decidedAt: '2026-09-17T12:00:00Z',
+          deliveryState: 'DELIVERED',
+        }),
+      ]);
+    mockedApprove.mockResolvedValue({
+      approvalId: 'acp-1',
+      approved: true,
+      status: 'processed',
+      decision: 'APPROVED',
+      deliveryState: 'DELIVERED',
+    });
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    await user.click(await screen.findByRole('button', { name: 'Allow once' }));
+
+    // The panel is gone — the short view took its place.
+    expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
+    expect(screen.queryByText(/NEEDS YOUR DECISION/)).not.toBeInTheDocument();
+
+    // …but the outcome strip lives on the parent and still shows the outcome.
+    expect(screen.getByText('approved · delivered')).toBeInTheDocument();
+    expect(document.querySelector('.acp-outcomes')).not.toBeNull();
+    expect(document.querySelector('.acp-outcome.ok')).not.toBeNull();
   });
 
   it('renders an error shell with a Collapse button when the item query fails', async () => {

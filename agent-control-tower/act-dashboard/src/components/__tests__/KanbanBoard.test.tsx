@@ -704,3 +704,57 @@ describe('KanbanBoard new-task modal (Task 13)', () => {
     expect(screen.queryByRole('dialog', { name: 'New task' })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * UX-7: the Assign-to picker must offer hired agents as well as catalog roles.
+ * The backend picker resolves an exact agent name first (AgentPickerService.pick),
+ * so the agent option's VALUE is the agent's name and it flows through the same
+ * agentTemplateId wire field; an optgroup per source keeps them distinguishable.
+ */
+describe('KanbanBoard Assign-to picker (UX-7)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+    kanbanData = [];
+  });
+
+  const openPicker = async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    act(() => { screen.getByRole('button', { name: /\+ new item/i }).click(); });
+    return screen.getByLabelText('Assign to') as HTMLSelectElement;
+  };
+
+  it('lists catalog roles and hired agents as distinguishable groups', async () => {
+    const select = await openPicker();
+
+    // Catalog role (template)…
+    expect(await screen.findByRole('option', { name: 'BA Agent' })).toBeInTheDocument();
+    // …and the hired agent, keyed by NAME (the picker's exact-name match).
+    const agentOption = screen.getByRole('option', { name: 'DEV Agent' }) as HTMLOptionElement;
+    expect(agentOption.value).toBe('DEV Agent');
+    // A group label per source keeps roles and agents distinguishable.
+    const groups = [...select.querySelectorAll('optgroup')].map((g) => g.label);
+    expect(groups).toEqual(['Catalog roles', 'Live agents']);
+  });
+
+  it('submits an agent pick as agentTemplateId=<agent name> for exact-name dispatch', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockResolvedValueOnce(baseItem());
+    await openPicker();
+    await userEvent.type(screen.getByLabelText('Title *'), 'pair with the hired agent');
+    await userEvent.selectOptions(await screen.findByLabelText('Assign to'), 'DEV Agent');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+
+    await waitFor(() =>
+      expect(createKanbanItem).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'pair with the hired agent',
+          agentTemplateId: 'DEV Agent',
+          status: 'TODO',
+        }),
+      ),
+    );
+  });
+});

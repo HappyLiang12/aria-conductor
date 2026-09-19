@@ -40,6 +40,11 @@ export function TopBar() {
     queries: (providers ?? []).map((p) => ({
       queryKey: ['adk-provider-health', p.id],
       queryFn: () => getAdkProviderHealth(p.id),
+      // The qoder key is shared with QoderCredentialCard and the ProvidersPage
+      // inventory table: query-core takes the retry policy from whichever
+      // observer triggers the fetch, so this always-mounted observer pins the
+      // same `retry:false` as the other two (a probe error is deterministic).
+      retry: false,
       refetchInterval: 15_000,
     })),
   });

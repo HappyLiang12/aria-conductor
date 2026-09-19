@@ -1,0 +1,258 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ---------------------< io.aria.conductor:act-mcp >----------------------
+[INFO] Building ACT MCP 0.1.0-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- jacoco:0.8.12:prepare-agent (prepare-agent) @ act-mcp ---
+[INFO] argLine set to -javaagent:C:\\Users\\User\\.m2\\repository\\org\\jacoco\\org.jacoco.agent\\0.8.12\\org.jacoco.agent-0.8.12-runtime.jar=destfile=D:\\project\\aria-conductor\\agent-control-tower\\act-mcp\\target\\jacoco.exec
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ act-mcp ---
+[INFO] skip non existing resourceDirectory D:\project\aria-conductor\agent-control-tower\act-mcp\src\main\resources
+[INFO] skip non existing resourceDirectory D:\project\aria-conductor\agent-control-tower\act-mcp\src\main\resources
+[INFO] 
+[INFO] --- compiler:3.13.0:compile (default-compile) @ act-mcp ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ act-mcp ---
+[INFO] skip non existing resourceDirectory D:\project\aria-conductor\agent-control-tower\act-mcp\src\test\resources
+[INFO] 
+[INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ act-mcp ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- surefire:3.5.3:test (default-test) @ act-mcp ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running io.aria.conductor.mcp.McpTokenFilterTest
+Mockito is currently self-attaching to enable the inline-mock-maker. This will no longer work in future releases of the JDK. Please add Mockito as an agent to your build what is described in Mockito's documentation: https://javadoc.io/doc/org.mockito/mockito-core/latest/org/mockito/Mockito.html#0.3
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.982 s -- in io.aria.conductor.mcp.McpTokenFilterTest
+[INFO] Running io.aria.conductor.mcp.ToolPolicyRegistryTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.816 s -- in io.aria.conductor.mcp.ToolPolicyRegistryTest
+[INFO] Running io.aria.conductor.mcp.tools.AgentToolsTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.204 s -- in io.aria.conductor.mcp.tools.AgentToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.ApprovalToolsTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.234 s -- in io.aria.conductor.mcp.tools.ApprovalToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.AriaToolsTest
+[INFO] Tests run: 17, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.420 s -- in io.aria.conductor.mcp.tools.AriaToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.DashboardToolsTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.548 s -- in io.aria.conductor.mcp.tools.DashboardToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.DoDToolsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.180 s -- in io.aria.conductor.mcp.tools.DoDToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.KanbanToolsTest
+[INFO] Tests run: 16, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.280 s -- in io.aria.conductor.mcp.tools.KanbanToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.KnowledgeToolsTest
+[INFO] Tests run: 15, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.176 s -- in io.aria.conductor.mcp.tools.KnowledgeToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.OpsToolsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.179 s -- in io.aria.conductor.mcp.tools.OpsToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.ProviderToolsTest
+[INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.159 s -- in io.aria.conductor.mcp.tools.ProviderToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.ReportToolsTest
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.161 s -- in io.aria.conductor.mcp.tools.ReportToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.RunToolsTest
+[INFO] Tests run: 20, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.166 s -- in io.aria.conductor.mcp.tools.RunToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.SkillToolsTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.251 s -- in io.aria.conductor.mcp.tools.SkillToolsTest
+[INFO] Running io.aria.conductor.mcp.tools.ToolAuditAspectTest
+02:34:04.738 [main] INFO io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool' args=[] durationMs=5 outcome=ok
+02:34:04.748 [main] WARN io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool_failing' args=[] durationMs=0 outcome=error error=boom
+02:34:04.759 [main] INFO io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool' args=[] durationMs=0 outcome=ok
+02:34:04.768 [main] WARN io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool_failing_with_token' args=[[redacted]] durationMs=0 outcome=error error=boom
+02:34:04.778 [main] INFO io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool_credential' args=[[redacted], eu-west-1] durationMs=0 outcome=ok
+02:34:04.801 [main] INFO io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool_all_sensitive' args=[[redacted], [redacted], [redacted], [redacted], [redacted], [redacted], [redacted], [redacted], eu-west-1] durationMs=14 outcome=ok
+02:34:04.961 [main] INFO io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool_credential' args=[args hidden: parameter names unavailable] durationMs=2 outcome=ok
+02:34:04.966 [main] INFO io.aria.conductor.mcp.tools.ToolAuditAspect -- MCP tool 'fixture_tool_credential' args=[args hidden: parameter names unavailable] durationMs=0 outcome=ok
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.299 s -- in io.aria.conductor.mcp.tools.ToolAuditAspectTest
+[INFO] Running io.aria.conductor.mcp.tools.ToolResponsesTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.063 s -- in io.aria.conductor.mcp.tools.ToolResponsesTest
+[INFO] Running io.aria.conductor.mcp.tools.WorkerGovernanceAspectTest
+02:34:05.075 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=11111111-1111-1111-1111-111111111111
+02:34:05.106 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=11111111-1111-1111-1111-111111111111
+02:34:05.112 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='list_knowledge' code=INVALID_IDENTITY runId=null
+02:34:05.121 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='get_agent' code=SCOPE_MISMATCH runId=11111111-1111-1111-1111-111111111111
+02:34:05.124 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=11111111-1111-1111-1111-111111111111
+02:34:05.136 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='get_run' code=SCOPE_MISMATCH runId=11111111-1111-1111-1111-111111111111
+02:34:05.147 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=11111111-1111-1111-1111-111111111111
+02:34:05.152 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='update_kanban_item' code=GRANT_REQUIRED runId=11111111-1111-1111-1111-111111111111
+02:34:05.158 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='decide_approval' code=OPERATOR_ONLY runId=11111111-1111-1111-1111-111111111111
+02:34:05.160 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='retire_agent' code=OPERATOR_ONLY runId=11111111-1111-1111-1111-111111111111
+02:34:05.162 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='run_agent' code=OPERATOR_ONLY runId=11111111-1111-1111-1111-111111111111
+02:34:05.169 [main] WARN io.aria.conductor.mcp.tools.WorkerGovernanceAspect -- MCP worker call denied tool='not_a_real_tool' code=UNKNOWN_TOOL runId=11111111-1111-1111-1111-111111111111
+[INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.134 s -- in io.aria.conductor.mcp.tools.WorkerGovernanceAspectTest
+[INFO] Running io.aria.conductor.mcp.tools.WorkflowToolsTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.187 s -- in io.aria.conductor.mcp.tools.WorkflowToolsTest
+[INFO] 
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 185, Failures: 0, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] 
+[INFO] --- jacoco:0.8.12:report (report) @ act-mcp ---
+[INFO] Loading execution data file D:\project\aria-conductor\agent-control-tower\act-mcp\target\jacoco.exec
+[INFO] Analyzed bundle 'ACT MCP' with 25 classes
+[INFO] 
+[INFO] --- jacoco:0.8.12:check (check) @ act-mcp ---
+[INFO] Loading execution data file D:\project\aria-conductor\agent-control-tower\act-mcp\target\jacoco.exec
+[INFO] Analyzed bundle 'act-mcp' with 25 classes
+[INFO] All coverage checks have been met.
+[INFO] 
+[INFO] --- jar:3.4.2:jar (default-jar) @ act-mcp ---
+[INFO] 
+[INFO] --- failsafe:3.5.3:integration-test (default) @ act-mcp ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running io.aria.conductor.mcp.McpEndpointIntegrationTest
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.4.5)
+
+2026-09-19T02:34:17.725+08:00  INFO 24796 --- [           main] i.a.c.mcp.McpEndpointIntegrationTest     : Starting McpEndpointIntegrationTest using Java 21.0.11 with PID 24796 (started by User in D:\project\aria-conductor\agent-control-tower\act-mcp)
+2026-09-19T02:34:17.730+08:00  INFO 24796 --- [           main] i.a.c.mcp.McpEndpointIntegrationTest     : No active profile set, falling back to 1 default profile: "default"
+Mockito is currently self-attaching to enable the inline-mock-maker. This will no longer work in future releases of the JDK. Please add Mockito as an agent to your build what is described in Mockito's documentation: https://javadoc.io/doc/org.mockito/mockito-core/latest/org/mockito/Mockito.html#0.3
+OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+2026-09-19T02:34:32.587+08:00  INFO 24796 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 0 (http)
+2026-09-19T02:34:32.640+08:00  INFO 24796 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-09-19T02:34:32.641+08:00  INFO 24796 --- [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.40]
+2026-09-19T02:34:32.935+08:00  INFO 24796 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-09-19T02:34:32.937+08:00  INFO 24796 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 15177 ms
+2026-09-19T02:34:38.258+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable tools capabilities, notification: true
+2026-09-19T02:34:38.408+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Registered tools: 57
+2026-09-19T02:34:38.408+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable resources capabilities, notification: true
+2026-09-19T02:34:38.410+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable prompts capabilities, notification: true
+2026-09-19T02:34:38.411+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable completions capabilities
+2026-09-19T02:34:39.524+08:00  INFO 24796 --- [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 1 endpoint beneath base path '/actuator'
+2026-09-19T02:34:40.198+08:00  INFO 24796 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 56281 (http) with context path '/'
+2026-09-19T02:34:40.232+08:00  INFO 24796 --- [           main] i.a.c.mcp.McpEndpointIntegrationTest     : Started McpEndpointIntegrationTest in 24.909 seconds (process running for 29.794)
+2026-09-19T02:34:43.336+08:00  INFO 24796 --- [o-auto-1-exec-4] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-09-19T02:34:43.337+08:00  INFO 24796 --- [o-auto-1-exec-4] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-09-19T02:34:43.340+08:00  INFO 24796 --- [o-auto-1-exec-4] o.s.web.servlet.DispatcherServlet        : Completed initialization in 3 ms
+2026-09-19T02:34:43.796+08:00  INFO 24796 --- [o-auto-1-exec-5] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2024-11-05, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:43.884+08:00  INFO 24796 --- [ient-1-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2024-11-05, Capabilities: ServerCapabilities[completions=CompletionCapabilities[], experimental=null, logging=LoggingCapabilities[], prompts=PromptCapabilities[listChanged=true], resources=ResourceCapabilities[subscribe=false, listChanged=true], tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=mcp-server, title=null, version=1.0.0] and Instructions null
+2026-09-19T02:34:44.704+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'list_knowledge' args=[null, null] durationMs=10 outcome=ok
+2026-09-19T02:34:45.688+08:00  INFO 24796 --- [o-auto-1-exec-2] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2024-11-05, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:45.706+08:00  INFO 24796 --- [ient-2-Worker-0] i.m.client.LifecycleInitializer          : Server response with Protocol: 2024-11-05, Capabilities: ServerCapabilities[completions=CompletionCapabilities[], experimental=null, logging=LoggingCapabilities[], prompts=PromptCapabilities[listChanged=true], resources=ResourceCapabilities[subscribe=false, listChanged=true], tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=mcp-server, title=null, version=1.0.0] and Instructions null
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 32.68 s -- in io.aria.conductor.mcp.McpEndpointIntegrationTest
+[INFO] Running io.aria.conductor.mcp.McpNoneModeIdentityIntegrationTest
+2026-09-19T02:34:46.649+08:00  INFO 24796 --- [o-auto-1-exec-4] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:46.691+08:00  INFO 24796 --- [ient-3-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:46.746+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'retire_agent' args=[0e0e0e0e-1111-2222-3333-444455556666] durationMs=2 outcome=ok
+2026-09-19T02:34:47.012+08:00  INFO 24796 --- [o-auto-1-exec-3] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:47.029+08:00  INFO 24796 --- [ient-4-Worker-0] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:47.124+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'list_knowledge' args=[null, null] durationMs=0 outcome=ok
+2026-09-19T02:34:47.141+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=0d0d0d0d-1111-2222-3333-444455556666
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.350 s -- in io.aria.conductor.mcp.McpNoneModeIdentityIntegrationTest
+[INFO] Running io.aria.conductor.mcp.McpStreamableEndpointIntegrationTest
+2026-09-19T02:34:49.210+08:00  INFO 24796 --- [o-auto-1-exec-1] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:49.216+08:00  INFO 24796 --- [ient-7-Worker-2] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:49.402+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'list_knowledge' args=[null, null] durationMs=1 outcome=ok
+2026-09-19T02:34:49.841+08:00  INFO 24796 --- [o-auto-1-exec-5] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:49.859+08:00  INFO 24796 --- [ient-8-Worker-0] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.333 s -- in io.aria.conductor.mcp.McpStreamableEndpointIntegrationTest
+[INFO] Running io.aria.conductor.mcp.McpTokenEndpointIntegrationTest
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.4.5)
+
+2026-09-19T02:34:49.998+08:00  INFO 24796 --- [           main] i.a.c.m.McpTokenEndpointIntegrationTest  : Starting McpTokenEndpointIntegrationTest using Java 21.0.11 with PID 24796 (started by User in D:\project\aria-conductor\agent-control-tower\act-mcp)
+2026-09-19T02:34:49.999+08:00  INFO 24796 --- [           main] i.a.c.m.McpTokenEndpointIntegrationTest  : No active profile set, falling back to 1 default profile: "default"
+2026-09-19T02:34:52.012+08:00  INFO 24796 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 0 (http)
+2026-09-19T02:34:52.014+08:00  INFO 24796 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-09-19T02:34:52.014+08:00  INFO 24796 --- [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.40]
+2026-09-19T02:34:52.101+08:00  INFO 24796 --- [           main] o.a.c.c.C.[Tomcat-1].[localhost].[/]     : Initializing Spring embedded WebApplicationContext
+2026-09-19T02:34:52.102+08:00  INFO 24796 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 2100 ms
+2026-09-19T02:34:53.413+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable tools capabilities, notification: true
+2026-09-19T02:34:53.609+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Registered tools: 57
+2026-09-19T02:34:53.609+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable resources capabilities, notification: true
+2026-09-19T02:34:53.610+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable prompts capabilities, notification: true
+2026-09-19T02:34:53.610+08:00  INFO 24796 --- [           main] o.s.a.m.s.a.McpServerAutoConfiguration   : Enable completions capabilities
+2026-09-19T02:34:54.096+08:00  INFO 24796 --- [           main] o.s.b.a.e.web.EndpointLinksResolver      : Exposing 1 endpoint beneath base path '/actuator'
+2026-09-19T02:34:54.165+08:00  INFO 24796 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 56380 (http) with context path '/'
+2026-09-19T02:34:54.191+08:00  INFO 24796 --- [           main] i.a.c.m.McpTokenEndpointIntegrationTest  : Started McpTokenEndpointIntegrationTest in 4.224 seconds (process running for 43.752)
+2026-09-19T02:34:54.236+08:00  INFO 24796 --- [           main] o.a.c.c.C.[Tomcat-1].[localhost].[/]     : Initializing Spring TestDispatcherServlet ''
+2026-09-19T02:34:54.237+08:00  INFO 24796 --- [           main] o.s.t.web.servlet.TestDispatcherServlet  : Initializing Servlet ''
+2026-09-19T02:34:54.244+08:00  INFO 24796 --- [           main] o.s.t.web.servlet.TestDispatcherServlet  : Completed initialization in 7 ms
+2026-09-19T02:34:54.306+08:00  INFO 24796 --- [           main] o.a.c.c.C.[Tomcat-1].[localhost].[/]     : Initializing Spring TestDispatcherServlet ''
+2026-09-19T02:34:54.307+08:00  INFO 24796 --- [           main] o.s.t.web.servlet.TestDispatcherServlet  : Initializing Servlet ''
+2026-09-19T02:34:54.309+08:00  INFO 24796 --- [           main] o.s.t.web.servlet.TestDispatcherServlet  : Completed initialization in 2 ms
+2026-09-19T02:34:54.320+08:00  INFO 24796 --- [           main] o.a.c.c.C.[Tomcat-1].[localhost].[/]     : Initializing Spring TestDispatcherServlet ''
+2026-09-19T02:34:54.321+08:00  INFO 24796 --- [           main] o.s.t.web.servlet.TestDispatcherServlet  : Initializing Servlet ''
+2026-09-19T02:34:54.323+08:00  INFO 24796 --- [           main] o.s.t.web.servlet.TestDispatcherServlet  : Completed initialization in 2 ms
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.390 s -- in io.aria.conductor.mcp.McpTokenEndpointIntegrationTest
+[INFO] Running io.aria.conductor.mcp.McpWorkerEndpointIntegrationTest
+2026-09-19T02:34:55.065+08:00  INFO 24796 --- [o-auto-2-exec-3] o.a.c.c.C.[Tomcat-1].[localhost].[/]     : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-09-19T02:34:55.065+08:00  INFO 24796 --- [o-auto-2-exec-3] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+2026-09-19T02:34:55.066+08:00  INFO 24796 --- [o-auto-2-exec-3] o.s.web.servlet.DispatcherServlet        : Completed initialization in 1 ms
+2026-09-19T02:34:55.079+08:00  INFO 24796 --- [o-auto-2-exec-3] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:55.091+08:00  INFO 24796 --- [ient-9-Worker-2] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:55.111+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='get_run' code=SCOPE_MISMATCH runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:55.130+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'get_run' args=[0a0a0a0a-1111-2222-3333-444455556666] durationMs=1 outcome=ok
+2026-09-19T02:34:55.331+08:00  INFO 24796 --- [o-auto-2-exec-2] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:55.348+08:00  INFO 24796 --- [ent-10-Worker-2] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:55.379+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'list_knowledge' args=[null, null] durationMs=1 outcome=ok
+2026-09-19T02:34:55.521+08:00  INFO 24796 --- [o-auto-2-exec-3] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:55.525+08:00  INFO 24796 --- [ent-11-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:55.557+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='decide_approval' code=OPERATOR_ONLY runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:55.572+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='retire_agent' code=OPERATOR_ONLY runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:55.610+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='run_agent' code=OPERATOR_ONLY runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:55.664+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='housekeeping_execute' code=OPERATOR_ONLY runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:55.693+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='create_llm_provider' code=OPERATOR_ONLY runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:56.180+08:00  INFO 24796 --- [o-auto-2-exec-4] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:56.184+08:00  INFO 24796 --- [ent-12-Worker-2] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:56.209+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='get_agent' code=SCOPE_MISMATCH runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:56.824+08:00  INFO 24796 --- [o-auto-2-exec-6] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:56.854+08:00  INFO 24796 --- [ent-14-Worker-2] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:57.151+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'generate_report' args=[effective title, effective description, null, null, null, null] durationMs=3 outcome=ok
+2026-09-19T02:34:57.179+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:57.204+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'generate_report' args=[pinned title, pinned description, null, null, null, internal] durationMs=0 outcome=ok
+2026-09-19T02:34:57.239+08:00  INFO 24796 --- [o-auto-2-exec-9] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:57.241+08:00  INFO 24796 --- [ent-15-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:57.443+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'list_knowledge' args=[null, null] durationMs=0 outcome=ok
+2026-09-19T02:34:57.468+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'retire_agent' args=[0b0b0b0b-1111-2222-3333-444455556666] durationMs=0 outcome=ok
+2026-09-19T02:34:57.491+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'get_run' args=[0c0c0c0c-1111-2222-3333-444455556666] durationMs=0 outcome=ok
+2026-09-19T02:34:57.517+08:00  INFO 24796 --- [o-auto-2-exec-4] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:57.588+08:00  INFO 24796 --- [ent-16-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:58.040+08:00  INFO 24796 --- [o-auto-2-exec-6] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:58.045+08:00  INFO 24796 --- [ent-17-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:58.094+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:58.517+08:00  INFO 24796 --- [o-auto-2-exec-5] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:58.522+08:00  INFO 24796 --- [ent-18-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:58.556+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=0a0a0a0a-1111-2222-3333-444455556666
+2026-09-19T02:34:59.183+08:00  INFO 24796 --- [o-auto-2-exec-6] i.m.server.McpAsyncServer                : Client initialize request - Protocol: 2025-11-25, Capabilities: ClientCapabilities[experimental=null, roots=null, sampling=null, elicitation=null], Info: Implementation[name=Java SDK MCP Client, title=null, version=0.15.0]
+2026-09-19T02:34:59.220+08:00  INFO 24796 --- [ent-19-Worker-1] i.m.client.LifecycleInitializer          : Server response with Protocol: 2025-11-25, Capabilities: ServerCapabilities[completions=null, experimental=null, logging=LoggingCapabilities[], prompts=null, resources=null, tools=ToolCapabilities[listChanged=true]], Info: Implementation[name=aria-conductor, title=null, version=0.1.0] and Instructions null
+2026-09-19T02:34:59.313+08:00  INFO 24796 --- [oundedElastic-1] i.a.conductor.mcp.tools.ToolAuditAspect  : MCP tool 'generate_report' args=[worker summary, approved work, null, null, null, null] durationMs=0 outcome=ok
+2026-09-19T02:34:59.364+08:00  WARN 24796 --- [oundedElastic-1] i.a.c.mcp.tools.WorkerGovernanceAspect   : MCP worker call denied tool='generate_report' code=GRANT_REQUIRED runId=0a0a0a0a-1111-2222-3333-444455556666
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.018 s -- in io.aria.conductor.mcp.McpWorkerEndpointIntegrationTest
+2026-09-19T02:35:02.999+08:00  INFO 24796 --- [ionShutdownHook] o.s.b.w.e.tomcat.GracefulShutdown        : Commencing graceful shutdown. Waiting for active requests to complete
+[ERROR] Surefire is going to kill self fork JVM. The exit has elapsed 30 seconds after System.exit(0).
+[INFO] 
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 23, Failures: 0, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] 
+[INFO] --- failsafe:3.5.3:verify (default) @ act-mcp ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  01:50 min
+[INFO] Finished at: 2026-09-19T02:35:30+08:00
+[INFO] ------------------------------------------------------------------------

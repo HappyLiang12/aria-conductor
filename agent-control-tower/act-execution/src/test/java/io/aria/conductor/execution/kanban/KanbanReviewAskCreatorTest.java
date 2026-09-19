@@ -3,6 +3,7 @@ package io.aria.conductor.execution.kanban;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
@@ -91,6 +92,28 @@ class KanbanReviewAskCreatorTest {
         creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
 
         verify(approvalRepository, never()).save(any());
+    }
+
+    @Test
+    void doesNotSkipWhenTheOnlyPendingAskIsAnAcpPermissionAsk() {
+        // A pending ACP permission ask is owned by AcpPermissionCoordinator and
+        // resolved independently (decision / expiry / run-end sweep): it must not
+        // suppress the review surface for a card that just entered REVIEW.
+        when(approvalRepository.findByStatusAndKanbanItemId(ApprovalStatus.PENDING, "c1"))
+                .thenReturn(List.of(Approval.builder()
+                        .runId(runId).status(ApprovalStatus.PENDING)
+                        .source(ApprovalSource.ACP_PERMISSION)
+                        .build()));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(
+                Run.builder().id(runId).status(RunStatus.COMPLETED).build()));
+
+        creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
+
+        ArgumentCaptor<Approval> captor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(captor.capture());
+        Approval ask = captor.getValue();
+        assertThat(ask.getAskType()).isEqualTo(Approval.AskType.REVIEW_REQUEST);
+        assertThat(ask.getStatus()).isEqualTo(ApprovalStatus.PENDING);
     }
 
     @Test

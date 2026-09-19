@@ -1,6 +1,7 @@
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { listAgents } from '../api/agents';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
+import { QoderCredentialCard } from '../components/QoderCredentialCard';
 
 interface HealthBadgeProps {
   healthy: boolean;
@@ -13,7 +14,9 @@ function HealthBadge({ healthy }: HealthBadgeProps) {
       className="status-badge status-badge-md"
       style={{ backgroundColor: color + '22', color, borderColor: color }}
     >
-      {healthy ? 'Healthy' : 'Unhealthy'}
+      {/* UX-3: the probe is service reachability only (credential-free), so the
+          label must not read as "run-ready". */}
+      {healthy ? 'Service OK' : 'Service Unreachable'}
     </span>
   );
 }
@@ -33,6 +36,12 @@ export function ProvidersPage() {
     queries: (providers ?? []).map((p) => ({
       queryKey: ['adk-provider-health', p.id],
       queryFn: () => getAdkProviderHealth(p.id),
+      // The qoder key is shared with QoderCredentialCard and the TopBar badge,
+      // and query-core takes the retry policy from whichever observer triggers
+      // the fetch: every observer must agree. A 404 means "not registered" and
+      // must classify at once instead of after the app client's `retry: 1`
+      // (`App.tsx:19`).
+      retry: false,
     })),
   });
 
@@ -89,6 +98,11 @@ export function ProvidersPage() {
           </table>
         </div>
       )}
+
+      {/* Qoder runtime credential + separate sandbox/bridge readiness states (B9).
+          Rendered as a .card after the inventory table so the first .data-table
+          stays the provider inventory (e2e/adk-providers.spec.ts contract). */}
+      <QoderCredentialCard />
 
       {/* Per-agent backend overview */}
       <div className="card" style={{ marginTop: 24 }}>

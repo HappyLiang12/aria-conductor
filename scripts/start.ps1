@@ -11,6 +11,13 @@ which is langchain-only.
 .PARAMETER Mode
 local (default) or compose.
 
+.PARAMETER Provider
+opencode (default) or qoder. `-Provider qoder` is an explicit opt-in: it selects the
+qoder provider and its sandbox image and pins MCP token auth (`ARIA_MCP_AUTH_MODE=token`)
+with a locally generated token file, because a qoder sandbox can reach the backend's
+operator APIs (design Section 6.2). An explicit override to any other auth mode is
+refused. The qoder provider needs the local-dev topology, so compose mode rejects it.
+
 .PARAMETER DryRun
 Run the environment checks, print the mode block, then exit. No services are started,
 no containers and no ports are touched, and no `.run/` state is written. The one
@@ -19,6 +26,7 @@ the repair this script exists to make, and without it the sandbox socket cannot 
 #>
 param(
     [ValidateSet('local', 'compose')][string]$Mode = 'local',
+    [ValidateSet('opencode', 'qoder')][string]$Provider = 'opencode',
     [switch]$DryRun,
     [switch]$NonInteractive,
     # Test seam: defaults to the repository root.
@@ -27,16 +35,40 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# -Provider qoder is valid only in the local-dev topology: the compose backend runs in a
+# container, where the OpenSandbox endpoints are unreachable, so an explicit qoder request
+# must fail loudly instead of being silently served by langchain.
+if ($Provider -eq 'qoder' -and $Mode -ne 'local') {
+    throw "-Provider qoder requires the local-dev topology. -Mode compose is langchain-only (its backend runs in a container and cannot reach the OpenSandbox endpoints). Run: pwsh -File scripts\start.ps1 -Provider qoder"
+}
+
 . (Join-Path $PSScriptRoot "lib/container-runtime.ps1")
 . (Join-Path $PSScriptRoot "lib/env-setup.ps1")
 . (Join-Path $PSScriptRoot "lib/preflight.ps1")
 
 $RunDir = Join-Path $ProjectRoot ".run"
 
-$provider = if ($Mode -eq 'local') { 'opencode' } else { 'langchain' }
+# Effective provider: the local-dev topology honours -Provider (opencode by default, qoder
+# as an explicit opt-in); compose is langchain-only. This must NOT be assigned back into
+# $Provider: PowerShell variables are case-insensitive, so that would trip the parameter's
+# ValidateSet (compose would die with 'langchain is not a valid value for Provider'). The id
+# is lowercased here because the ValidateSet match is case-insensitive too: -Provider Qoder
+# is accepted, and without normalization its raw casing would leak into the summary and into
+# the backend's case-sensitive --adk.default-provider lookup.
+$providerId = if ($Mode -eq 'local') { $Provider.ToLowerInvariant() } else { 'langchain' }
 $topology = if ($Mode -eq 'local') { 'local-dev (backend + frontend on host)' } else { 'full-stack compose (backend in a container)' }
 # Compose runs three phases (environment, stack bring-up, report); the local-dev flow runs eight.
 $phaseTotal = if ($Mode -eq 'compose') { 3 } else { 8 }
+
+# Qoder mode assets. The image tag is authoritative in act-app/src/main/resources/application.yml
+# (`qoder.image`) and in Ensure-QoderSandboxImage's default; keep the three in step. The token
+# file holds the locally generated MCP bearer (never printed) that the backend and its sandboxes
+# share - the qoder refusal below is what keeps that endpoint authenticated (design Section 6.2).
+$qoderSandboxImage = 'aria-conductor/qoder-sandbox:0.1'
+$qoderTokenFile = Join-Path $RunDir 'mcp-token'
+# Qoder-only summary lines: the default (opencode) mode block stays unchanged.
+$summaryImage = if ($providerId -eq 'qoder') { $qoderSandboxImage } else { '' }
+$summaryMcpAuth = if ($providerId -eq 'qoder') { "token (token file: $qoderTokenFile)" } else { '' }
 
 function Write-Phase([int]$Number, [int]$Total, [string]$Text) {
     Write-Host ("[{0}/{1}] {2}" -f $Number, $Total, $Text) -ForegroundColor Cyan
@@ -48,14 +80,26 @@ function Get-EnvValue([string]$Name, [string]$Default) {
     return $value
 }
 
+# 256 bits of CSPRNG output as lowercase hex. Used for the qoder mode MCP bearer;
+# McpTokenFilter refuses an empty token, so it must never be blank.
+function New-McpToken {
+    $bytes = [byte[]]::new(32)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
 function Write-ModeSummary([string]$Topology, [string]$Provider, [string]$RuntimeLine,
-                          [string]$OpenSandboxUrl, [hashtable]$Checks) {
+                          [string]$OpenSandboxUrl, [hashtable]$Checks,
+                          [string]$SandboxImage, [string]$McpAuthLine) {
     Write-Host ""
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host "  Aria Conductor - READY" -ForegroundColor Green
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host "  Topology : $Topology"
     Write-Host "  Provider : $Provider"
+    # Empty for the default provider: its mode block is deliberately unchanged.
+    if ($SandboxImage) { Write-Host "  Image    : $SandboxImage" }
+    if ($McpAuthLine) { Write-Host "  MCP auth : $McpAuthLine" }
     Write-Host "  Runtime  : $RuntimeLine"
     if ($OpenSandboxUrl) { Write-Host "  OpenSandbox: $OpenSandboxUrl" }
     Write-Host "  Database : h2 (file)"
@@ -75,6 +119,26 @@ Write-Host "Aria Conductor - one-click start ($Mode)" -ForegroundColor Cyan
 Write-Phase 1 $phaseTotal "Checking environment"
 
 Load-DotEnv $ProjectRoot
+
+# ── Qoder provider: pin MCP token auth, reject an unauthenticated override ───
+# A qoder sandbox shares the host network with the backend, so the local default
+# (aria.mcp.auth-mode=none, an open operator API) is a blocked configuration for it
+# (design Section 6.2): qoder mode pins token auth and mints a local token file in phase 5.
+# An explicit override to any other mode is refused rather than silently degraded. The
+# default opencode path is untouched - no pinning, no token, no extra files.
+if ($providerId -eq 'qoder') {
+    $explicitAuthMode = [Environment]::GetEnvironmentVariable('ARIA_MCP_AUTH_MODE')
+    if ($explicitAuthMode -and $explicitAuthMode.Trim().ToLowerInvariant() -ne 'token') {
+        throw ("Refusing to start the qoder provider with ARIA_MCP_AUTH_MODE='$explicitAuthMode': qoder " +
+               "sandboxes can reach the backend's operator APIs, so an unauthenticated MCP endpoint is a " +
+               "blocked configuration (design Section 6.2). Remove the override from .env (or set it to " +
+               "'token') and retry.")
+    }
+    $env:ARIA_MCP_AUTH_MODE = 'token'
+    if ($DryRun) {
+        Write-Host "      would pin MCP token auth (token file: $qoderTokenFile)" -ForegroundColor DarkGray
+    }
+}
 
 # This flow targets podman by default: the opencode sandbox needs a runtime whose socket
 # the OpenSandbox server can mount, and Docker Desktop is commonly installed alongside
@@ -189,7 +253,7 @@ if ($Mode -eq 'compose') {
     Write-Host "  Aria Conductor - COMPOSE STACK STARTING" -ForegroundColor Green
     Write-Host "=========================================================" -ForegroundColor Green
     Write-Host "  Topology : $topology"
-    Write-Host "  Provider : $provider"
+    Write-Host "  Provider : $providerId"
     Write-Host "  Runtime  : $runtime ($($runtimeInfo.Mode))"
     Write-Host "  Dashboard: http://localhost:$composeDashboardPort"
     Write-Host "  Backend  : http://localhost:$composeBackendPort"
@@ -211,9 +275,10 @@ $sandboxPort = [int](Get-EnvValue 'OPENSANDBOX_PORT' '8090')
 
 # ── Dry run: stop before anything is mutated ─────────────────────────────────
 if ($DryRun) {
-    Write-ModeSummary -Topology $topology -Provider $provider `
+    Write-ModeSummary -Topology $topology -Provider $providerId `
         -RuntimeLine "$runtime ($($runtimeInfo.Mode))" `
-        -OpenSandboxUrl "http://localhost:$sandboxPort" -Checks @{}
+        -OpenSandboxUrl "http://localhost:$sandboxPort" -Checks @{} `
+        -SandboxImage $summaryImage -McpAuthLine $summaryMcpAuth
     Write-Host ""
     Write-Host "-DryRun: environment OK, nothing started." -ForegroundColor Yellow
     exit 0
@@ -221,7 +286,11 @@ if ($DryRun) {
 
 # ── Phase 3: resource preparation ────────────────────────────────────────────
 Write-Phase 3 $phaseTotal "Preparing container resources"
-Ensure-OpencodeSandboxImage -Runtime $runtime -ProjectRoot $ProjectRoot | Out-Null
+if ($providerId -eq 'qoder') {
+    Ensure-QoderSandboxImage -Runtime $runtime -ProjectRoot $ProjectRoot -Tag $qoderSandboxImage | Out-Null
+} else {
+    Ensure-OpencodeSandboxImage -Runtime $runtime -ProjectRoot $ProjectRoot | Out-Null
+}
 Ensure-OpenSandboxServer -Runtime $runtime -ProjectRoot $ProjectRoot | Out-Null
 
 # ── Phase 4: port pre-check ──────────────────────────────────────────────────
@@ -250,11 +319,32 @@ foreach ($port in @($backendPort, $frontendPort)) {
 # ── Phase 5: start ───────────────────────────────────────────────────────────
 Write-Phase 5 $phaseTotal "Starting services"
 New-Item -ItemType Directory -Path $RunDir -Force | Out-Null
+if ($providerId -eq 'qoder') {
+    # Minted here rather than during the checks above, so a dry run and a run aborted before
+    # this phase leave no secret on disk. ARIA_MCP_TOKEN is inherited by start-backend.ps1
+    # (Start-Process passes this process's environment), which hands it to Spring Boot; the
+    # file is the local copy the operator and the E2E harness can read.
+    if ([string]::IsNullOrWhiteSpace($env:ARIA_MCP_TOKEN)) {
+        $env:ARIA_MCP_TOKEN = New-McpToken
+    }
+    Set-Content -Path $qoderTokenFile -Value $env:ARIA_MCP_TOKEN -NoNewline
+    # Tighten the file to the current user, the PowerShell twin of the bash launcher's
+    # chmod 600: drop the inherited ACEs and grant only this user. Read+write, not read
+    # alone, because the next qoder run rewrites the file right here and a read-only DACL
+    # would fail that Set-Content with access denied. Nothing in this repository reads the
+    # file back (the backend receives the token through ARIA_MCP_TOKEN, inherited from this
+    # process), and .run removal keeps working (delete-child comes from the parent entry).
+    # Best effort like the bash chmod: a failure here must not stop the launcher.
+    if ($IsWindows) {
+        icacls $qoderTokenFile /inheritance:r /grant:r "$([System.Security.Principal.WindowsIdentity]::GetCurrent().Name):(R,W)" | Out-Null
+    }
+    Write-Host "      MCP auth token written to $qoderTokenFile" -ForegroundColor DarkGray
+}
 $env:VITE_BACKEND_PORT = "$backendPort"
 
 $backend = Start-Process pwsh -ArgumentList @(
         '-NoProfile', '-File', (Join-Path $PSScriptRoot 'start-backend.ps1'),
-        '-AdkProvider', 'opencode'
+        '-AdkProvider', $providerId
     ) -NoNewWindow -PassThru `
     -RedirectStandardOutput (Join-Path $RunDir 'backend.log') `
     -RedirectStandardError (Join-Path $RunDir 'backend.err.log')
@@ -283,9 +373,10 @@ $allOk = $backendOk -and $dashboardOk -and $sandboxOk
 
 # ── Phase 7: mode confirmation ───────────────────────────────────────────────
 Write-Phase 7 $phaseTotal "Reporting"
-Write-ModeSummary -Topology $topology -Provider $provider `
+Write-ModeSummary -Topology $topology -Provider $providerId `
     -RuntimeLine "$runtime ($($runtimeInfo.Mode))" `
-    -OpenSandboxUrl "http://localhost:$sandboxPort" -Checks $checks
+    -OpenSandboxUrl "http://localhost:$sandboxPort" -Checks $checks `
+    -SandboxImage $summaryImage -McpAuthLine $summaryMcpAuth
 if ($allOk) {
     Start-Process "http://localhost:$frontendPort" | Out-Null
 }

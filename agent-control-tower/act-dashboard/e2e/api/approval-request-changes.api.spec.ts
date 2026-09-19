@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
+  dispatchSeededCard,
   pollUntil,
   seedAdkAgent,
   seedKanbanItem,
@@ -28,7 +29,8 @@ test.describe('request changes loop', () => {
       title: `changes-${uniqueName('card')}`,
       agentTemplateId: agent.name,
     });
-    expect((await transitionKanban(request, card.id, 'IN_PROGRESS')).status).toBe(200);
+    // Same auto-dispatch race: the explicit move may lose to the listener and answer 409.
+    await dispatchSeededCard(request, card.id);
 
     const asks = await pollUntil<any[]>(
       request,

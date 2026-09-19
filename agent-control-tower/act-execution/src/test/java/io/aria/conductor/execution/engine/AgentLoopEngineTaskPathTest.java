@@ -1,5 +1,8 @@
 package io.aria.conductor.execution.engine;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
@@ -40,6 +43,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Duration;
@@ -148,7 +152,7 @@ class AgentLoopEngineTaskPathTest {
     @Test
     void taskProvider_delegatesWholeRun_andCompletesWithFinalOutput() {
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false));
+                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false, true));
 
         engine.startRun(runId);
 
@@ -175,10 +179,91 @@ class AgentLoopEngineTaskPathTest {
         assertThat(run.getIterationCount()).isEqualTo(1);
     }
 
+    // ---- H1: prior conversation turns must reach task-execution providers ----
+
+    @Test
+    void taskPrompt_multiTurnHistory_includesPriorTurnsAsTranscript() {
+        // P0 (PR #91 user-POV walkthrough): within one Aria conversation the model answered
+        // "this is the first message in our conversation" because buildTaskPrompt kept only
+        // the LAST user message. The history below mirrors that failing walkthrough shape.
+        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of(
+                trajectory(1, "user", "remember PINEAPPLE-42"),
+                trajectory(2, "assistant", "Acknowledged."),
+                trajectory(3, "user", "what did I ask you to remember?")));
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(taskProvider).executeTask(eq(agent), eq(runId), promptCaptor.capture(), any());
+        String taskPrompt = promptCaptor.getValue();
+
+        // The earlier user message AND the assistant ack must both survive into the prompt
+        assertThat(taskPrompt).contains("PINEAPPLE-42");
+        assertThat(taskPrompt).contains("Acknowledged.");
+        // ... as a readable transcript section, in turn order
+        assertThat(taskPrompt).contains("## Conversation so far");
+        assertThat(taskPrompt).contains("user: remember PINEAPPLE-42");
+        assertThat(taskPrompt).contains("assistant: Acknowledged.");
+        assertThat(taskPrompt.indexOf("user: remember PINEAPPLE-42"))
+                .as("transcript preserves conversation order")
+                .isLessThan(taskPrompt.indexOf("assistant: Acknowledged."));
+        // The transcript sits BEFORE the existing suffix; the last user message stays the request
+        int suffixIndex = taskPrompt.indexOf("---\nUser request: what did I ask you to remember?");
+        assertThat(suffixIndex).isPositive();
+        assertThat(taskPrompt.indexOf("## Conversation so far")).isLessThan(suffixIndex);
+        assertThat(taskPrompt).endsWith("---\nUser request: what did I ask you to remember?");
+    }
+
+    @Test
+    void taskPrompt_singleTurnFreshRun_promptStaysByteIdentical() {
+        // Blast-radius guard: a fresh agent run (no prior turns — every S-scenario run)
+        // must keep the exact prompt bytes the E-series evidence was produced with:
+        // system content (config prompt plus the blank line appended by buildMessages)
+        // + "\n\n---\nUser request: " + the single user message from the promptSeed.
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(taskProvider).executeTask(eq(agent), eq(runId), promptCaptor.capture(), any());
+        assertThat(promptCaptor.getValue())
+                .isEqualTo("You are a tester agent.\n\n\n\n---\nUser request: do the work");
+    }
+
+    @Test
+    void taskPrompt_historyWithOnlyTheFinalUserMessage_staysByteIdentical() {
+        // Streaming-path single-turn shape: initialContext persisted exactly one user
+        // trajectory, which IS the final request — no prior turns, no transcript section,
+        // byte-identical to the previous shape.
+        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of(
+                trajectory(1, "user", "hello there")));
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15))
+                .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(taskProvider).executeTask(eq(agent), eq(runId), promptCaptor.capture(), any());
+        assertThat(promptCaptor.getValue())
+                .isEqualTo("You are a tester agent.\n\n\n\n---\nUser request: hello there");
+    }
+
     @Test
     void taskContext_carriesConfigMaxRounds_andOpenCodeMaxDuration() {
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
 
         engine.startRun(runId);
 
@@ -224,7 +309,7 @@ class AgentLoopEngineTaskPathTest {
                 Thread.currentThread().interrupt();
                 throw e;
             }
-            return new TaskResult(runId, "sess-1", "done", 10, 5, false);
+            return new TaskResult(runId, "sess-1", "done", 10, 5, false, true);
         });
 
         engine.startRun(runId);
@@ -273,7 +358,7 @@ class AgentLoopEngineTaskPathTest {
     void taskApprovalGate_defaultConfig_requestsApprovalBeforeExecution() {
         // Agent config has NO taskApprovalRequired key — the gate must engage by default
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "approved task output", 20, 10, false));
+                new TaskResult(runId, "sess-1", "approved task output", 20, 10, false, true));
 
         engine.startRun(runId);
 
@@ -290,7 +375,7 @@ class AgentLoopEngineTaskPathTest {
         when(agent.getConfig()).thenReturn(
                 "{\"taskApprovalRequired\":false,\"maxToolCallRounds\":7,\"systemPrompt\":\"You are a tester agent.\"}");
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
 
         engine.startRun(runId);
 
@@ -323,7 +408,7 @@ class AgentLoopEngineTaskPathTest {
     void taskSuccess_writesAssistantTrajectoryWithFinalOutput() {
         when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(1);
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false));
+                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false, true));
 
         engine.startRun(runId);
 
@@ -362,12 +447,41 @@ class AgentLoopEngineTaskPathTest {
         verify(promptCallRepository, never()).save(any());
     }
 
+    // ---- fix-round 1, item 2: unknown usage is never folded into accounting ----
+
+    @Test
+    void taskProviderUnknownUsage_skipsTokenAccounting_andLogsTheMarker() {
+        Logger logger = (Logger) LoggerFactory.getLogger(AgentLoopEngine.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            // A provider that cannot measure usage reports 0 placeholders with usageReported=false.
+            when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
+                    new TaskResult(runId, "sess-1", "Task done output", 0, 0, false, false));
+
+            engine.startRun(runId);
+
+            await().atMost(Duration.ofSeconds(15))
+                    .until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+            // Unknown usage stays unknown: no fabricated 0-fold, an explicit marker instead.
+            assertThat(run.getTotalTokensUsed()).isZero();
+            assertThat(run.getIterationCount()).isEqualTo(1);
+            assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+                    .anyMatch(message -> message.contains("Token usage not reported by the provider")
+                            && message.contains(runId.toString()));
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
     // ---- #19 task path is covered by the circuit breaker ----
 
     @Test
     void taskPath_checksCircuitBreakerBeforeExecution() {
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
 
         engine.startRun(runId);
 
@@ -394,7 +508,16 @@ class AgentLoopEngineTaskPathTest {
         assertThat(run.getErrorMessage()).contains("budget");
     }
 
-    // ---- helper to build a plain agent (avoid over-mocking in edge tests) ----
+    // ---- helpers to build plain fixtures (avoid over-mocking in edge tests) ----
+
+    /** Persisted-trajectory fixture as buildMessages() reads it (role + content). */
+    private static SessionTrajectory trajectory(int turn, String role, String content) {
+        return SessionTrajectory.builder()
+                .turnNumber(turn)
+                .role(role)
+                .content(content)
+                .build();
+    }
 
     @SuppressWarnings("unused")
     private static Agent plainAgent(UUID id) {

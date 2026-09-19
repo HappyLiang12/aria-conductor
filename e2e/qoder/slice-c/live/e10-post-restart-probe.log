@@ -1,0 +1,1 @@
+Error: command C:\WINDOWS\System32\wsl.exe [-u root -d podman-machine-default sh] failed: exit status 0xffffffff ()

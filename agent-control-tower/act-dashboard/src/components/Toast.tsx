@@ -20,6 +20,7 @@ const TOAST_WORTHY = new Set([
   'run.completed',
   'approval.requested',
   'approval.decided',
+  'approval.expired',
   'knowledge.submitted',
   'knowledge.approved',
   'knowledge.retired',

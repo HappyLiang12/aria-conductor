@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   apiCall,
   approveRunApproval,
+  dispatchSeededCard,
   pollRunTerminal,
   seedAdkAgent,
   seedAgent,
@@ -147,11 +148,8 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
       page.locator(`[data-card="${item.id}"]`),
     ).toBeVisible({ timeout: 15_000 });
 
-    const { status } = await apiCall(request, 'POST', `/kanban/items/${item.id}/transition`, {
-      status: 'IN_PROGRESS',
-      comment: 'e2e observability move',
-    });
-    expect(status).toBe(200);
+    // Same auto-dispatch race as the other specs; the comment was decorative (never asserted).
+    await dispatchSeededCard(request, item.id);
 
     // WS kanban.transitioned → invalidate → the card lands in the target column.
     // The 1.2s flash class on the moved card is timing-fragile to observe E2E

@@ -1,10 +1,14 @@
 package io.aria.conductor.execution.controller;
 
+import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RiskTier;
 import io.aria.conductor.common.model.ToolCall;
-import io.aria.conductor.execution.approval.ApprovalGate;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
+import io.aria.conductor.execution.approval.AcpDecisionRejectedException;
+import io.aria.conductor.execution.approval.ApprovalDecisionService;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
@@ -18,6 +22,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,7 +30,6 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -42,11 +46,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ApprovalControllerTest extends WebMvcTestBase {
 
     private final ApprovalRepository approvalRepository = mock(ApprovalRepository.class);
-    private final ApprovalGate approvalGate = mock(ApprovalGate.class);
+    private final ApprovalDecisionService approvalDecisionService = mock(ApprovalDecisionService.class);
     private final ToolCallRepository toolCallRepository = mock(ToolCallRepository.class);
     private final ToolRiskResolver toolRiskResolver = mock(ToolRiskResolver.class);
+    private final AcpPermissionRequestRepository acpPermissionRequestRepository =
+            mock(AcpPermissionRequestRepository.class);
     private final MockMvc mvc = mockMvcFor(new ApprovalController(
-            approvalRepository, approvalGate, toolCallRepository, toolRiskResolver));
+            approvalRepository, approvalDecisionService, toolCallRepository, toolRiskResolver,
+            acpPermissionRequestRepository));
 
     @Test
     void listApprovals_enrichesApprovalsWithToolNameAndRiskTier() throws Exception {
@@ -289,6 +296,25 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.message").value("Approval not found: " + id));
     }
 
+    /**
+     * R20.6 / R24.11: an ACP permission ask must never be answered with free text — the
+     * sanctioned path is the operator decision through the ACP permission coordinator.
+     */
+    @Test
+    void answer_acpPermissionAsk_returns400() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval acpAsk = anApproval().withId(id).build();
+        acpAsk.setSource(ApprovalSource.ACP_PERMISSION);
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(acpAsk));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "free-text bypass"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("ACP permission coordinator")));
+    }
+
     @Test
     void getApproval_returns200WithEnrichedDetail() throws Exception {
         UUID id = UUID.randomUUID();
@@ -324,6 +350,56 @@ class ApprovalControllerTest extends WebMvcTestBase {
         verifyNoInteractions(toolCallRepository, toolRiskResolver);
     }
 
+    /**
+     * ACP ask (V60): there is no ToolCall row, so the tool identity falls back to the companion
+     * record and the ACP delivery fields (deliveryState/displayJson) are surfaced. The ACP tool
+     * name is not a registry tool, so arguments and riskTier stay null.
+     */
+    @Test
+    void getApproval_acpAsk_fallsBackToCompanionToolNameAndExposesDeliveryFields() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval ask = anApproval().withId(id).withReason("CLI wants to write a file").build();
+        ask.setSource(ApprovalSource.ACP_PERMISSION);
+        AcpPermissionRequest companion = AcpPermissionRequest.builder()
+                .approvalId(id)
+                .runId(ask.getRunId())
+                .bridgeSessionId("bridge-session-1")
+                .bridgeRequestId("bridge-request-1")
+                .toolName("write_file")
+                .requestDigest("digest-1")
+                .expiresAt(Instant.now().plusSeconds(600))
+                .deliveryState("PENDING_DELIVERY")
+                .displayJson("{\"title\":\"Write file\"}")
+                .build();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(ask));
+        when(acpPermissionRequestRepository.findById(id)).thenReturn(Optional.of(companion));
+
+        mvc.perform(get("/api/v1/approvals/" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.source").value("ACP_PERMISSION"))
+                .andExpect(jsonPath("$.toolName").value("write_file"))
+                .andExpect(jsonPath("$.arguments").isEmpty())
+                .andExpect(jsonPath("$.riskTier").isEmpty())
+                .andExpect(jsonPath("$.deliveryState").value("PENDING_DELIVERY"))
+                .andExpect(jsonPath("$.displayJson").value("{\"title\":\"Write file\"}"));
+
+        verifyNoInteractions(toolRiskResolver);
+    }
+
+    /** Legacy rows have no companion: source reads as LEGACY_GATE and the ACP fields are null. */
+    @Test
+    void listApprovals_legacyRows_defaultToLegacyGateWithNullAcpFields() throws Exception {
+        Approval legacy = anApproval().build();
+        when(approvalRepository.findAll(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(legacy)));
+
+        mvc.perform(get("/api/v1/approvals"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].source").value("LEGACY_GATE"))
+                .andExpect(jsonPath("$[0].deliveryState").isEmpty())
+                .andExpect(jsonPath("$[0].displayJson").isEmpty());
+    }
+
     @Test
     void getApproval_unknownId_returns404() throws Exception {
         UUID id = UUID.randomUUID();
@@ -335,27 +411,31 @@ class ApprovalControllerTest extends WebMvcTestBase {
     }
 
     @Test
-    void decideApproval_approve_passesParsedArgumentsToGate() throws Exception {
+    void decideApproval_approve_passesParsedArgumentsToTheService_andKeepsTheLegacyBody() throws Exception {
         UUID id = UUID.randomUUID();
+        when(approvalDecisionService.decide(id, true, "looks safe"))
+                .thenReturn(new ApprovalDecisionService.Result(id, true, null, null));
 
         mvc.perform(post("/api/v1/approvals/" + id + "/decide")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("approved", true, "reason", "looks safe"))))
                 .andExpect(status().isOk())
+                // The legacy body is exactly the three keys it always had.
+                .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(jsonPath("$.approvalId").value(id.toString()))
                 .andExpect(jsonPath("$.approved").value(true))
-                .andExpect(jsonPath("$.status").value("processed"));
+                .andExpect(jsonPath("$.status").value("processed"))
+                .andExpect(jsonPath("$.decision").doesNotExist())
+                .andExpect(jsonPath("$.deliveryState").doesNotExist());
 
-        ArgumentCaptor<Boolean> approvedCaptor = ArgumentCaptor.forClass(Boolean.class);
-        ArgumentCaptor<String> reasonCaptor = ArgumentCaptor.forClass(String.class);
-        verify(approvalGate).decideApproval(eq(id), approvedCaptor.capture(), reasonCaptor.capture());
-        assertThat(approvedCaptor.getValue()).isTrue();
-        assertThat(reasonCaptor.getValue()).isEqualTo("looks safe");
+        verify(approvalDecisionService).decide(id, true, "looks safe");
     }
 
     @Test
     void decideApproval_deny_propagatesFalseDecision() throws Exception {
         UUID id = UUID.randomUUID();
+        when(approvalDecisionService.decide(id, false, "too risky"))
+                .thenReturn(new ApprovalDecisionService.Result(id, false, null, null));
 
         mvc.perform(post("/api/v1/approvals/" + id + "/decide")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -364,14 +444,49 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.approved").value(false))
                 .andExpect(jsonPath("$.status").value("processed"));
 
-        verify(approvalGate).decideApproval(id, false, "too risky");
+        verify(approvalDecisionService).decide(id, false, "too risky");
+    }
+
+    /** R20.1: an ACP decision ack carries the terminal status and the delivery state. */
+    @Test
+    void decideApproval_acpAsk_returnsDecisionAndDeliveryState() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(approvalDecisionService.decide(id, true, "operator approved"))
+                .thenReturn(new ApprovalDecisionService.Result(id, true, "APPROVED", "DELIVERED"));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/decide")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("approved", true, "reason", "operator approved"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(5))
+                .andExpect(jsonPath("$.approvalId").value(id.toString()))
+                .andExpect(jsonPath("$.approved").value(true))
+                .andExpect(jsonPath("$.status").value("processed"))
+                .andExpect(jsonPath("$.decision").value("APPROVED"))
+                .andExpect(jsonPath("$.deliveryState").value("DELIVERED"));
+    }
+
+    /** R20.1: a typed ACP rejection maps to 409 with its code, not the legacy 400. */
+    @Test
+    void decideApproval_rejectedAcpDecision_returns409WithCodeAndError() throws Exception {
+        UUID id = UUID.randomUUID();
+        doThrow(new AcpDecisionRejectedException(
+                AcpDecisionRejectedException.Code.EXPIRED, "ask expired before decision"))
+                .when(approvalDecisionService).decide(id, true, "too late");
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/decide")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("approved", true, "reason", "too late"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("EXPIRED"))
+                .andExpect(jsonPath("$.error").value("ask expired before decision"));
     }
 
     @Test
-    void decideApproval_unknownId_returns400WithGateError() throws Exception {
+    void decideApproval_unknownId_returns400WithServiceError() throws Exception {
         UUID id = UUID.randomUUID();
         doThrow(new IllegalArgumentException("Approval not found: " + id))
-                .when(approvalGate).decideApproval(id, true, "ok");
+                .when(approvalDecisionService).decide(id, true, "ok");
 
         mvc.perform(post("/api/v1/approvals/" + id + "/decide")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -382,12 +497,12 @@ class ApprovalControllerTest extends WebMvcTestBase {
 
     @ParameterizedTest
     @ValueSource(strings = {"", "not-json", "{\"approved\":"})
-    void decideApproval_malformedBody_returns400WithoutTouchingGate(String body) throws Exception {
+    void decideApproval_malformedBody_returns400WithoutTouchingTheService(String body) throws Exception {
         mvc.perform(post("/api/v1/approvals/" + UUID.randomUUID() + "/decide")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400));
-        verifyNoInteractions(approvalGate);
+        verifyNoInteractions(approvalDecisionService);
     }
 }

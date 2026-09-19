@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -25,6 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(classes = McpTestBootstrap.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {"aria.mcp.enabled=true", "aria.mcp.auth-mode=token", "aria.mcp.token=test-token-1"})
+@Import({io.aria.conductor.execution.approval.RunScopedCredentialService.class,
+        io.aria.conductor.execution.approval.WriteGrantService.class})
 class McpTokenEndpointIntegrationTest {
 
     @LocalServerPort
@@ -39,6 +42,7 @@ class McpTokenEndpointIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.service.KnowledgeService knowledgeService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalQueryService approvalQueryService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalGate approvalGate;
+    @MockitoBean io.aria.conductor.execution.approval.ApprovalDecisionService approvalDecisionService;
     @MockitoBean io.aria.conductor.agent.service.AgentService agentService;
     @MockitoBean io.aria.conductor.agent.service.RunService runService;
     @MockitoBean io.aria.conductor.agent.service.LlmProviderService llmProviderService;

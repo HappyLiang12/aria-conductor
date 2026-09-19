@@ -52,11 +52,15 @@ function liveStatusFor(agent: Agent): LiveStatus {
   return 'online';
 }
 
+// UX-3: the status pill renders the agent lifecycle flag (set at creation /
+// retire), not a live probe, so the labels must not claim online/offline
+// connectivity. The LiveStatus values stay as CSS class hooks; only the
+// rendered text changes.
 function statusLabel(s: LiveStatus): string {
   switch (s) {
-    case 'online':  return 'Online';
-    case 'idle':    return 'Idle';
-    case 'offline': return 'Offline';
+    case 'online':  return 'Active';
+    case 'idle':    return 'Degraded';
+    case 'offline': return 'Retired';
   }
 }
 

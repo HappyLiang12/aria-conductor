@@ -1,0 +1,21 @@
+# step: S8 (spec-owned scenario S8)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S8:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 65f8bd9
+# started: 2026-09-18T05:42:02Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S8] operator replay: call1 HTTP 200 isError=false | call2 HTTP 200 isError=false
+[S8] REST confirms 2 item(s) titled 's8-replay-card-1789710128487-918' (ids 691e98b8-5cac-4e06-98b5-40149789d8ab, cab79c38-fbd9-48fa-932a-1d732ae47974)
+[S8] unknown worker-shaped bearer on the same write: HTTP 401 body=""
+[S8] NOT VERIFIED (worker one-use half): grant consumed by the first matching worker call and GRANT_REQUIRED on replay — needs a LIVE worker token, not obtainable host-side (RunScopedCredentialService.java:58,116-135; QoderAdkProvider.java:288-297). In-repo evidence: McpWorkerEndpointIntegrationTest.workerToken_writeWithoutGrant_isDenied_andTheServiceIsUntouched, WriteGrantServiceTest (single use), WorkerGovernanceAspectTest.
+[S8] E2E-verified halves: operator replay executes twice (no dedup/grant on the operator path) and an unknown worker-shaped bearer is rejected 401 with no side effect.
+  ok 1 [chromium] › e2e\qoder-governance-e2e.spec.ts:425:1 › S8: one-use write-grant replay — operator replay control + forged worker write denied (worker one-use half NOT VERIFIED: no worker-token seam) (811ms)
+
+  1 passed (2.4s)
+
+EXIT=0

@@ -1,0 +1,22 @@
+# step: S1 (spec-owned scenario S1)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S1:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 12b4a36
+# started: 2026-09-18T05:56:32Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S1] credential status: configured=true model=efficient
+[S1] agent=c82c87e8-6947-4653-adb0-2c9e8d824e14 run=5fc16122-deb6-469a-9b77-df453e2ee2ba
+[S1] terminal status=COMPLETED iterations=1 totalTokensUsed=0 finalOutput="Hi there! How can I help you today?"
+[S1] qoder.model progress events: ["qoder.model=efficient"]
+[S1] reported usage (no zero-cost guarantee): totalTokensUsed=0
+[S1] credential probe: success=true model=efficient billable=false costNote="This probe runs no billable inference: it only verifies that a stored credential is configured, decrypts and is non-bla
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:149:1 › S1: qoder agent ordinary run completes on the zero-credit model (29.9s)
+
+  1 passed (33.8s)
+
+EXIT=0

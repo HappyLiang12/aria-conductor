@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.repository;
 
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.test.DataJpaTestBase;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,23 @@ class ApprovalAskRepositoryTest extends DataJpaTestBase {
                 .kanbanItemId(kanbanItemId)
                 .contextMd("why we ask")
                 .optionsJson("[{\"label\":\"yes\",\"suggested\":true}]")
+                .build());
+    }
+
+    /**
+     * A V60 ACP permission ask: owned by {@code AcpPermissionCoordinator} (run-end listener /
+     * {@code cancelPendingForRun}), never by a legacy kanban card sweep.
+     */
+    private Approval saveAcpAsk(String kanbanItemId, Approval.AskType askType) {
+        return repository.save(Approval.builder()
+                .runId(java.util.UUID.randomUUID())
+                .status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.SPEC_REVIEW)
+                .askType(askType)
+                .kanbanItemId(kanbanItemId)
+                .contextMd("why we ask")
+                .optionsJson("[{\"label\":\"yes\",\"suggested\":true}]")
+                .source(ApprovalSource.ACP_PERMISSION)
                 .build());
     }
 
@@ -67,5 +85,40 @@ class ApprovalAskRepositoryTest extends DataJpaTestBase {
         Approval reloaded = repository.findById(a.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
         assertThat(reloaded.getDecidedAt()).isNotNull();
+    }
+
+    /**
+     * I1: an ACP ask is owned by {@code AcpPermissionCoordinator}; a card cancel sweeps only
+     * legacy rows, otherwise the ask diverges from its companion with no delivery.
+     */
+    @Test
+    void denyPendingByKanbanItemId_leavesAcpPermissionRowsToTheCoordinator() {
+        Approval legacy = saveAsk("item-acp-deny", Approval.AskType.QUESTION);
+        Approval acp = saveAcpAsk("item-acp-deny", Approval.AskType.QUESTION);
+
+        int denied = repository.denyPendingByKanbanItemId("item-acp-deny", "task cancelled", java.time.Instant.now());
+
+        assertThat(denied).isEqualTo(1);
+        // Bulk update bypasses the persistence context; force a real SQL round-trip.
+        flushAndClear();
+        assertThat(repository.findById(legacy.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.DENIED);
+        assertThat(repository.findById(acp.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.PENDING);
+    }
+
+    /** I1: same shape for the request-changes sweep. */
+    @Test
+    void markStaleByKanbanItemId_leavesAcpPermissionRowsToTheCoordinator() {
+        Approval legacy = saveAsk("item-acp-stale", Approval.AskType.QUESTION);
+        Approval acp = saveAcpAsk("item-acp-stale", Approval.AskType.QUESTION);
+
+        int stale = repository.markStaleByKanbanItemId("item-acp-stale", java.time.Instant.now());
+
+        assertThat(stale).isEqualTo(1);
+        // Bulk update bypasses the persistence context; force a real SQL round-trip.
+        flushAndClear();
+        assertThat(repository.findById(legacy.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        Approval reloadedAcp = repository.findById(acp.getId()).orElseThrow();
+        assertThat(reloadedAcp.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(reloadedAcp.getDecidedAt()).isNull();
     }
 }

@@ -12,6 +12,7 @@ describe('eventLabel', () => {
   it('maps approval, agent and tool event types', () => {
     expect(eventLabel('approval.requested')).toBe('Approval Needed');
     expect(eventLabel('approval.decided')).toBe('Approval Decided');
+    expect(eventLabel('approval.expired')).toBe('Approval Expired');
     expect(eventLabel('agent.created')).toBe('Agent Created');
     expect(eventLabel('agent.retired')).toBe('Agent Retired');
     expect(eventLabel('tool_call')).toBe('Tool Call');

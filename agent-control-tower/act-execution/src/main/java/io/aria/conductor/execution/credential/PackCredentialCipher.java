@@ -43,6 +43,15 @@ public class PackCredentialCipher {
         }
     }
 
+    /**
+     * Whether a real encryption key is configured. Exists so callers that must not accept the
+     * Base64 development fallback (e.g. runtime credential storage) can refuse to operate when
+     * no key is set. Does not alter {@link #encrypt}/{@link #decrypt} behavior.
+     */
+    public boolean encryptionEnabled() {
+        return encryptionEnabled;
+    }
+
     public String encrypt(String plaintext) {
         if (plaintext == null) return null;
         if (!encryptionEnabled) {

@@ -1,0 +1,60 @@
+# step: S9 (spec-owned scenario S9)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S9:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 1f36e5c
+# started: 2026-09-18T06:20:20Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=3223dc0d-b357-4ebf-9746-f46a95e899a6 agent=f259982d-5db6-41bf-b6cf-4da955ef6bfe file=/workspace/e2e-s9-1789712430426-7074.txt
+[S9] auto-dispatch: card status=IN_PROGRESS linkedRunId=65220b80-6c93-4911-9d8a-2f9d97d74fa0
+[S9] live ask=fdcaa4b1-c635-4e53-b0bd-5bd4a437c7b8 toolName=Write status=PENDING kanbanItemId=3223dc0d-b357-4ebf-9746-f46a95e899a6 expiresAt=2026-09-18T06:24:46.885431Z
+[S9] ask decided: status=APPROVED deliveryState=DELIVERING
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:497:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (2.5m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=7b3ce1fa-3aae-4efa-8bba-86b9deee5c1c agent=21ee040c-5764-44ad-bdd5-64e9b913f01b file=/workspace/e2e-s9-1789712585953-9012.txt
+[S9] auto-dispatch: card status=IN_PROGRESS linkedRunId=940b5c65-b95c-4528-a78d-5361bad3a3d9
+[S9] live ask=f3448fa2-9e43-4101-bad2-7cdca3fe914f toolName=Write status=PENDING kanbanItemId=7b3ce1fa-3aae-4efa-8bba-86b9deee5c1c expiresAt=2026-09-18T06:26:17.807093Z
+[S9] ask decided: status=APPROVED deliveryState=DELIVERED
+[S9] card right after the decision: status=REVIEW
+[S9] run terminal=COMPLETED finalCardStatus=REVIEW
+  ok 2 [chromium] › e2e\qoder-governance-e2e.spec.ts:497:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (retry #1) (1.4m)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:497:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: "DELIVERED"
+    Received: "DELIVERING"
+
+      567 |   await expect(allowOnce).toBeEnabled();
+      568 |
+    > 569 |   // ── Decide: the decision settles the ASK, never the card ───────────────────
+          |                                       ^
+      570 |   await allowOnce.click();
+      571 |   await expect
+      572 |     .poll(async () => (await askDetail(request, ask.id)).data?.status, { timeout: 90_000 })
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:569:39
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 flaky
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:497:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+EXIT=0

@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Declared explicitly: without a <link rel="icon"> the browser probes
+         /favicon.ico on every first load and logs a 404 console error, which
+         the zero-console-error E2E contracts treat as a failure. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Aria Conductor</title>
   </head>
   <body>

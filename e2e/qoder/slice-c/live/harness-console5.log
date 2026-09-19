@@ -1,0 +1,423 @@
+[c6b] qoder slice-c harness — 8f5ed4d — model=efficient api=http://localhost:8097 dashboard=http://localhost:5273 sandbox=http://localhost:8090
+[c6b] evidence dir: D:/project/aria-conductor/e2e/qoder/slice-c/live
+[c6b] plan: preflight S4 S5 S9 S10 S11 S12 leak-scan
+[c6b] == step preflight: stack health + qoder credential + live zero-credit model pin
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/preflight.run5.log
++ GET http://localhost:8097/actuator/health (expect '"status":"UP"')
++ GET http://localhost:5273 (dashboard reachable)
++ GET http://localhost:8090/health (OpenSandbox server reachable)
++ GET http://localhost:8097/api/v1/adk/providers/qoder/credential (masked status)
++ live model pin check: 'efficient' in {efficient, lite} (plan Global Constraint)
+[c6b]    preflight: PASS
+[c6b] == step S4: spec-owned scenario S4
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/S4.run5.log
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S4] agent=fb0973ff-d2f4-49db-b837-d148cf7f7d71 run=d228f5f0-3659-4467-8ae0-1d0ccc265dfc file=/workspace/e2e-s4-1789729893133-6566.txt ttlMs=120000
+[S4] ask=d5d3e270-a3e2-4512-978e-19fb4a231df7 status=PENDING expiresAt=2026-09-18T11:14:02.163305Z
+[S4] sandbox container=79971eec207d
+[S4] ask expired: status=EXPIRED deliveryState=CANCELLED reason="expired before decision" decidedAt=2026-09-18T11:14:47.442791Z
+[S4] late decide: HTTP 409 body={"code":"EXPIRED","error":"ACP permission ask d5d3e270-a3e2-4512-978e-19fb4a231df7 expired before the decision"}
+[S4] file probe after expiry: exists=false content=null note="test -f failed inside a live container (file absent)"
+[S4] run outcome (recorded, not a success claim): status=COMPLETED finalOutput="I'll create that file with the Write tool.The Write tool call was blocked by the permission system — it returned an error asking \"Allow writing to /workspace/e2e-s4-1789729893133-6566.txt?\" and the write did not go through.\n\nI haven't  totalTokensUsed=0
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (3.6m)
+
+  1 passed (3.6m)
+[c6b]    S4: PASS
+[c6b] == step S5: cancel during pending permission (sandbox survival)
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/S5.run5.log
++ podman ps --filter ancestor=aria-conductor/qoder-sandbox:0.1 --format '{{.ID}} {{.Names}} {{.Image}}'   (baseline, before the run)
++ podman ps --filter ancestor=aria-conductor/qoder-sandbox:0.1 --format '{{.ID}} {{.Names}} {{.Image}}'   (now)
++ POST http://localhost:8097/api/v1/runs/ec6c6abb-ed10-49d4-bcf5-8c819ed925a0/cancel
+[c6b]    S5: PASS
+[c6b] == step S9: spec-owned scenario S9
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/S9.run5.log
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=eb57c16e-61d8-4833-9087-83be56c5b08c agent=51f066e1-3b65-476e-a74f-4620bc139a2d file=/workspace/e2e-s9-1789730142956-5841.txt
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (4.0m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=fab6242b-55f5-4f1b-8319-685c03c645b3 agent=03be149f-7219-4b45-9601-75c2e0e64c9d file=/workspace/e2e-s9-1789730387059-8672.txt
+[S9] auto-dispatch: card status=IN_PROGRESS linkedRunId=758c3725-b0b0-4bd1-8491-006be3046076
+[S9] live ask=d9229995-0c65-461e-a848-7094ebcf498c toolName=Write status=PENDING kanbanItemId=fab6242b-55f5-4f1b-8319-685c03c645b3 expiresAt=2026-09-18T11:22:06.300895Z
+[S9] ask decided: status=APPROVED deliveryState=DELIVERED
+[S9] card right after the decision: status=REVIEW
+[S9] run terminal=COMPLETED finalCardStatus=REVIEW
+  ok 2 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (retry #1) (32.4s)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+    Error: pollUntil timed out for /kanban/items/eb57c16e-61d8-4833-9087-83be56c5b08c after 240000ms; last={"id":"eb57c16e-61d8-4833-9087-83be56c5b08c","title":"qoder s9 card-1789730142977-6932","description":"Create a new file at /workspace/e2e-s9-1789730142956-5841.txt containing exactly the two characters \"hi\" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+
+       at fixtures.ts:201
+
+      199 |     await new Promise((r) => setTimeout(r, intervalMs));
+      200 |   }
+    > 201 |   throw new Error(
+          |         ^
+      202 |     `pollUntil timed out for ${path} after ${timeoutMs}ms; last=${JSON.stringify(last)?.slice(0, 300)}`,
+      203 |   );
+      204 | }
+        at pollUntil (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\fixtures.ts:201:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:522:22
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 flaky
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+[c6b]    S9: PASS
+[c6b] == step S10: backend restart interrupts a pending ask (S10)
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/S10.run5.log
+[c6b] ERROR: [S10] no PENDING ACP_PERMISSION ask appeared for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c within 180s
+[c6b] WARNING: S10 failed (EXIT=1) — continuing; see D:/project/aria-conductor/e2e/qoder/slice-c/live/S10.run5.log
+[c6b] == step S11: spec-owned scenario S11
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/S11.run5.log
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=4302270a-a419-4ae1-9cb1-2e9727bd64ce run=8d35e470-8c3c-46da-b807-727cd668ce37 marker=s11-marker-1789730608062-1536
+[S11] write ask=963dcd9b-1bae-4a4e-a468-ee528992448b toolName=mcp__aria__store_knowledge status=PENDING deliveryState=PENDING options=["allow_always","allow_once","reject_once"]
+[S11] read execution entries (TOOL_RESULT list_knowledge): 0 []
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (20.3s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=1de9e199-c937-4c5a-af7d-2daa76df9d73 run=f5d0358b-9ace-4cab-904d-a11c32732abe marker=s11-marker-1789730629295-4410
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (retry #1) (7.0m)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+    Error: the read must EXECUTE (a TOOL_RESULT progress entry) while producing no ask
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      651 |     readExecuted.length,
+      652 |     'the read must EXECUTE (a TOOL_RESULT progress entry) while producing no ask',
+    > 653 |   ).toBeGreaterThan(0);
+          |     ^
+      654 |
+      655 |   // ── Write half: unexecuted before the decision ─────────────────────────────
+      656 |   const knowledgeBefore = await requestJson<any[]>(request, 'GET', '/knowledge');
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:653:5
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within 420000ms; last list=[{"id":"0c656a61-58f3-4fbc-b43b-7e35132382d0","runId":"6fd64f0a-6000-4bd9-9655-287dc6658b5f","toolCallId":null,"status":"PENDING","reason":null,"requestedAt":"2026-09-18T05:42:42.143261Z","decidedAt":null,"expiresAt":null,"approvalType":"TOOL_CALL","content":"Run 6fd64f0a completed (COMPLETED) - awaiting your review: s8-replay-card-1789710128487-918","contentKind":null,"knowledgeItemId":null,"tool
+
+       at qoder-e2e-lib.ts:283
+
+      281 |     await sleep(2_000);
+      282 |   }
+    > 283 |   throw new Error(
+          |         ^
+      284 |     `waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within ${timeoutMs}ms;`
+      285 |     + ` last list=${JSON.stringify(last)?.slice(0, 400)}`,
+      286 |   );
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:283:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:623:15
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+[c6b] WARNING: S11 failed (EXIT=1) — continuing; see D:/project/aria-conductor/e2e/qoder/slice-c/live/S11.run5.log
+[c6b] == step S12: spec-owned governance scenario S12
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/S12.run5.log
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S12] benign console warnings recorded (not asserted): ["WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established."]
+[S12] console errors=0 failed backend requests=3
+[S12] backend-URL requests matched by the filter: 108
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (8.9s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S12] benign console warnings recorded (not asserted): ["WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established."]
+[S12] console errors=0 failed backend requests=2
+[S12] backend-URL requests matched by the filter: 109
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (retry #1) (9.2s)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+    Error: failed backend requests on the touched routes: ["FAILED GET http://localhost:5273/api/v1/adk/providers/langchain/health (net::ERR_ABORTED)","FAILED GET http://localhost:5273/api/v1/adk/providers/qoder/health (net::ERR_ABORTED)","FAILED GET http://localhost:5273/api/v1/agents (net::ERR_ABORTED)"]
+
+    expect(received).toHaveLength(expected)
+
+    Expected length: 0
+    Received length: 3
+    Received array:  ["FAILED GET http://localhost:5273/api/v1/adk/providers/langchain/health (net::ERR_ABORTED)", "FAILED GET http://localhost:5273/api/v1/adk/providers/qoder/health (net::ERR_ABORTED)", "FAILED GET http://localhost:5273/api/v1/agents (net::ERR_ABORTED)"]
+
+      820 |     failedBackendRequests,
+      821 |     `failed backend requests on the touched routes: ${JSON.stringify(failedBackendRequests)}`,
+    > 822 |   ).toHaveLength(0);
+          |     ^
+      823 |
+      824 |   // Teardown: remove the smoke card so the board is not left with residue.
+      825 |   const deleted = await apiCall(request, 'DELETE', `/kanban/items/${card.id}`);
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:822:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: failed backend requests on the touched routes: ["FAILED GET http://localhost:5273/api/v1/adk/providers/qoder/health (net::ERR_ABORTED)","FAILED GET http://localhost:5273/api/v1/adk/providers/opencode/health (net::ERR_ABORTED)"]
+
+    expect(received).toHaveLength(expected)
+
+    Expected length: 0
+    Received length: 2
+    Received array:  ["FAILED GET http://localhost:5273/api/v1/adk/providers/qoder/health (net::ERR_ABORTED)", "FAILED GET http://localhost:5273/api/v1/adk/providers/opencode/health (net::ERR_ABORTED)"]
+
+      820 |     failedBackendRequests,
+      821 |     `failed backend requests on the touched routes: ${JSON.stringify(failedBackendRequests)}`,
+    > 822 |   ).toHaveLength(0);
+          |     ^
+      823 |
+      824 |   // Teardown: remove the smoke card so the board is not left with residue.
+      825 |   const deleted = await apiCall(request, 'DELETE', `/kanban/items/${card.id}`);
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:822:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+[c6b] WARNING: S12 failed (EXIT=1) — continuing; see D:/project/aria-conductor/e2e/qoder/slice-c/live/S12.run5.log
+[c6b] == step leak-scan: PAT leak scan over the evidence dir
+[c6b]    log: D:/project/aria-conductor/e2e/qoder/slice-c/live/leak-scan.run4.log
+
+# PAT leak scan (fixed-string, count only; the pattern file is deleted right after)
+# pattern file: /tmp/c6b-pat.qgEIos (chmod 600, deleted after the scan)
+# leak-scan: .c6b-work/approval.json -> 0
+# leak-scan: .c6b-work/approvals.json -> 0
+# leak-scan: .c6b-work/approvals.timeout.json -> 0
+# leak-scan: .c6b-work/health/down.json -> 0
+# leak-scan: .c6b-work/leakscan.out -> 0
+# leak-scan: .c6b-work/preflight/cred0.json -> 0
+# leak-scan: .c6b-work/preflight/cred1.json -> 0
+# leak-scan: .c6b-work/preflight/cred_put.json -> 0
+# leak-scan: .c6b-work/preflight/dashboard.html -> 0
+# leak-scan: .c6b-work/preflight/health.json -> 0
+# leak-scan: .c6b-work/preflight/opensandbox.json -> 0
+# leak-scan: .c6b-work/run.json -> 0
+# leak-scan: .c6b-work/s10/agent.json -> 0
+# leak-scan: .c6b-work/s10/agent.json.req.json -> 0
+# leak-scan: .c6b-work/s10/ask.before.json -> 0
+# leak-scan: .c6b-work/s10/run.before.json -> 0
+# leak-scan: .c6b-work/s10/run.json -> 0
+# leak-scan: .c6b-work/s10/run.json.req.json -> 0
+# leak-scan: .c6b-work/s5/agent.json -> 0
+# leak-scan: .c6b-work/s5/agent.json.req.json -> 0
+# leak-scan: .c6b-work/s5/cancel.json -> 0
+# leak-scan: .c6b-work/s5/containers.after.txt -> 0
+# leak-scan: .c6b-work/s5/containers.before.txt -> 0
+# leak-scan: .c6b-work/s5/ids.after.txt -> 0
+# leak-scan: .c6b-work/s5/ids.before.txt -> 0
+# leak-scan: .c6b-work/s5/run.json -> 0
+# leak-scan: .c6b-work/s5/run.json.req.json -> 0
+# leak-scan: .smoke-work/agent.json -> 0
+# leak-scan: .smoke-work/agent.json.req.json -> 0
+# leak-scan: .smoke-work/approvals.json -> 0
+# leak-scan: .smoke-work/ask.json -> 0
+# leak-scan: .smoke-work/run.json -> 0
+# leak-scan: .smoke-work/run.json.req.json -> 0
+# leak-scan: S1.run1.log -> 0
+# leak-scan: S1.run2.log -> 0
+# leak-scan: S1.run3.log -> 0
+# leak-scan: S1.run4.log -> 0
+# leak-scan: S10.run1.log -> 0
+# leak-scan: S10.run2.log -> 0
+# leak-scan: S10.run3.log -> 0
+# leak-scan: S10.run4.log -> 0
+# leak-scan: S10.run5.log -> 0
+# leak-scan: S11.run1.log -> 0
+# leak-scan: S11.run2.log -> 0
+# leak-scan: S11.run3.log -> 0
+# leak-scan: S11.run4.log -> 0
+# leak-scan: S11.run5.log -> 0
+# leak-scan: S12.run1.log -> 0
+# leak-scan: S12.run2.log -> 0
+# leak-scan: S12.run3.log -> 0
+# leak-scan: S12.run4.log -> 0
+# leak-scan: S12.run5.log -> 0
+# leak-scan: S2.run1.log -> 0
+# leak-scan: S2.run2.log -> 0
+# leak-scan: S2.run3.log -> 0
+# leak-scan: S2.run4.log -> 0
+# leak-scan: S3.run1.log -> 0
+# leak-scan: S3.run2.log -> 0
+# leak-scan: S3.run3.log -> 0
+# leak-scan: S3.run4.log -> 0
+# leak-scan: S4.run1.log -> 0
+# leak-scan: S4.run2.log -> 0
+# leak-scan: S4.run3.log -> 0
+# leak-scan: S4.run4.log -> 0
+# leak-scan: S4.run5.log -> 0
+# leak-scan: S5.run1.log -> 0
+# leak-scan: S5.run2.log -> 0
+# leak-scan: S5.run3.log -> 0
+# leak-scan: S5.run4.log -> 0
+# leak-scan: S5.run5.log -> 0
+# leak-scan: S6.run1.log -> 0
+# leak-scan: S6.run2.log -> 0
+# leak-scan: S6.run3.log -> 0
+# leak-scan: S6.run4.log -> 0
+# leak-scan: S7.run1.log -> 0
+# leak-scan: S7.run2.log -> 0
+# leak-scan: S7.run3.log -> 0
+# leak-scan: S7.run4.log -> 0
+# leak-scan: S8.run1.log -> 0
+# leak-scan: S8.run2.log -> 0
+# leak-scan: S8.run3.log -> 0
+# leak-scan: S8.run4.log -> 0
+# leak-scan: S9.run1.log -> 0
+# leak-scan: S9.run2.log -> 0
+# leak-scan: S9.run3.log -> 0
+# leak-scan: S9.run4.log -> 0
+# leak-scan: S9.run5.log -> 0
+# leak-scan: SUMMARY.run1.md -> 0
+# leak-scan: SUMMARY.run2.md -> 0
+# leak-scan: SUMMARY.run3.md -> 0
+# leak-scan: harness-console.log -> 0
+# leak-scan: harness-console2.log -> 0
+# leak-scan: harness-console3.log -> 0
+# leak-scan: harness-console4.log -> 0
+# leak-scan: harness-console5.log -> 0
+# leak-scan: leak-scan.run1.log -> 0
+# leak-scan: leak-scan.run2.log -> 0
+# leak-scan: leak-scan.run3.log -> 0
+# leak-scan: leak-scan.run4.log -> 0
+# leak-scan: metrics-mixed-load.json -> 0
+# leak-scan: metrics-read-burst.json -> 0
+# leak-scan: metrics-saturation.json -> 0
+# leak-scan: playwright-aria-session-id-triage.run1.log -> 0
+# leak-scan: preflight.run1.log -> 0
+# leak-scan: preflight.run2.log -> 0
+# leak-scan: preflight.run3.log -> 0
+# leak-scan: preflight.run4.log -> 0
+# leak-scan: preflight.run5.log -> 0
+# leak-scan: rebuild-image.run1.log -> 0
+# leak-scan: rebuild-image.run2.log -> 0
+# leak-scan: rebuild-image.run3.log -> 0
+# leak-scan: rebuild-image.run4.log -> 0
+# leak-scan: regression-build.run1.log -> 0
+# leak-scan: regression-build.run2.log -> 0
+# leak-scan: regression-build.run3.log -> 0
+# leak-scan: regression-container-runtime.run1.log -> 0
+# leak-scan: regression-container-runtime.run2.log -> 0
+# leak-scan: regression-container-runtime.run3.log -> 0
+# leak-scan: regression-mvn-test.run1.log -> 0
+# leak-scan: regression-mvn-test.run2.log -> 0
+# leak-scan: regression-mvn-test.run3.log -> 0
+# leak-scan: regression-mvn-test.run4.log -> 0
+# leak-scan: regression-mvn-verify.run1.log -> 0
+# leak-scan: regression-mvn-verify.run2.log -> 0
+# leak-scan: regression-mvn-verify.run3.log -> 0
+# leak-scan: regression-mvn-verify.run4.log -> 0
+# leak-scan: regression-playwright.run1.log -> 0
+# leak-scan: regression-playwright.run2.log -> 0
+# leak-scan: regression-playwright.run3.log -> 0
+# leak-scan: regression-vitest.run1.log -> 0
+# leak-scan: regression-vitest.run2.log -> 0
+# leak-scan: regression-vitest.run3.log -> 0
+# leak-scan: smoke-post-restore.log -> 0
+# leak-scan: smoke-post-restore.sh -> 0
+# leak-scan: stack-restore-after-s10.log -> 0
+# leak-scan: stack-start.log -> 0
+# leak-scan: stack-start2.log -> 0
+# leak-scan: stack-start3.log -> 0
+# leak-scan: ui-concurrent-workflows.png -> 0
+# leak-scan: 139 file(s) scanned, 0 file(s) contain the PAT
+[c6b]    leak-scan: PASS
+
+==================================================================
+  qoder slice-c harness — summary (run 4)
+==================================================================
+  STEP                         LOG                                STATUS
+  preflight                    preflight.run5.log                 PASS
+  rebuild-image                —                                SKIPPED
+  S1                           —                                SKIPPED
+  S2                           —                                SKIPPED
+  S3                           —                                SKIPPED
+  S4                           S4.run5.log                        PASS
+  S5                           S5.run5.log                        PASS
+  S6                           —                                SKIPPED
+  S7                           —                                SKIPPED
+  S8                           —                                SKIPPED
+  S9                           S9.run5.log                        PASS
+  S10                          S10.run5.log                       FAIL
+  S11                          S11.run5.log                       FAIL
+  S12                          S12.run5.log                       FAIL
+  regression-mvn-test          —                                SKIPPED
+  regression-mvn-verify        —                                SKIPPED
+  regression-vitest            —                                SKIPPED
+  regression-build             —                                SKIPPED
+  regression-playwright        —                                SKIPPED
+  regression-container-runtime —                                SKIPPED
+  leak-scan                    leak-scan.run4.log                 PASS
+  note: PAT leak scan: 0 hits across 139 evidence file(s)
+  summary file: D:/project/aria-conductor/e2e/qoder/slice-c/live/SUMMARY.run4.md
+  OVERALL: FAIL
+==================================================================

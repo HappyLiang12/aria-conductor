@@ -43,16 +43,16 @@ test('ADK providers: Providers page renders provider table + Per-Agent Backends'
   await expect(langchainRow).toBeVisible();
   await expect(langchainRow).toContainText('langchain');
 
-  // Exactly ONE row carries the Default badge and it is one of the two known
+  // Exactly ONE row carries the Default badge and it is one of the known
   // backends. WHICH one is a stack-config decision (CI pins langchain for ADK
-  // pre-warm; opencode-first local stacks pin opencode), so assert the marker
-  // semantics rather than a specific provider — extra/absent non-default rows
-  // are tolerated.
+  // pre-warm; opencode-first and qoder local stacks pin their provider), so
+  // assert the marker semantics rather than a specific provider — extra/absent
+  // non-default rows are tolerated.
   const defaultRow = providerTable.locator('tbody tr').filter({
     has: page.locator('span.type-badge', { hasText: /^Default$/ }),
   });
   await expect(defaultRow).toHaveCount(1);
-  await expect(defaultRow.first()).toContainText(/OpenCode|LangChain ADK/);
+  await expect(defaultRow.first()).toContainText(/OpenCode|LangChain ADK|Qoder/);
 
   // Per-Agent Backends block exists (agent list may be empty on fresh db)
   await expect(page.locator('.card', { hasText: 'Per-Agent Backends' })).toBeVisible();

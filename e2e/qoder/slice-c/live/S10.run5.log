@@ -1,0 +1,54 @@
+# step: S10 (backend restart interrupts a pending ask (S10))
+# command: bash-owned: kill the backend recorded in .run/backend.pid mid-ask, restart the stack (stop.ps1 + QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder), assert the startup-sweep interruption state + expired ask without replay
+# cwd: /d/project/aria-conductor
+# git: 8f5ed4d
+# started: 2026-09-18T11:20:20Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+  1. seed: POST /api/v1/agents (qoder ADK, taskApprovalRequired=false) + POST /api/v1/runs (write trigger)
+  POST /api/v1/agents request: {"name":"c6b-s10-20260918-112020","agentType":"ADK","role":"dev","model":"efficient","adkProvider":"qoder","config":{"taskApprovalRequired":false}}
+  POST /api/v1/agents -> HTTP 201
+  response: {"id":"8f552a75-c8ba-4c7e-afc8-03d5c78781a5","name":"c6b-s10-20260918-112020","description":null,"agentType":"ADK","role":"dev","model":"efficient","provider":null,"adkProvider":"qoder","config":"{\"harnessProfile\":\"weak-model-safe\",\"taskApprovalRequired\":false}","healthStatus":"HEALTHY","createdAt":"2026-09-18T11:20:20.471553200Z","updatedAt":null,"retiredAt":null,"pickupEligible":true,"pickupIneligibleReasons":[],"lastProbedAt":null,"skills":[],"tools":null}
+  POST /api/v1/runs request: {"agentId":"8f552a75-c8ba-4c7e-afc8-03d5c78781a5","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-112020.txt whose content is exactly: ready","maxIterations":3}
+  POST /api/v1/runs -> HTTP 201
+  response: {"id":"dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c","agentId":"8f552a75-c8ba-4c7e-afc8-03d5c78781a5","status":"PENDING","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-112020.txt whose content is exactly: ready","maxIterations":3,"totalTokensUsed":0,"iterationCount":0,"errorMessage":null,"finalOutput":null,"createdAt":"2026-09-18T11:20:20.917857400Z","updatedAt":null,"completedAt":null}
+     agent=8f552a75-c8ba-4c7e-afc8-03d5c78781a5 run=dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c
+  2. waiting (<=180s) for a PENDING ACP_PERMISSION ask of run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c
+  poll /approvals?status=PENDING (t+0s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+5s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+11s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+16s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+21s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+27s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+32s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+38s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+43s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+48s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+54s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+59s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+65s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+70s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+75s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+81s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+86s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+91s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+97s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+102s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+108s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+113s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+118s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+124s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+129s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+134s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+140s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+145s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+150s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+156s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+161s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+167s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+172s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  poll /approvals?status=PENDING (t+177s): no ACP ask for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c yet
+  pending approvals at timeout: [{"id":"0c656a61-58f3-4fbc-b43b-7e35132382d0","runId":"6fd64f0a-6000-4bd9-9655-287dc6658b5f","toolCallId":null,"status":"PENDING","reason":null,"requestedAt":"2026-09-18T05:42:42.143261Z","decidedAt":null,"expiresAt":null,"approvalType":"TOOL_CALL","content":"Run 6fd64f0a completed (COMPLETED) - awaiting your review: s8-replay-card-1789710128487-918","contentKind":null,"knowledgeItemId":null,"toolName":null,"arguments":null,"riskTier":null,"kanbanItemId":"cab79c38-fbd9-48fa-932a-1d732ae47974","askType":"REVIEW_REQUEST","contextMd":"**Task:** s8-replay-card-1789710128487-918\n**Agent:** Busines
+# FAIL: no PENDING ACP_PERMISSION ask appeared for run dadea8cb-0cf7-4c5f-b8d4-fa9d1fc4205c within 180s
+
+EXIT=1

@@ -1,0 +1,3651 @@
+Browser tab: 1551191682, Title: "Aria Conductor", URL: "http://localhost:5273/".
+0 AXWebArea Aria Conductor, URL: localhost:5273/
+	1 container, ID: root
+		2 container
+			3 heading Aria Conductor ARIA CONDUCTOR · LOCAL, Value: 1
+				4 text Aria Conductor
+				5 text ARIA CONDUCTOR · LOCAL
+			6 text 95
+			7 text Agents
+			8 text 2 of 3 Providers Healthy
+			9 text 95
+			10 text ACTIVE AGENTS
+			11 text 0
+			12 text RUNNING RUNS
+			13 text 16
+			14 text APPROVALS PENDING
+			15 text 198
+			16 text TOKENS TODAY
+			17 container Current time
+				18 text 12:55:47
+			19 button Notifications (666 unread)
+				20 text 🔔
+				21 text 99+
+			22 button Toggle theme
+				23 text ☀ Light
+		24 container Main views
+			25 button Overview
+			26 button Crew
+			27 button Providers
+			28 button Runs
+			29 button Knowledge
+			30 button Reports
+			31 button Chat
+			32 button Workflows
+			33 button Ops
+			34 button Jobs
+			35 button Open configuration
+				36 text Configure
+		37 container
+			38 container, ID: panel-exec
+				39 heading EXECUTIVE SUMMARY · LIVE, Value: 2
+					40 text EXECUTIVE SUMMARY
+					41 text · LIVE
+				42 container
+					43 text ACTIVE AGENTS
+					44 text 95
+					45 text All healthy
+				46 button WAITING ON YOU 14 Cards need a decision
+					47 text WAITING ON YOU
+					48 text 14
+					49 text Cards need a decision
+				50 container
+					51 text TASKS IN PROGRESS
+					52 text 0
+					53 text Across kanban board
+				54 container
+					55 text TOTAL RUNS
+					56 text 347
+					57 text 0 running now
+				58 container
+					59 text TOKENS USED
+					60 text 198
+					61 text Cumulative spend
+				62 container
+					63 text KNOWLEDGE ITEMS
+					64 text 364
+					65 text Indexed assets
+			66 container
+				67 heading KANBAN BOARD · GOVERNED FLOW 🧹 Clear Done & Cancelled (6) + New Item, Value: 2
+					68 text KANBAN BOARD
+					69 text · GOVERNED FLOW
+					70 button 🧹 Clear Done & Cancelled (6)
+						71 text 🧹 Clear Done & Cancelled (
+						72 text 6
+						73 text )
+					74 button + New Item
+				75 sectionheader
+					76 text BACKLOG
+					77 text 0
+				78 sectionheader
+					79 text TODO
+					80 text 266
+				81 container
+					82 text 6ee33625
+					83 text Use the Write tool (not a shell command) to create the fi...
+					84 text MEDIUM
+					85 text ↪
+					86 text c6b-s10-20260918-184450
+					87 button Cancel task, Help: Cancel task
+						88 text ✕
+				89 container
+					90 text 2cde35fa
+					91 text e2e-chat-thread-1789757842432-6091
+					92 text MEDIUM
+					93 button Cancel task, Help: Cancel task
+						94 text ✕
+				95 container
+					96 text 6dc4361e
+					97 text Say hello briefly
+					98 text MEDIUM
+					99 button Cancel task, Help: Cancel task
+						100 text ✕
+				101 container
+					102 text c724c9fe
+					103 text Say hello briefly
+					104 text MEDIUM
+					105 button Cancel task, Help: Cancel task
+						106 text ✕
+				107 container
+					108 text fd9f3c61
+					109 text Say hello briefly
+					110 text MEDIUM
+					111 button Cancel task, Help: Cancel task
+						112 text ✕
+				113 container
+					114 text 74a88cce
+					115 text e2e-journey-run-1789757918256-1900
+					116 text MEDIUM
+					117 button Cancel task, Help: Cancel task
+						118 text ✕
+				119 container
+					120 text b552354f
+					121 text Say hello briefly.
+					122 text MEDIUM
+					123 text ↪
+					124 text Developer Agent
+					125 button Cancel task, Help: Cancel task
+						126 text ✕
+				127 container
+					128 text 3db20409
+					129 text Analyze the input data
+					130 text MEDIUM
+					131 button Cancel task, Help: Cancel task
+						132 text ✕
+				133 container
+					134 text 3d3d418d
+					135 text hitl-card-1789757968952-985
+					136 text MEDIUM
+					137 text @
+					138 text e2e-agent-1789757968884-4090
+					139 button Cancel task, Help: Cancel task
+						140 text ✕
+				141 container
+					142 text 89a7601e
+					143 text e2e-kanban-move-1789757990610-4441
+					144 text MEDIUM
+					145 text @
+					146 text e2e-agent-1789757990008-8504
+					147 button Cancel task, Help: Cancel task
+						148 text ✕
+				149 container
+					150 text 81727be5
+					151 text e2e observability track A
+					152 text MEDIUM
+					153 button Cancel task, Help: Cancel task
+						154 text ✕
+				155 container
+					156 text d1e62430
+					157 text e2e-ops-run-1789758084274-121
+					158 text MEDIUM
+					159 button Cancel task, Help: Cancel task
+						160 text ✕
+				161 container
+					162 text e99e5e37
+					163 text e2e observability runs panel
+					164 text MEDIUM
+					165 button Cancel task, Help: Cancel task
+						166 text ✕
+				167 container
+					168 text 0f5b67ee
+					169 text E2E UI-started run — assert reachable state only
+					170 text MEDIUM
+					171 button Cancel task, Help: Cancel task
+						172 text ✕
+				173 container
+					174 text 2900167b
+					175 text First: analyze data
+					176 text MEDIUM
+					177 text ↪
+					178 text WfDfAgent-1789758120435
+					179 button Cancel task, Help: Cancel task
+						180 text ✕
+				181 container
+					182 text f2350968
+					183 text Step A: gather data
+					184 text MEDIUM
+					185 text ↪
+					186 text WfDfAgent-1789758120435
+					187 button Cancel task, Help: Cancel task
+						188 text ✕
+				189 container
+					190 text c14f52bf
+					191 text First step
+					192 text MEDIUM
+					193 text ↪
+					194 text WfDfAgent-1789758120435
+					195 button Cancel task, Help: Cancel task
+						196 text ✕
+				197 container
+					198 text a19610b6
+					199 text Custom iterations
+					200 text MEDIUM
+					201 text ↪
+					202 text WfDfAgent-1789758120435
+					203 button Cancel task, Help: Cancel task
+						204 text ✕
+				205 container
+					206 text af212309
+					207 text Step 1: Analyze {input}
+					208 text MEDIUM
+					209 text ↪
+					210 text WfE2EAgent-1789758132290
+					211 button Cancel task, Help: Cancel task
+						212 text ✕
+				213 container
+					214 text b2b383b8
+					215 text Step 0: test prompt
+					216 text MEDIUM
+					217 text ↪
+					218 text WfSmAgent-1789758136414
+					219 button Cancel task, Help: Cancel task
+						220 text ✕
+				221 container
+					222 text 9cb4f77d
+					223 text Step 0: test prompt
+					224 text MEDIUM
+					225 text ↪
+					226 text WfSmAgent-1789758136414
+					227 button Cancel task, Help: Cancel task
+						228 text ✕
+				229 container
+					230 text c16a58f0
+					231 text Analyze {input}
+					232 text MEDIUM
+					233 text ↪
+					234 text WfTplAgent-1789758161170
+					235 button Cancel task, Help: Cancel task
+						236 text ✕
+				237 container
+					238 text 75a4e3a6
+					239 text Check template field
+					240 text MEDIUM
+					241 text ↪
+					242 text WfTplAgent-1789758161170
+					243 button Cancel task, Help: Cancel task
+						244 text ✕
+				245 container
+					246 text 954c24d1
+					247 text No params test
+					248 text MEDIUM
+					249 text ↪
+					250 text WfTplAgent-1789758161170
+					251 button Cancel task, Help: Cancel task
+						252 text ✕
+				253 container
+					254 text 630040cf
+					255 text Null params test
+					256 text MEDIUM
+					257 text ↪
+					258 text WfTplAgent-1789758161170
+					259 button Cancel task, Help: Cancel task
+						260 text ✕
+				261 container
+					262 text 7153717a
+					263 text Step 0: UI test prompt
+					264 text MEDIUM
+					265 text ↪
+					266 text WfUiAgent-1789758166454
+					267 button Cancel task, Help: Cancel task
+						268 text ✕
+				269 container
+					270 text a6b8e7fb
+					271 text Step 0: UI test prompt
+					272 text MEDIUM
+					273 text ↪
+					274 text WfUiAgent-1789758166454
+					275 button Cancel task, Help: Cancel task
+						276 text ✕
+				277 container
+					278 text a1eb29e5
+					279 text Step 0: UI test prompt
+					280 text MEDIUM
+					281 text ↪
+					282 text WfUiAgent-1789758166454
+					283 button Cancel task, Help: Cancel task
+						284 text ✕
+				285 container
+					286 text 894cbbfb
+					287 text Step 0: UI test prompt
+					288 text MEDIUM
+					289 text ↪
+					290 text WfUiAgent-1789758166454
+					291 button Cancel task, Help: Cancel task
+						292 text ✕
+				293 container
+					294 text eefbc159
+					295 text Step 1: Analyze {input}
+					296 text MEDIUM
+					297 text ↪
+					298 text WfE2EAgent-1789758186149
+					299 button Cancel task, Help: Cancel task
+						300 text ✕
+				301 container
+					302 text 2d881128
+					303 text Step 0: test prompt
+					304 text MEDIUM
+					305 text ↪
+					306 text WfSmAgent-1789758186185
+					307 button Cancel task, Help: Cancel task
+						308 text ✕
+				309 container
+					310 text 3743c1fc
+					311 text Step 0: test prompt
+					312 text MEDIUM
+					313 text ↪
+					314 text WfSmAgent-1789758186185
+					315 button Cancel task, Help: Cancel task
+						316 text ✕
+				317 container
+					318 text 2f1b912d
+					319 text Step 0: UI test prompt
+					320 text MEDIUM
+					321 text ↪
+					322 text WfUiAgent-1789758166454
+					323 button Cancel task, Help: Cancel task
+						324 text ✕
+				325 container
+					326 text 739a9bed
+					327 text Step 0: test prompt
+					328 text MEDIUM
+					329 text ↪
+					330 text WfSmAgent-1789758186185
+					331 button Cancel task, Help: Cancel task
+						332 text ✕
+				333 container
+					334 text d68345e9
+					335 text Step 0: test prompt
+					336 text MEDIUM
+					337 text ↪
+					338 text WfSmAgent-1789758186185
+					339 button Cancel task, Help: Cancel task
+						340 text ✕
+				341 container
+					342 text a5966f50
+					343 text Do mutation test work
+					344 text MEDIUM
+					345 text ↪
+					346 text WfE2EAgent-1789758186149
+					347 button Cancel task, Help: Cancel task
+						348 text ✕
+				349 container
+					350 text e226ad6c
+					351 text Step 0: UI test prompt
+					352 text MEDIUM
+					353 text ↪
+					354 text WfUiAgent-1789758166454
+					355 button Cancel task, Help: Cancel task
+						356 text ✕
+				357 container
+					358 text f3bfd2b8
+					359 text Retry test work
+					360 text MEDIUM
+					361 text ↪
+					362 text WfE2EAgent-1789758186149
+					363 button Cancel task, Help: Cancel task
+						364 text ✕
+				365 container
+					366 text 4f1c8c2a
+					367 text Source A step
+					368 text MEDIUM
+					369 text ↪
+					370 text WfE2EAgent-1789758186149
+					371 button Cancel task, Help: Cancel task
+						372 text ✕
+				373 container
+					374 text e113a7c6
+					375 text Source B step
+					376 text MEDIUM
+					377 text ↪
+					378 text WfE2EAgent-1789758186149
+					379 button Cancel task, Help: Cancel task
+						380 text ✕
+				381 container
+					382 text 0d7dc1a2
+					383 text Source A step
+					384 text MEDIUM
+					385 text ↪
+					386 text WfE2EAgent-1789758186149
+					387 button Cancel task, Help: Cancel task
+						388 text ✕
+				389 container
+					390 text c99bb480
+					391 text Step 0: UI test prompt
+					392 text MEDIUM
+					393 text ↪
+					394 text WfUiAgent-1789758166454
+					395 button Cancel task, Help: Cancel task
+						396 text ✕
+				397 container
+					398 text a3050d1f
+					399 text Running step
+					400 text MEDIUM
+					401 text ↪
+					402 text WfE2EAgent-1789758186149
+					403 button Cancel task, Help: Cancel task
+						404 text ✕
+				405 container
+					406 text b62eabc0
+					407 text Step 0: UI test prompt
+					408 text MEDIUM
+					409 text ↪
+					410 text WfUiAgent-1789758166454
+					411 button Cancel task, Help: Cancel task
+						412 text ✕
+				413 container
+					414 text 6bb67a02
+					415 text Step 0: UI test prompt
+					416 text MEDIUM
+					417 text ↪
+					418 text WfUiAgent-1789758166454
+					419 button Cancel task, Help: Cancel task
+						420 text ✕
+				421 container
+					422 text c53b20ac
+					423 text Step 0: UI test prompt
+					424 text MEDIUM
+					425 text ↪
+					426 text WfUiAgent-1789758166454
+					427 button Cancel task, Help: Cancel task
+						428 text ✕
+				429 container
+					430 text 52bf1102
+					431 text Step 0: UI test prompt
+					432 text MEDIUM
+					433 text ↪
+					434 text WfUiAgent-1789758166454
+					435 button Cancel task, Help: Cancel task
+						436 text ✕
+				437 container
+					438 text b258d4eb
+					439 text Step 0: UI test prompt
+					440 text MEDIUM
+					441 text ↪
+					442 text WfUiAgent-1789758166454
+					443 button Cancel task, Help: Cancel task
+						444 text ✕
+				445 container
+					446 text 1b6b7233
+					447 text Step 0: UI test prompt
+					448 text MEDIUM
+					449 text ↪
+					450 text WfUiAgent-1789758166454
+					451 button Cancel task, Help: Cancel task
+						452 text ✕
+				453 container
+					454 text 5a234ae3
+					455 text Single step
+					456 text MEDIUM
+					457 text ↪
+					458 text WfValAgent-1789758229037
+					459 button Cancel task, Help: Cancel task
+						460 text ✕
+				461 container
+					462 text 66edc729
+					463 text Valid step
+					464 text MEDIUM
+					465 text ↪
+					466 text WfValAgent-1789758229037
+					467 button Cancel task, Help: Cancel task
+						468 text ✕
+				469 container
+					470 text 245f83a2
+					471 text Step A
+					472 text MEDIUM
+					473 text ↪
+					474 text WfValAgent-1789758229037
+					475 button Cancel task, Help: Cancel task
+						476 text ✕
+				477 container
+					478 text 08e58438
+					479 text Step B
+					480 text MEDIUM
+					481 text ↪
+					482 text WfValAgent-1789758229037
+					483 button Cancel task, Help: Cancel task
+						484 text ✕
+				485 container
+					486 text baaaa00f
+					487 text Analyze this data
+					488 text MEDIUM
+					489 text ↪
+					490 text WfYamlAgent-1789758234999
+					491 button Cancel task, Help: Cancel task
+						492 text ✕
+				493 container
+					494 text a1d1033c
+					495 text Step A
+					496 text MEDIUM
+					497 text ↪
+					498 text WfYamlAgent-1789758234999
+					499 button Cancel task, Help: Cancel task
+						500 text ✕
+				501 container
+					502 text bab12f46
+					503 text Draft 2 requirements. Brief.
+					504 text MEDIUM
+					505 text ↪
+					506 text E2E-BA-1789758249649-6797
+					507 button Cancel task, Help: Cancel task
+						508 text ✕
+				509 container
+					510 text ffbbf82c
+					511 text Say hello briefly
+					512 text MEDIUM
+					513 text ↪
+					514 text E2E-Iso-A-1789758249848-6698
+					515 button Cancel task, Help: Cancel task
+						516 text ✕
+				517 container
+					518 text 355e0cfb
+					519 text Say hello briefly
+					520 text MEDIUM
+					521 text ↪
+					522 text E2E-Iso-B-1789758249850-7222
+					523 button Cancel task, Help: Cancel task
+						524 text ✕
+				525 container
+					526 text 2df1f8e3
+					527 text Say hello briefly
+					528 text MEDIUM
+					529 button Cancel task, Help: Cancel task
+						530 text ✕
+				531 container
+					532 text f3158ba4
+					533 text Say hello briefly
+					534 text MEDIUM
+					535 button Cancel task, Help: Cancel task
+						536 text ✕
+				537 container
+					538 text 842aa340
+					539 text Say hello briefly
+					540 text MEDIUM
+					541 button Cancel task, Help: Cancel task
+						542 text ✕
+				543 container
+					544 text d2913716
+					545 text Say hello briefly
+					546 text MEDIUM
+					547 button Cancel task, Help: Cancel task
+						548 text ✕
+				549 container
+					550 text 67633aaa
+					551 text Say hello briefly
+					552 text MEDIUM
+					553 button Cancel task, Help: Cancel task
+						554 text ✕
+				555 container
+					556 text 7a07ff2e
+					557 text Say hello briefly
+					558 text MEDIUM
+					559 button Cancel task, Help: Cancel task
+						560 text ✕
+				561 container
+					562 text e167a5fc
+					563 text Say hello briefly
+					564 text MEDIUM
+					565 button Cancel task, Help: Cancel task
+						566 text ✕
+				567 container
+					568 text 59500d37
+					569 text Say hello briefly
+					570 text MEDIUM
+					571 button Cancel task, Help: Cancel task
+						572 text ✕
+				573 container
+					574 text efe4fcfa
+					575 text Say hello briefly
+					576 text MEDIUM
+					577 button Cancel task, Help: Cancel task
+						578 text ✕
+				579 container
+					580 text 315febde
+					581 text Say hello briefly
+					582 text MEDIUM
+					583 button Cancel task, Help: Cancel task
+						584 text ✕
+				585 container
+					586 text 638da43e
+					587 text Say hello briefly
+					588 text MEDIUM
+					589 button Cancel task, Help: Cancel task
+						590 text ✕
+				591 container
+					592 text 2a87608b
+					593 text Say hello briefly
+					594 text MEDIUM
+					595 button Cancel task, Help: Cancel task
+						596 text ✕
+				597 container
+					598 text 3a4fa2f5
+					599 text Say hello briefly
+					600 text MEDIUM
+					601 button Cancel task, Help: Cancel task
+						602 text ✕
+				603 container
+					604 text e73b24e8
+					605 text Analyze the input data
+					606 text MEDIUM
+					607 button Cancel task, Help: Cancel task
+						608 text ✕
+				609 container
+					610 text 21f938fe
+					611 text Step 1: Analyze {input}
+					612 text MEDIUM
+					613 text ↪
+					614 text WfE2EAgent-1789758347769
+					615 button Cancel task, Help: Cancel task
+						616 text ✕
+				617 container
+					618 text d6dec8d2
+					619 text Step 0: test prompt
+					620 text MEDIUM
+					621 text ↪
+					622 text WfSmAgent-1789758347804
+					623 button Cancel task, Help: Cancel task
+						624 text ✕
+				625 container
+					626 text c7d17715
+					627 text Step 0: test prompt
+					628 text MEDIUM
+					629 text ↪
+					630 text WfSmAgent-1789758347804
+					631 button Cancel task, Help: Cancel task
+						632 text ✕
+				633 container
+					634 text 8a49019d
+					635 text Step 0: test prompt
+					636 text MEDIUM
+					637 text ↪
+					638 text WfSmAgent-1789758347804
+					639 button Cancel task, Help: Cancel task
+						640 text ✕
+				641 container
+					642 text c88dff9d
+					643 text Step 0: test prompt
+					644 text MEDIUM
+					645 text ↪
+					646 text WfSmAgent-1789758347804
+					647 button Cancel task, Help: Cancel task
+						648 text ✕
+				649 container
+					650 text 9c0ed5d6
+					651 text Do mutation test work
+					652 text MEDIUM
+					653 text ↪
+					654 text WfE2EAgent-1789758347769
+					655 button Cancel task, Help: Cancel task
+						656 text ✕
+				657 container
+					658 text aab7e7b7
+					659 text Retry test work
+					660 text MEDIUM
+					661 text ↪
+					662 text WfE2EAgent-1789758347769
+					663 button Cancel task, Help: Cancel task
+						664 text ✕
+				665 container
+					666 text a92fe5e4
+					667 text Source A step
+					668 text MEDIUM
+					669 text ↪
+					670 text WfE2EAgent-1789758347769
+					671 button Cancel task, Help: Cancel task
+						672 text ✕
+				673 container
+					674 text c48aaf1c
+					675 text Source B step
+					676 text MEDIUM
+					677 text ↪
+					678 text WfE2EAgent-1789758347769
+					679 button Cancel task, Help: Cancel task
+						680 text ✕
+				681 container
+					682 text 7eb88af7
+					683 text Source A step
+					684 text MEDIUM
+					685 text ↪
+					686 text WfE2EAgent-1789758347769
+					687 button Cancel task, Help: Cancel task
+						688 text ✕
+				689 container
+					690 text 2f1614c8
+					691 text Running step
+					692 text MEDIUM
+					693 text ↪
+					694 text WfE2EAgent-1789758347769
+					695 button Cancel task, Help: Cancel task
+						696 text ✕
+				697 container
+					698 text 8aeac81c
+					699 text Analyze {input}
+					700 text MEDIUM
+					701 text ↪
+					702 text WfE2EAgent-1789758347769
+					703 button Cancel task, Help: Cancel task
+						704 text ✕
+				705 container
+					706 text 51881f47
+					707 text UI test step
+					708 text MEDIUM
+					709 text ↪
+					710 text WfE2EAgent-1789758347769
+					711 button Cancel task, Help: Cancel task
+						712 text ✕
+				713 container
+					714 text 95091e24
+					715 text Step 0: test prompt
+					716 text MEDIUM
+					717 text ↪
+					718 text WfSmAgent-1789758347804
+					719 button Cancel task, Help: Cancel task
+						720 text ✕
+				721 container
+					722 text 5d6466b9
+					723 text Step 0: test prompt
+					724 text MEDIUM
+					725 text ↪
+					726 text WfSmAgent-1789758347804
+					727 button Cancel task, Help: Cancel task
+						728 text ✕
+				729 container
+					730 text 7fccee41
+					731 text Step 0: test prompt
+					732 text MEDIUM
+					733 text ↪
+					734 text WfSmAgent-1789758347804
+					735 button Cancel task, Help: Cancel task
+						736 text ✕
+				737 container
+					738 text 48cb2ca6
+					739 text Step 0: test prompt
+					740 text MEDIUM
+					741 text ↪
+					742 text WfSmAgent-1789758347804
+					743 button Cancel task, Help: Cancel task
+						744 text ✕
+				745 container
+					746 text eac71e63
+					747 text Step 0: test prompt
+					748 text MEDIUM
+					749 text ↪
+					750 text WfSmAgent-1789758347804
+					751 button Cancel task, Help: Cancel task
+						752 text ✕
+				753 container
+					754 text c47c0674
+					755 text Step 0: test prompt
+					756 text MEDIUM
+					757 text ↪
+					758 text WfSmAgent-1789758347804
+					759 button Cancel task, Help: Cancel task
+						760 text ✕
+				761 container
+					762 text 50fd3101
+					763 text Step 0: test prompt
+					764 text MEDIUM
+					765 text ↪
+					766 text WfSmAgent-1789758347804
+					767 button Cancel task, Help: Cancel task
+						768 text ✕
+				769 container
+					770 text 12c90cf0
+					771 text Step 0: test prompt
+					772 text MEDIUM
+					773 text ↪
+					774 text WfSmAgent-1789758347804
+					775 button Cancel task, Help: Cancel task
+						776 text ✕
+				777 container
+					778 text 87e2f9be
+					779 text e2e-chat-thread-1789758773056-5462
+					780 text MEDIUM
+					781 button Cancel task, Help: Cancel task
+						782 text ✕
+				783 container
+					784 text 23376fd8
+					785 text Say hello briefly
+					786 text MEDIUM
+					787 button Cancel task, Help: Cancel task
+						788 text ✕
+				789 container
+					790 text 7bed97dd
+					791 text Say hello briefly
+					792 text MEDIUM
+					793 button Cancel task, Help: Cancel task
+						794 text ✕
+				795 container
+					796 text 5ed19212
+					797 text Say hello briefly
+					798 text MEDIUM
+					799 button Cancel task, Help: Cancel task
+						800 text ✕
+				801 container
+					802 text d77effcc
+					803 text e2e-journey-run-1789758852727-4264
+					804 text MEDIUM
+					805 button Cancel task, Help: Cancel task
+						806 text ✕
+				807 container
+					808 text baa00319
+					809 text Say hello briefly.
+					810 text MEDIUM
+					811 text ↪
+					812 text Developer Agent
+					813 button Cancel task, Help: Cancel task
+						814 text ✕
+				815 container
+					816 text 144855f7
+					817 text Analyze the input data
+					818 text MEDIUM
+					819 button Cancel task, Help: Cancel task
+						820 text ✕
+				821 container
+					822 text a6b82e45
+					823 text hitl-card-1789758916909-6235
+					824 text MEDIUM
+					825 text @
+					826 text e2e-agent-1789758916875-6388
+					827 button Cancel task, Help: Cancel task
+						828 text ✕
+				829 container
+					830 text 0169a9fc
+					831 text e2e-kanban-move-1789758925021-1745
+					832 text MEDIUM
+					833 text @
+					834 text e2e-agent-1789758924998-7412
+					835 button Cancel task, Help: Cancel task
+						836 text ✕
+				837 container
+					838 text 12aa83ff
+					839 text e2e observability track A
+					840 text MEDIUM
+					841 button Cancel task, Help: Cancel task
+						842 text ✕
+				843 container
+					844 text 0610c45c
+					845 text e2e-ops-run-1789759021735-8307
+					846 text MEDIUM
+					847 button Cancel task, Help: Cancel task
+						848 text ✕
+				849 container
+					850 text 60b192eb
+					851 text e2e observability runs panel
+					852 text MEDIUM
+					853 button Cancel task, Help: Cancel task
+						854 text ✕
+				855 container
+					856 text 0cb6b2b9
+					857 text E2E UI-started run — assert reachable state only
+					858 text MEDIUM
+					859 button Cancel task, Help: Cancel task
+						860 text ✕
+				861 container
+					862 text 0a4c6979
+					863 text First: analyze data
+					864 text MEDIUM
+					865 text ↪
+					866 text WfDfAgent-1789759102064
+					867 button Cancel task, Help: Cancel task
+						868 text ✕
+				869 container
+					870 text 02e5750e
+					871 text Step A: gather data
+					872 text MEDIUM
+					873 text ↪
+					874 text WfDfAgent-1789759102064
+					875 button Cancel task, Help: Cancel task
+						876 text ✕
+				877 container
+					878 text 33089bc2
+					879 text First step
+					880 text MEDIUM
+					881 text ↪
+					882 text WfDfAgent-1789759102064
+					883 button Cancel task, Help: Cancel task
+						884 text ✕
+				885 container
+					886 text f2b8c41b
+					887 text Custom iterations
+					888 text MEDIUM
+					889 text ↪
+					890 text WfDfAgent-1789759102064
+					891 button Cancel task, Help: Cancel task
+						892 text ✕
+				893 container
+					894 text f092f413
+					895 text Step 0: test prompt
+					896 text MEDIUM
+					897 text ↪
+					898 text WfSmAgent-1789759120287
+					899 button Cancel task, Help: Cancel task
+						900 text ✕
+				901 container
+					902 text 638409d8
+					903 text Step 1: Analyze {input}
+					904 text MEDIUM
+					905 text ↪
+					906 text WfE2EAgent-1789759118171
+					907 button Cancel task, Help: Cancel task
+						908 text ✕
+				909 container
+					910 text 6f2a612d
+					911 text Step 0: test prompt
+					912 text MEDIUM
+					913 text ↪
+					914 text WfSmAgent-1789759120287
+					915 button Cancel task, Help: Cancel task
+						916 text ✕
+				917 container
+					918 text 3b672ceb
+					919 text Step 0: test prompt
+					920 text MEDIUM
+					921 text ↪
+					922 text WfSmAgent-1789759120287
+					923 button Cancel task, Help: Cancel task
+						924 text ✕
+				925 container
+					926 text 59744a0e
+					927 text Step 0: test prompt
+					928 text MEDIUM
+					929 text ↪
+					930 text WfSmAgent-1789759120287
+					931 button Cancel task, Help: Cancel task
+						932 text ✕
+				933 container
+					934 text 923b28e2
+					935 text Step 0: test prompt
+					936 text MEDIUM
+					937 text ↪
+					938 text WfSmAgent-1789759120287
+					939 button Cancel task, Help: Cancel task
+						940 text ✕
+				941 container
+					942 text 5baf6a4f
+					943 text Step 0: test prompt
+					944 text MEDIUM
+					945 text ↪
+					946 text WfSmAgent-1789759120287
+					947 button Cancel task, Help: Cancel task
+						948 text ✕
+				949 container
+					950 text 56bbab2f
+					951 text Do mutation test work
+					952 text MEDIUM
+					953 text ↪
+					954 text WfE2EAgent-1789759118171
+					955 button Cancel task, Help: Cancel task
+						956 text ✕
+				957 container
+					958 text 0005c4e8
+					959 text Step 0: test prompt
+					960 text MEDIUM
+					961 text ↪
+					962 text WfSmAgent-1789759120287
+					963 button Cancel task, Help: Cancel task
+						964 text ✕
+				965 container
+					966 text d5f97e5e
+					967 text Step 0: test prompt
+					968 text MEDIUM
+					969 text ↪
+					970 text WfSmAgent-1789759120287
+					971 button Cancel task, Help: Cancel task
+						972 text ✕
+				973 container
+					974 text 6e39b719
+					975 text Retry test work
+					976 text MEDIUM
+					977 text ↪
+					978 text WfE2EAgent-1789759118171
+					979 button Cancel task, Help: Cancel task
+						980 text ✕
+				981 container
+					982 text e1d97e86
+					983 text Source A step
+					984 text MEDIUM
+					985 text ↪
+					986 text WfE2EAgent-1789759118171
+					987 button Cancel task, Help: Cancel task
+						988 text ✕
+				989 container
+					990 text 119767e7
+					991 text Source B step
+					992 text MEDIUM
+					993 text ↪
+					994 text WfE2EAgent-1789759118171
+					995 button Cancel task, Help: Cancel task
+						996 text ✕
+				997 container
+					998 text 8f5a0fa6
+					999 text Source A step
+					1000 text MEDIUM
+					1001 text ↪
+					1002 text WfE2EAgent-1789759118171
+					1003 button Cancel task, Help: Cancel task
+						1004 text ✕
+				1005 container
+					1006 text c8f7950b
+					1007 text Step 0: test prompt
+					1008 text MEDIUM
+					1009 text ↪
+					1010 text WfSmAgent-1789759120287
+					1011 button Cancel task, Help: Cancel task
+						1012 text ✕
+				1013 container
+					1014 text d7dcc2ec
+					1015 text Step 0: test prompt
+					1016 text MEDIUM
+					1017 text ↪
+					1018 text WfSmAgent-1789759120287
+					1019 button Cancel task, Help: Cancel task
+						1020 text ✕
+				1021 container
+					1022 text bfe9c311
+					1023 text Running step
+					1024 text MEDIUM
+					1025 text ↪
+					1026 text WfE2EAgent-1789759118171
+					1027 button Cancel task, Help: Cancel task
+						1028 text ✕
+				1029 container
+					1030 text 783f2c49
+					1031 text Step 0: test prompt
+					1032 text MEDIUM
+					1033 text ↪
+					1034 text WfSmAgent-1789759120287
+					1035 button Cancel task, Help: Cancel task
+						1036 text ✕
+				1037 container
+					1038 text 60673bdc
+					1039 text Analyze {input}
+					1040 text MEDIUM
+					1041 text ↪
+					1042 text WfE2EAgent-1789759118171
+					1043 button Cancel task, Help: Cancel task
+						1044 text ✕
+				1045 container
+					1046 text f0662e7f
+					1047 text Step 0: test prompt
+					1048 text MEDIUM
+					1049 text ↪
+					1050 text WfSmAgent-1789759120287
+					1051 button Cancel task, Help: Cancel task
+						1052 text ✕
+				1053 container
+					1054 text 199d7803
+					1055 text UI test step
+					1056 text MEDIUM
+					1057 text ↪
+					1058 text WfE2EAgent-1789759118171
+					1059 button Cancel task, Help: Cancel task
+						1060 text ✕
+				1061 container
+					1062 text 712b800c
+					1063 text Analyze {input}
+					1064 text MEDIUM
+					1065 text ↪
+					1066 text WfTplAgent-1789759156191
+					1067 button Cancel task, Help: Cancel task
+						1068 text ✕
+				1069 container
+					1070 text 1cf3d2a7
+					1071 text Check template field
+					1072 text MEDIUM
+					1073 text ↪
+					1074 text WfTplAgent-1789759156191
+					1075 button Cancel task, Help: Cancel task
+						1076 text ✕
+				1077 container
+					1078 text 0c091316
+					1079 text No params test
+					1080 text MEDIUM
+					1081 text ↪
+					1082 text WfTplAgent-1789759156191
+					1083 button Cancel task, Help: Cancel task
+						1084 text ✕
+				1085 container
+					1086 text b72c8e63
+					1087 text Step 0: UI test prompt
+					1088 text MEDIUM
+					1089 text ↪
+					1090 text WfUiAgent-1789759160894
+					1091 button Cancel task, Help: Cancel task
+						1092 text ✕
+				1093 container
+					1094 text 7c6ef789
+					1095 text Null params test
+					1096 text MEDIUM
+					1097 text ↪
+					1098 text WfTplAgent-1789759156191
+					1099 button Cancel task, Help: Cancel task
+						1100 text ✕
+				1101 container
+					1102 text 0255fd2a
+					1103 text Step 0: UI test prompt
+					1104 text MEDIUM
+					1105 text ↪
+					1106 text WfUiAgent-1789759160894
+					1107 button Cancel task, Help: Cancel task
+						1108 text ✕
+				1109 container
+					1110 text 05faa7c2
+					1111 text Step 0: UI test prompt
+					1112 text MEDIUM
+					1113 text ↪
+					1114 text WfUiAgent-1789759160894
+					1115 button Cancel task, Help: Cancel task
+						1116 text ✕
+				1117 container
+					1118 text d861a2ca
+					1119 text Analyze this data
+					1120 text MEDIUM
+					1121 text ↪
+					1122 text WfYamlAgent-1789759177768
+					1123 button Cancel task, Help: Cancel task
+						1124 text ✕
+				1125 container
+					1126 text 2915c24c
+					1127 text Step 0: UI test prompt
+					1128 text MEDIUM
+					1129 text ↪
+					1130 text WfUiAgent-1789759160894
+					1131 button Cancel task, Help: Cancel task
+						1132 text ✕
+				1133 container
+					1134 text 18adf4d5
+					1135 text Step A
+					1136 text MEDIUM
+					1137 text ↪
+					1138 text WfYamlAgent-1789759177768
+					1139 button Cancel task, Help: Cancel task
+						1140 text ✕
+				1141 container
+					1142 text 7bf951ae
+					1143 text Analyze market trends for executives
+					1144 text MEDIUM
+					1145 text ↪
+					1146 text WfYamlAgent-1789759177768
+					1147 button Cancel task, Help: Cancel task
+						1148 text ✕
+				1149 container
+					1150 text 3530249d
+					1151 text Single step
+					1152 text MEDIUM
+					1153 text ↪
+					1154 text WfValAgent-1789759168353
+					1155 button Cancel task, Help: Cancel task
+						1156 text ✕
+				1157 container
+					1158 text d0754af4
+					1159 text Valid step
+					1160 text MEDIUM
+					1161 text ↪
+					1162 text WfValAgent-1789759168353
+					1163 button Cancel task, Help: Cancel task
+						1164 text ✕
+				1165 container
+					1166 text 21e62fe6
+					1167 text Step 0: UI test prompt
+					1168 text MEDIUM
+					1169 text ↪
+					1170 text WfUiAgent-1789759160894
+					1171 button Cancel task, Help: Cancel task
+						1172 text ✕
+				1173 container
+					1174 text 926328fc
+					1175 text Step A
+					1176 text MEDIUM
+					1177 text ↪
+					1178 text WfValAgent-1789759168353
+					1179 button Cancel task, Help: Cancel task
+						1180 text ✕
+				1181 container
+					1182 text adc53cf5
+					1183 text Step B
+					1184 text MEDIUM
+					1185 text ↪
+					1186 text WfValAgent-1789759168353
+					1187 button Cancel task, Help: Cancel task
+						1188 text ✕
+				1189 container
+					1190 text b31dfc22
+					1191 text Step 0: UI test prompt
+					1192 text MEDIUM
+					1193 text ↪
+					1194 text WfUiAgent-1789759160894
+					1195 button Cancel task, Help: Cancel task
+						1196 text ✕
+				1197 container
+					1198 text a0bba5e3
+					1199 text Step 0: UI test prompt
+					1200 text MEDIUM
+					1201 text ↪
+					1202 text WfUiAgent-1789759160894
+					1203 button Cancel task, Help: Cancel task
+						1204 text ✕
+				1205 container
+					1206 text dd5fb212
+					1207 text Step 0: UI test prompt
+					1208 text MEDIUM
+					1209 text ↪
+					1210 text WfUiAgent-1789759160894
+					1211 button Cancel task, Help: Cancel task
+						1212 text ✕
+				1213 container
+					1214 text 35a81b8c
+					1215 text Step 0: UI test prompt
+					1216 text MEDIUM
+					1217 text ↪
+					1218 text WfUiAgent-1789759160894
+					1219 button Cancel task, Help: Cancel task
+						1220 text ✕
+				1221 container
+					1222 text ed554f7b
+					1223 text Step 0: UI test prompt
+					1224 text MEDIUM
+					1225 text ↪
+					1226 text WfUiAgent-1789759160894
+					1227 button Cancel task, Help: Cancel task
+						1228 text ✕
+				1229 container
+					1230 text dad00131
+					1231 text Step 0: UI test prompt
+					1232 text MEDIUM
+					1233 text ↪
+					1234 text WfUiAgent-1789759160894
+					1235 button Cancel task, Help: Cancel task
+						1236 text ✕
+				1237 container
+					1238 text 43854f02
+					1239 text Step 0: UI test prompt
+					1240 text MEDIUM
+					1241 text ↪
+					1242 text WfUiAgent-1789759160894
+					1243 button Cancel task, Help: Cancel task
+						1244 text ✕
+				1245 container
+					1246 text 8a541b75
+					1247 text Step 0: UI test prompt
+					1248 text MEDIUM
+					1249 text ↪
+					1250 text WfUiAgent-1789759160894
+					1251 button Cancel task, Help: Cancel task
+						1252 text ✕
+				1253 container
+					1254 text 6d4b04a8
+					1255 text Say hello briefly
+					1256 text MEDIUM
+					1257 button Cancel task, Help: Cancel task
+						1258 text ✕
+				1259 container
+					1260 text a67e1da4
+					1261 text Say hello briefly
+					1262 text MEDIUM
+					1263 button Cancel task, Help: Cancel task
+						1264 text ✕
+				1265 container
+					1266 text 1ed385ad
+					1267 text Say hello briefly
+					1268 text MEDIUM
+					1269 button Cancel task, Help: Cancel task
+						1270 text ✕
+				1271 container
+					1272 text f5a025f4
+					1273 text Say hello briefly
+					1274 text MEDIUM
+					1275 button Cancel task, Help: Cancel task
+						1276 text ✕
+				1277 container
+					1278 text 56aa06a0
+					1279 text Say hello briefly
+					1280 text MEDIUM
+					1281 button Cancel task, Help: Cancel task
+						1282 text ✕
+				1283 container
+					1284 text dc85db34
+					1285 text Say hello briefly
+					1286 text MEDIUM
+					1287 button Cancel task, Help: Cancel task
+						1288 text ✕
+				1289 container
+					1290 text 10056df3
+					1291 text Say hello briefly
+					1292 text MEDIUM
+					1293 button Cancel task, Help: Cancel task
+						1294 text ✕
+				1295 container
+					1296 text 1566cf22
+					1297 text Say hello briefly
+					1298 text MEDIUM
+					1299 button Cancel task, Help: Cancel task
+						1300 text ✕
+				1301 container
+					1302 text 9117ec81
+					1303 text Say hello briefly
+					1304 text MEDIUM
+					1305 button Cancel task, Help: Cancel task
+						1306 text ✕
+				1307 container
+					1308 text 4958b8da
+					1309 text Say hello briefly
+					1310 text MEDIUM
+					1311 button Cancel task, Help: Cancel task
+						1312 text ✕
+				1313 container
+					1314 text 069567b7
+					1315 text Say hello briefly
+					1316 text MEDIUM
+					1317 button Cancel task, Help: Cancel task
+						1318 text ✕
+				1319 container
+					1320 text 19763137
+					1321 text Analyze the input data
+					1322 text MEDIUM
+					1323 button Cancel task, Help: Cancel task
+						1324 text ✕
+				1325 container
+					1326 text 6050a3ab
+					1327 text Reply with a short greeting. Do not use any tools.
+					1328 text MEDIUM
+					1329 button Cancel task, Help: Cancel task
+						1330 text ✕
+				1331 container
+					1332 text ba5fbdb2
+					1333 text Create a new file at /workspace/e2e-s4-1789764448009-8606...
+					1334 text MEDIUM
+					1335 button Cancel task, Help: Cancel task
+						1336 text ✕
+				1337 container
+					1338 text 82d6b187
+					1339 text Create a new file at /workspace/e2e-s4-1789764872949-617....
+					1340 text MEDIUM
+					1341 button Cancel task, Help: Cancel task
+						1342 text ✕
+				1343 container
+					1344 text cec767b8
+					1345 text Use the Write tool (not a shell command) to create the fi...
+					1346 text MEDIUM
+					1347 text ↪
+					1348 text c6b-s5-20260918-210137
+					1349 button Cancel task, Help: Cancel task
+						1350 text ✕
+				1351 container
+					1352 text 072ddbdf
+					1353 text Use the Write tool (not a shell command) to create the fi...
+					1354 text MEDIUM
+					1355 text ↪
+					1356 text c6b-s10-20260918-211613
+					1357 button Cancel task, Help: Cancel task
+						1358 text ✕
+				1359 container
+					1360 text 1446b87c
+					1361 text Use the platform MCP tools for both steps and nothing els...
+					1362 text MEDIUM
+					1363 button Cancel task, Help: Cancel task
+						1364 text ✕
+				1365 container
+					1366 text 86da6235
+					1367 text e2e-chat-thread-1789767819584-1994
+					1368 text MEDIUM
+					1369 button Cancel task, Help: Cancel task
+						1370 text ✕
+				1371 container
+					1372 text d03e5824
+					1373 text Say hello briefly
+					1374 text MEDIUM
+					1375 button Cancel task, Help: Cancel task
+						1376 text ✕
+				1377 container
+					1378 text 29b37d19
+					1379 text Say hello briefly
+					1380 text MEDIUM
+					1381 button Cancel task, Help: Cancel task
+						1382 text ✕
+				1383 container
+					1384 text 0d73042b
+					1385 text Say hello briefly
+					1386 text MEDIUM
+					1387 button Cancel task, Help: Cancel task
+						1388 text ✕
+				1389 container
+					1390 text 7f83e15c
+					1391 text e2e-journey-run-1789767933428-7905
+					1392 text MEDIUM
+					1393 button Cancel task, Help: Cancel task
+						1394 text ✕
+				1395 container
+					1396 text 67717f2a
+					1397 text Say hello briefly.
+					1398 text MEDIUM
+					1399 text ↪
+					1400 text QA Agent
+					1401 button Cancel task, Help: Cancel task
+						1402 text ✕
+				1403 container
+					1404 text 148ac0d4
+					1405 text Analyze the input data
+					1406 text MEDIUM
+					1407 text ↪
+					1408 text e2e-agent-1789767946593-8463
+					1409 button Cancel task, Help: Cancel task
+						1410 text ✕
+				1411 container
+					1412 text 049d9548
+					1413 text hitl-card-1789767971299-6989
+					1414 text MEDIUM
+					1415 text ↪
+					1416 text e2e-agent-1789767971290-194
+					1417 text @
+					1418 text e2e-agent-1789767971290-194
+					1419 button Cancel task, Help: Cancel task
+						1420 text ✕
+				1421 container
+					1422 text 3aabab83
+					1423 text e2e-kanban-move-1789767988385-1261
+					1424 text MEDIUM
+					1425 text ↪
+					1426 text e2e-agent-1789767988303-3267
+					1427 text @
+					1428 text e2e-agent-1789767988303-3267
+					1429 button Cancel task, Help: Cancel task
+						1430 text ✕
+				1431 container
+					1432 text 23790e12
+					1433 text e2e observability track A
+					1434 text MEDIUM
+					1435 text ↪
+					1436 text e2e-agent-1789768030192-1502
+					1437 button Cancel task, Help: Cancel task
+						1438 text ✕
+				1439 container
+					1440 text 4f26b308
+					1441 text e2e-ops-run-1789768066880-5383
+					1442 text MEDIUM
+					1443 text ↪
+					1444 text e2e-agent-1789768066859-240
+					1445 button Cancel task, Help: Cancel task
+						1446 text ✕
+				1447 container
+					1448 text 99966f0b
+					1449 text e2e observability runs panel
+					1450 text MEDIUM
+					1451 text ↪
+					1452 text e2e-agent-1789768099969-8723
+					1453 button Cancel task, Help: Cancel task
+						1454 text ✕
+				1455 container
+					1456 text 3577bb32
+					1457 text E2E UI-started run — assert reachable state only
+					1458 text MEDIUM
+					1459 text ↪
+					1460 text e2e-agent-1789768173879-1138
+					1461 button Cancel task, Help: Cancel task
+						1462 text ✕
+				1463 container
+					1464 text adeac452
+					1465 text First: analyze data
+					1466 text MEDIUM
+					1467 text ↪
+					1468 text WfDfAgent-1789768184601
+					1469 button Cancel task, Help: Cancel task
+						1470 text ✕
+				1471 container
+					1472 text 4ffc6a1d
+					1473 text Step A: gather data
+					1474 text MEDIUM
+					1475 text ↪
+					1476 text WfDfAgent-1789768184601
+					1477 button Cancel task, Help: Cancel task
+						1478 text ✕
+				1479 container
+					1480 text ceae02e8
+					1481 text First step
+					1482 text MEDIUM
+					1483 text ↪
+					1484 text WfDfAgent-1789768184601
+					1485 button Cancel task, Help: Cancel task
+						1486 text ✕
+				1487 container
+					1488 text d05f0957
+					1489 text Step 1: Analyze {input}
+					1490 text MEDIUM
+					1491 text ↪
+					1492 text WfE2EAgent-1789768222873
+					1493 button Cancel task, Help: Cancel task
+						1494 text ✕
+				1495 container
+					1496 text 3e197cc5
+					1497 text Do mutation test work
+					1498 text MEDIUM
+					1499 text ↪
+					1500 text WfE2EAgent-1789768222873
+					1501 button Cancel task, Help: Cancel task
+						1502 text ✕
+				1503 container
+					1504 text 93b9d9b4
+					1505 text Retry test work
+					1506 text MEDIUM
+					1507 text ↪
+					1508 text WfE2EAgent-1789768222873
+					1509 button Cancel task, Help: Cancel task
+						1510 text ✕
+				1511 container
+					1512 text fd2fe520
+					1513 text Source A step
+					1514 text MEDIUM
+					1515 text ↪
+					1516 text WfE2EAgent-1789768222873
+					1517 button Cancel task, Help: Cancel task
+						1518 text ✕
+				1519 container
+					1520 text f49a5078
+					1521 text Source B step
+					1522 text MEDIUM
+					1523 text ↪
+					1524 text WfE2EAgent-1789768222873
+					1525 button Cancel task, Help: Cancel task
+						1526 text ✕
+				1527 container
+					1528 text 940c4fa3
+					1529 text Source A step
+					1530 text MEDIUM
+					1531 text ↪
+					1532 text WfE2EAgent-1789768222873
+					1533 button Cancel task, Help: Cancel task
+						1534 text ✕
+				1535 container
+					1536 text 6fcef747
+					1537 text Running step
+					1538 text MEDIUM
+					1539 text ↪
+					1540 text WfE2EAgent-1789768222873
+					1541 button Cancel task, Help: Cancel task
+						1542 text ✕
+				1543 container
+					1544 text 100cfc19
+					1545 text Step 0: test prompt
+					1546 text MEDIUM
+					1547 text ↪
+					1548 text WfSmAgent-1789768233301
+					1549 button Cancel task, Help: Cancel task
+						1550 text ✕
+				1551 container
+					1552 text a7e448a6
+					1553 text Step 0: test prompt
+					1554 text MEDIUM
+					1555 text ↪
+					1556 text WfSmAgent-1789768233301
+					1557 button Cancel task, Help: Cancel task
+						1558 text ✕
+				1559 container
+					1560 text 5cc621fa
+					1561 text Analyze {input}
+					1562 text MEDIUM
+					1563 text ↪
+					1564 text WfE2EAgent-1789768222873
+					1565 button Cancel task, Help: Cancel task
+						1566 text ✕
+				1567 container
+					1568 text 5ffef90e
+					1569 text Step 0: test prompt
+					1570 text MEDIUM
+					1571 text ↪
+					1572 text WfSmAgent-1789768233301
+					1573 button Cancel task, Help: Cancel task
+						1574 text ✕
+				1575 container
+					1576 text ce7df0f8
+					1577 text UI test step
+					1578 text MEDIUM
+					1579 text ↪
+					1580 text WfE2EAgent-1789768222873
+					1581 button Cancel task, Help: Cancel task
+						1582 text ✕
+				1583 container
+					1584 text 276b7c0f
+					1585 text Step 0: test prompt
+					1586 text MEDIUM
+					1587 text ↪
+					1588 text WfSmAgent-1789768233301
+					1589 button Cancel task, Help: Cancel task
+						1590 text ✕
+				1591 container
+					1592 text 6c44ff0e
+					1593 text Analyze {input}
+					1594 text MEDIUM
+					1595 text ↪
+					1596 text WfTplAgent-1789768240995
+					1597 button Cancel task, Help: Cancel task
+						1598 text ✕
+				1599 container
+					1600 text 93f3c3bc
+					1601 text Check template field
+					1602 text MEDIUM
+					1603 text ↪
+					1604 text WfTplAgent-1789768240995
+					1605 button Cancel task, Help: Cancel task
+						1606 text ✕
+				1607 container
+					1608 text 3c39fdf3
+					1609 text No params test
+					1610 text MEDIUM
+					1611 text ↪
+					1612 text WfTplAgent-1789768240995
+					1613 button Cancel task, Help: Cancel task
+						1614 text ✕
+				1615 container
+					1616 text 42bd28b4
+					1617 text Null params test
+					1618 text MEDIUM
+					1619 text ↪
+					1620 text WfTplAgent-1789768240995
+					1621 button Cancel task, Help: Cancel task
+						1622 text ✕
+				1623 container
+					1624 text 3eb14198
+					1625 text Step 0: UI test prompt
+					1626 text MEDIUM
+					1627 text ↪
+					1628 text WfUiAgent-1789768249769
+					1629 button Cancel task, Help: Cancel task
+						1630 text ✕
+				1631 container
+					1632 text 374ffe64
+					1633 text Step 0: test prompt
+					1634 text MEDIUM
+					1635 text ↪
+					1636 text WfSmAgent-1789768233301
+					1637 button Cancel task, Help: Cancel task
+						1638 text ✕
+				1639 container
+					1640 text 32a4705d
+					1641 text Step 0: test prompt
+					1642 text MEDIUM
+					1643 text ↪
+					1644 text WfSmAgent-1789768233301
+					1645 button Cancel task, Help: Cancel task
+						1646 text ✕
+				1647 container
+					1648 text aacb0560
+					1649 text Step 0: UI test prompt
+					1650 text MEDIUM
+					1651 text ↪
+					1652 text WfUiAgent-1789768249769
+					1653 button Cancel task, Help: Cancel task
+						1654 text ✕
+				1655 container
+					1656 text 43bbc915
+					1657 text Step 0: test prompt
+					1658 text MEDIUM
+					1659 text ↪
+					1660 text WfSmAgent-1789768233301
+					1661 button Cancel task, Help: Cancel task
+						1662 text ✕
+				1663 container
+					1664 text bd28890c
+					1665 text Step 0: UI test prompt
+					1666 text MEDIUM
+					1667 text ↪
+					1668 text WfUiAgent-1789768249769
+					1669 button Cancel task, Help: Cancel task
+						1670 text ✕
+				1671 container
+					1672 text f9b0587f
+					1673 text Step 0: test prompt
+					1674 text MEDIUM
+					1675 text ↪
+					1676 text WfSmAgent-1789768233301
+					1677 button Cancel task, Help: Cancel task
+						1678 text ✕
+				1679 container
+					1680 text 12308994
+					1681 text Step 0: UI test prompt
+					1682 text MEDIUM
+					1683 text ↪
+					1684 text WfUiAgent-1789768249769
+					1685 button Cancel task, Help: Cancel task
+						1686 text ✕
+				1687 container
+					1688 text 6e25974d
+					1689 text Step 0: test prompt
+					1690 text MEDIUM
+					1691 text ↪
+					1692 text WfSmAgent-1789768233301
+					1693 button Cancel task, Help: Cancel task
+						1694 text ✕
+				1695 container
+					1696 text a0b9e806
+					1697 text Step 0: test prompt
+					1698 text MEDIUM
+					1699 text ↪
+					1700 text WfSmAgent-1789768233301
+					1701 button Cancel task, Help: Cancel task
+						1702 text ✕
+				1703 container
+					1704 text 1b2e4935
+					1705 text Step 0: test prompt
+					1706 text MEDIUM
+					1707 text ↪
+					1708 text WfSmAgent-1789768233301
+					1709 button Cancel task, Help: Cancel task
+						1710 text ✕
+				1711 container
+					1712 text 1c09f0e7
+					1713 text Step 0: test prompt
+					1714 text MEDIUM
+					1715 text ↪
+					1716 text WfSmAgent-1789768233301
+					1717 button Cancel task, Help: Cancel task
+						1718 text ✕
+				1719 container
+					1720 text 42a396e8
+					1721 text Single step
+					1722 text MEDIUM
+					1723 text ↪
+					1724 text WfValAgent-1789768267571
+					1725 button Cancel task, Help: Cancel task
+						1726 text ✕
+				1727 container
+					1728 text 6915b21f
+					1729 text Valid step
+					1730 text MEDIUM
+					1731 text ↪
+					1732 text WfValAgent-1789768267571
+					1733 button Cancel task, Help: Cancel task
+						1734 text ✕
+				1735 container
+					1736 text 2d638d17
+					1737 text Step A
+					1738 text MEDIUM
+					1739 text ↪
+					1740 text WfValAgent-1789768267571
+					1741 button Cancel task, Help: Cancel task
+						1742 text ✕
+				1743 container
+					1744 text be98fa8e
+					1745 text Step B
+					1746 text MEDIUM
+					1747 text ↪
+					1748 text WfValAgent-1789768267571
+					1749 button Cancel task, Help: Cancel task
+						1750 text ✕
+				1751 container
+					1752 text b0f98d07
+					1753 text Step 0: UI test prompt
+					1754 text MEDIUM
+					1755 text ↪
+					1756 text WfUiAgent-1789768249769
+					1757 button Cancel task, Help: Cancel task
+						1758 text ✕
+				1759 container
+					1760 text 775f8477
+					1761 text Analyze this data
+					1762 text MEDIUM
+					1763 text ↪
+					1764 text WfYamlAgent-1789768277456
+					1765 button Cancel task, Help: Cancel task
+						1766 text ✕
+				1767 container
+					1768 text 098a6266
+					1769 text Step 0: UI test prompt
+					1770 text MEDIUM
+					1771 text ↪
+					1772 text WfUiAgent-1789768249769
+					1773 button Cancel task, Help: Cancel task
+						1774 text ✕
+				1775 container
+					1776 text f358585d
+					1777 text Step A
+					1778 text MEDIUM
+					1779 text ↪
+					1780 text WfYamlAgent-1789768277456
+					1781 button Cancel task, Help: Cancel task
+						1782 text ✕
+				1783 container
+					1784 text 9b7b9ff5
+					1785 text Analyze market trends for executives
+					1786 text MEDIUM
+					1787 text ↪
+					1788 text WfYamlAgent-1789768277456
+					1789 button Cancel task, Help: Cancel task
+						1790 text ✕
+				1791 container
+					1792 text 28e68885
+					1793 text Step 0: UI test prompt
+					1794 text MEDIUM
+					1795 text ↪
+					1796 text WfUiAgent-1789768249769
+					1797 button Cancel task, Help: Cancel task
+						1798 text ✕
+				1799 container
+					1800 text e29bb39b
+					1801 text Step 0: UI test prompt
+					1802 text MEDIUM
+					1803 text ↪
+					1804 text WfUiAgent-1789768249769
+					1805 button Cancel task, Help: Cancel task
+						1806 text ✕
+				1807 container
+					1808 text d1100b4d
+					1809 text Step 0: UI test prompt
+					1810 text MEDIUM
+					1811 text ↪
+					1812 text WfUiAgent-1789768249769
+					1813 button Cancel task, Help: Cancel task
+						1814 text ✕
+				1815 container
+					1816 text 09569cb5
+					1817 text Step 0: UI test prompt
+					1818 text MEDIUM
+					1819 text ↪
+					1820 text WfUiAgent-1789768249769
+					1821 button Cancel task, Help: Cancel task
+						1822 text ✕
+				1823 container
+					1824 text 3bb9b1dd
+					1825 text First: analyze data
+					1826 text MEDIUM
+					1827 text ↪
+					1828 text WfDfAgent-1789768294815
+					1829 button Cancel task, Help: Cancel task
+						1830 text ✕
+				1831 container
+					1832 text 50f1e104
+					1833 text Step A: gather data
+					1834 text MEDIUM
+					1835 text ↪
+					1836 text WfDfAgent-1789768294815
+					1837 button Cancel task, Help: Cancel task
+						1838 text ✕
+				1839 container
+					1840 text 931d04d5
+					1841 text First step
+					1842 text MEDIUM
+					1843 text ↪
+					1844 text WfDfAgent-1789768294815
+					1845 button Cancel task, Help: Cancel task
+						1846 text ✕
+				1847 container
+					1848 text 27f27439
+					1849 text Step 0: UI test prompt
+					1850 text MEDIUM
+					1851 text ↪
+					1852 text WfUiAgent-1789768249769
+					1853 button Cancel task, Help: Cancel task
+						1854 text ✕
+				1855 container
+					1856 text e8e78344
+					1857 text Custom iterations
+					1858 text MEDIUM
+					1859 text ↪
+					1860 text WfDfAgent-1789768294815
+					1861 button Cancel task, Help: Cancel task
+						1862 text ✕
+				1863 container
+					1864 text 6dec1dc9
+					1865 text Step 0: UI test prompt
+					1866 text MEDIUM
+					1867 text ↪
+					1868 text WfUiAgent-1789768249769
+					1869 button Cancel task, Help: Cancel task
+						1870 text ✕
+				1871 container
+					1872 text ef02522d
+					1873 text Step 0: UI test prompt
+					1874 text MEDIUM
+					1875 text ↪
+					1876 text WfUiAgent-1789768249769
+					1877 button Cancel task, Help: Cancel task
+						1878 text ✕
+				1879 container
+					1880 text 16ba9b75
+					1881 text Draft 2 requirements. Brief.
+					1882 text MEDIUM
+					1883 text ↪
+					1884 text E2E-BA-1789768338657-4474
+					1885 button Cancel task, Help: Cancel task
+						1886 text ✕
+				1887 container
+					1888 text c8536e61
+					1889 text Say hello briefly
+					1890 text MEDIUM
+					1891 text ↪
+					1892 text E2E-Iso-A-1789768339161-2919
+					1893 button Cancel task, Help: Cancel task
+						1894 text ✕
+				1895 container
+					1896 text fb402e2f
+					1897 text Say hello briefly
+					1898 text MEDIUM
+					1899 text ↪
+					1900 text E2E-Iso-B-1789768339162-2919
+					1901 button Cancel task, Help: Cancel task
+						1902 text ✕
+				1903 container
+					1904 text 503fe128
+					1905 text Say hello briefly
+					1906 text MEDIUM
+					1907 text ↪
+					1908 text e2e-wf-agent-1789768340530-3880
+					1909 button Cancel task, Help: Cancel task
+						1910 text ✕
+				1911 container
+					1912 text 52b9c807
+					1913 text Say hello briefly
+					1914 text MEDIUM
+					1915 text ↪
+					1916 text e2e-wf-guard-agent-1789768343024-8437
+					1917 button Cancel task, Help: Cancel task
+						1918 text ✕
+				1919 container
+					1920 text 301c8098
+					1921 text Say hello briefly
+					1922 text MEDIUM
+					1923 text ↪
+					1924 text e2e-wf-cancel-agent-1789768354214-9002
+					1925 button Cancel task, Help: Cancel task
+						1926 text ✕
+				1927 container
+					1928 text 562a441a
+					1929 text Say hello briefly
+					1930 text MEDIUM
+					1931 text ↪
+					1932 text e2e-wf-cancel-agent-1789768354214-9002
+					1933 button Cancel task, Help: Cancel task
+						1934 text ✕
+				1935 container
+					1936 text 4e349e3d
+					1937 text Say hello briefly
+					1938 text MEDIUM
+					1939 text ↪
+					1940 text e2e-wf-cancel-agent-1789768354214-9002
+					1941 button Cancel task, Help: Cancel task
+						1942 text ✕
+				1943 container
+					1944 text 5d73a36f
+					1945 text Say hello briefly
+					1946 text MEDIUM
+					1947 text ↪
+					1948 text e2e-wf-cancel-agent-1789768354214-9002
+					1949 button Cancel task, Help: Cancel task
+						1950 text ✕
+				1951 container
+					1952 text cc68b6bf
+					1953 text Say hello briefly
+					1954 text MEDIUM
+					1955 text ↪
+					1956 text e2e-wf-cancel-agent-1789768354214-9002
+					1957 button Cancel task, Help: Cancel task
+						1958 text ✕
+				1959 container
+					1960 text 4c63ca1a
+					1961 text Say hello briefly
+					1962 text MEDIUM
+					1963 text ↪
+					1964 text e2e-wf-cancel-agent-1789768354214-9002
+					1965 button Cancel task, Help: Cancel task
+						1966 text ✕
+				1967 container
+					1968 text c08fa0e3
+					1969 text Say hello briefly
+					1970 text MEDIUM
+					1971 text ↪
+					1972 text e2e-wf-cancel-agent-1789768354214-9002
+					1973 button Cancel task, Help: Cancel task
+						1974 text ✕
+				1975 container
+					1976 text 232c443c
+					1977 text Say hello briefly
+					1978 text MEDIUM
+					1979 text ↪
+					1980 text e2e-wf-cancel-agent-1789768354214-9002
+					1981 button Cancel task, Help: Cancel task
+						1982 text ✕
+				1983 container
+					1984 text 697a9d0a
+					1985 text Say hello briefly
+					1986 text MEDIUM
+					1987 text ↪
+					1988 text e2e-wf-merge-agent-1789768363247-6870
+					1989 button Cancel task, Help: Cancel task
+						1990 text ✕
+				1991 container
+					1992 text b062d8f2
+					1993 text Say hello briefly
+					1994 text MEDIUM
+					1995 text ↪
+					1996 text e2e-wf-merge-agent-1789768363247-6870
+					1997 button Cancel task, Help: Cancel task
+						1998 text ✕
+				1999 container
+					2000 text 706804ac
+					2001 text Say hello briefly
+					2002 text MEDIUM
+					2003 text ↪
+					2004 text e2e-wf-merge-agent-1789768363247-6870
+					2005 button Cancel task, Help: Cancel task
+						2006 text ✕
+				2007 container
+					2008 text 6a0a2eda
+					2009 text Analyze the input data
+					2010 text MEDIUM
+					2011 text ↪
+					2012 text e2e-wf-yaml-agent-1789768375157-1985
+					2013 button Cancel task, Help: Cancel task
+						2014 text ✕
+				2015 container
+					2016 text 361a4d66
+					2017 text Create a new file at /workspace/e2e-s4-1789768613405-9047...
+					2018 text MEDIUM
+					2019 text ↪
+					2020 text e2e-qoder-s4-1789768615850-6950
+					2021 button Cancel task, Help: Cancel task
+						2022 text ✕
+				2023 container
+					2024 text 1ece9625
+					2025 text Create a new file at /workspace/e2e-s4-1789768772338-8537...
+					2026 text MEDIUM
+					2027 text ↪
+					2028 text e2e-qoder-s4-1789768774124-4859
+					2029 button Cancel task, Help: Cancel task
+						2030 text ✕
+				2031 container
+					2032 text df9c0f99
+					2033 text Use the Write tool (not a shell command) to create the fi...
+					2034 text MEDIUM
+					2035 text ↪
+					2036 text c6b-s10-20260918-220325
+					2037 button Cancel task, Help: Cancel task
+						2038 text ✕
+				2039 container
+					2040 text ea7043c0
+					2041 text Create a new file at /workspace/e2e-s4-1789769415257-230....
+					2042 text MEDIUM
+					2043 text ↪
+					2044 text e2e-qoder-s4-1789769417941-9935
+					2045 button Cancel task, Help: Cancel task
+						2046 text ✕
+				2047 container
+					2048 text 8b62af84
+					2049 text Create a new file at /workspace/e2e-s4-1789769574108-9702...
+					2050 text MEDIUM
+					2051 text ↪
+					2052 text e2e-qoder-s4-1789769576003-5027
+					2053 button Cancel task, Help: Cancel task
+						2054 text ✕
+				2055 container
+					2056 text f135352b
+					2057 text Use the Write tool (not a shell command) to create the fi...
+					2058 text MEDIUM
+					2059 text ↪
+					2060 text c6b-s10-20260918-221526
+					2061 button Cancel task, Help: Cancel task
+						2062 text ✕
+				2063 container
+					2064 text f3679589
+					2065 text Create a new file at /workspace/e2e-s4-1789770096830-1931...
+					2066 text MEDIUM
+					2067 text ↪
+					2068 text e2e-qoder-s4-1789770099436-7004
+					2069 button Cancel task, Help: Cancel task
+						2070 text ✕
+				2071 container
+					2072 text 4a664f0c
+					2073 text Create a new file at /workspace/e2e-s4-1789770520538-6485...
+					2074 text MEDIUM
+					2075 text ↪
+					2076 text e2e-qoder-s4-1789770522471-2262
+					2077 button Cancel task, Help: Cancel task
+						2078 text ✕
+				2079 container
+					2080 text de494506
+					2081 text Create a new file at /workspace/e2e-s4-1789771031975-3199...
+					2082 text MEDIUM
+					2083 text ↪
+					2084 text e2e-qoder-s4-1789771034038-7768
+					2085 button Cancel task, Help: Cancel task
+						2086 text ✕
+				2087 container
+					2088 text 24a81cbf
+					2089 text Create a new file at /workspace/e2e-s4-1789771457036-5618...
+					2090 text MEDIUM
+					2091 text ↪
+					2092 text e2e-qoder-s4-1789771459825-1503
+					2093 button Cancel task, Help: Cancel task
+						2094 text ✕
+				2095 container
+					2096 text 5e1df3a2
+					2097 text Create a new file at /workspace/e2e-s4-1789771998364-3884...
+					2098 text MEDIUM
+					2099 text ↪
+					2100 text e2e-qoder-s4-1789772001446-9888
+					2101 button Cancel task, Help: Cancel task
+						2102 text ✕
+				2103 sectionheader
+					2104 text IN PROGRESS
+					2105 text 0
+				2106 sectionheader
+					2107 text REVIEW
+					2108 text 46
+				2109 container
+					2110 text 0e7aaa8f
+					2111 text qoder s9 card-1789757051239-684
+					2112 text MEDIUM
+					2113 text @
+					2114 text e2e-qoder-s9-1789757051215-8686
+					2115 container
+						2116 button Quick approve, Help: Approve (complete task)
+							2117 text ✓ Approve
+						2118 button Request changes, Help: Request changes (sent back to the agent)
+							2119 text ✎ Changes
+						2120 button Quick deny, Help: Deny (cancel task)
+							2121 text ✕ Deny
+						2122 button Expand review workspace, Help: Expand review workspace
+							2123 text ⤢
+					2124 button Cancel task, Help: Cancel task
+						2125 text ✕
+				2126 container
+					2127 text 558ef9b3
+					2128 text Review: tool call (run c1b78bc8)
+					2129 text MEDIUM
+					2130 container
+						2131 button Quick approve, Help: Approve (complete task)
+							2132 text ✓ Approve
+						2133 button Request changes, Help: Request changes (sent back to the agent)
+							2134 text ✎ Changes
+						2135 button Quick deny, Help: Deny (cancel task)
+							2136 text ✕ Deny
+						2137 button Expand review workspace, Help: Expand review workspace
+							2138 text ⤢
+					2139 button Cancel task, Help: Cancel task
+						2140 text ✕
+				2141 container
+					2142 text ee6e6a04
+					2143 text hitl-card-1789757957512-7503
+					2144 text MEDIUM
+					2145 text @
+					2146 text e2e-agent-1789757957446-6050
+					2147 container
+						2148 button Quick approve, Help: Approve (complete task)
+							2149 text ✓ Approve
+						2150 button Request changes, Help: Request changes (sent back to the agent)
+							2151 text ✎ Changes
+						2152 button Quick deny, Help: Deny (cancel task)
+							2153 text ✕ Deny
+						2154 button Expand review workspace, Help: Expand review workspace
+							2155 text ⤢
+					2156 button Cancel task, Help: Cancel task
+						2157 text ✕
+				2158 container
+					2159 text e97ae83a
+					2160 text e2e-kanban-seeded-1789757962858-6768
+					2161 text MEDIUM
+					2162 text ↪
+					2163 text Developer Agent
+					2164 text @
+					2165 text Developer Agent
+					2166 container
+						2167 button Quick approve, Help: Approve (complete task)
+							2168 text ✓ Approve
+						2169 button Request changes, Help: Request changes (sent back to the agent)
+							2170 text ✎ Changes
+						2171 button Quick deny, Help: Deny (cancel task)
+							2172 text ✕ Deny
+						2173 button Expand review workspace, Help: Expand review workspace
+							2174 text ⤢
+					2175 button Cancel task, Help: Cancel task
+						2176 text ✕
+				2177 container
+					2178 text c2e667c3
+					2179 text hitl-card-1789757965165-2958
+					2180 text MEDIUM
+					2181 text @
+					2182 text e2e-agent-1789757965148-3441
+					2183 container
+						2184 button Quick approve, Help: Approve (complete task)
+							2185 text ✓ Approve
+						2186 button Request changes, Help: Request changes (sent back to the agent)
+							2187 text ✎ Changes
+						2188 button Quick deny, Help: Deny (cancel task)
+							2189 text ✕ Deny
+						2190 button Expand review workspace, Help: Expand review workspace
+							2191 text ⤢
+					2192 button Cancel task, Help: Cancel task
+						2193 text ✕
+				2194 container
+					2195 text 8dcb493e
+					2196 text hitl-card-1789757979339-5062
+					2197 text MEDIUM
+					2198 text @
+					2199 text e2e-agent-1789757979322-3491
+					2200 container
+						2201 button Quick approve, Help: Approve (complete task)
+							2202 text ✓ Approve
+						2203 button Request changes, Help: Request changes (sent back to the agent)
+							2204 text ✎ Changes
+						2205 button Quick deny, Help: Deny (cancel task)
+							2206 text ✕ Deny
+						2207 button Expand review workspace, Help: Expand review workspace
+							2208 text ⤢
+					2209 button Cancel task, Help: Cancel task
+						2210 text ✕
+				2211 container
+					2212 text 1ff1954f
+					2213 text e2e-kanban-ui-1789757982224-6871
+					2214 text MEDIUM
+					2215 text ↪
+					2216 text Developer Agent
+					2217 text @
+					2218 text Developer Agent
+					2219 container
+						2220 button Quick approve, Help: Approve (complete task)
+							2221 text ✓ Approve
+						2222 button Request changes, Help: Request changes (sent back to the agent)
+							2223 text ✎ Changes
+						2224 button Quick deny, Help: Deny (cancel task)
+							2225 text ✕ Deny
+						2226 button Expand review workspace, Help: Expand review workspace
+							2227 text ⤢
+					2228 button Cancel task, Help: Cancel task
+						2229 text ✕
+				2230 container
+					2231 text 3020fbf5
+					2232 text opsap-card-1789758024096-1644
+					2233 text MEDIUM
+					2234 text @
+					2235 text e2e-oc-opsap-1789758023555-4643
+					2236 container
+						2237 button Quick approve, Help: Approve (complete task)
+							2238 text ✓ Approve
+						2239 button Request changes, Help: Request changes (sent back to the agent)
+							2240 text ✎ Changes
+						2241 button Quick deny, Help: Deny (cancel task)
+							2242 text ✕ Deny
+						2243 button Expand review workspace, Help: Expand review workspace
+							2244 text ⤢
+					2245 button Cancel task, Help: Cancel task
+						2246 text ✕
+				2247 container
+					2248 text 28160574
+					2249 text uiaz-card-1789758100668-7514
+					2250 text MEDIUM
+					2251 text @
+					2252 text e2e-oc-uiaz-1789758100654-6721
+					2253 container
+						2254 button Quick approve, Help: Approve (complete task)
+							2255 text ✓ Approve
+						2256 button Request changes, Help: Request changes (sent back to the agent)
+							2257 text ✎ Changes
+						2258 button Quick deny, Help: Deny (cancel task)
+							2259 text ✕ Deny
+						2260 button Expand review workspace, Help: Expand review workspace
+							2261 text ⤢
+					2262 button Cancel task, Help: Cancel task
+						2263 text ✕
+				2264 container
+					2265 text 4dd45041
+					2266 text e2e-obs-live-move
+					2267 text MEDIUM
+					2268 text @
+					2269 text e2e-agent-1789758125467-8515
+					2270 container
+						2271 button Quick approve, Help: Approve (complete task)
+							2272 text ✓ Approve
+						2273 button Request changes, Help: Request changes (sent back to the agent)
+							2274 text ✎ Changes
+						2275 button Quick deny, Help: Deny (cancel task)
+							2276 text ✕ Deny
+						2277 button Expand review workspace, Help: Expand review workspace
+							2278 text ⤢
+					2279 button Cancel task, Help: Cancel task
+						2280 text ✕
+				2281 container
+					2282 text 98cea445
+					2283 text Analyze market trends for executives
+					2284 text MEDIUM
+					2285 text ↪
+					2286 text WfYamlAgent-1789758234999
+					2287 container
+						2288 button Quick approve, Help: Approve (complete task)
+							2289 text ✓ Approve
+						2290 button Request changes, Help: Request changes (sent back to the agent)
+							2291 text ✎ Changes
+						2292 button Quick deny, Help: Deny (cancel task)
+							2293 text ✕ Deny
+						2294 button Expand review workspace, Help: Expand review workspace
+							2295 text ⤢
+					2296 button Cancel task, Help: Cancel task
+						2297 text ✕
+				2298 container
+					2299 text 20d5632d
+					2300 text Push branch e2e-pack-gate-1789758242554-6143 to origin.
+					2301 text 1
+					2302 text asks
+					2303 text MEDIUM
+					2304 container
+						2305 button Quick approve, Help: Approve (complete task)
+							2306 text ✓ Approve
+						2307 button Request changes, Help: Request changes (sent back to the agent)
+							2308 text ✎ Changes
+						2309 button Quick deny, Help: Deny (cancel task)
+							2310 text ✕ Deny
+						2311 button Expand review workspace, Help: Expand review workspace
+							2312 text ⤢
+					2313 button Cancel task, Help: Cancel task
+						2314 text ✕
+				2315 container
+					2316 text b57796f5
+					2317 text e2e-hk-clear-1789758851589-3318
+					2318 text 1
+					2319 text asks
+					2320 text MEDIUM
+					2321 text @
+					2322 text e2e-hk-clear-agent-1789758851565-3706
+					2323 container
+						2324 button Quick approve, Help: Approve (complete task)
+							2325 text ✓ Approve
+						2326 button Request changes, Help: Request changes (sent back to the agent)
+							2327 text ✎ Changes
+						2328 button Quick deny, Help: Deny (cancel task)
+							2329 text ✕ Deny
+						2330 button Expand review workspace, Help: Expand review workspace
+							2331 text ⤢
+					2332 button Cancel task, Help: Cancel task
+						2333 text ✕
+				2334 container
+					2335 text 99c2824e
+					2336 text hitl-card-1789758897507-5161
+					2337 text 1
+					2338 text asks
+					2339 text MEDIUM
+					2340 text @
+					2341 text e2e-agent-1789758897493-1101
+					2342 container
+						2343 button Quick approve, Help: Approve (complete task)
+							2344 text ✓ Approve
+						2345 button Request changes, Help: Request changes (sent back to the agent)
+							2346 text ✎ Changes
+						2347 button Quick deny, Help: Deny (cancel task)
+							2348 text ✕ Deny
+						2349 button Expand review workspace, Help: Expand review workspace
+							2350 text ⤢
+					2351 button Cancel task, Help: Cancel task
+						2352 text ✕
+				2353 container
+					2354 text 721cae86
+					2355 text e2e-kanban-seeded-1789758900218-1228
+					2356 text MEDIUM
+					2357 text ↪
+					2358 text Developer Agent
+					2359 text @
+					2360 text Developer Agent
+					2361 container
+						2362 button Quick approve, Help: Approve (complete task)
+							2363 text ✓ Approve
+						2364 button Request changes, Help: Request changes (sent back to the agent)
+							2365 text ✎ Changes
+						2366 button Quick deny, Help: Deny (cancel task)
+							2367 text ✕ Deny
+						2368 button Expand review workspace, Help: Expand review workspace
+							2369 text ⤢
+					2370 button Cancel task, Help: Cancel task
+						2371 text ✕
+				2372 container
+					2373 text 55f91cb3
+					2374 text hitl-card-1789758905657-3429
+					2375 text MEDIUM
+					2376 text @
+					2377 text e2e-agent-1789758905631-4117
+					2378 container
+						2379 button Quick approve, Help: Approve (complete task)
+							2380 text ✓ Approve
+						2381 button Request changes, Help: Request changes (sent back to the agent)
+							2382 text ✎ Changes
+						2383 button Quick deny, Help: Deny (cancel task)
+							2384 text ✕ Deny
+						2385 button Expand review workspace, Help: Expand review workspace
+							2386 text ⤢
+					2387 button Cancel task, Help: Cancel task
+						2388 text ✕
+				2389 container
+					2390 text 5e125ac2
+					2391 text e2e-kanban-ui-1789758910962-4593
+					2392 text 1
+					2393 text asks
+					2394 text MEDIUM
+					2395 text ↪
+					2396 text Developer Agent
+					2397 text @
+					2398 text Developer Agent
+					2399 container
+						2400 button Quick approve, Help: Approve (complete task)
+							2401 text ✓ Approve
+						2402 button Request changes, Help: Request changes (sent back to the agent)
+							2403 text ✎ Changes
+						2404 button Quick deny, Help: Deny (cancel task)
+							2405 text ✕ Deny
+						2406 button Expand review workspace, Help: Expand review workspace
+							2407 text ⤢
+					2408 button Cancel task, Help: Cancel task
+						2409 text ✕
+				2410 container
+					2411 text c8d9f1be
+					2412 text hitl-card-1789758941569-4782
+					2413 text 1
+					2414 text asks
+					2415 text MEDIUM
+					2416 text @
+					2417 text e2e-agent-1789758941558-1813
+					2418 container
+						2419 button Quick approve, Help: Approve (complete task)
+							2420 text ✓ Approve
+						2421 button Request changes, Help: Request changes (sent back to the agent)
+							2422 text ✎ Changes
+						2423 button Quick deny, Help: Deny (cancel task)
+							2424 text ✕ Deny
+						2425 button Expand review workspace, Help: Expand review workspace
+							2426 text ⤢
+					2427 button Cancel task, Help: Cancel task
+						2428 text ✕
+				2429 container
+					2430 text 38815e39
+					2431 text opsap-card-1789759001461-3755
+					2432 text 1
+					2433 text asks
+					2434 text MEDIUM
+					2435 text @
+					2436 text e2e-oc-opsap-1789759001427-4262
+					2437 container
+						2438 button Quick approve, Help: Approve (complete task)
+							2439 text ✓ Approve
+						2440 button Request changes, Help: Request changes (sent back to the agent)
+							2441 text ✎ Changes
+						2442 button Quick deny, Help: Deny (cancel task)
+							2443 text ✕ Deny
+						2444 button Expand review workspace, Help: Expand review workspace
+							2445 text ⤢
+					2446 button Cancel task, Help: Cancel task
+						2447 text ✕
+				2448 container
+					2449 text e8b4ca5d
+					2450 text uiaz-card-1789759059920-1939
+					2451 text MEDIUM
+					2452 text @
+					2453 text e2e-oc-uiaz-1789759059718-1901
+					2454 container
+						2455 button Quick approve, Help: Approve (complete task)
+							2456 text ✓ Approve
+						2457 button Request changes, Help: Request changes (sent back to the agent)
+							2458 text ✎ Changes
+						2459 button Quick deny, Help: Deny (cancel task)
+							2460 text ✕ Deny
+						2461 button Expand review workspace, Help: Expand review workspace
+							2462 text ⤢
+					2463 button Cancel task, Help: Cancel task
+						2464 text ✕
+				2465 container
+					2466 text fe2213be
+					2467 text e2e-obs-live-move
+					2468 text 1
+					2469 text asks
+					2470 text MEDIUM
+					2471 text @
+					2472 text e2e-agent-1789759073506-4363
+					2473 container
+						2474 button Quick approve, Help: Approve (complete task)
+							2475 text ✓ Approve
+						2476 button Request changes, Help: Request changes (sent back to the agent)
+							2477 text ✎ Changes
+						2478 button Quick deny, Help: Deny (cancel task)
+							2479 text ✕ Deny
+						2480 button Expand review workspace, Help: Expand review workspace
+							2481 text ⤢
+					2482 button Cancel task, Help: Cancel task
+						2483 text ✕
+				2484 container
+					2485 text beccbb30
+					2486 text Push branch e2e-pack-gate-1789759237386-9773 to origin.
+					2487 text MEDIUM
+					2488 container
+						2489 button Quick approve, Help: Approve (complete task)
+							2490 text ✓ Approve
+						2491 button Request changes, Help: Request changes (sent back to the agent)
+							2492 text ✎ Changes
+						2493 button Quick deny, Help: Deny (cancel task)
+							2494 text ✕ Deny
+						2495 button Expand review workspace, Help: Expand review workspace
+							2496 text ⤢
+					2497 button Cancel task, Help: Cancel task
+						2498 text ✕
+				2499 container
+					2500 text bc9e2bd2
+					2501 text Draft 2 requirements. Brief.
+					2502 text MEDIUM
+					2503 text ↪
+					2504 text E2E-BA-1789759243794-1202
+					2505 container
+						2506 button Quick approve, Help: Approve (complete task)
+							2507 text ✓ Approve
+						2508 button Request changes, Help: Request changes (sent back to the agent)
+							2509 text ✎ Changes
+						2510 button Quick deny, Help: Deny (cancel task)
+							2511 text ✕ Deny
+						2512 button Expand review workspace, Help: Expand review workspace
+							2513 text ⤢
+					2514 button Cancel task, Help: Cancel task
+						2515 text ✕
+				2516 container
+					2517 text 5bac16ad
+					2518 text Say hello briefly
+					2519 text MEDIUM
+					2520 text ↪
+					2521 text E2E-Iso-B-1789759244036-6148
+					2522 container
+						2523 button Quick approve, Help: Approve (complete task)
+							2524 text ✓ Approve
+						2525 button Request changes, Help: Request changes (sent back to the agent)
+							2526 text ✎ Changes
+						2527 button Quick deny, Help: Deny (cancel task)
+							2528 text ✕ Deny
+						2529 button Expand review workspace, Help: Expand review workspace
+							2530 text ⤢
+					2531 button Cancel task, Help: Cancel task
+						2532 text ✕
+				2533 container
+					2534 text 9a2da974
+					2535 text Say hello briefly
+					2536 text MEDIUM
+					2537 text ↪
+					2538 text E2E-Iso-A-1789759244035-6180
+					2539 container
+						2540 button Quick approve, Help: Approve (complete task)
+							2541 text ✓ Approve
+						2542 button Request changes, Help: Request changes (sent back to the agent)
+							2543 text ✎ Changes
+						2544 button Quick deny, Help: Deny (cancel task)
+							2545 text ✕ Deny
+						2546 button Expand review workspace, Help: Expand review workspace
+							2547 text ⤢
+					2548 button Cancel task, Help: Cancel task
+						2549 text ✕
+				2550 container
+					2551 text 125dc3d5
+					2552 text Given ok, name 1 approach.
+					2553 text MEDIUM
+					2554 text ↪
+					2555 text E2E-Dev-1789759243820-357
+					2556 container
+						2557 button Quick approve, Help: Approve (complete task)
+							2558 text ✓ Approve
+						2559 button Request changes, Help: Request changes (sent back to the agent)
+							2560 text ✎ Changes
+						2561 button Quick deny, Help: Deny (cancel task)
+							2562 text ✕ Deny
+						2563 button Expand review workspace, Help: Expand review workspace
+							2564 text ⤢
+					2565 button Cancel task, Help: Cancel task
+						2566 text ✕
+				2567 container
+					2568 text 63643398
+					2569 text Say hello briefly
+					2570 text MEDIUM
+					2571 container
+						2572 button Quick approve, Help: Approve (complete task)
+							2573 text ✓ Approve
+						2574 button Request changes, Help: Request changes (sent back to the agent)
+							2575 text ✎ Changes
+						2576 button Quick deny, Help: Deny (cancel task)
+							2577 text ✕ Deny
+						2578 button Expand review workspace, Help: Expand review workspace
+							2579 text ⤢
+					2580 button Cancel task, Help: Cancel task
+						2581 text ✕
+				2582 container
+					2583 text 7d7894d3
+					2584 text Say hello briefly
+					2585 text MEDIUM
+					2586 container
+						2587 button Quick approve, Help: Approve (complete task)
+							2588 text ✓ Approve
+						2589 button Request changes, Help: Request changes (sent back to the agent)
+							2590 text ✎ Changes
+						2591 button Quick deny, Help: Deny (cancel task)
+							2592 text ✕ Deny
+						2593 button Expand review workspace, Help: Expand review workspace
+							2594 text ⤢
+					2595 button Cancel task, Help: Cancel task
+						2596 text ✕
+				2597 container
+					2598 text 42d449e0
+					2599 text Given ok, write 1 test.
+					2600 text MEDIUM
+					2601 text ↪
+					2602 text E2E-QA-1789759243829-1543
+					2603 container
+						2604 button Quick approve, Help: Approve (complete task)
+							2605 text ✓ Approve
+						2606 button Request changes, Help: Request changes (sent back to the agent)
+							2607 text ✎ Changes
+						2608 button Quick deny, Help: Deny (cancel task)
+							2609 text ✕ Deny
+						2610 button Expand review workspace, Help: Expand review workspace
+							2611 text ⤢
+					2612 button Cancel task, Help: Cancel task
+						2613 text ✕
+				2614 container
+					2615 text e70e79d1
+					2616 text qoder write card-1789764007320-9339
+					2617 text MEDIUM
+					2618 text @
+					2619 text e2e-qoder-s2-1789764007302-6765
+					2620 container
+						2621 button Quick approve, Help: Approve (complete task)
+							2622 text ✓ Approve
+						2623 button Request changes, Help: Request changes (sent back to the agent)
+							2624 text ✎ Changes
+						2625 button Quick deny, Help: Deny (cancel task)
+							2626 text ✕ Deny
+						2627 button Expand review workspace, Help: Expand review workspace
+							2628 text ⤢
+					2629 button Cancel task, Help: Cancel task
+						2630 text ✕
+				2631 container
+					2632 text 7361de69
+					2633 text qoder write card-1789764061266-5734
+					2634 text MEDIUM
+					2635 text @
+					2636 text e2e-qoder-s3-1789764061247-7281
+					2637 container
+						2638 button Quick approve, Help: Approve (complete task)
+							2639 text ✓ Approve
+						2640 button Request changes, Help: Request changes (sent back to the agent)
+							2641 text ✎ Changes
+						2642 button Quick deny, Help: Deny (cancel task)
+							2643 text ✕ Deny
+						2644 button Expand review workspace, Help: Expand review workspace
+							2645 text ⤢
+					2646 button Cancel task, Help: Cancel task
+						2647 text ✕
+				2648 container
+					2649 text 5e721f43
+					2650 text qoder write card-1789764410861-3647
+					2651 text MEDIUM
+					2652 text @
+					2653 text e2e-qoder-s3-1789764410844-2675
+					2654 container
+						2655 button Quick approve, Help: Approve (complete task)
+							2656 text ✓ Approve
+						2657 button Request changes, Help: Request changes (sent back to the agent)
+							2658 text ✎ Changes
+						2659 button Quick deny, Help: Deny (cancel task)
+							2660 text ✕ Deny
+						2661 button Expand review workspace, Help: Expand review workspace
+							2662 text ⤢
+					2663 button Cancel task, Help: Cancel task
+						2664 text ✕
+				2665 container
+					2666 text 9cbf3bdb
+					2667 text s8-replay-card-1789765501669-6322
+					2668 text 1
+					2669 text asks
+					2670 text MEDIUM
+					2671 text ↪
+					2672 text Developer Agent
+					2673 text @
+					2674 text Developer Agent
+					2675 container
+						2676 button Quick approve, Help: Approve (complete task)
+							2677 text ✓ Approve
+						2678 button Request changes, Help: Request changes (sent back to the agent)
+							2679 text ✎ Changes
+						2680 button Quick deny, Help: Deny (cancel task)
+							2681 text ✕ Deny
+						2682 button Expand review workspace, Help: Expand review workspace
+							2683 text ⤢
+					2684 button Cancel task, Help: Cancel task
+						2685 text ✕
+				2686 container
+					2687 text 0cfa618b
+					2688 text s8-replay-card-1789765501669-6322
+					2689 text MEDIUM
+					2690 text ↪
+					2691 text Developer Agent
+					2692 text @
+					2693 text Developer Agent
+					2694 container
+						2695 button Quick approve, Help: Approve (complete task)
+							2696 text ✓ Approve
+						2697 button Request changes, Help: Request changes (sent back to the agent)
+							2698 text ✎ Changes
+						2699 button Quick deny, Help: Deny (cancel task)
+							2700 text ✕ Deny
+						2701 button Expand review workspace, Help: Expand review workspace
+							2702 text ⤢
+					2703 button Cancel task, Help: Cancel task
+						2704 text ✕
+				2705 container
+					2706 text 55c43f48
+					2707 text qoder s9 card-1789765507755-5254
+					2708 text 1
+					2709 text asks
+					2710 text MEDIUM
+					2711 text @
+					2712 text e2e-qoder-s9-1789765507727-3840
+					2713 container
+						2714 button Quick approve, Help: Approve (complete task)
+							2715 text ✓ Approve
+						2716 button Request changes, Help: Request changes (sent back to the agent)
+							2717 text ✎ Changes
+						2718 button Quick deny, Help: Deny (cancel task)
+							2719 text ✕ Deny
+						2720 button Expand review workspace, Help: Expand review workspace
+							2721 text ⤢
+					2722 button Cancel task, Help: Cancel task
+						2723 text ✕
+				2724 container
+					2725 text b61b5866
+					2726 text qoder s9 card-1789765751091-2239
+					2727 text 1
+					2728 text asks
+					2729 text MEDIUM
+					2730 text @
+					2731 text e2e-qoder-s9-1789765751065-112
+					2732 container
+						2733 button Quick approve, Help: Approve (complete task)
+							2734 text ✓ Approve
+						2735 button Request changes, Help: Request changes (sent back to the agent)
+							2736 text ✎ Changes
+						2737 button Quick deny, Help: Deny (cancel task)
+							2738 text ✕ Deny
+						2739 button Expand review workspace, Help: Expand review workspace
+							2740 text ⤢
+					2741 button Cancel task, Help: Cancel task
+						2742 text ✕
+				2743 container
+					2744 text 71244334
+					2745 text hitl-card-1789767955957-2014
+					2746 text MEDIUM
+					2747 text ↪
+					2748 text e2e-agent-1789767955897-1365
+					2749 text @
+					2750 text e2e-agent-1789767955897-1365
+					2751 container
+						2752 button Quick approve, Help: Approve (complete task)
+							2753 text ✓ Approve
+						2754 button Request changes, Help: Request changes (sent back to the agent)
+							2755 text ✎ Changes
+						2756 button Quick deny, Help: Deny (cancel task)
+							2757 text ✕ Deny
+						2758 button Expand review workspace, Help: Expand review workspace
+							2759 text ⤢
+					2760 button Cancel task, Help: Cancel task
+						2761 text ✕
+				2762 container
+					2763 text a6480fb9
+					2764 text hitl-card-1789767959982-8402
+					2765 text MEDIUM
+					2766 text ↪
+					2767 text e2e-agent-1789767959967-8297
+					2768 text @
+					2769 text e2e-agent-1789767959967-8297
+					2770 container
+						2771 button Quick approve, Help: Approve (complete task)
+							2772 text ✓ Approve
+						2773 button Request changes, Help: Request changes (sent back to the agent)
+							2774 text ✎ Changes
+						2775 button Quick deny, Help: Deny (cancel task)
+							2776 text ✕ Deny
+						2777 button Expand review workspace, Help: Expand review workspace
+							2778 text ⤢
+					2779 button Cancel task, Help: Cancel task
+						2780 text ✕
+				2781 container
+					2782 text 5767073a
+					2783 text e2e-kanban-seeded-1789767965937-3460
+					2784 text 1
+					2785 text asks
+					2786 text MEDIUM
+					2787 text ↪
+					2788 text Developer Agent
+					2789 text @
+					2790 text Developer Agent
+					2791 container
+						2792 button Quick approve, Help: Approve (complete task)
+							2793 text ✓ Approve
+						2794 button Request changes, Help: Request changes (sent back to the agent)
+							2795 text ✎ Changes
+						2796 button Quick deny, Help: Deny (cancel task)
+							2797 text ✕ Deny
+						2798 button Expand review workspace, Help: Expand review workspace
+							2799 text ⤢
+					2800 button Cancel task, Help: Cancel task
+						2801 text ✕
+				2802 container
+					2803 text 01758d08
+					2804 text e2e-kanban-ui-1789767973131-1694
+					2805 text 1
+					2806 text asks
+					2807 text MEDIUM
+					2808 text ↪
+					2809 text Developer Agent
+					2810 text @
+					2811 text Developer Agent
+					2812 container
+						2813 button Quick approve, Help: Approve (complete task)
+							2814 text ✓ Approve
+						2815 button Request changes, Help: Request changes (sent back to the agent)
+							2816 text ✎ Changes
+						2817 button Quick deny, Help: Deny (cancel task)
+							2818 text ✕ Deny
+						2819 button Expand review workspace, Help: Expand review workspace
+							2820 text ⤢
+					2821 button Cancel task, Help: Cancel task
+						2822 text ✕
+				2823 container
+					2824 text ecb7cf48
+					2825 text hitl-card-1789767998404-9548
+					2826 text MEDIUM
+					2827 text ↪
+					2828 text e2e-agent-1789767998159-897
+					2829 text @
+					2830 text e2e-agent-1789767998159-897
+					2831 container
+						2832 button Quick approve, Help: Approve (complete task)
+							2833 text ✓ Approve
+						2834 button Request changes, Help: Request changes (sent back to the agent)
+							2835 text ✎ Changes
+						2836 button Quick deny, Help: Deny (cancel task)
+							2837 text ✕ Deny
+						2838 button Expand review workspace, Help: Expand review workspace
+							2839 text ⤢
+					2840 button Cancel task, Help: Cancel task
+						2841 text ✕
+				2842 container
+					2843 text 69ed5979
+					2844 text opsap-card-1789768047054-9411
+					2845 text 1
+					2846 text asks
+					2847 text MEDIUM
+					2848 text ↪
+					2849 text e2e-oc-opsap-1789768047026-3547
+					2850 text @
+					2851 text e2e-oc-opsap-1789768047026-3547
+					2852 container
+						2853 button Quick approve, Help: Approve (complete task)
+							2854 text ✓ Approve
+						2855 button Request changes, Help: Request changes (sent back to the agent)
+							2856 text ✎ Changes
+						2857 button Quick deny, Help: Deny (cancel task)
+							2858 text ✕ Deny
+						2859 button Expand review workspace, Help: Expand review workspace
+							2860 text ⤢
+					2861 button Cancel task, Help: Cancel task
+						2862 text ✕
+				2863 container
+					2864 text 4c0b9be7
+					2865 text e2e-obs-live-move
+					2866 text 1
+					2867 text asks
+					2868 text MEDIUM
+					2869 text ↪
+					2870 text e2e-agent-1789768126418-7734
+					2871 text @
+					2872 text e2e-agent-1789768126418-7734
+					2873 container
+						2874 button Quick approve, Help: Approve (complete task)
+							2875 text ✓ Approve
+						2876 button Request changes, Help: Request changes (sent back to the agent)
+							2877 text ✎ Changes
+						2878 button Quick deny, Help: Deny (cancel task)
+							2879 text ✕ Deny
+						2880 button Expand review workspace, Help: Expand review workspace
+							2881 text ⤢
+					2882 button Cancel task, Help: Cancel task
+						2883 text ✕
+				2884 container
+					2885 text 2281680e
+					2886 text uiaz-card-1789768127409-8204
+					2887 text MEDIUM
+					2888 text ↪
+					2889 text e2e-oc-uiaz-1789768127387-7074
+					2890 text @
+					2891 text e2e-oc-uiaz-1789768127387-7074
+					2892 container
+						2893 button Quick approve, Help: Approve (complete task)
+							2894 text ✓ Approve
+						2895 button Request changes, Help: Request changes (sent back to the agent)
+							2896 text ✎ Changes
+						2897 button Quick deny, Help: Deny (cancel task)
+							2898 text ✕ Deny
+						2899 button Expand review workspace, Help: Expand review workspace
+							2900 text ⤢
+					2901 button Cancel task, Help: Cancel task
+						2902 text ✕
+				2903 container
+					2904 text b2d7adee
+					2905 text Push branch e2e-pack-gate-1789768326176-1505 to origin.
+					2906 text MEDIUM
+					2907 text ↪
+					2908 text e2e-git-gate-agent-1789768326586-8502
+					2909 container
+						2910 button Quick approve, Help: Approve (complete task)
+							2911 text ✓ Approve
+						2912 button Request changes, Help: Request changes (sent back to the agent)
+							2913 text ✎ Changes
+						2914 button Quick deny, Help: Deny (cancel task)
+							2915 text ✕ Deny
+						2916 button Expand review workspace, Help: Expand review workspace
+							2917 text ⤢
+					2918 button Cancel task, Help: Cancel task
+						2919 text ✕
+				2920 container
+					2921 text ddeef246
+					2922 text qoder s9 card-1789768969582-9460
+					2923 text MEDIUM
+					2924 text ↪
+					2925 text e2e-qoder-s9-1789768969567-6684
+					2926 text @
+					2927 text e2e-qoder-s9-1789768969567-6684
+					2928 container
+						2929 button Quick approve, Help: Approve (complete task)
+							2930 text ✓ Approve
+						2931 button Request changes, Help: Request changes (sent back to the agent)
+							2932 text ✎ Changes
+						2933 button Quick deny, Help: Deny (cancel task)
+							2934 text ✕ Deny
+						2935 button Expand review workspace, Help: Expand review workspace
+							2936 text ⤢
+					2937 button Cancel task, Help: Cancel task
+						2938 text ✕
+				2939 sectionheader
+					2940 text DONE
+					2941 text 0
+			2942 container, ID: panel-briefing
+				2943 heading AFTERNOON BRIEFING · AUTO-GENERATED, Value: 2
+					2944 text AFTERNOON BRIEFING
+					2945 text · AUTO-GENERATED
+				2946 container
+					2947 text Snapshot ·
+					2948 text 12:55
+				2949 content list
+					2950 listitem
+						2951 ListMarker •
+						2952 text 0
+						2953 text cards done
+					2954 listitem
+						2955 ListMarker •
+						2956 text 46
+						2957 text cards in review
+					2958 listitem
+						2959 ListMarker •
+						2960 text 0
+						2961 text runs running
+					2962 listitem
+						2963 ListMarker •
+						2964 text 0
+						2965 text cards in progress
+				2966 container
+					2967 text Generated at
+					2968 text 12:55
+			2969 container, ID: panel-agents
+				2970 heading AGENT TEAM · 95 ACTIVE, Value: 2
+					2971 text AGENT TEAM
+					2972 text ·
+					2973 text 95
+					2974 text ACTIVE
+				2975 container
+					2976 text SB
+					2977 text SDD BA Agent
+					2978 text ba · default
+					2979 text Online
+				2980 container
+					2981 text SD
+					2982 text SDD DEV Agent
+					2983 text dev · default
+					2984 text Online
+				2985 container
+					2986 text SQ
+					2987 text SDD QA Agent
+					2988 text qa · default
+					2989 text Online
+				2990 container
+					2991 text C6
+					2992 text c6b-s5-20260918-184323
+					2993 text dev · efficient
+					2994 text Online
+				2995 container
+					2996 text C6
+					2997 text c6b-s10-20260918-184450
+					2998 text dev · efficient
+					2999 text Online
+				3000 container
+					3001 text RE
+					3002 text Rec-1789757752359
+					3003 text dev · ali-copilot
+					3004 text Online
+				3005 container
+					3006 text RE
+					3007 text RecApply-1789757756681
+					3008 text dev · ali-copilot
+					3009 text Online
+				3010 container
+					3011 text DA
+					3012 text Developer Agent
+					3013 text dev · ali-copilot
+					3014 text Online
+				3015 container
+					3016 text DA
+					3017 text Developer Agent
+					3018 text dev · ali-copilot
+					3019 text Online
+				3020 container
+					3021 text WF
+					3022 text WfDfAgent-1789758120435
+					3023 text NATIVE · default
+					3024 text Online
+				3025 container
+					3026 text WF
+					3027 text WfE2EAgent-1789758132290
+					3028 text NATIVE · default
+					3029 text Online
+				3030 container
+					3031 text WF
+					3032 text WfSmAgent-1789758136414
+					3033 text NATIVE · default
+					3034 text Online
+				3035 container
+					3036 text WF
+					3037 text WfTplAgent-1789758161170
+					3038 text NATIVE · default
+					3039 text Online
+				3040 container
+					3041 text WF
+					3042 text WfUiAgent-1789758166454
+					3043 text NATIVE · default
+					3044 text Online
+				3045 container
+					3046 text WF
+					3047 text WfE2EAgent-1789758186149
+					3048 text NATIVE · default
+					3049 text Online
+				3050 container
+					3051 text WF
+					3052 text WfSmAgent-1789758186185
+					3053 text NATIVE · default
+					3054 text Online
+				3055 container
+					3056 text WF
+					3057 text WfValAgent-1789758229037
+					3058 text NATIVE · default
+					3059 text Online
+				3060 container
+					3061 text WF
+					3062 text WfYamlAgent-1789758234999
+					3063 text NATIVE · default
+					3064 text Online
+				3065 container
+					3066 text E2
+					3067 text E2E-BA-1789758249649-6797
+					3068 text NATIVE · default
+					3069 text Online
+				3070 container
+					3071 text E2
+					3072 text E2E-Dev-1789758249660-2967
+					3073 text NATIVE · default
+					3074 text Online
+				3075 container
+					3076 text E2
+					3077 text E2E-QA-1789758249670-7443
+					3078 text NATIVE · default
+					3079 text Online
+				3080 container
+					3081 text E2
+					3082 text E2E-Iso-B-1789758249850-7222
+					3083 text NATIVE · default
+					3084 text Online
+				3085 container
+					3086 text E2
+					3087 text E2E-Iso-A-1789758249848-6698
+					3088 text NATIVE · default
+					3089 text Online
+				3090 container
+					3091 text WF
+					3092 text WfSmAgent-1789758347804
+					3093 text NATIVE · default
+					3094 text Online
+				3095 container
+					3096 text WF
+					3097 text WfE2EAgent-1789758347769
+					3098 text NATIVE · default
+					3099 text Online
+				3100 container
+					3101 text RE
+					3102 text Rec-1789758453648
+					3103 text dev · ali-copilot
+					3104 text Online
+				3105 container
+					3106 text RE
+					3107 text RecApply-1789758462156
+					3108 text dev · ali-copilot
+					3109 text Online
+				3110 container
+					3111 text RE
+					3112 text RecApply-1789758647416
+					3113 text dev · ali-copilot
+					3114 text Online
+				3115 container
+					3116 text DA
+					3117 text Developer Agent
+					3118 text dev · ali-copilot
+					3119 text Online
+				3120 container
+					3121 text DA
+					3122 text Developer Agent
+					3123 text dev · ali-copilot
+					3124 text Online
+				3125 container
+					3126 text WF
+					3127 text WfDfAgent-1789759102064
+					3128 text NATIVE · default
+					3129 text Online
+				3130 container
+					3131 text WF
+					3132 text WfE2EAgent-1789759118171
+					3133 text NATIVE · default
+					3134 text Online
+				3135 container
+					3136 text WF
+					3137 text WfSmAgent-1789759120287
+					3138 text NATIVE · default
+					3139 text Online
+				3140 container
+					3141 text WF
+					3142 text WfTplAgent-1789759156191
+					3143 text NATIVE · default
+					3144 text Online
+				3145 container
+					3146 text WF
+					3147 text WfUiAgent-1789759160894
+					3148 text NATIVE · default
+					3149 text Online
+				3150 container
+					3151 text WF
+					3152 text WfValAgent-1789759168353
+					3153 text NATIVE · default
+					3154 text Online
+				3155 container
+					3156 text WF
+					3157 text WfYamlAgent-1789759177768
+					3158 text NATIVE · default
+					3159 text Online
+				3160 container
+					3161 text E2
+					3162 text E2E-BA-1789759243794-1202
+					3163 text NATIVE · default
+					3164 text Online
+				3165 container
+					3166 text E2
+					3167 text E2E-Dev-1789759243820-357
+					3168 text NATIVE · default
+					3169 text Online
+				3170 container
+					3171 text E2
+					3172 text E2E-QA-1789759243829-1543
+					3173 text NATIVE · default
+					3174 text Online
+				3175 container
+					3176 text E2
+					3177 text E2E-Iso-A-1789759244035-6180
+					3178 text NATIVE · default
+					3179 text Online
+				3180 container
+					3181 text E2
+					3182 text E2E-Iso-B-1789759244036-6148
+					3183 text NATIVE · default
+					3184 text Online
+				3185 container
+					3186 text C6
+					3187 text c6b-s5-20260918-210137
+					3188 text dev · efficient
+					3189 text Online
+				3190 container
+					3191 text C6
+					3192 text c6b-s10-20260918-211613
+					3193 text dev · efficient
+					3194 text Online
+				3195 container
+					3196 text RE
+					3197 text Rec-1789767589847
+					3198 text dev · ali-copilot
+					3199 text Online
+				3200 container
+					3201 text RE
+					3202 text RecApply-1789767612704
+					3203 text dev · ali-copilot
+					3204 text Online
+				3205 container
+					3206 text QA
+					3207 text QA Agent
+					3208 text qa · ali-copilot
+					3209 text Online
+				3210 container
+					3211 text QA
+					3212 text QA Agent
+					3213 text qa · ali-copilot
+					3214 text Online
+				3215 container
+					3216 text E2
+					3217 text e2e-agent-1789767946593-8463
+					3218 text NATIVE · default
+					3219 text Online
+				3220 container
+					3221 text E2
+					3222 text e2e-agent-1789767955897-1365
+					3223 text NATIVE · default
+					3224 text Online
+				3225 container
+					3226 text E2
+					3227 text e2e-agent-1789767959967-8297
+					3228 text NATIVE · default
+					3229 text Online
+				3230 container
+					3231 text E2
+					3232 text e2e-agent-1789767971290-194
+					3233 text NATIVE · default
+					3234 text Online
+				3235 container
+					3236 text E2
+					3237 text e2e-agent-1789767978117-4292
+					3238 text NATIVE · default
+					3239 text Online
+				3240 container
+					3241 text E2
+					3242 text e2e-agent-1789767988303-3267
+					3243 text NATIVE · default
+					3244 text Online
+				3245 container
+					3246 text E2
+					3247 text e2e-agent-1789767998159-897
+					3248 text NATIVE · default
+					3249 text Online
+				3250 container
+					3251 text E2
+					3252 text e2e-oc-hitl-1789767999717-8015
+					3253 text dev · deepseek-chat
+					3254 text Online
+				3255 container
+					3256 text E2
+					3257 text e2e-agent-1789768030192-1502
+					3258 text NATIVE · default
+					3259 text Online
+				3260 container
+					3261 text E2
+					3262 text e2e-oc-opsap-1789768047026-3547
+					3263 text dev · deepseek-chat
+					3264 text Online
+				3265 container
+					3266 text E2
+					3267 text e2e-agent-1789768066859-240
+					3268 text NATIVE · default
+					3269 text Online
+				3270 container
+					3271 text E2
+					3272 text e2e-agent-1789768093709-7118
+					3273 text NATIVE · default
+					3274 text Online
+				3275 container
+					3276 text E2
+					3277 text e2e-agent-1789768099969-8723
+					3278 text NATIVE · default
+					3279 text Online
+				3280 container
+					3281 text E2
+					3282 text e2e-oc-uidz-1789768112085-1125
+					3283 text dev · deepseek-chat
+					3284 text Online
+				3285 container
+					3286 text E2
+					3287 text e2e-agent-1789768126418-7734
+					3288 text NATIVE · default
+					3289 text Online
+				3290 container
+					3291 text E2
+					3292 text e2e-oc-uiaz-1789768127387-7074
+					3293 text dev · deepseek-chat
+					3294 text Online
+				3295 container
+					3296 text E2
+					3297 text e2e-agent-1789768173879-1138
+					3298 text NATIVE · default
+					3299 text Online
+				3300 container
+					3301 text WF
+					3302 text WfDfAgent-1789768184601
+					3303 text NATIVE · default
+					3304 text Online
+				3305 container
+					3306 text WF
+					3307 text WfE2EAgent-1789768222873
+					3308 text NATIVE · default
+					3309 text Online
+				3310 container
+					3311 text WF
+					3312 text WfSmAgent-1789768233301
+					3313 text NATIVE · default
+					3314 text Online
+				3315 container
+					3316 text WF
+					3317 text WfTplAgent-1789768240995
+					3318 text NATIVE · default
+					3319 text Online
+				3320 container
+					3321 text WF
+					3322 text WfUiAgent-1789768249769
+					3323 text NATIVE · default
+					3324 text Online
+				3325 container
+					3326 text WF
+					3327 text WfValAgent-1789768267571
+					3328 text NATIVE · default
+					3329 text Online
+				3330 container
+					3331 text WF
+					3332 text WfYamlAgent-1789768277456
+					3333 text NATIVE · default
+					3334 text Online
+				3335 container
+					3336 text WF
+					3337 text WfDfAgent-1789768294815
+					3338 text NATIVE · default
+					3339 text Online
+				3340 container
+					3341 text E2
+					3342 text e2e-oc-deny-1789768323810-8336
+					3343 text dev · deepseek-chat
+					3344 text Online
+				3345 container
+					3346 text E2
+					3347 text e2e-git-gate-agent-1789768326586-8502
+					3348 text dev · deepseek-chat
+					3349 text Online
+				3350 container
+					3351 text E2
+					3352 text e2e-oc-changes-1789768331282-4861
+					3353 text dev · deepseek-chat
+					3354 text Online
+				3355 container
+					3356 text E2
+					3357 text E2E-BA-1789768338657-4474
+					3358 text NATIVE · default
+					3359 text Online
+				3360 container
+					3361 text E2
+					3362 text E2E-Dev-1789768338706-3470
+					3363 text NATIVE · default
+					3364 text Online
+				3365 container
+					3366 text E2
+					3367 text E2E-QA-1789768338723-38
+					3368 text NATIVE · default
+					3369 text Online
+				3370 container
+					3371 text E2
+					3372 text E2E-Iso-A-1789768339161-2919
+					3373 text NATIVE · default
+					3374 text Online
+				3375 container
+					3376 text E2
+					3377 text E2E-Iso-B-1789768339162-2919
+					3378 text NATIVE · default
+					3379 text Online
+				3380 container
+					3381 text E2
+					3382 text e2e-skill-agent-1789768340087-951
+					3383 text NATIVE · default
+					3384 text Online
+				3385 container
+					3386 text E2
+					3387 text e2e-wf-agent-1789768340530-3880
+					3388 text NATIVE · default
+					3389 text Online
+				3390 container
+					3391 text E2
+					3392 text e2e-wf-guard-agent-1789768343024-8437
+					3393 text NATIVE · default
+					3394 text Online
+				3395 container
+					3396 text E2
+					3397 text e2e-wf-cancel-agent-1789768354214-9002
+					3398 text NATIVE · default
+					3399 text Online
+				3400 container
+					3401 text E2
+					3402 text e2e-wf-merge-agent-1789768363247-6870
+					3403 text NATIVE · default
+					3404 text Online
+				3405 container
+					3406 text E2
+					3407 text e2e-wf-yaml-agent-1789768375157-1985
+					3408 text NATIVE · default
+					3409 text Online
+				3410 container
+					3411 text E2
+					3412 text e2e-qoder-s4-1789768615850-6950
+					3413 text dev · default
+					3414 text Unhealthy
+					3415 text No pickup
+				3416 container
+					3417 text E2
+					3418 text e2e-qoder-s4-1789768774124-4859
+					3419 text dev · default
+					3420 text Unhealthy
+					3421 text No pickup
+				3422 container
+					3423 text C6
+					3424 text c6b-s5-20260918-220205
+					3425 text dev · efficient
+					3426 text Unhealthy
+					3427 text No pickup
+				3428 container
+					3429 text E2
+					3430 text e2e-qoder-s9-1789768969567-6684
+					3431 text dev · default
+					3432 text Unhealthy
+					3433 text No pickup
+				3434 container
+					3435 text C6
+					3436 text c6b-s10-20260918-220325
+					3437 text dev · efficient
+					3438 text Online
+				3439 container
+					3440 text E2
+					3441 text e2e-qoder-s4-1789769417941-9935
+					3442 text dev · default
+					3443 text Online
+				3444 container
+					3445 text E2
+					3446 text e2e-qoder-s4-1789769576003-5027
+					3447 text dev · default
+					3448 text Online
+				3449 container
+					3450 text C6
+					3451 text c6b-s10-20260918-221526
+					3452 text dev · efficient
+					3453 text Online
+				3454 container
+					3455 text E2
+					3456 text e2e-qoder-s4-1789770099436-7004
+					3457 text dev · default
+					3458 text Online
+				3459 container
+					3460 text E2
+					3461 text e2e-qoder-s4-1789770522471-2262
+					3462 text dev · default
+					3463 text Online
+				3464 container
+					3465 text E2
+					3466 text e2e-qoder-s4-1789771034038-7768
+					3467 text dev · default
+					3468 text Online
+				3469 container
+					3470 text E2
+					3471 text e2e-qoder-s4-1789771459825-1503
+					3472 text dev · default
+					3473 text Online
+				3474 container
+					3475 text E2
+					3476 text e2e-qoder-s4-1789772001446-9888
+					3477 text dev · default
+					3478 text Unhealthy
+					3479 text No pickup
+			3480 container, ID: panel-queue
+				3481 heading REVIEW QUEUE · 16 PENDING, Value: 2
+					3482 text REVIEW QUEUE
+					3483 text ·
+					3484 text 16
+					3485 text PENDING
+				3486 text Approval
+				3487 text 9h ago
+				3488 container
+					3489 text Run ·
+					3490 text 8be61a21
+				3491 text Awaiting human verification before tool execution proceeds.
+				3492 button Approve
+				3493 button Deny
+				3494 text Approval
+				3495 text 9h ago
+				3496 container
+					3497 text Run ·
+					3498 text 64ed1b8a
+				3499 text Awaiting human verification before tool execution proceeds.
+				3500 button Approve
+				3501 button Deny
+				3502 text Approval
+				3503 text 9h ago
+				3504 container
+					3505 text Run ·
+					3506 text 361e395b
+				3507 text Awaiting human verification before tool execution proceeds.
+				3508 button Approve
+				3509 button Deny
+				3510 text Approval
+				3511 text 9h ago
+				3512 container
+					3513 text Run ·
+					3514 text 5549519d
+				3515 text Awaiting human verification before tool execution proceeds.
+				3516 button Approve
+				3517 button Deny
+				3518 text Approval
+				3519 text 9h ago
+				3520 container
+					3521 text Run ·
+					3522 text 3f049a20
+				3523 text Awaiting human verification before tool execution proceeds.
+				3524 button Approve
+				3525 button Deny
+				3526 text Approval
+				3527 text 9h ago
+				3528 container
+					3529 text Run ·
+					3530 text 96da7f1f
+				3531 text Awaiting human verification before tool execution proceeds.
+				3532 button Approve
+				3533 button Deny
+				3534 text Approval
+				3535 text 9h ago
+				3536 container
+					3537 text Run ·
+					3538 text c90e1416
+				3539 text Awaiting human verification before tool execution proceeds.
+				3540 button Approve
+				3541 button Deny
+				3542 text Approval
+				3543 text 9h ago
+				3544 container
+					3545 text Run ·
+					3546 text 97b79d9c
+				3547 text Awaiting human verification before tool execution proceeds.
+				3548 button Approve
+				3549 button Deny
+				3550 text Approval
+				3551 text 7h ago
+				3552 container
+					3553 text Run ·
+					3554 text f55bd6b4
+				3555 text Awaiting human verification before tool execution proceeds.
+				3556 button Approve
+				3557 button Deny
+				3558 text Approval
+				3559 text 7h ago
+				3560 container
+					3561 text Run ·
+					3562 text 3847f14e
+				3563 text Awaiting human verification before tool execution proceeds.
+				3564 button Approve
+				3565 button Deny
+				3566 text Approval
+				3567 text 7h ago
+				3568 container
+					3569 text Run ·
+					3570 text 0ea4bce8
+				3571 text Awaiting human verification before tool execution proceeds.
+				3572 button Approve
+				3573 button Deny
+				3574 text Approval
+				3575 text 7h ago
+				3576 container
+					3577 text Run ·
+					3578 text d794e8a6
+				3579 text Awaiting human verification before tool execution proceeds.
+				3580 button Approve
+				3581 button Deny
+				3582 text Approval
+				3583 text 7h ago
+				3584 container
+					3585 text Run ·
+					3586 text 2d9b0b6d
+				3587 text Awaiting human verification before tool execution proceeds.
+				3588 button Approve
+				3589 button Deny
+				3590 text Approval
+				3591 text 7h ago
+				3592 container
+					3593 text Run ·
+					3594 text 9555f9c3
+				3595 text Awaiting human verification before tool execution proceeds.
+				3596 button Approve
+				3597 button Deny
+				3598 text Approval
+				3599 text 7h ago
+				3600 container
+					3601 text Run ·
+					3602 text 5ba5b842
+				3603 text Awaiting human verification before tool execution proceeds.
+				3604 button Approve
+				3605 button Deny
+				3606 text Approval
+				3607 text 7h ago
+				3608 container
+					3609 text Run ·
+					3610 text cb3f9116
+				3611 text Awaiting human verification before tool execution proceeds.
+				3612 button Approve
+				3613 button Deny
+			3614 container, ID: panel-timeline
+				3615 heading ACTIVITY TIMELINE · RECENT, Value: 2
+					3616 text ACTIVITY TIMELINE
+					3617 text · RECENT
+				3618 container
+					3619 container
+						3620 text 06:55
+						3621 text Run 7f3fe57d · COMPLETE — Run completed with status: COMPLETED
+					3622 container
+						3623 text 06:53
+						3624 text Run 7f3fe57d · START — Run started for agent b0d3d849-db01-428a-8b5a-b2c1e5e65c3a
+					3625 container
+						3626 text 06:53
+						3627 text Agent b0d3d849 · CREATE — Agent 'e2e-qoder-s4-1789772001446-9888' of type ADK created
+					3628 container
+						3629 text 06:46
+						3630 text Run 155d87b6 · FAILED — Run completed with status: FAILED
+					3631 container
+						3632 text 06:44
+						3633 text Run 155d87b6 · START — Run started for agent dd76dbbf-7229-4833-aa1c-d16bada5ea10
+					3634 container
+						3635 text 06:44
+						3636 text Agent dd76dbbf · CREATE — Agent 'e2e-qoder-s4-1789771459825-1503' of type ADK created
+					3637 container
+						3638 text 06:39
+						3639 text Run 924cc828 · FAILED — Run completed with status: FAILED
+					3640 container
+						3641 text 06:37
+						3642 text Run 924cc828 · START — Run started for agent 60e7d1c9-6ecb-4f8a-ac89-b93ccf8bc056
+					3643 container
+						3644 text 06:37
+						3645 text Agent 60e7d1c9 · CREATE — Agent 'e2e-qoder-s4-1789771034038-7768' of type ADK created
+					3646 container
+						3647 text 06:28
+						3648 text Run b5207830 · FAILED — Run completed with status: FAILED
+		3649 button (collapsed) Open Aria panel, Secondary Actions: Expand

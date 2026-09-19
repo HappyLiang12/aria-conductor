@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -210,5 +211,20 @@ class KanbanReviewCardListenerTest {
 
         verify(kanbanService, never()).create(any());
         verify(approvalRepository, never()).save(any());
+    }
+
+    // ---- behavior 5: decisions never reach the board (R24.7) ----
+
+    /**
+     * R24.7: an ACP decision is published as an {@code ApprovalDecidedEvent}, and nothing on the
+     * board path may react to it — a decision can never move a card (least of all to DONE). The
+     * listener only ever handles {@code ApprovalRequestedEvent}.
+     */
+    @Test
+    void decisionEvents_haveNoHandlerOnTheBoardListener() {
+        assertThat(Arrays.stream(KanbanReviewCardListener.class.getDeclaredMethods())
+                .flatMap(method -> Arrays.stream(method.getParameterTypes()))
+                .map(Class::getSimpleName))
+                .doesNotContain("ApprovalDecidedEvent");
     }
 }

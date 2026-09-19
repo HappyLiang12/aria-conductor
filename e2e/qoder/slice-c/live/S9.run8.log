@@ -1,0 +1,83 @@
+# step: S9 (spec-owned scenario S9)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S9:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6b48899
+# started: 2026-09-18T17:11:30Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=ac7d81a1-4c9d-4b72-b12e-24a48ff8fcde agent=81b2e7e8-882f-454a-887d-ee20a38ef761 file=/workspace/e2e-s9-1789751495322-7555.txt
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (4.0m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=60f96050-65bc-438f-89c0-0abb2f1b7a9c agent=c00ce8c5-c304-4311-bac3-d7eef88a6722 file=/workspace/e2e-s9-1789751738667-6765.txt
+[S9] auto-dispatch: card status=IN_PROGRESS linkedRunId=371b3bae-abd9-4c2d-9909-41af0c9be11e
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (retry #1) (7.0m)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+    Error: pollUntil timed out for /kanban/items/ac7d81a1-4c9d-4b72-b12e-24a48ff8fcde after 240000ms; last={"id":"ac7d81a1-4c9d-4b72-b12e-24a48ff8fcde","title":"qoder s9 card-1789751495339-5104","description":"Create a new file at /workspace/e2e-s9-1789751495322-7555.txt containing exactly the two characters \"hi\" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+
+       at fixtures.ts:201
+
+      199 |     await new Promise((r) => setTimeout(r, intervalMs));
+      200 |   }
+    > 201 |   throw new Error(
+          |         ^
+      202 |     `pollUntil timed out for ${path} after ${timeoutMs}ms; last=${JSON.stringify(last)?.slice(0, 300)}`,
+      203 |   );
+      204 | }
+        at pollUntil (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\fixtures.ts:201:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:522:22
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within 420000ms; last list=[{"id":"0c656a61-58f3-4fbc-b43b-7e35132382d0","runId":"6fd64f0a-6000-4bd9-9655-287dc6658b5f","toolCallId":null,"status":"PENDING","reason":null,"requestedAt":"2026-09-18T05:42:42.143261Z","decidedAt":null,"expiresAt":null,"approvalType":"TOOL_CALL","content":"Run 6fd64f0a completed (COMPLETED) - awaiting your review: s8-replay-card-1789710128487-918","contentKind":null,"knowledgeItemId":null,"tool
+
+       at qoder-e2e-lib.ts:283
+
+      281 |     await sleep(2_000);
+      282 |   }
+    > 283 |   throw new Error(
+          |         ^
+      284 |     `waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within ${timeoutMs}ms;`
+      285 |     + ` last list=${JSON.stringify(last)?.slice(0, 400)}`,
+      286 |   );
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:283:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:534:15
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+EXIT=1

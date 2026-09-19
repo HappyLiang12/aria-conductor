@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   BACKEND,
+  dispatchSeededCard,
   pollUntil,
   seedAdkAgent,
   seedAgent,
@@ -96,8 +97,7 @@ test.describe('kanban HITL board', () => {
 
   test('pause: dragging in-progress card back to todo keeps card TODO', async ({ page, request }) => {
     // Arrange: dispatch via the API (same path the UI drag uses).
-    const dispatched = await transitionKanban(request, itemId, 'IN_PROGRESS');
-    expect(dispatched.status).toBe(200);
+    await dispatchSeededCard(request, itemId);
     await page.goto('/');
     const card = page.locator(`[data-card="${itemId}"]`);
     await expect(card).toBeVisible({ timeout: 15_000 });
@@ -144,8 +144,7 @@ test.describe('kanban HITL board', () => {
       title: `hitl-ask-${uniqueName('card')}`,
       agentTemplateId: agent.name,
     });
-    const dispatched = await transitionKanban(request, askItem.id, 'IN_PROGRESS');
-    expect(dispatched.status).toBe(200);
+    await dispatchSeededCard(request, askItem.id);
 
     // Wait for the engine's (asynchronous) task-level approval gate to surface
     // a PENDING ask linked to the card.

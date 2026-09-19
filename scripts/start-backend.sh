@@ -35,6 +35,36 @@ if [ "$SKIP_SANDBOX" = "true" ] && [ -z "$ADK_PROVIDER" ]; then
 fi
 ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
 
+# ── Qoder provider: pin MCP token auth, reject an unauthenticated override ──
+# A qoder sandbox shares the host network with the backend, so the local default
+# (aria.mcp.auth-mode=none, an open operator API) is a blocked configuration for it
+# (design Section 6.2): qoder mode pins token auth and mints a local token file. An
+# explicit override to any other mode is refused rather than silently degraded. The
+# default opencode path is untouched - no pinning, no token, no extra files.
+MCP_TOKEN_FILE="$PROJECT_ROOT/.run/mcp-token"
+if [ "$ADK_PROVIDER" = "qoder" ]; then
+    if [ -n "${ARIA_MCP_AUTH_MODE:-}" ] && [ "$(printf '%s' "$ARIA_MCP_AUTH_MODE" | tr '[:upper:]' '[:lower:]')" != "token" ]; then
+        echo "ERROR: Refusing to start the qoder provider with ARIA_MCP_AUTH_MODE=$ARIA_MCP_AUTH_MODE." >&2
+        echo "       qoder sandboxes can reach the backend's operator APIs, so an unauthenticated MCP" >&2
+        echo "       endpoint is a blocked configuration (design Section 6.2)." >&2
+        echo "       Unset ARIA_MCP_AUTH_MODE (or set it to 'token') and retry." >&2
+        exit 1
+    fi
+    export ARIA_MCP_AUTH_MODE=token
+    if [ -z "${ARIA_MCP_TOKEN:-}" ]; then
+        if command -v openssl >/dev/null 2>&1; then
+            ARIA_MCP_TOKEN="$(openssl rand -hex 32)"
+        else
+            # od -An -tx1 renders 32 bytes as 64 hex digits; strip the separating blanks.
+            ARIA_MCP_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+        fi
+    fi
+    export ARIA_MCP_TOKEN
+    mkdir -p "$(dirname "$MCP_TOKEN_FILE")"
+    printf '%s' "$ARIA_MCP_TOKEN" > "$MCP_TOKEN_FILE"
+    chmod 600 "$MCP_TOKEN_FILE" 2>/dev/null || true
+fi
+
 # Prerequisites check
 check_command() {
     if ! command -v "$1" &> /dev/null; then
@@ -48,14 +78,14 @@ check_command "mvn" "Install Maven 3.9+: https://maven.apache.org/"
 
 java -version 2>&1 | grep -q "21" || echo "WARNING: JDK 21 recommended. Current version may not be compatible."
 
-# Container runtime status (required only for the opencode provider)
+# Container runtime status (required only for the opencode and qoder providers)
 echo "Container runtimes:"
 for rt in docker podman; do
     if command -v "$rt" &> /dev/null; then
         if "$rt" info &> /dev/null; then
             echo "  $rt: running"
         else
-            echo "  WARNING: $rt is installed but not running. Required only for the opencode provider."
+            echo "  WARNING: $rt is installed but not running. Required only for the opencode and qoder providers."
         fi
     else
         echo "  $rt: not installed"
@@ -69,18 +99,18 @@ if resolve_container_runtime; then
             echo "  Container runtime: $CONTAINER_RT (auto-detected)"
         fi
     else
-        echo "  WARNING: No container runtime available. Required only for the opencode provider."
+        echo "  WARNING: No container runtime available. Required only for the opencode and qoder providers."
     fi
 fi
 
-# ── OpenSandbox server (required for opencode provider) ──
-if [ "$ADK_PROVIDER" = "opencode" ] && [ "$SKIP_SANDBOX" != "true" ]; then
+# ── OpenSandbox server (required for the opencode and qoder providers) ──
+if { [ "$ADK_PROVIDER" = "opencode" ] || [ "$ADK_PROVIDER" = "qoder" ]; } && [ "$SKIP_SANDBOX" != "true" ]; then
     echo "Checking OpenSandbox server..."
     if ! resolve_container_runtime; then
         exit 1
     fi
     if [ -z "$CONTAINER_RT" ]; then
-        echo "ERROR: Neither docker nor podman is available. The opencode provider requires a container runtime for the OpenSandbox server. Install Docker or podman, or use --skip-sandbox / ADK_PROVIDER=langchain."
+        echo "ERROR: Neither docker nor podman is available. The $ADK_PROVIDER provider requires a container runtime for the OpenSandbox server. Install Docker or podman, or use --skip-sandbox / ADK_PROVIDER=langchain."
         exit 1
     fi
 
@@ -116,6 +146,12 @@ echo "  ADK Provider: $ADK_PROVIDER"
 echo "  Port: 8080"
 if [ "$ADK_PROVIDER" = "opencode" ]; then
     echo "  OpenSandbox: ${OPENCODE_SANDBOX_SERVER_URL:-http://localhost:8090}"
+fi
+if [ "$ADK_PROVIDER" = "qoder" ]; then
+    # qoder.sandbox-server-url is fixed in application.yml (no env override), and the
+    # sandbox image is built separately: podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox
+    echo "  OpenSandbox: http://localhost:8090 (image aria-conductor/qoder-sandbox:0.1)"
+    echo "  MCP auth: token (token file: $MCP_TOKEN_FILE)"
 fi
 
 cd "$BACKEND_DIR"

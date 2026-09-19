@@ -106,6 +106,21 @@ public interface AdkProvider {
     }
 
     /**
+     * Task-level constraints the engine must apply to {@link #executeTask} runs
+     * (frozen contract C0.6). Lets each provider resolve its own task limits
+     * (e.g. its configured task deadline) instead of the engine reading
+     * provider-specific properties.
+     *
+     * @return the constraints, or {@code null} when the provider states none.
+     *         Both {@code null} and a record whose
+     *         {@link TaskExecutionConstraints#maxTaskDuration()} is {@code null}
+     *         mean "no stated deadline": the engine then keeps its own fallback
+     */
+    default TaskExecutionConstraints taskConstraints() {
+        return null;
+    }
+
+    /**
      * Task-level execution: hand the whole run to the provider's internal loop.
      *
      * <p>Only invoked when {@link #supportsTaskExecution()} returns {@code true}.

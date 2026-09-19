@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { platformMcpToken } from '../qoder-e2e-lib';
 
 /**
  * MCP twin of e2e/sdd-workflow.spec.ts: an EXTERNAL MCP client (no browser, no
@@ -24,12 +25,23 @@ const RUN_TIMEOUT = Number(process.env.E2E_RUN_TIMEOUT_MS || 180_000);
 test.describe.configure({ mode: 'serial', timeout: Math.max(600_000, GATE_TIMEOUT + RUN_TIMEOUT + 30_000) });
 
 async function connectMcp(): Promise<Client> {
-  // token mode (aria.mcp.auth-mode=token) will need Authorization headers on BOTH transports — see Task 11 filter paths
+  // qoder stacks pin aria.mcp.auth-mode=token, so both transports need the
+  // platform bearer; with no token file (none mode) the headers stay empty.
+  const headers: Record<string, string> = {};
+  try {
+    headers.Authorization = `Bearer ${platformMcpToken()}`;
+  } catch {
+    // no token file — the stack runs auth-mode=none
+  }
   const client = new Client({ name: 'mcp-e2e', version: '0.1.0' });
   try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${API_URL}/mcp`)));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${API_URL}/mcp`), {
+      requestInit: { headers },
+    }));
   } catch {
-    await client.connect(new SSEClientTransport(new URL(`${API_URL}/sse`)));
+    await client.connect(new SSEClientTransport(new URL(`${API_URL}/sse`), {
+      requestInit: { headers },
+    }));
   }
   return client;
 }

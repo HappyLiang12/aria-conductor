@@ -17,6 +17,7 @@ import io.aria.conductor.common.model.*;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskContext;
+import io.aria.conductor.execution.adk.TaskExecutionConstraints;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
@@ -717,17 +718,30 @@ public class AgentLoopEngine {
             String taskPrompt = buildTaskPrompt(ctx);
 
             // Task-level constraints: agent-config round cap (same parse as the turn loop)
-            // + OpenCode max-task-minutes timeout.
+            // + provider-resolved task deadline (C0.6). A provider that states no
+            // constraint keeps the opencode max-task-minutes fallback.
+            TaskExecutionConstraints taskConstraints = provider.taskConstraints();
+            Duration taskDuration = taskConstraints != null && taskConstraints.maxTaskDuration() != null
+                    ? taskConstraints.maxTaskDuration()
+                    : Duration.ofMinutes(openCodeProperties.getMaxTaskMinutes());
             TaskContext taskContext = new TaskContext(
                     parseMaxIterationsFromConfig(ctx.getAgent(), ctx.getMaxIterations()),
-                    Duration.ofMinutes(openCodeProperties.getMaxTaskMinutes()));
+                    taskDuration);
 
             // Execute on a virtual thread; poll every second so cancelRun() stays
             // responsive (abortTask on cancel → TaskExecutionException(ABORTED)).
             TaskResult result = awaitTaskResult(ctx, provider, taskPrompt, taskContext);
 
             // Success: token/iteration bookkeeping + audit + final output + completion.
-            ctx.addTokensUsed(result.inputTokens(), result.outputTokens());
+            if (result.usageReported()) {
+                ctx.addTokensUsed(result.inputTokens(), result.outputTokens());
+            } else {
+                // Unknown usage must stay unknown: the int counters are a 0 placeholder and
+                // must never be folded into the budget as measured usage (design §4.2,
+                // acceptance item 10).
+                log.warn("Token usage not reported by the provider for run {} — accounting unavailable,"
+                        + " wall-clock limit still applies", ctx.getRunId());
+            }
             ctx.incrementIteration();
             if (result.finalOutput() != null && !result.finalOutput().isBlank()) {
                 ctx.setLastAssistantResponse(result.finalOutput());

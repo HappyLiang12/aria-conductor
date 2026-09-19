@@ -98,7 +98,7 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
 
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenAnswer(inv -> {
             UUID runId = inv.getArgument(1);
-            return new TaskResult(runId, "sess-oc-1", "OpenCode finished the job", 100, 40, false);
+            return new TaskResult(runId, "sess-oc-1", "OpenCode finished the job", 100, 40, false, true);
         });
 
         // --- act ---

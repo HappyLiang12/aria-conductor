@@ -1,0 +1,369 @@
+Browser tab: 1551191682, Title: "Aria Conductor", URL: "http://localhost:5273/ops".
+0 AXWebArea Aria Conductor, URL: localhost:5273/ops
+	1 container, ID: root
+		2 container
+			3 heading Aria Conductor ARIA CONDUCTOR · LOCAL, Value: 1
+				4 text Aria Conductor
+				5 text ARIA CONDUCTOR · LOCAL
+			6 text 97
+			7 text Agents
+			8 text 2 of 3 Providers Healthy
+			9 text 97
+			10 text ACTIVE AGENTS
+			11 text 2
+			12 text RUNNING RUNS
+			13 text 18
+			14 text APPROVALS PENDING
+			15 text 198
+			16 text TOKENS TODAY
+			17 container Current time
+				18 text 13:23:22
+			19 button Notifications (666 unread)
+				20 text 🔔
+				21 text 99+
+			22 button Toggle theme
+				23 text ☀ Light
+		24 container Main views
+			25 button Overview
+			26 button Crew
+			27 button Providers
+			28 button Runs
+			29 button Knowledge
+			30 button Reports
+			31 button Chat
+			32 button Workflows
+			33 button Ops
+			34 button Jobs
+			35 button Open configuration
+				36 text Configure
+		37 container
+			14358 heading ◈Operations· COMMAND SURFACE, Value: 1
+				14359 text ◈
+				14360 text Operations
+				14361 text · COMMAND SURFACE
+			14362 text Approval queue, run history, live activity, and morning briefing — one focused work surface.
+			14363 text Live
+			14364 button ↻ Refresh
+			14365 heading HOUSEKEEPING ⚡ Scan leftovers, Value: 2
+				14366 text HOUSEKEEPING
+				14367 button ⚡ Scan leftovers
+			14368 container ⚖ PENDING APPROVALS 18 items
+				14369 heading ⚖ PENDING APPROVALS 18 items, Value: 2, ID: ops-approvals-h
+					14370 text ⚖
+					14371 text PENDING APPROVALS
+					14372 text 18
+					14373 text items
+				14374 text Action
+				14375 text 10h ago
+				14376 text Approval requires sign-off
+				14377 text Unknown agent
+				14378 text · run
+				14379 text 8be61a21
+				14380 button ✓ Approve
+				14381 button ✕ Deny
+				14382 text Action
+				14383 text 10h ago
+				14384 text Approval requires sign-off
+				14385 text Unknown agent
+				14386 text · run
+				14387 text 64ed1b8a
+				14388 button ✓ Approve
+				14389 button ✕ Deny
+				14390 text Action
+				14391 text 10h ago
+				14392 text Approval requires sign-off
+				14393 text Unknown agent
+				14394 text · run
+				14395 text 361e395b
+				14396 button ✓ Approve
+				14397 button ✕ Deny
+				14398 text Action
+				14399 text 10h ago
+				14400 text Approval requires sign-off
+				14401 text Unknown agent
+				14402 text · run
+				14403 text 5549519d
+				14404 button ✓ Approve
+				14405 button ✕ Deny
+				14406 text Action
+				14407 text 10h ago
+				14408 text Approval requires sign-off
+				14409 text Unknown agent
+				14410 text · run
+				14411 text 3f049a20
+				14412 button ✓ Approve
+				14413 button ✕ Deny
+				14414 text Action
+				14415 text 10h ago
+				14416 text Approval requires sign-off
+				14417 text Unknown agent
+				14418 text · run
+				14419 text 96da7f1f
+				14420 button ✓ Approve
+				14421 button ✕ Deny
+				14422 text Action
+				14423 text 10h ago
+				14424 text Approval requires sign-off
+				14425 text Unknown agent
+				14426 text · run
+				14427 text c90e1416
+				14428 button ✓ Approve
+				14429 button ✕ Deny
+				14430 text Action
+				14431 text 10h ago
+				14432 text Approval requires sign-off
+				14433 text Unknown agent
+				14434 text · run
+				14435 text 97b79d9c
+				14436 button ✓ Approve
+				14437 button ✕ Deny
+				14438 text Action
+				14439 text 8h ago
+				14440 text Approval requires sign-off
+				14441 text Unknown agent
+				14442 text · run
+				14443 text f55bd6b4
+				14444 button ✓ Approve
+				14445 button ✕ Deny
+				14446 text Action
+				14447 text 8h ago
+				14448 text Approval requires sign-off
+				14449 text Unknown agent
+				14450 text · run
+				14451 text 3847f14e
+				14452 button ✓ Approve
+				14453 button ✕ Deny
+				14454 text Action
+				14455 text 8h ago
+				14456 text Approval requires sign-off
+				14457 text Unknown agent
+				14458 text · run
+				14459 text 0ea4bce8
+				14460 button ✓ Approve
+				14461 button ✕ Deny
+				14462 text Action
+				14463 text 7h ago
+				14464 text Approval requires sign-off
+				14465 text Unknown agent
+				14466 text · run
+				14467 text d794e8a6
+				14468 button ✓ Approve
+				14469 button ✕ Deny
+				14470 text Action
+				14471 text 7h ago
+				14472 text Approval requires sign-off
+				14473 text Unknown agent
+				14474 text · run
+				14475 text 2d9b0b6d
+				14476 button ✓ Approve
+				14477 button ✕ Deny
+				14478 text Action
+				14479 text 7h ago
+				14480 text Approval requires sign-off
+				14481 text Unknown agent
+				14482 text · run
+				14483 text 9555f9c3
+				14484 button ✓ Approve
+				14485 button ✕ Deny
+				14486 text Action
+				14487 text 7h ago
+				14488 text Approval requires sign-off
+				14489 text Unknown agent
+				14490 text · run
+				14491 text 5ba5b842
+				14492 button ✓ Approve
+				14493 button ✕ Deny
+				14494 text Action
+				14495 text 7h ago
+				14496 text Approval requires sign-off
+				14497 text Unknown agent
+				14498 text · run
+				14499 text cb3f9116
+				14500 button ✓ Approve
+				14501 button ✕ Deny
+				14502 text Action
+				14503 text 1m ago
+				14504 text Agent requests approval to execute task_execution {}
+				14505 text Unknown agent
+				14506 text · run
+				14507 text fab06a0f
+				14508 button ✓ Approve
+				14509 button ✕ Deny
+				14510 text Action
+				14511 text 50s ago
+				14512 text Agent requests approval to execute task_execution {}
+				14513 text Unknown agent
+				14514 text · run
+				14515 text aee5b52d
+				14516 button ✓ Approve
+				14517 button ✕ Deny
+			14518 container ▣ RECENT RUNS 14 latest
+				14519 heading ▣ RECENT RUNS 14 latest, Value: 2, ID: ops-runs-h
+					14520 text ▣
+					14521 text RECENT RUNS
+					14522 text 14
+					14523 text latest
+				14524 table
+					14525 row
+						14526 cell AGENT
+							14527 text AGENT
+						14528 cell PROMPT
+							14529 text PROMPT
+						14530 cell STATUS
+							14531 text STATUS
+						14532 cell DURATION
+							14533 text DURATION
+						14534 cell WHEN
+							14535 text WHEN
+					14536 row
+						14537 text PR90 UX Reviewer 0919
+						14538 text This is a local user-experience acceptance test. Do not call any tools, do not access files or networks. Return exactly: PR90-REVIEWER-READY.
+						14539 text Running
+						14540 text 50s
+						14541 text 50s ago
+					14542 row
+						14543 text PR90 UX Analyst 0919
+						14544 text This is a local user-experience acceptance test. Do not call any tools, do not access files or networks. Return exactly: PR90-ANALYST-READY.
+						14545 text Running
+						14546 text 1m 6s
+						14547 text 1m ago
+					14548 row
+						14549 text e2e-qoder-s4-1789772001446-9888
+						14550 text Create a new file at /workspace/e2e-s4-1789771998364-3884.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14551 text Completed
+						14552 text 2m 34s
+						14553 text 6h ago
+					14554 row
+						14555 text e2e-qoder-s4-1789771459825-1503
+						14556 text Create a new file at /workspace/e2e-s4-1789771457036-5618.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14557 text Failed
+						14558 text 2m 34s
+						14559 text 6h ago
+					14560 row
+						14561 text e2e-qoder-s4-1789771034038-7768
+						14562 text Create a new file at /workspace/e2e-s4-1789771031975-3199.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14563 text Failed
+						14564 text 2m 34s
+						14565 text 6h ago
+					14566 row
+						14567 text e2e-qoder-s4-1789770522471-2262
+						14568 text Create a new file at /workspace/e2e-s4-1789770520538-6485.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14569 text Failed
+						14570 text 1s
+						14571 text 6h ago
+					14572 row
+						14573 text e2e-qoder-s4-1789770099436-7004
+						14574 text Create a new file at /workspace/e2e-s4-1789770096830-1931.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14575 text Failed
+						14576 text 1s
+						14577 text 7h ago
+					14578 row
+						14579 text c6b-s10-20260918-221526
+						14580 text Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-221526.txt whose content is exactly: ready
+						14581 text Failed
+						14582 text 1m 29s
+						14583 text 7h ago
+					14584 row
+						14585 text e2e-qoder-s4-1789769576003-5027
+						14586 text Create a new file at /workspace/e2e-s4-1789769574108-9702.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14587 text Completed
+						14588 text 2m 29s
+						14589 text 7h ago
+					14590 row
+						14591 text e2e-qoder-s4-1789769417941-9935
+						14592 text Create a new file at /workspace/e2e-s4-1789769415257-230.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14593 text Completed
+						14594 text 2m 33s
+						14595 text 7h ago
+					14596 row
+						14597 text c6b-s10-20260918-220325
+						14598 text Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-220325.txt whose content is exactly: ready
+						14599 text Failed
+						14600 text 1s
+						14601 text 7h ago
+					14602 row
+						14603 text e2e-qoder-s9-1789768969567-6684
+						14604 text Kanban task: qoder s9 card-1789768969582-9460 Description: Create a new file at /workspace/e2e-s9-1789768969567-438.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14605 text Completed
+						14606 text 30s
+						14607 text 7h ago
+					14608 row
+						14609 text c6b-s5-20260918-220205
+						14610 text Use the Write tool (not a shell command) to create the file /workspace/c6b-s5-20260918-220205.txt whose content is exactly: ready
+						14611 text Cancelled
+						14612 text 27s
+						14613 text 7h ago
+					14614 row
+						14615 text e2e-qoder-s4-1789768774124-4859
+						14616 text Create a new file at /workspace/e2e-s4-1789768772338-8537.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						14617 text Completed
+						14618 text 2m 28s
+						14619 text 7h ago
+			14620 container ◴ ACTIVITY TIMELINE
+				14621 heading ◴ ACTIVITY TIMELINE, Value: 2, ID: ops-activity-h
+					14622 text ◴
+					14623 text ACTIVITY TIMELINE
+				14624 container
+					14625 container
+						14626 text 13:22
+						14627 text START · run aee5b52d
+					14628 container
+						14629 text 13:22
+						14630 text START · run fab06a0f
+					14631 container
+						14632 text 13:20
+						14633 text CREATE · agent 4944fc8a
+					14634 container
+						14635 text 13:19
+						14636 text CREATE · agent b3facd33
+					14637 container
+						14638 text 06:55
+						14639 text COMPLETE · run 7f3fe57d
+					14640 container
+						14641 text 06:53
+						14642 text START · run 7f3fe57d
+					14643 container
+						14644 text 06:53
+						14645 text CREATE · agent b0d3d849
+					14646 container
+						14647 text 06:46
+						14648 text FAILED · run 155d87b6
+					14649 container
+						14650 text 06:44
+						14651 text START · run 155d87b6
+					14652 container
+						14653 text 06:44
+						14654 text CREATE · agent dd76dbbf
+					14655 container
+						14656 text 06:39
+						14657 text FAILED · run 924cc828
+					14658 container
+						14659 text 06:37
+						14660 text START · run 924cc828
+			14661 container ☀ TODAY'S BRIEFING GENERATED 13:23
+				14662 heading ☀ TODAY'S BRIEFING GENERATED 13:23, Value: 2, ID: ops-brief-h
+					14663 text ☀
+					14664 text TODAY'S BRIEFING
+					14665 text GENERATED
+					14666 text 13:23
+				14667 text Afternoon. 97 agents on deck, 2 active runs. 301 runs failed — investigate.
+				14668 container
+					14669 text ACTIVE AGENTS
+					14670 text 97
+				14671 container
+					14672 text RUNNING
+					14673 text 2
+				14674 container
+					14675 text COMPLETED TODAY
+					14676 text 24
+				14677 container
+					14678 text PENDING REVIEWS
+					14679 text 18
+				14680 text ⚠
+				14681 text 301
+				14682 text failed run
+				14683 text s
+				14684 text need attention.
+		617 button (collapsed) Open Aria panel, Secondary Actions: Expand
+
+The focused UI element is 0 AXWebArea Aria Conductor, URL: localhost:5273/ops

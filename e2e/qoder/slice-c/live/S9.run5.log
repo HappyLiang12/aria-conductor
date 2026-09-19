@@ -1,0 +1,57 @@
+# step: S9 (spec-owned scenario S9)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S9:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 8f5ed4d
+# started: 2026-09-18T11:15:38Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=eb57c16e-61d8-4833-9087-83be56c5b08c agent=51f066e1-3b65-476e-a74f-4620bc139a2d file=/workspace/e2e-s9-1789730142956-5841.txt
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (4.0m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S9] seeded card=fab6242b-55f5-4f1b-8319-685c03c645b3 agent=03be149f-7219-4b45-9601-75c2e0e64c9d file=/workspace/e2e-s9-1789730387059-8672.txt
+[S9] auto-dispatch: card status=IN_PROGRESS linkedRunId=758c3725-b0b0-4bd1-8491-006be3046076
+[S9] live ask=d9229995-0c65-461e-a848-7094ebcf498c toolName=Write status=PENDING kanbanItemId=fab6242b-55f5-4f1b-8319-685c03c645b3 expiresAt=2026-09-18T11:22:06.300895Z
+[S9] ask decided: status=APPROVED deliveryState=DELIVERED
+[S9] card right after the decision: status=REVIEW
+[S9] run terminal=COMPLETED finalCardStatus=REVIEW
+  ok 2 [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE (retry #1) (32.4s)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+    Error: pollUntil timed out for /kanban/items/eb57c16e-61d8-4833-9087-83be56c5b08c after 240000ms; last={"id":"eb57c16e-61d8-4833-9087-83be56c5b08c","title":"qoder s9 card-1789730142977-6932","description":"Create a new file at /workspace/e2e-s9-1789730142956-5841.txt containing exactly the two characters \"hi\" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+
+       at fixtures.ts:201
+
+      199 |     await new Promise((r) => setTimeout(r, intervalMs));
+      200 |   }
+    > 201 |   throw new Error(
+          |         ^
+      202 |     `pollUntil timed out for ${path} after ${timeoutMs}ms; last=${JSON.stringify(last)?.slice(0, 300)}`,
+      203 |   );
+      204 | }
+        at pollUntil (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\fixtures.ts:201:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:522:22
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S9-ka-2a3c4-ision-does-not-mark-it-DONE-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 flaky
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:506:1 › S9: kanban-dispatched qoder run — board moves the card, the Review surface shows the live ask, the decision does not mark it DONE 
+
+EXIT=0

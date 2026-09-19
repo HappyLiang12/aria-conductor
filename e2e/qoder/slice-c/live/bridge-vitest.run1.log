@@ -1,0 +1,20 @@
+
+> @aria-conductor/qoder-bridge@0.1.0 test
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90mD:/project/aria-conductor/agent-control-tower/qoder-sandbox/bridge[39m
+
+ [32m✓[39m test/acp-client.test.ts [2m([22m[2m25 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[33m 4686[2mms[22m[39m
+   [33m[2m✓[22m[39m failure propagation[2m > [22mrefuses a model that is not in the advertised list (no silent fallback) [33m 495[2mms[22m[39m
+   [33m[2m✓[22m[39m stderr redaction (F4)[2m > [22mcarries a token split across two stderr chunks and flushes the carry on child close (F4 follow-up) [33m 373[2mms[22m[39m
+ [32m✓[39m test/server.test.ts [2m([22m[2m35 tests[22m[2m)[22m[33m 6521[2mms[22m[39m
+   [33m[2m✓[22m[39m SSE replay (C0.2 events row)[2m > [22mreplays from `after` and then continues live without duplicates [33m 360[2mms[22m[39m
+   [33m[2m✓[22m[39m permission decisions (C0.2 permissions row)[2m > [22mexpires a decision after the pending deadline and never delivers it [33m 794[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /probe (C2 ruling R1)[2m > [22mgives up at timeoutMs, reports a null status and names the timeout [33m 371[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m2 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[32m59 passed[39m[22m[2m | [22m[33m1 skipped[39m[90m (60)[39m
+[2m   Start at [22m 19:36:09
+[2m   Duration [22m 7.41s[2m (transform 399ms, setup 0ms, collect 554ms, tests 11.21s, environment 1ms, prepare 432ms)[22m
+

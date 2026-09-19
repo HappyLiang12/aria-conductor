@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.approval;
 
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.test.TestDataBuilder;
@@ -35,6 +36,7 @@ class ApprovalExpiryCheckerTest {
 
     @Mock private ApprovalRepository approvalRepository;
     @Mock private ApprovalGate approvalGate;
+    @Mock private AcpPermissionCoordinator acpPermissionCoordinator;
 
     @Test
     void checkExpiredApprovals_marksOverduePendingAsExpiredAndUnblocksWaiters() {
@@ -55,7 +57,7 @@ class ApprovalExpiryCheckerTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of(overdue1, overdue2));
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate).checkExpiredApprovals();
+        new ApprovalExpiryChecker(approvalRepository, approvalGate, acpPermissionCoordinator).checkExpiredApprovals();
 
         // Both entities are mutated in place with the expiry outcome and audit fields.
         for (Approval approval : List.of(overdue1, overdue2)) {
@@ -77,12 +79,47 @@ class ApprovalExpiryCheckerTest {
     }
 
     @Test
+    void checkExpiredApprovals_acpRowsDelegateToTheCoordinator_legacyRowsKeepTheGatePath() {
+        UUID runId = UUID.randomUUID();
+        Approval acp = TestDataBuilder.anApproval()
+                .withRunId(runId)
+                .withStatus(ApprovalStatus.PENDING)
+                .withExpiresAt(Instant.now().minusSeconds(30))
+                .build();
+        acp.setSource(ApprovalSource.ACP_PERMISSION);
+        Approval legacy = TestDataBuilder.anApproval()
+                .withRunId(runId)
+                .withStatus(ApprovalStatus.PENDING)
+                .withExpiresAt(Instant.now().minusSeconds(30))
+                .build();
+        when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
+                .thenReturn(List.of(acp, legacy));
+
+        new ApprovalExpiryChecker(approvalRepository, approvalGate, acpPermissionCoordinator)
+                .checkExpiredApprovals();
+
+        // The ACP row belongs to the coordinator, which expires it atomically and delivers the
+        // cancel itself: the sweep must neither mutate nor save it.
+        verify(acpPermissionCoordinator).expire(acp.getId());
+        assertThat(acp.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(acp);
+        verify(approvalGate, never()).cancelPendingApproval(acp.getId());
+
+        // Legacy rows keep the historical sweep behaviour.
+        assertThat(legacy.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(legacy.getReason()).isEqualTo("Auto-rejected: approval expired");
+        verify(approvalRepository).save(legacy);
+        verify(approvalGate).cancelPendingApproval(legacy.getId());
+        verify(acpPermissionCoordinator, never()).expire(legacy.getId());
+    }
+
+    @Test
     void checkExpiredApprovals_noOverdueApprovals_performsNoWrites() {
         Instant before = Instant.now();
         when(approvalRepository.findByStatusAndExpiresAtBefore(any(ApprovalStatus.class), any(Instant.class)))
                 .thenReturn(List.of());
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate).checkExpiredApprovals();
+        new ApprovalExpiryChecker(approvalRepository, approvalGate, acpPermissionCoordinator).checkExpiredApprovals();
         Instant after = Instant.now();
 
         // The query itself is what protects decided and fresh approvals: it must select
@@ -109,7 +146,7 @@ class ApprovalExpiryCheckerTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of());
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate).checkExpiredApprovals();
+        new ApprovalExpiryChecker(approvalRepository, approvalGate, acpPermissionCoordinator).checkExpiredApprovals();
 
         assertThat(fresh.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(fresh.getReason()).isEqualTo("still fresh");

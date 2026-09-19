@@ -1,0 +1,476 @@
+Browser tab: 1551191682, Title: "Aria Conductor", URL: "http://localhost:5273/ops".
+0 AXWebArea Aria Conductor, URL: localhost:5273/ops
+	1 container, ID: root
+		2 container
+			3 heading Aria Conductor ARIA CONDUCTOR · LOCAL, Value: 1
+				4 text Aria Conductor
+				5 text ARIA CONDUCTOR · LOCAL
+			6 text 96
+			7 text Agents
+			8 text 2 of 3 Providers Healthy
+			9 text 96
+			10 text ACTIVE AGENTS
+			11 text 0
+			12 text RUNNING RUNS
+			13 text 17
+			14 text APPROVALS PENDING
+			15 text 198
+			16 text TOKENS TODAY
+			17 container Current time
+				18 text 16:32:38
+			19 button Notifications (680 unread)
+				20 text 🔔
+				21 text 99+
+			22 button Toggle theme
+				23 text ☀ Light
+		24 container Main views
+			25 button Overview
+			26 button Crew
+			27 button Providers
+			28 button Runs
+			29 button Knowledge
+			30 button Reports
+			31 button Chat
+			32 button Workflows
+			33 button Ops
+			34 button Jobs
+			35 button Open configuration
+				36 text Configure
+		37 container
+			13347 heading ◈Operations· COMMAND SURFACE, Value: 1
+				13348 text ◈
+				13349 text Operations
+				13350 text · COMMAND SURFACE
+			13351 text Approval queue, run history, live activity, and morning briefing — one focused work surface.
+			13352 text Live
+			13353 button ↻ Refresh
+			13354 heading HOUSEKEEPING ⚡ Scan leftovers, Value: 2
+				13355 text HOUSEKEEPING
+				13356 button ⚡ Scan leftovers
+			13357 container ⚖ PENDING APPROVALS 17 items
+				13358 heading ⚖ PENDING APPROVALS 17 items, Value: 2, ID: ops-approvals-h
+					13359 text ⚖
+					13360 text PENDING APPROVALS
+					13361 text 17
+					13362 text items
+				13363 text Action
+				13364 text 13h ago
+				13365 text Approval requires sign-off
+				13366 text Unknown agent
+				13367 text · run
+				13368 text 8be61a21
+				13369 text Push branch e2e-pack-gate-1789758242554-6143 to origin.
+				13370 button ✓ Approve
+				13371 button ✕ Deny
+				13372 text Action
+				13373 text 13h ago
+				13374 text Approval requires sign-off
+				13375 text Unknown agent
+				13376 text · run
+				13377 text 64ed1b8a
+				13378 text Kanban task: e2e-hk-clear-1789758851589-3318 Description: Seeded by Phase E e2e fixtures
+				13379 button ✓ Approve
+				13380 button ✕ Deny
+				13381 text Action
+				13382 text 13h ago
+				13383 text Approval requires sign-off
+				13384 text Developer Agent
+				13385 text · run
+				13386 text 361e395b
+				13387 text Kanban task: e2e-kanban-ui-1789758910962-4593
+				13388 button ✓ Approve
+				13389 button ✕ Deny
+				13390 text Action
+				13391 text 13h ago
+				13392 text Approval requires sign-off
+				13393 text Unknown agent
+				13394 text · run
+				13395 text 5549519d
+				13396 text Kanban task: hitl-card-1789758897507-5161 Description: Seeded by Phase E e2e fixtures
+				13397 button ✓ Approve
+				13398 button ✕ Deny
+				13399 text Action
+				13400 text 13h ago
+				13401 text Approval requires sign-off
+				13402 text Unknown agent
+				13403 text · run
+				13404 text 3f049a20
+				13405 text Kanban task: hitl-card-1789758941569-4782 Description: Seeded by Phase E e2e fixtures
+				13406 button ✓ Approve
+				13407 button ✕ Deny
+				13408 text Action
+				13409 text 13h ago
+				13410 text Approval requires sign-off
+				13411 text Unknown agent
+				13412 text · run
+				13413 text 96da7f1f
+				13414 text Kanban task: e2e-hk-clear-1789759031740-5074 Description: Seeded by Phase E e2e fixtures
+				13415 button ✓ Approve
+				13416 button ✕ Deny
+				13417 text Action
+				13418 text 13h ago
+				13419 text Approval requires sign-off
+				13420 text Unknown agent
+				13421 text · run
+				13422 text c90e1416
+				13423 text Kanban task: opsap-card-1789759001461-3755 Description: Seeded by Phase E e2e fixtures
+				13424 button ✓ Approve
+				13425 button ✕ Deny
+				13426 text Action
+				13427 text 13h ago
+				13428 text Approval requires sign-off
+				13429 text Unknown agent
+				13430 text · run
+				13431 text 97b79d9c
+				13432 text Kanban task: e2e-obs-live-move Description: Seeded by Phase E e2e fixtures
+				13433 button ✓ Approve
+				13434 button ✕ Deny
+				13435 text Action
+				13436 text 11h ago
+				13437 text Approval requires sign-off
+				13438 text Unknown agent
+				13439 text · run
+				13440 text f55bd6b4
+				13441 text Kanban task: qoder s9 card-1789765507755-5254 Description: Create a new file at /workspace/e2e-s9-1789765507727-4957.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+				13442 button ✓ Approve
+				13443 button ✕ Deny
+				13444 text Action
+				13445 text 11h ago
+				13446 text Approval requires sign-off
+				13447 text Developer Agent
+				13448 text · run
+				13449 text 3847f14e
+				13450 text Kanban task: s8-replay-card-1789765501669-6322
+				13451 button ✓ Approve
+				13452 button ✕ Deny
+				13453 text Action
+				13454 text 11h ago
+				13455 text Approval requires sign-off
+				13456 text Unknown agent
+				13457 text · run
+				13458 text 0ea4bce8
+				13459 text Kanban task: qoder s9 card-1789765751091-2239 Description: Create a new file at /workspace/e2e-s9-1789765751065-3689.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+				13460 button ✓ Approve
+				13461 button ✕ Deny
+				13462 text Action
+				13463 text 10h ago
+				13464 text Approval requires sign-off
+				13465 text Unknown agent
+				13466 text · run
+				13467 text d794e8a6
+				13468 text Kanban task: e2e-hk-clear-1789767904006-8034 Description: Seeded by Phase E e2e fixtures
+				13469 button ✓ Approve
+				13470 button ✕ Deny
+				13471 text Action
+				13472 text 10h ago
+				13473 text Approval requires sign-off
+				13474 text Developer Agent
+				13475 text · run
+				13476 text 2d9b0b6d
+				13477 text Kanban task: e2e-kanban-seeded-1789767965937-3460 Description: Seeded by Phase E e2e fixtures
+				13478 button ✓ Approve
+				13479 button ✕ Deny
+				13480 text Action
+				13481 text 10h ago
+				13482 text Approval requires sign-off
+				13483 text Developer Agent
+				13484 text · run
+				13485 text 9555f9c3
+				13486 text Kanban task: e2e-kanban-ui-1789767973131-1694
+				13487 button ✓ Approve
+				13488 button ✕ Deny
+				13489 text Action
+				13490 text 10h ago
+				13491 text Approval requires sign-off
+				13492 text e2e-oc-opsap-1789768047026-3547
+				13493 text · run
+				13494 text 5ba5b842
+				13495 text Kanban task: opsap-card-1789768047054-9411 Description: Seeded by Phase E e2e fixtures
+				13496 button ✓ Approve
+				13497 button ✕ Deny
+				13498 text Action
+				13499 text 10h ago
+				13500 text Approval requires sign-off
+				13501 text e2e-agent-1789768126418-7734
+				13502 text · run
+				13503 text cb3f9116
+				13504 text Kanban task: e2e-obs-live-move Description: Seeded by Phase E e2e fixtures
+				13505 button ✓ Approve
+				13506 button ✕ Deny
+				13507 text Action
+				13508 text 2h ago
+				13509 text Approval requires sign-off
+				13510 text Developer Agent
+				13511 text · run
+				13512 text abf5ef37
+				13513 text Kanban task: PR90 UX card 0919 Description: User-POV E2E: verify kanban creation and assignment. Aria reads this first.
+				13514 button ✓ Approve
+				13515 button ✕ Deny
+			13525 container ▣ RECENT RUNS 14 latest
+				13526 heading ▣ RECENT RUNS 14 latest, Value: 2, ID: ops-runs-h
+					13527 text ▣
+					13528 text RECENT RUNS
+					13529 text 14
+					13530 text latest
+				13531 table
+					13532 row
+						13533 cell AGENT
+							13534 text AGENT
+						13535 cell PROMPT
+							13536 text PROMPT
+						13537 cell STATUS
+							13538 text STATUS
+						13539 cell DURATION
+							13540 text DURATION
+						13541 cell WHEN
+							13542 text WHEN
+					13543 row
+						13544 text PR90 UX Reviewer 0919
+						13545 text Return exactly PR90-REVIEWER-FIX2. Do not call tools.
+						13546 text Running
+						13547 text 4m 58s
+						13548 text 4m ago
+					13549 row
+						13550 text 00000000
+						13551 text What code did I ask you to remember earlier in this conversation? Reply with just the code.
+						13552 text Completed
+						13553 text 16s
+						13554 text 1h ago
+					13555 row
+						13556 text 00000000
+						13557 text For this conversation only, please remember the code PINEAPPLE-42. Reply with just: acknowledged.
+						13558 text Completed
+						13559 text 20s
+						13560 text 1h ago
+					13561 row
+						13562 text 00000000
+						13563 text What code did I ask you to remember in this conversation?
+						13564 text Completed
+						13565 text 9s
+						13566 text 2h ago
+					13567 row
+						13568 text 00000000
+						13569 text For this conversation only, please remember the code PINEAPPLE-42. Reply with just: acknowledged.
+						13570 text Completed
+						13571 text 19s
+						13572 text 2h ago
+					13573 row
+						13574 text Developer Agent
+						13575 text Kanban task: PR90 UX card 0919 Description: User-POV E2E: verify kanban creation and assignment. Aria reads this first.
+						13576 text Failed
+						13577 text 9s
+						13578 text 2h ago
+					13579 row
+						13580 text PR90 UX Reviewer 0919
+						13581 text Return exactly PR90-REVIEWER-READY. Do not call tools or access files or networks.
+						13582 text Failed
+						13583 text 3m 7s
+						13584 text 3h ago
+					13585 row
+						13586 text PR90 UX Analyst 0919
+						13587 text Return exactly PR90-ANALYST-READY. Do not call any tools or access files or networks.
+						13588 text Completed
+						13589 text 51s
+						13590 text 3h ago
+					13591 row
+						13592 text PR90 UX Reviewer 0919
+						13593 text This is a local user-experience acceptance test. Do not call any tools, do not access files or networks. Return exactly: PR90-REVIEWER-READY.
+						13594 text Cancelled
+						13595 text 2m 0s
+						13596 text 3h ago
+					13597 row
+						13598 text PR90 UX Analyst 0919
+						13599 text This is a local user-experience acceptance test. Do not call any tools, do not access files or networks. Return exactly: PR90-ANALYST-READY.
+						13600 text Cancelled
+						13601 text 2m 0s
+						13602 text 3h ago
+					13603 row
+						13604 text e2e-qoder-s4-1789772001446-9888
+						13605 text Create a new file at /workspace/e2e-s4-1789771998364-3884.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						13606 text Completed
+						13607 text 2m 34s
+						13608 text 9h ago
+					13609 row
+						13610 text e2e-qoder-s4-1789771459825-1503
+						13611 text Create a new file at /workspace/e2e-s4-1789771457036-5618.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						13612 text Failed
+						13613 text 2m 34s
+						13614 text 9h ago
+					13615 row
+						13616 text e2e-qoder-s4-1789771034038-7768
+						13617 text Create a new file at /workspace/e2e-s4-1789771031975-3199.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						13618 text Failed
+						13619 text 2m 34s
+						13620 text 9h ago
+					13621 row
+						13622 text e2e-qoder-s4-1789770522471-2262
+						13623 text Create a new file at /workspace/e2e-s4-1789770520538-6485.txt containing exactly the two characters "hi" (no trailing period). Use the Write file tool and nothing else; do not use shell commands.
+						13624 text Failed
+						13625 text 1s
+						13626 text 10h ago
+			13627 container ◴ ACTIVITY TIMELINE
+				13628 heading ◴ ACTIVITY TIMELINE, Value: 2, ID: ops-activity-h
+					13629 text ◴
+					13630 text ACTIVITY TIMELINE
+				13631 container
+					13632 container
+						13633 text 16:27
+						13634 text START · run 586521f1
+					13635 container
+						13636 text 15:15
+						13637 text COMPLETE · run 83ef3ea6
+					13638 container
+						13639 text 15:08
+						13640 text COMPLETE · run 5207afc5
+					13641 container
+						13642 text 13:35
+						13643 text COMPLETE · run 9ab3717a
+					13644 container
+						13645 text 13:34
+						13646 text COMPLETE · run 82f195c0
+					13647 container
+						13648 text 13:33
+						13649 text FAILED · run 880030c9
+					13650 container
+						13651 text 13:32
+						13652 text FAILED · run abf5ef37
+					13653 container
+						13654 text 13:32
+						13655 text START · run abf5ef37
+					13656 container
+						13657 text 13:29
+						13658 text START · run 880030c9
+					13659 container
+						13660 text 13:26
+						13661 text COMPLETE · run 207e5015
+					13662 container
+						13663 text 13:25
+						13664 text START · run 207e5015
+					13665 container
+						13666 text 13:24
+						13667 text CANCELLED · run aee5b52d
+			13668 container ☀ TODAY'S BRIEFING GENERATED 16:32
+				13669 heading ☀ TODAY'S BRIEFING GENERATED 16:32, Value: 2, ID: ops-brief-h
+					13670 text ☀
+					13671 text TODAY'S BRIEFING
+					13672 text GENERATED
+					13673 text 16:32
+				13674 text Afternoon. 96 agents on deck, 1 active run. 303 runs failed — investigate.
+				13675 container
+					13676 text ACTIVE AGENTS
+					13677 text 96
+				13678 container
+					13679 text RUNNING
+					13680 text 1
+				13681 container
+					13682 text COMPLETED TODAY
+					13683 text 29
+				13684 container
+					13685 text PENDING REVIEWS
+					13686 text 18
+				13687 text ⚠
+				13688 text 303
+				13689 text failed run
+				13690 text s
+				13691 text need attention.
+		1839 button (expanded) Close Aria panel, Secondary Actions: Collapse
+		13692 container Aria assistant
+			13693 container
+				13694 text Aria
+				13695 text PERSONAL ASSISTANT · ALWAYS ON
+				13696 code, Help: reuse-conv-1789767597773-5291
+					13697 text reuse-co
+					13698 text ...
+				13699 button Copy conversation ID, Help: Copy conversation ID to clipboard
+					13700 text 📋
+				13701 button Clear and start new conversation, Help: Clear and start new conversation
+					13702 text Clear
+				13703 button Close Aria
+					13704 text ×
+			13705 container
+				13786 text For this conversation only, please remember the code MAGNOLIA-77. Reply with just: acknowledged.
+				13787 text YOU
+				13788 text ·
+				13789 text 16:29
+				13791 text Acknowledged.
+				13792 text ARIA
+				13793 text ·
+				13794 text 16:30
+				13795 text What code did I ask you to remember in this conversation? Reply with just the code.
+				13796 text YOU
+				13797 text ·
+				13798 text 16:31
+				13799 text MAGNOLIA-77
+				13800 text ARIA
+				13801 text ·
+				13802 text 16:31
+			13718 container
+				13719 text entry area (settable) Ask Aria anything… (type / for skills)
+				13720 button (disabled) Send message
+					13721 text SEND
+			13722 text ARIA STREAMS LIVE · ACTS ON THE LIVE SYSTEM · REVIEW APPROVALS BEFORE DESTRUCTIVE MOVES.
+		13723 complementary Agent live drawer
+			13724 sectionheader
+				13725 text WF
+				13726 text NATIVE · —
+				13727 heading WfDfAgent-1789758120435, Value: 3
+					13728 text WfDfAgent-1789758120435
+				13729 text Online
+				13730 button Close
+					13731 text ✕
+			13732 container
+				13733 text STATUS
+				13734 text Idle — awaiting work
+				13735 text RUN FAILED
+				13736 text Iteration 1 failed: LangChain ADK error: Error code: 402 - {'error': {'message': 'Insufficient Balance', 'type': 'unknown_error', 'param': None, 'code': 'invalid_request_error'}}; LangChain ADK error: Error code: 402 - {'error': {'message': 'Insufficient Balance', 'type': 'unknown_error', 'param': None, 'code': 'invalid_request_error'}}
+				13737 text LIVE ACTIVITY STREAM
+				13738 text WINDOW · LAST 60 LINES · AUTO-FOLLOW
+				13739 button ▾ collapse
+				13740 text 03:02:29
+				13741 text WARN
+				13742 text Agent Progress · status
+				13743 text 03:02:29
+				13744 text WARN
+				13745 text Agent Progress · status
+				13746 text 03:02:31
+				13747 text WARN
+				13748 text Agent Progress · status
+				13749 text RESOURCES
+				13750 text ACTIVE RUNS
+				13751 text 0
+				13752 container
+					13753 text total
+					13754 text 4
+				13755 text RUNTIME
+				13756 container
+					13757 text 0
+					13758 text m
+				13759 text since current run start
+				13760 text ASSIGNED SKILLS
+				13761 text --
+				13762 text No skills assigned
+				13763 text ASSIGNED TOOLS
+				13764 text --
+				13765 text No tools assigned
+				13766 container
+					13767 DisclosureTriangle (collapsed) CONFIG, Secondary Actions: Expand
+						13768 text CONFIG
+				13769 container
+					13770 text ORDER CONSOLE
+					13771 text ⌘ + ↵ TO SEND
+				13772 text ▶ SEND INSTRUCTION TO
+				13773 text WFDFAGENT-1789758120435
+				13774 text 🎯 Focus highest priority
+				13775 text 🔁 Submit when ready
+				13776 text ⏸ Pause & wait
+				13777 text ⛔ Stop run
+				13778 text entry area (settable) Description: Order instruction, Value: For this conversation only, please remember the code MAGNOLIA-77. Reply with just: acknowledged.
+					13779 text For this conversation only, please remember the code MAGNOLIA-77. Reply with just: acknowledged.
+				13780 button (disabled) Send ▶
+			13781 sectionfooter
+				13782 button (disabled) ⏸ Pause
+				13783 button (disabled) ▶ Resume
+				13784 button (disabled) ⛔ Stop
+				13785 button Close
+
+The focused UI element is 0 AXWebArea Aria Conductor, URL: localhost:5273/ops

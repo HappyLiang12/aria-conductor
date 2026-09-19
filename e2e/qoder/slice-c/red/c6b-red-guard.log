@@ -1,0 +1,3 @@
+$ QODER_E2E_MODEL=gpt-5 QODER_E2E_PAT=wcp_test_dummy EVIDENCE_DIR=/tmp/c6b-red-guard-evd ./e2e/qoder/slice-c/run-all.sh --only S1
+[c6b] ERROR: QODER_E2E_MODEL='gpt-5' is not a zero-credit model {efficient, lite}; local E2E Qoder runs must use a 0.00x-credit model (plan Global Constraint — mirrors QoderSandboxHarness). Set QODER_E2E_ALLOW_PAID=1 to use a paid model explicitly.
+EXIT=2

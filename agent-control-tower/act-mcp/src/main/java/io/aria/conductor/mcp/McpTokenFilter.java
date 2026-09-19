@@ -5,54 +5,90 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.List;
+import java.util.Optional;
 
 /**
- * Bearer guard for the MCP message endpoint (/mcp, /mcp/message) and the SSE
- * handshake (/sse) — registered ONLY when aria.mcp.auth-mode=token
- * (v1 default is none: auth deferred, audit logging is the safeguard).
- * Ordered after CorrelationIdFilter (HIGHEST_PRECEDENCE).
+ * Identity guard for the MCP HTTP surfaces, active in BOTH auth modes
+ * (C4 ruling 2). It resolves every protected request through
+ * {@link WorkerScopeResolver} to exactly one of:
+ *
+ * <ul>
+ *   <li><b>OPERATOR</b> — the operator bearer matches byte-for-byte (token mode,
+ *       frozen behaviour), or no Authorization header is present in none mode
+ *       (v1 behaviour unchanged).</li>
+ *   <li><b>WORKER(scope)</b> — the bearer resolves to a live worker credential,
+ *       on the streamable endpoint {@code /mcp} only, where the per-request
+ *       transport context lets the governance aspect re-bind the identity at the
+ *       tool seam (ruling 3). The SSE surfaces ({@code /sse},
+ *       {@code /mcp/message}) carry no per-request transport context, so a worker
+ *       credential there would be enforced nowhere: it is rejected 401 rather
+ *       than admitted unenforced (fail closed).</li>
+ *   <li><b>401</b> — token mode without a bearer (frozen), or any present bearer
+ *       that is neither the operator token nor a live worker credential.
+ *       Rejecting a present-but-invalid bearer in none mode is the deliberate
+ *       C4 fail-closed change: previously any header was ignored.</li>
+ * </ul>
+ *
+ * <p>The resolved identity is bound to the request thread via
+ * {@link McpCallerContext} and cleared in a {@code finally} block. Nothing here
+ * is ever logged, and the presented token material is never retained.
  */
 @Component
-@ConditionalOnProperty(prefix = "aria.mcp", name = "auth-mode", havingValue = "token")
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class McpTokenFilter extends OncePerRequestFilter {
 
     private static final List<String> PROTECTED_PATHS = List.of("/mcp", "/mcp/message", "/sse");
 
-    private final McpProperties properties;
+    /** The only surface that can re-bind identity at the tool seam (ruling 3). */
+    private static final String STREAMABLE_PATH = "/mcp";
 
-    public McpTokenFilter(McpProperties properties) {
+    private final McpProperties properties;
+    private final WorkerScopeResolver workerScopeResolver;
+
+    public McpTokenFilter(McpProperties properties, WorkerScopeResolver workerScopeResolver) {
         if (properties.isTokenMode() && (properties.getToken() == null || properties.getToken().isBlank())) {
             throw new IllegalStateException(
                     "aria.mcp.token must be set when aria.mcp.auth-mode=token (refusing a guessable empty bearer)");
         }
         this.properties = properties;
+        this.workerScopeResolver = workerScopeResolver;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        if (!PROTECTED_PATHS.contains(request.getRequestURI())) {
+        String path = request.getRequestURI();
+        if (!PROTECTED_PATHS.contains(path)) {
             chain.doFilter(request, response);
             return;
         }
-        String expected = "Bearer " + properties.getToken();
-        String actual = request.getHeader("Authorization");
-        if (actual == null || !MessageDigest.isEqual(
-                expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8))) {
+        Optional<McpCallerContext.Caller> identity =
+                workerScopeResolver.resolveAuthorization(request.getHeader("Authorization"));
+        if (identity.isEmpty() || !transportCanEnforce(identity.get(), path)) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             return;
         }
-        chain.doFilter(request, response);
+        McpCallerContext.set(identity.get());
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            McpCallerContext.clear();
+        }
+    }
+
+    /**
+     * Worker identities are only admitted where the streamable transport can
+     * propagate them to the tool invocation (ruling 3). Operator access keeps
+     * working on every protected path.
+     */
+    private static boolean transportCanEnforce(McpCallerContext.Caller caller, String path) {
+        return !caller.isWorker() || STREAMABLE_PATH.equals(path);
     }
 }

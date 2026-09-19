@@ -237,6 +237,10 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     private Duration bridgeReadyPollInterval = READY_POLL_INTERVAL;
     /** Bridge-start re-issue interval while readiness is unproven (overridable in tests). */
     private Duration bridgeStartRetryInterval = BRIDGE_START_RETRY_INTERVAL;
+    /** Execd-readiness budget (overridable in tests). */
+    private Duration execdReadyTimeout = EXECD_READY_TIMEOUT;
+    /** Execd-readiness probe interval (overridable in tests). */
+    private long execdReadyPollMs = EXECD_READY_POLL_MS;
     /** Cancel-to-kill grace (overridable in tests). */
     private Duration stopGrace = STOP_GRACE;
 
@@ -1085,12 +1089,17 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      * {@link SandboxLifecycle#runBackgroundCommand} (the same long-lived-process pattern
      * as the opencode {@code serve} launch). The command inherits the container env, so
      * no secret rides this call. Because that call is fire-and-forget, a command issued
-     * before the sandbox exec channel accepts connections is lost silently — hence the
-     * {@link #awaitExecdReady} gate first, and a bounded re-issue every
-     * {@link #BRIDGE_START_RETRY_INTERVAL} while readiness stays unproven.
+     * before the sandbox exec channel accepts connections is lost silently — so
+     * {@link #awaitExecdReady} gates this loop, and if the exec channel never comes up the
+     * whole loop is doomed (every start re-issue would be lost): the failure is raised
+     * before the loop starts and names the exec channel, not the bridge.
      */
     private void waitForBridgeReady(QoderBridgeClient client, String sandboxId, UUID agentId) {
-        awaitExecdReady(sandboxId, agentId);
+        if (!awaitExecdReady(sandboxId, agentId)) {
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Sandbox exec channel did not become ready within " + execdReadyTimeout.toSeconds()
+                            + "s for agent " + agentId);
+        }
         long deadlineNanos = System.nanoTime() + bridgeReadyTimeout.toNanos();
         long nextStartNanos = System.nanoTime();
         while (true) {
@@ -1127,33 +1136,32 @@ public class QoderAdkProvider extends AbstractAdkProvider {
      *
      * <p>Sandboxes are created with {@code skipHealthCheck=true} (execd lags the sandbox
      * record), and commands issued before execd is up fail at connect time and are lost
-     * for the fire-and-forget background launch. Never fatal: if execd stays down the
-     * bridge-readiness loop below still produces the typed
-     * {@code SANDBOX_UNAVAILABLE} failure within its own budget.
+     * for the fire-and-forget background launch. Returns {@code false} when the channel
+     * never came up within the budget: the caller fails the preparation immediately —
+     * the bridge-start loop below cannot succeed over a dead channel.
      */
-    private void awaitExecdReady(String sandboxId, UUID agentId) {
-        long deadlineNanos = System.nanoTime() + EXECD_READY_TIMEOUT.toNanos();
+    private boolean awaitExecdReady(String sandboxId, UUID agentId) {
+        long deadlineNanos = System.nanoTime() + execdReadyTimeout.toNanos();
         int attempts = 0;
         while (true) {
             try {
                 sandboxLifecycle.runCommand(sandboxId, "true");
-                return;
+                return true;
             } catch (Exception e) {
                 attempts++;
                 log.debug("Sandbox exec channel not ready for agent {} (sandbox {}), attempt {}: {}",
                         agentId, sandboxId, attempts, e.getMessage());
             }
             if (System.nanoTime() >= deadlineNanos) {
-                log.warn("Sandbox exec channel still not ready after {}s for agent {} (sandbox {}) —"
-                                + " continuing with the bridge readiness probe",
-                        EXECD_READY_TIMEOUT.toSeconds(), agentId, sandboxId);
-                return;
+                log.warn("Sandbox exec channel still not ready after {}s for agent {} (sandbox {})",
+                        execdReadyTimeout.toSeconds(), agentId, sandboxId);
+                return false;
             }
             try {
-                Thread.sleep(EXECD_READY_POLL_MS);
+                Thread.sleep(execdReadyPollMs);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                return false;
             }
         }
     }
@@ -1406,6 +1414,16 @@ public class QoderAdkProvider extends AbstractAdkProvider {
     /** Test-only: shrink the bridge-start re-issue interval. */
     void setBridgeStartRetryIntervalForTest(Duration interval) {
         this.bridgeStartRetryInterval = interval;
+    }
+
+    /** Test-only: shrink the execd readiness budget. */
+    void setExecdReadyTimeoutForTest(Duration timeout) {
+        this.execdReadyTimeout = timeout;
+    }
+
+    /** Test-only: shrink the execd readiness probe interval. */
+    void setExecdReadyPollMsForTest(long intervalMs) {
+        this.execdReadyPollMs = intervalMs;
     }
 
     /** Test-only: shrink the cancel-to-kill grace. */

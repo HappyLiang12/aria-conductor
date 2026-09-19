@@ -1199,6 +1199,28 @@ class QoderAdkProviderTest {
         assertThat(provider.instancesForTest()).containsKey(agentId);
     }
 
+    // ---- fix-round 2: execd-dead fail-fast (the 2026-09-19 run-586521f1 misdiagnosis) ----
+
+    @Test
+    void prepareAgent_execdNeverReady_failsFastWithTheExecChannelMessage() {
+        UUID agentId = UUID.randomUUID();
+        provider.setExecdReadyTimeoutForTest(Duration.ofMillis(500));
+        provider.setExecdReadyPollMsForTest(50);
+        when(sandboxLifecycle.runCommand(SANDBOX_ID, "true"))
+                .thenThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                        "Command execution failed in sandbox sb-1: connection refused"));
+
+        assertThatThrownBy(() -> provider.prepareAgent(agentId, agent(agentId)))
+                .isInstanceOf(TaskExecutionException.class)
+                .hasMessageContaining("exec channel")
+                .hasMessageContaining(agentId.toString());
+
+        // With the exec channel dead the bridge loop is doomed: every fire-and-forget start is
+        // lost, so none of it may run — the failure must name the exec channel, not the bridge.
+        verify(sandboxLifecycle, never()).runBackgroundCommand(eq(SANDBOX_ID), anyString(), anyMap());
+        verify(client, never()).health();
+    }
+
     // ---- fix-round 1, item 5: one sandbox preparation per agent, no second owner ----
 
     @Test

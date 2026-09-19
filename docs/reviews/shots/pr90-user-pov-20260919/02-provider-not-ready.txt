@@ -1,0 +1,615 @@
+Browser tab: 1551191682, Title: "Aria Conductor", URL: "http://localhost:5273/providers".
+0 AXWebArea Aria Conductor, URL: localhost:5273/providers
+	1 container, ID: root
+		2 container
+			3 heading Aria Conductor ARIA CONDUCTOR · LOCAL, Value: 1
+				4 text Aria Conductor
+				5 text ARIA CONDUCTOR · LOCAL
+			6 text 95
+			7 text Agents
+			8 text 2 of 3 Providers Healthy
+			9 text 95
+			10 text ACTIVE AGENTS
+			11 text 0
+			12 text RUNNING RUNS
+			13 text 16
+			14 text APPROVALS PENDING
+			15 text 198
+			16 text TOKENS TODAY
+			17 container Current time
+				18 text 12:56:13
+			19 button Notifications (666 unread)
+				20 text 🔔
+				21 text 99+
+			22 button Toggle theme
+				23 text ☀ Light
+		24 container Main views
+			25 button Overview
+			26 button Crew
+			27 button Providers
+			28 button Runs
+			29 button Knowledge
+			30 button Reports
+			31 button Chat
+			32 button Workflows
+			33 button Ops
+			34 button Jobs
+			35 button Open configuration
+				36 text Configure
+		37 container
+			3650 heading AGENT PROVIDERS, Value: 2
+				3651 text AGENT PROVIDERS
+			3652 table
+				3653 rowgroup
+					3654 row
+						3655 cell ID
+							3656 text ID
+						3657 cell DISPLAY NAME
+							3658 text DISPLAY NAME
+						3659 cell CAPABILITY
+							3660 text CAPABILITY
+						3661 cell DEFAULT
+							3662 text DEFAULT
+						3663 cell HEALTH
+							3664 text HEALTH
+				3665 row
+					3666 cell opencode
+						3667 text opencode
+					3668 cell OpenCode
+						3669 text OpenCode
+					3670 cell Task
+						3671 text Task
+					3672 cell
+					3673 cell HEALTHY
+						3674 text HEALTHY
+				3675 row
+					3676 cell langchain
+						3677 text langchain
+					3678 cell LangChain ADK
+						3679 text LangChain ADK
+					3680 cell Turn
+						3681 text Turn
+					3682 cell
+					3683 cell UNHEALTHY
+						3684 text UNHEALTHY
+				3685 row
+					3686 cell qoder
+						3687 text qoder
+					3688 cell Qoder
+						3689 text Qoder
+					3690 cell Task
+						3691 text Task
+					3692 cell Default
+						3693 text Default
+					3694 cell HEALTHY
+						3695 text HEALTHY
+			3696 container
+				3697 heading Qoder Provider, Value: 3
+					3698 text Qoder Provider
+				3699 text Runtime credential and service status for the qoder ADK provider. The PAT is encrypted at rest, sent one way, and never displayed again.
+				3700 text CREDENTIAL
+				4217 text NOT CONFIGURED
+				4218 text Save a Qoder personal access token (PAT) to enable qoder runs.
+				3702 text SANDBOX SERVICE
+				3703 text HEALTHY
+				3704 text BRIDGE READINESS
+				4219 text BLOCKED
+				4220 text no credential saved
+				3706 text A configured PAT alone is not sufficient: the sandbox service must be reachable before qoder runs can start.
+				4221 container
+					4222 text PERSONAL ACCESS TOKEN (PAT)
+					4223 text field (settable) PERSONAL ACCESS TOKEN (PAT)
+					4224 button (disabled) Save
+			3707 container
+				3708 heading Per-Agent Backends, Value: 3
+					3709 text Per-Agent Backends
+				3710 table
+					3711 rowgroup
+						3712 row
+							3713 cell AGENT
+								3714 text AGENT
+							3715 cell ADK PROVIDER
+								3716 text ADK PROVIDER
+					3717 row
+						3718 cell SDD BA Agent
+							3719 text SDD BA Agent
+						3720 cell qoder
+							3721 text qoder
+					3722 row
+						3723 cell SDD DEV Agent
+							3724 text SDD DEV Agent
+						3725 cell qoder
+							3726 text qoder
+					3727 row
+						3728 cell SDD QA Agent
+							3729 text SDD QA Agent
+						3730 cell qoder
+							3731 text qoder
+					3732 row
+						3733 cell c6b-s5-20260918-184323
+							3734 text c6b-s5-20260918-184323
+						3735 cell qoder
+							3736 text qoder
+					3737 row
+						3738 cell c6b-s10-20260918-184450
+							3739 text c6b-s10-20260918-184450
+						3740 cell qoder
+							3741 text qoder
+					3742 row
+						3743 cell Rec-1789757752359
+							3744 text Rec-1789757752359
+						3745 cell langchain
+							3746 text langchain
+					3747 row
+						3748 cell RecApply-1789757756681
+							3749 text RecApply-1789757756681
+						3750 cell langchain
+							3751 text langchain
+					3752 row
+						3753 cell Developer Agent
+							3754 text Developer Agent
+						3755 cell langchain
+							3756 text langchain
+					3757 row
+						3758 cell Developer Agent
+							3759 text Developer Agent
+						3760 cell langchain
+							3761 text langchain
+					3762 row
+						3763 cell WfDfAgent-1789758120435
+							3764 text WfDfAgent-1789758120435
+						3765 cell langchain
+							3766 text langchain
+					3767 row
+						3768 cell WfE2EAgent-1789758132290
+							3769 text WfE2EAgent-1789758132290
+						3770 cell langchain
+							3771 text langchain
+					3772 row
+						3773 cell WfSmAgent-1789758136414
+							3774 text WfSmAgent-1789758136414
+						3775 cell langchain
+							3776 text langchain
+					3777 row
+						3778 cell WfTplAgent-1789758161170
+							3779 text WfTplAgent-1789758161170
+						3780 cell langchain
+							3781 text langchain
+					3782 row
+						3783 cell WfUiAgent-1789758166454
+							3784 text WfUiAgent-1789758166454
+						3785 cell langchain
+							3786 text langchain
+					3787 row
+						3788 cell WfE2EAgent-1789758186149
+							3789 text WfE2EAgent-1789758186149
+						3790 cell langchain
+							3791 text langchain
+					3792 row
+						3793 cell WfSmAgent-1789758186185
+							3794 text WfSmAgent-1789758186185
+						3795 cell langchain
+							3796 text langchain
+					3797 row
+						3798 cell WfValAgent-1789758229037
+							3799 text WfValAgent-1789758229037
+						3800 cell langchain
+							3801 text langchain
+					3802 row
+						3803 cell WfYamlAgent-1789758234999
+							3804 text WfYamlAgent-1789758234999
+						3805 cell langchain
+							3806 text langchain
+					3807 row
+						3808 cell E2E-BA-1789758249649-6797
+							3809 text E2E-BA-1789758249649-6797
+						3810 cell langchain
+							3811 text langchain
+					3812 row
+						3813 cell E2E-Dev-1789758249660-2967
+							3814 text E2E-Dev-1789758249660-2967
+						3815 cell langchain
+							3816 text langchain
+					3817 row
+						3818 cell E2E-QA-1789758249670-7443
+							3819 text E2E-QA-1789758249670-7443
+						3820 cell langchain
+							3821 text langchain
+					3822 row
+						3823 cell E2E-Iso-B-1789758249850-7222
+							3824 text E2E-Iso-B-1789758249850-7222
+						3825 cell langchain
+							3826 text langchain
+					3827 row
+						3828 cell E2E-Iso-A-1789758249848-6698
+							3829 text E2E-Iso-A-1789758249848-6698
+						3830 cell langchain
+							3831 text langchain
+					3832 row
+						3833 cell WfSmAgent-1789758347804
+							3834 text WfSmAgent-1789758347804
+						3835 cell langchain
+							3836 text langchain
+					3837 row
+						3838 cell WfE2EAgent-1789758347769
+							3839 text WfE2EAgent-1789758347769
+						3840 cell langchain
+							3841 text langchain
+					3842 row
+						3843 cell Rec-1789758453648
+							3844 text Rec-1789758453648
+						3845 cell langchain
+							3846 text langchain
+					3847 row
+						3848 cell RecApply-1789758462156
+							3849 text RecApply-1789758462156
+						3850 cell langchain
+							3851 text langchain
+					3852 row
+						3853 cell RecApply-1789758647416
+							3854 text RecApply-1789758647416
+						3855 cell langchain
+							3856 text langchain
+					3857 row
+						3858 cell Developer Agent
+							3859 text Developer Agent
+						3860 cell langchain
+							3861 text langchain
+					3862 row
+						3863 cell Developer Agent
+							3864 text Developer Agent
+						3865 cell langchain
+							3866 text langchain
+					3867 row
+						3868 cell WfDfAgent-1789759102064
+							3869 text WfDfAgent-1789759102064
+						3870 cell langchain
+							3871 text langchain
+					3872 row
+						3873 cell WfE2EAgent-1789759118171
+							3874 text WfE2EAgent-1789759118171
+						3875 cell langchain
+							3876 text langchain
+					3877 row
+						3878 cell WfSmAgent-1789759120287
+							3879 text WfSmAgent-1789759120287
+						3880 cell langchain
+							3881 text langchain
+					3882 row
+						3883 cell WfTplAgent-1789759156191
+							3884 text WfTplAgent-1789759156191
+						3885 cell langchain
+							3886 text langchain
+					3887 row
+						3888 cell WfUiAgent-1789759160894
+							3889 text WfUiAgent-1789759160894
+						3890 cell langchain
+							3891 text langchain
+					3892 row
+						3893 cell WfValAgent-1789759168353
+							3894 text WfValAgent-1789759168353
+						3895 cell langchain
+							3896 text langchain
+					3897 row
+						3898 cell WfYamlAgent-1789759177768
+							3899 text WfYamlAgent-1789759177768
+						3900 cell langchain
+							3901 text langchain
+					3902 row
+						3903 cell E2E-BA-1789759243794-1202
+							3904 text E2E-BA-1789759243794-1202
+						3905 cell langchain
+							3906 text langchain
+					3907 row
+						3908 cell E2E-Dev-1789759243820-357
+							3909 text E2E-Dev-1789759243820-357
+						3910 cell langchain
+							3911 text langchain
+					3912 row
+						3913 cell E2E-QA-1789759243829-1543
+							3914 text E2E-QA-1789759243829-1543
+						3915 cell langchain
+							3916 text langchain
+					3917 row
+						3918 cell E2E-Iso-A-1789759244035-6180
+							3919 text E2E-Iso-A-1789759244035-6180
+						3920 cell langchain
+							3921 text langchain
+					3922 row
+						3923 cell E2E-Iso-B-1789759244036-6148
+							3924 text E2E-Iso-B-1789759244036-6148
+						3925 cell langchain
+							3926 text langchain
+					3927 row
+						3928 cell c6b-s5-20260918-210137
+							3929 text c6b-s5-20260918-210137
+						3930 cell qoder
+							3931 text qoder
+					3932 row
+						3933 cell c6b-s10-20260918-211613
+							3934 text c6b-s10-20260918-211613
+						3935 cell qoder
+							3936 text qoder
+					3937 row
+						3938 cell Rec-1789767589847
+							3939 text Rec-1789767589847
+						3940 cell langchain
+							3941 text langchain
+					3942 row
+						3943 cell RecApply-1789767612704
+							3944 text RecApply-1789767612704
+						3945 cell langchain
+							3946 text langchain
+					3947 row
+						3948 cell QA Agent
+							3949 text QA Agent
+						3950 cell langchain
+							3951 text langchain
+					3952 row
+						3953 cell QA Agent
+							3954 text QA Agent
+						3955 cell langchain
+							3956 text langchain
+					3957 row
+						3958 cell e2e-agent-1789767946593-8463
+							3959 text e2e-agent-1789767946593-8463
+						3960 cell langchain
+							3961 text langchain
+					3962 row
+						3963 cell e2e-agent-1789767955897-1365
+							3964 text e2e-agent-1789767955897-1365
+						3965 cell langchain
+							3966 text langchain
+					3967 row
+						3968 cell e2e-agent-1789767959967-8297
+							3969 text e2e-agent-1789767959967-8297
+						3970 cell langchain
+							3971 text langchain
+					3972 row
+						3973 cell e2e-agent-1789767971290-194
+							3974 text e2e-agent-1789767971290-194
+						3975 cell langchain
+							3976 text langchain
+					3977 row
+						3978 cell e2e-agent-1789767978117-4292
+							3979 text e2e-agent-1789767978117-4292
+						3980 cell langchain
+							3981 text langchain
+					3982 row
+						3983 cell e2e-agent-1789767988303-3267
+							3984 text e2e-agent-1789767988303-3267
+						3985 cell langchain
+							3986 text langchain
+					3987 row
+						3988 cell e2e-agent-1789767998159-897
+							3989 text e2e-agent-1789767998159-897
+						3990 cell langchain
+							3991 text langchain
+					3992 row
+						3993 cell e2e-oc-hitl-1789767999717-8015
+							3994 text e2e-oc-hitl-1789767999717-8015
+						3995 cell opencode
+							3996 text opencode
+					3997 row
+						3998 cell e2e-agent-1789768030192-1502
+							3999 text e2e-agent-1789768030192-1502
+						4000 cell langchain
+							4001 text langchain
+					4002 row
+						4003 cell e2e-oc-opsap-1789768047026-3547
+							4004 text e2e-oc-opsap-1789768047026-3547
+						4005 cell opencode
+							4006 text opencode
+					4007 row
+						4008 cell e2e-agent-1789768066859-240
+							4009 text e2e-agent-1789768066859-240
+						4010 cell langchain
+							4011 text langchain
+					4012 row
+						4013 cell e2e-agent-1789768093709-7118
+							4014 text e2e-agent-1789768093709-7118
+						4015 cell langchain
+							4016 text langchain
+					4017 row
+						4018 cell e2e-agent-1789768099969-8723
+							4019 text e2e-agent-1789768099969-8723
+						4020 cell langchain
+							4021 text langchain
+					4022 row
+						4023 cell e2e-oc-uidz-1789768112085-1125
+							4024 text e2e-oc-uidz-1789768112085-1125
+						4025 cell opencode
+							4026 text opencode
+					4027 row
+						4028 cell e2e-agent-1789768126418-7734
+							4029 text e2e-agent-1789768126418-7734
+						4030 cell langchain
+							4031 text langchain
+					4032 row
+						4033 cell e2e-oc-uiaz-1789768127387-7074
+							4034 text e2e-oc-uiaz-1789768127387-7074
+						4035 cell opencode
+							4036 text opencode
+					4037 row
+						4038 cell e2e-agent-1789768173879-1138
+							4039 text e2e-agent-1789768173879-1138
+						4040 cell langchain
+							4041 text langchain
+					4042 row
+						4043 cell WfDfAgent-1789768184601
+							4044 text WfDfAgent-1789768184601
+						4045 cell langchain
+							4046 text langchain
+					4047 row
+						4048 cell WfE2EAgent-1789768222873
+							4049 text WfE2EAgent-1789768222873
+						4050 cell langchain
+							4051 text langchain
+					4052 row
+						4053 cell WfSmAgent-1789768233301
+							4054 text WfSmAgent-1789768233301
+						4055 cell langchain
+							4056 text langchain
+					4057 row
+						4058 cell WfTplAgent-1789768240995
+							4059 text WfTplAgent-1789768240995
+						4060 cell langchain
+							4061 text langchain
+					4062 row
+						4063 cell WfUiAgent-1789768249769
+							4064 text WfUiAgent-1789768249769
+						4065 cell langchain
+							4066 text langchain
+					4067 row
+						4068 cell WfValAgent-1789768267571
+							4069 text WfValAgent-1789768267571
+						4070 cell langchain
+							4071 text langchain
+					4072 row
+						4073 cell WfYamlAgent-1789768277456
+							4074 text WfYamlAgent-1789768277456
+						4075 cell langchain
+							4076 text langchain
+					4077 row
+						4078 cell WfDfAgent-1789768294815
+							4079 text WfDfAgent-1789768294815
+						4080 cell langchain
+							4081 text langchain
+					4082 row
+						4083 cell e2e-oc-deny-1789768323810-8336
+							4084 text e2e-oc-deny-1789768323810-8336
+						4085 cell opencode
+							4086 text opencode
+					4087 row
+						4088 cell e2e-git-gate-agent-1789768326586-8502
+							4089 text e2e-git-gate-agent-1789768326586-8502
+						4090 cell langchain
+							4091 text langchain
+					4092 row
+						4093 cell e2e-oc-changes-1789768331282-4861
+							4094 text e2e-oc-changes-1789768331282-4861
+						4095 cell opencode
+							4096 text opencode
+					4097 row
+						4098 cell E2E-BA-1789768338657-4474
+							4099 text E2E-BA-1789768338657-4474
+						4100 cell langchain
+							4101 text langchain
+					4102 row
+						4103 cell E2E-Dev-1789768338706-3470
+							4104 text E2E-Dev-1789768338706-3470
+						4105 cell langchain
+							4106 text langchain
+					4107 row
+						4108 cell E2E-QA-1789768338723-38
+							4109 text E2E-QA-1789768338723-38
+						4110 cell langchain
+							4111 text langchain
+					4112 row
+						4113 cell E2E-Iso-A-1789768339161-2919
+							4114 text E2E-Iso-A-1789768339161-2919
+						4115 cell langchain
+							4116 text langchain
+					4117 row
+						4118 cell E2E-Iso-B-1789768339162-2919
+							4119 text E2E-Iso-B-1789768339162-2919
+						4120 cell langchain
+							4121 text langchain
+					4122 row
+						4123 cell e2e-skill-agent-1789768340087-951
+							4124 text e2e-skill-agent-1789768340087-951
+						4125 cell langchain
+							4126 text langchain
+					4127 row
+						4128 cell e2e-wf-agent-1789768340530-3880
+							4129 text e2e-wf-agent-1789768340530-3880
+						4130 cell langchain
+							4131 text langchain
+					4132 row
+						4133 cell e2e-wf-guard-agent-1789768343024-8437
+							4134 text e2e-wf-guard-agent-1789768343024-8437
+						4135 cell langchain
+							4136 text langchain
+					4137 row
+						4138 cell e2e-wf-cancel-agent-1789768354214-9002
+							4139 text e2e-wf-cancel-agent-1789768354214-9002
+						4140 cell langchain
+							4141 text langchain
+					4142 row
+						4143 cell e2e-wf-merge-agent-1789768363247-6870
+							4144 text e2e-wf-merge-agent-1789768363247-6870
+						4145 cell langchain
+							4146 text langchain
+					4147 row
+						4148 cell e2e-wf-yaml-agent-1789768375157-1985
+							4149 text e2e-wf-yaml-agent-1789768375157-1985
+						4150 cell langchain
+							4151 text langchain
+					4152 row
+						4153 cell e2e-qoder-s4-1789768615850-6950
+							4154 text e2e-qoder-s4-1789768615850-6950
+						4155 cell qoder
+							4156 text qoder
+					4157 row
+						4158 cell e2e-qoder-s4-1789768774124-4859
+							4159 text e2e-qoder-s4-1789768774124-4859
+						4160 cell qoder
+							4161 text qoder
+					4162 row
+						4163 cell c6b-s5-20260918-220205
+							4164 text c6b-s5-20260918-220205
+						4165 cell qoder
+							4166 text qoder
+					4167 row
+						4168 cell e2e-qoder-s9-1789768969567-6684
+							4169 text e2e-qoder-s9-1789768969567-6684
+						4170 cell qoder
+							4171 text qoder
+					4172 row
+						4173 cell c6b-s10-20260918-220325
+							4174 text c6b-s10-20260918-220325
+						4175 cell qoder
+							4176 text qoder
+					4177 row
+						4178 cell e2e-qoder-s4-1789769417941-9935
+							4179 text e2e-qoder-s4-1789769417941-9935
+						4180 cell qoder
+							4181 text qoder
+					4182 row
+						4183 cell e2e-qoder-s4-1789769576003-5027
+							4184 text e2e-qoder-s4-1789769576003-5027
+						4185 cell qoder
+							4186 text qoder
+					4187 row
+						4188 cell c6b-s10-20260918-221526
+							4189 text c6b-s10-20260918-221526
+						4190 cell qoder
+							4191 text qoder
+					4192 row
+						4193 cell e2e-qoder-s4-1789770099436-7004
+							4194 text e2e-qoder-s4-1789770099436-7004
+						4195 cell qoder
+							4196 text qoder
+					4197 row
+						4198 cell e2e-qoder-s4-1789770522471-2262
+							4199 text e2e-qoder-s4-1789770522471-2262
+						4200 cell qoder
+							4201 text qoder
+					4202 row
+						4203 cell e2e-qoder-s4-1789771034038-7768
+							4204 text e2e-qoder-s4-1789771034038-7768
+						4205 cell qoder
+							4206 text qoder
+					4207 row
+						4208 cell e2e-qoder-s4-1789771459825-1503
+							4209 text e2e-qoder-s4-1789771459825-1503
+						4210 cell qoder
+							4211 text qoder
+					4212 row
+						4213 cell e2e-qoder-s4-1789772001446-9888
+							4214 text e2e-qoder-s4-1789772001446-9888
+						4215 cell qoder
+							4216 text qoder
+		3649 button (collapsed) Open Aria panel, Secondary Actions: Expand
+
+The focused UI element is 0 AXWebArea Aria Conductor, URL: localhost:5273/providers

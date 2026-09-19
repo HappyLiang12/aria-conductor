@@ -1,0 +1,4867 @@
+Browser tab: 1551191682, Title: "Aria Conductor", URL: "http://localhost:5273/knowledge".
+0 AXWebArea Aria Conductor, URL: localhost:5273/knowledge
+	1 container, ID: root
+		2 container
+			3 heading Aria Conductor ARIA CONDUCTOR · LOCAL, Value: 1
+				4 text Aria Conductor
+				5 text ARIA CONDUCTOR · LOCAL
+			6 text 97
+			7 text Agents
+			8 text 2 of 3 Providers Healthy
+			9 text 97
+			10 text ACTIVE AGENTS
+			11 text 1
+			12 text RUNNING RUNS
+			13 text 16
+			14 text APPROVALS PENDING
+			15 text 198
+			16 text TOKENS TODAY
+			17 container Current time
+				18 text 13:33:11
+			19 button Notifications (673 unread)
+				20 text 🔔
+				21 text 99+
+			22 button Toggle theme
+				23 text ☀ Light
+		24 container Main views
+			25 button Overview
+			26 button Crew
+			27 button Providers
+			28 button Runs
+			29 button Knowledge
+			30 button Reports
+			31 button Chat
+			32 button Workflows
+			33 button Ops
+			34 button Jobs
+			35 button Open configuration
+				36 text Configure
+		37 container
+			10552 heading Knowledge Governance, Value: 1
+				10553 text Knowledge Governance
+			10554 text Lifecycle of every skill, prompt, script and template — from agent draft to unified library.
+			10555 button ↻ Refresh
+			10556 button + Submit New
+			10557 container
+				10558 heading PROMOTION PATH / GOVERNANCE FLOW, Value: 2
+					10559 text PROMOTION PATH
+					10560 text / GOVERNANCE FLOW
+				10561 container
+					10562 container
+						10563 text STAGE
+						10564 text 01
+					10565 text Agent Draft
+					10566 text Agent captures a new skill, prompt or script as a draft artifact.
+				10567 container
+					10568 container
+						10569 text STAGE
+						10570 text 02
+					10571 text Peer Review
+					10572 text Sibling agents validate logic, security and reuse signals.
+				10573 container
+					10574 container
+						10575 text STAGE
+						10576 text 03
+					10577 text Human Approval
+					10578 text Governance lead signs off on policy, risk and access scope.
+				10579 container
+					10580 container
+						10581 text STAGE
+						10582 text 04
+					10583 text Validated
+					10584 text Item is versioned, signed and access-scoped to consumers.
+				10585 container
+					10586 container
+						10587 text STAGE
+						10588 text 05
+					10589 text Unified Library
+					10590 text Indexed in the shared knowledge fabric; reusable everywhere.
+			10591 container
+				10592 heading PER-AGENT SPACES / 102 AGENTS, Value: 2
+					10593 text PER-AGENT SPACES
+					10594 text /
+					10595 text 102
+					10596 text AGENTS
+				10597 button S SDD BA Agent ba 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					10598 text S
+					10599 text SDD BA Agent
+					10600 text ba
+					10601 text 3
+					10602 text TOTAL
+					10603 text 2
+					10604 text IN REVIEW
+					10605 text 1
+					10606 text LIVE
+				10607 button S SDD DEV Agent dev 9 TOTAL 9 IN REVIEW 0 LIVE CLICK TO OPEN
+					10608 text S
+					10609 text SDD DEV Agent
+					10610 text dev
+					10611 text 9
+					10612 text TOTAL
+					10613 text 9
+					10614 text IN REVIEW
+					10615 text 0
+					10616 text LIVE
+				10617 button S SDD QA Agent qa 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					10618 text S
+					10619 text SDD QA Agent
+					10620 text qa
+					10621 text 1
+					10622 text TOTAL
+					10623 text 1
+					10624 text IN REVIEW
+					10625 text 0
+					10626 text LIVE
+				10627 button C c6b-s5-20260918-184323 dev 3 TOTAL 3 IN REVIEW 0 LIVE CLICK TO OPEN
+					10628 text C
+					10629 text c6b-s5-20260918-184323
+					10630 text dev
+					10631 text 3
+					10632 text TOTAL
+					10633 text 3
+					10634 text IN REVIEW
+					10635 text 0
+					10636 text LIVE
+				10637 button C c6b-s10-20260918-184450 dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					10638 text C
+					10639 text c6b-s10-20260918-184450
+					10640 text dev
+					10641 text 2
+					10642 text TOTAL
+					10643 text 2
+					10644 text IN REVIEW
+					10645 text 0
+					10646 text LIVE
+				10647 button R Rec-1789757752359 dev 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					10648 text R
+					10649 text Rec-1789757752359
+					10650 text dev
+					10651 text 3
+					10652 text TOTAL
+					10653 text 2
+					10654 text IN REVIEW
+					10655 text 1
+					10656 text LIVE
+				10657 button R RecApply-1789757756681 dev 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					10658 text R
+					10659 text RecApply-1789757756681
+					10660 text dev
+					10661 text 3
+					10662 text TOTAL
+					10663 text 2
+					10664 text IN REVIEW
+					10665 text 1
+					10666 text LIVE
+				10667 button D Developer Agent dev 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					10668 text D
+					10669 text Developer Agent
+					10670 text dev
+					10671 text 1
+					10672 text TOTAL
+					10673 text 1
+					10674 text IN REVIEW
+					10675 text 0
+					10676 text LIVE
+				10677 button D Developer Agent dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					10678 text D
+					10679 text Developer Agent
+					10680 text dev
+					10681 text 2
+					10682 text TOTAL
+					10683 text 2
+					10684 text IN REVIEW
+					10685 text 0
+					10686 text LIVE
+				10687 button W WfDfAgent-1789758120435 NATIVE 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					10688 text W
+					10689 text WfDfAgent-1789758120435
+					10690 text NATIVE
+					10691 text 4
+					10692 text TOTAL
+					10693 text 4
+					10694 text IN REVIEW
+					10695 text 0
+					10696 text LIVE
+				10697 button W WfE2EAgent-1789758132290 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					10698 text W
+					10699 text WfE2EAgent-1789758132290
+					10700 text NATIVE
+					10701 text 4
+					10702 text TOTAL
+					10703 text 3
+					10704 text IN REVIEW
+					10705 text 1
+					10706 text LIVE
+				10707 button W WfSmAgent-1789758136414 NATIVE 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					10708 text W
+					10709 text WfSmAgent-1789758136414
+					10710 text NATIVE
+					10711 text 3
+					10712 text TOTAL
+					10713 text 2
+					10714 text IN REVIEW
+					10715 text 1
+					10716 text LIVE
+				10717 button W WfTplAgent-1789758161170 NATIVE 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					10718 text W
+					10719 text WfTplAgent-1789758161170
+					10720 text NATIVE
+					10721 text 4
+					10722 text TOTAL
+					10723 text 4
+					10724 text IN REVIEW
+					10725 text 0
+					10726 text LIVE
+				10727 button W WfUiAgent-1789758166454 NATIVE 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					10728 text W
+					10729 text WfUiAgent-1789758166454
+					10730 text NATIVE
+					10731 text 4
+					10732 text TOTAL
+					10733 text 4
+					10734 text IN REVIEW
+					10735 text 0
+					10736 text LIVE
+				10737 button W WfE2EAgent-1789758186149 NATIVE 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					10738 text W
+					10739 text WfE2EAgent-1789758186149
+					10740 text NATIVE
+					10741 text 3
+					10742 text TOTAL
+					10743 text 2
+					10744 text IN REVIEW
+					10745 text 1
+					10746 text LIVE
+				10747 button W WfSmAgent-1789758186185 NATIVE 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					10748 text W
+					10749 text WfSmAgent-1789758186185
+					10750 text NATIVE
+					10751 text 4
+					10752 text TOTAL
+					10753 text 4
+					10754 text IN REVIEW
+					10755 text 0
+					10756 text LIVE
+				10757 button W WfValAgent-1789758229037 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					10758 text W
+					10759 text WfValAgent-1789758229037
+					10760 text NATIVE
+					10761 text 4
+					10762 text TOTAL
+					10763 text 3
+					10764 text IN REVIEW
+					10765 text 1
+					10766 text LIVE
+				10767 button W WfYamlAgent-1789758234999 NATIVE 3 TOTAL 3 IN REVIEW 0 LIVE CLICK TO OPEN
+					10768 text W
+					10769 text WfYamlAgent-1789758234999
+					10770 text NATIVE
+					10771 text 3
+					10772 text TOTAL
+					10773 text 3
+					10774 text IN REVIEW
+					10775 text 0
+					10776 text LIVE
+				10777 button E E2E-BA-1789758249649-6797 NATIVE 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					10778 text E
+					10779 text E2E-BA-1789758249649-6797
+					10780 text NATIVE
+					10781 text 4
+					10782 text TOTAL
+					10783 text 4
+					10784 text IN REVIEW
+					10785 text 0
+					10786 text LIVE
+				10787 button E E2E-Dev-1789758249660-2967 NATIVE 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					10788 text E
+					10789 text E2E-Dev-1789758249660-2967
+					10790 text NATIVE
+					10791 text 1
+					10792 text TOTAL
+					10793 text 1
+					10794 text IN REVIEW
+					10795 text 0
+					10796 text LIVE
+				10797 button E E2E-QA-1789758249670-7443 NATIVE 5 TOTAL 1 IN REVIEW 4 LIVE CLICK TO OPEN
+					10798 text E
+					10799 text E2E-QA-1789758249670-7443
+					10800 text NATIVE
+					10801 text 5
+					10802 text TOTAL
+					10803 text 1
+					10804 text IN REVIEW
+					10805 text 4
+					10806 text LIVE
+				10807 button E E2E-Iso-B-1789758249850-7222 NATIVE 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					10808 text E
+					10809 text E2E-Iso-B-1789758249850-7222
+					10810 text NATIVE
+					10811 text 2
+					10812 text TOTAL
+					10813 text 2
+					10814 text IN REVIEW
+					10815 text 0
+					10816 text LIVE
+				10817 button E E2E-Iso-A-1789758249848-6698 NATIVE 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					10818 text E
+					10819 text E2E-Iso-A-1789758249848-6698
+					10820 text NATIVE
+					10821 text 2
+					10822 text TOTAL
+					10823 text 2
+					10824 text IN REVIEW
+					10825 text 0
+					10826 text LIVE
+				10827 button W WfSmAgent-1789758347804 NATIVE 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					10828 text W
+					10829 text WfSmAgent-1789758347804
+					10830 text NATIVE
+					10831 text 1
+					10832 text TOTAL
+					10833 text 1
+					10834 text IN REVIEW
+					10835 text 0
+					10836 text LIVE
+				10837 button W WfE2EAgent-1789758347769 NATIVE 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					10838 text W
+					10839 text WfE2EAgent-1789758347769
+					10840 text NATIVE
+					10841 text 1
+					10842 text TOTAL
+					10843 text 1
+					10844 text IN REVIEW
+					10845 text 0
+					10846 text LIVE
+				10847 button R Rec-1789758453648 dev 5 TOTAL 4 IN REVIEW 1 LIVE CLICK TO OPEN
+					10848 text R
+					10849 text Rec-1789758453648
+					10850 text dev
+					10851 text 5
+					10852 text TOTAL
+					10853 text 4
+					10854 text IN REVIEW
+					10855 text 1
+					10856 text LIVE
+				10857 button R RecApply-1789758462156 dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					10858 text R
+					10859 text RecApply-1789758462156
+					10860 text dev
+					10861 text 2
+					10862 text TOTAL
+					10863 text 2
+					10864 text IN REVIEW
+					10865 text 0
+					10866 text LIVE
+				10867 button R RecApply-1789758647416 dev 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					10868 text R
+					10869 text RecApply-1789758647416
+					10870 text dev
+					10871 text 1
+					10872 text TOTAL
+					10873 text 1
+					10874 text IN REVIEW
+					10875 text 0
+					10876 text LIVE
+				10877 button D Developer Agent dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					10878 text D
+					10879 text Developer Agent
+					10880 text dev
+					10881 text 2
+					10882 text TOTAL
+					10883 text 2
+					10884 text IN REVIEW
+					10885 text 0
+					10886 text LIVE
+				10887 button D Developer Agent dev 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					10888 text D
+					10889 text Developer Agent
+					10890 text dev
+					10891 text 4
+					10892 text TOTAL
+					10893 text 3
+					10894 text IN REVIEW
+					10895 text 1
+					10896 text LIVE
+				10897 button W WfDfAgent-1789759102064 NATIVE 2 TOTAL 0 IN REVIEW 2 LIVE CLICK TO OPEN
+					10898 text W
+					10899 text WfDfAgent-1789759102064
+					10900 text NATIVE
+					10901 text 2
+					10902 text TOTAL
+					10903 text 0
+					10904 text IN REVIEW
+					10905 text 2
+					10906 text LIVE
+				10907 button W WfE2EAgent-1789759118171 NATIVE 2 TOTAL 1 IN REVIEW 1 LIVE CLICK TO OPEN
+					10908 text W
+					10909 text WfE2EAgent-1789759118171
+					10910 text NATIVE
+					10911 text 2
+					10912 text TOTAL
+					10913 text 1
+					10914 text IN REVIEW
+					10915 text 1
+					10916 text LIVE
+				10917 button W WfSmAgent-1789759120287 NATIVE 2 TOTAL 1 IN REVIEW 1 LIVE CLICK TO OPEN
+					10918 text W
+					10919 text WfSmAgent-1789759120287
+					10920 text NATIVE
+					10921 text 2
+					10922 text TOTAL
+					10923 text 1
+					10924 text IN REVIEW
+					10925 text 1
+					10926 text LIVE
+				10927 button W WfTplAgent-1789759156191 NATIVE 3 TOTAL 1 IN REVIEW 2 LIVE CLICK TO OPEN
+					10928 text W
+					10929 text WfTplAgent-1789759156191
+					10930 text NATIVE
+					10931 text 3
+					10932 text TOTAL
+					10933 text 1
+					10934 text IN REVIEW
+					10935 text 2
+					10936 text LIVE
+				10937 button W WfUiAgent-1789759160894 NATIVE 1 TOTAL 0 IN REVIEW 1 LIVE CLICK TO OPEN
+					10938 text W
+					10939 text WfUiAgent-1789759160894
+					10940 text NATIVE
+					10941 text 1
+					10942 text TOTAL
+					10943 text 0
+					10944 text IN REVIEW
+					10945 text 1
+					10946 text LIVE
+				10947 button W WfValAgent-1789759168353 NATIVE 3 TOTAL 1 IN REVIEW 2 LIVE CLICK TO OPEN
+					10948 text W
+					10949 text WfValAgent-1789759168353
+					10950 text NATIVE
+					10951 text 3
+					10952 text TOTAL
+					10953 text 1
+					10954 text IN REVIEW
+					10955 text 2
+					10956 text LIVE
+				10957 button W WfYamlAgent-1789759177768 NATIVE 5 TOTAL 4 IN REVIEW 1 LIVE CLICK TO OPEN
+					10958 text W
+					10959 text WfYamlAgent-1789759177768
+					10960 text NATIVE
+					10961 text 5
+					10962 text TOTAL
+					10963 text 4
+					10964 text IN REVIEW
+					10965 text 1
+					10966 text LIVE
+				10967 button E E2E-BA-1789759243794-1202 NATIVE 4 TOTAL 2 IN REVIEW 2 LIVE CLICK TO OPEN
+					10968 text E
+					10969 text E2E-BA-1789759243794-1202
+					10970 text NATIVE
+					10971 text 4
+					10972 text TOTAL
+					10973 text 2
+					10974 text IN REVIEW
+					10975 text 2
+					10976 text LIVE
+				10977 button E E2E-Dev-1789759243820-357 NATIVE 7 TOTAL 4 IN REVIEW 3 LIVE CLICK TO OPEN
+					10978 text E
+					10979 text E2E-Dev-1789759243820-357
+					10980 text NATIVE
+					10981 text 7
+					10982 text TOTAL
+					10983 text 4
+					10984 text IN REVIEW
+					10985 text 3
+					10986 text LIVE
+				10987 button E E2E-QA-1789759243829-1543 NATIVE 3 TOTAL 3 IN REVIEW 0 LIVE CLICK TO OPEN
+					10988 text E
+					10989 text E2E-QA-1789759243829-1543
+					10990 text NATIVE
+					10991 text 3
+					10992 text TOTAL
+					10993 text 3
+					10994 text IN REVIEW
+					10995 text 0
+					10996 text LIVE
+				10997 button E E2E-Iso-A-1789759244035-6180 NATIVE 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					10998 text E
+					10999 text E2E-Iso-A-1789759244035-6180
+					11000 text NATIVE
+					11001 text 3
+					11002 text TOTAL
+					11003 text 2
+					11004 text IN REVIEW
+					11005 text 1
+					11006 text LIVE
+				11007 button E E2E-Iso-B-1789759244036-6148 NATIVE 5 TOTAL 4 IN REVIEW 1 LIVE CLICK TO OPEN
+					11008 text E
+					11009 text E2E-Iso-B-1789759244036-6148
+					11010 text NATIVE
+					11011 text 5
+					11012 text TOTAL
+					11013 text 4
+					11014 text IN REVIEW
+					11015 text 1
+					11016 text LIVE
+				11017 button C c6b-s5-20260918-210137 dev 9 TOTAL 7 IN REVIEW 2 LIVE CLICK TO OPEN
+					11018 text C
+					11019 text c6b-s5-20260918-210137
+					11020 text dev
+					11021 text 9
+					11022 text TOTAL
+					11023 text 7
+					11024 text IN REVIEW
+					11025 text 2
+					11026 text LIVE
+				11027 button C c6b-s10-20260918-211613 dev 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					11028 text C
+					11029 text c6b-s10-20260918-211613
+					11030 text dev
+					11031 text 4
+					11032 text TOTAL
+					11033 text 4
+					11034 text IN REVIEW
+					11035 text 0
+					11036 text LIVE
+				11037 button R Rec-1789767589847 dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					11038 text R
+					11039 text Rec-1789767589847
+					11040 text dev
+					11041 text 2
+					11042 text TOTAL
+					11043 text 2
+					11044 text IN REVIEW
+					11045 text 0
+					11046 text LIVE
+				11047 button R RecApply-1789767612704 dev 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11048 text R
+					11049 text RecApply-1789767612704
+					11050 text dev
+					11051 text 4
+					11052 text TOTAL
+					11053 text 3
+					11054 text IN REVIEW
+					11055 text 1
+					11056 text LIVE
+				11057 button Q QA Agent qa 5 TOTAL 3 IN REVIEW 2 LIVE CLICK TO OPEN
+					11058 text Q
+					11059 text QA Agent
+					11060 text qa
+					11061 text 5
+					11062 text TOTAL
+					11063 text 3
+					11064 text IN REVIEW
+					11065 text 2
+					11066 text LIVE
+				11067 button Q QA Agent qa 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					11068 text Q
+					11069 text QA Agent
+					11070 text qa
+					11071 text 3
+					11072 text TOTAL
+					11073 text 2
+					11074 text IN REVIEW
+					11075 text 1
+					11076 text LIVE
+				11077 button E e2e-agent-1789767946593-8463 NATIVE 6 TOTAL 4 IN REVIEW 1 LIVE CLICK TO OPEN
+					11078 text E
+					11079 text e2e-agent-1789767946593-8463
+					11080 text NATIVE
+					11081 text 6
+					11082 text TOTAL
+					11083 text 4
+					11084 text IN REVIEW
+					11085 text 1
+					11086 text LIVE
+				11087 button E e2e-agent-1789767955897-1365 NATIVE 6 TOTAL 3 IN REVIEW 3 LIVE CLICK TO OPEN
+					11088 text E
+					11089 text e2e-agent-1789767955897-1365
+					11090 text NATIVE
+					11091 text 6
+					11092 text TOTAL
+					11093 text 3
+					11094 text IN REVIEW
+					11095 text 3
+					11096 text LIVE
+				11097 button E e2e-agent-1789767959967-8297 NATIVE 4 TOTAL 2 IN REVIEW 2 LIVE CLICK TO OPEN
+					11098 text E
+					11099 text e2e-agent-1789767959967-8297
+					11100 text NATIVE
+					11101 text 4
+					11102 text TOTAL
+					11103 text 2
+					11104 text IN REVIEW
+					11105 text 2
+					11106 text LIVE
+				11107 button E e2e-agent-1789767971290-194 NATIVE 3 TOTAL 1 IN REVIEW 2 LIVE CLICK TO OPEN
+					11108 text E
+					11109 text e2e-agent-1789767971290-194
+					11110 text NATIVE
+					11111 text 3
+					11112 text TOTAL
+					11113 text 1
+					11114 text IN REVIEW
+					11115 text 2
+					11116 text LIVE
+				11117 button E e2e-agent-1789767978117-4292 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11118 text E
+					11119 text e2e-agent-1789767978117-4292
+					11120 text NATIVE
+					11121 text 4
+					11122 text TOTAL
+					11123 text 3
+					11124 text IN REVIEW
+					11125 text 1
+					11126 text LIVE
+				11127 button E e2e-agent-1789767988303-3267 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11128 text E
+					11129 text e2e-agent-1789767988303-3267
+					11130 text NATIVE
+					11131 text 4
+					11132 text TOTAL
+					11133 text 3
+					11134 text IN REVIEW
+					11135 text 1
+					11136 text LIVE
+				11137 button E e2e-agent-1789767998159-897 NATIVE 2 TOTAL 1 IN REVIEW 1 LIVE CLICK TO OPEN
+					11138 text E
+					11139 text e2e-agent-1789767998159-897
+					11140 text NATIVE
+					11141 text 2
+					11142 text TOTAL
+					11143 text 1
+					11144 text IN REVIEW
+					11145 text 1
+					11146 text LIVE
+				11147 button E e2e-oc-hitl-1789767999717-8015 dev 1 TOTAL 0 IN REVIEW 1 LIVE CLICK TO OPEN
+					11148 text E
+					11149 text e2e-oc-hitl-1789767999717-8015
+					11150 text dev
+					11151 text 1
+					11152 text TOTAL
+					11153 text 0
+					11154 text IN REVIEW
+					11155 text 1
+					11156 text LIVE
+				11157 button E e2e-agent-1789768030192-1502 NATIVE 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					11158 text E
+					11159 text e2e-agent-1789768030192-1502
+					11160 text NATIVE
+					11161 text 1
+					11162 text TOTAL
+					11163 text 1
+					11164 text IN REVIEW
+					11165 text 0
+					11166 text LIVE
+				11167 button E e2e-oc-opsap-1789768047026-3547 dev 2 TOTAL 0 IN REVIEW 2 LIVE CLICK TO OPEN
+					11168 text E
+					11169 text e2e-oc-opsap-1789768047026-3547
+					11170 text dev
+					11171 text 2
+					11172 text TOTAL
+					11173 text 0
+					11174 text IN REVIEW
+					11175 text 2
+					11176 text LIVE
+				11177 button E e2e-agent-1789768066859-240 NATIVE 3 TOTAL 0 IN REVIEW 3 LIVE CLICK TO OPEN
+					11178 text E
+					11179 text e2e-agent-1789768066859-240
+					11180 text NATIVE
+					11181 text 3
+					11182 text TOTAL
+					11183 text 0
+					11184 text IN REVIEW
+					11185 text 3
+					11186 text LIVE
+				11187 button E e2e-agent-1789768093709-7118 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11188 text E
+					11189 text e2e-agent-1789768093709-7118
+					11190 text NATIVE
+					11191 text 4
+					11192 text TOTAL
+					11193 text 3
+					11194 text IN REVIEW
+					11195 text 1
+					11196 text LIVE
+				11197 button E e2e-agent-1789768099969-8723 NATIVE 6 TOTAL 5 IN REVIEW 1 LIVE CLICK TO OPEN
+					11198 text E
+					11199 text e2e-agent-1789768099969-8723
+					11200 text NATIVE
+					11201 text 6
+					11202 text TOTAL
+					11203 text 5
+					11204 text IN REVIEW
+					11205 text 1
+					11206 text LIVE
+				11207 button E e2e-oc-uidz-1789768112085-1125 dev 7 TOTAL 6 IN REVIEW 1 LIVE CLICK TO OPEN
+					11208 text E
+					11209 text e2e-oc-uidz-1789768112085-1125
+					11210 text dev
+					11211 text 7
+					11212 text TOTAL
+					11213 text 6
+					11214 text IN REVIEW
+					11215 text 1
+					11216 text LIVE
+				11217 button E e2e-agent-1789768126418-7734 NATIVE 4 TOTAL 2 IN REVIEW 2 LIVE CLICK TO OPEN
+					11218 text E
+					11219 text e2e-agent-1789768126418-7734
+					11220 text NATIVE
+					11221 text 4
+					11222 text TOTAL
+					11223 text 2
+					11224 text IN REVIEW
+					11225 text 2
+					11226 text LIVE
+				11227 button E e2e-oc-uiaz-1789768127387-7074 dev 3 TOTAL 1 IN REVIEW 2 LIVE CLICK TO OPEN
+					11228 text E
+					11229 text e2e-oc-uiaz-1789768127387-7074
+					11230 text dev
+					11231 text 3
+					11232 text TOTAL
+					11233 text 1
+					11234 text IN REVIEW
+					11235 text 2
+					11236 text LIVE
+				11237 button E e2e-agent-1789768173879-1138 NATIVE 4 TOTAL 2 IN REVIEW 2 LIVE CLICK TO OPEN
+					11238 text E
+					11239 text e2e-agent-1789768173879-1138
+					11240 text NATIVE
+					11241 text 4
+					11242 text TOTAL
+					11243 text 2
+					11244 text IN REVIEW
+					11245 text 2
+					11246 text LIVE
+				11247 button W WfDfAgent-1789768184601 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11248 text W
+					11249 text WfDfAgent-1789768184601
+					11250 text NATIVE
+					11251 text 4
+					11252 text TOTAL
+					11253 text 3
+					11254 text IN REVIEW
+					11255 text 1
+					11256 text LIVE
+				11257 button W WfE2EAgent-1789768222873 NATIVE 8 TOTAL 6 IN REVIEW 2 LIVE CLICK TO OPEN
+					11258 text W
+					11259 text WfE2EAgent-1789768222873
+					11260 text NATIVE
+					11261 text 8
+					11262 text TOTAL
+					11263 text 6
+					11264 text IN REVIEW
+					11265 text 2
+					11266 text LIVE
+				11267 button W WfSmAgent-1789768233301 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11268 text W
+					11269 text WfSmAgent-1789768233301
+					11270 text NATIVE
+					11271 text 4
+					11272 text TOTAL
+					11273 text 3
+					11274 text IN REVIEW
+					11275 text 1
+					11276 text LIVE
+				11277 button W WfTplAgent-1789768240995 NATIVE 6 TOTAL 5 IN REVIEW 1 LIVE CLICK TO OPEN
+					11278 text W
+					11279 text WfTplAgent-1789768240995
+					11280 text NATIVE
+					11281 text 6
+					11282 text TOTAL
+					11283 text 5
+					11284 text IN REVIEW
+					11285 text 1
+					11286 text LIVE
+				11287 button W WfUiAgent-1789768249769 NATIVE 1 TOTAL 0 IN REVIEW 1 LIVE CLICK TO OPEN
+					11288 text W
+					11289 text WfUiAgent-1789768249769
+					11290 text NATIVE
+					11291 text 1
+					11292 text TOTAL
+					11293 text 0
+					11294 text IN REVIEW
+					11295 text 1
+					11296 text LIVE
+				11297 button W WfValAgent-1789768267571 NATIVE 5 TOTAL 3 IN REVIEW 2 LIVE CLICK TO OPEN
+					11298 text W
+					11299 text WfValAgent-1789768267571
+					11300 text NATIVE
+					11301 text 5
+					11302 text TOTAL
+					11303 text 3
+					11304 text IN REVIEW
+					11305 text 2
+					11306 text LIVE
+				11307 button W WfYamlAgent-1789768277456 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11308 text W
+					11309 text WfYamlAgent-1789768277456
+					11310 text NATIVE
+					11311 text 4
+					11312 text TOTAL
+					11313 text 3
+					11314 text IN REVIEW
+					11315 text 1
+					11316 text LIVE
+				11317 button W WfDfAgent-1789768294815 NATIVE 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					11318 text W
+					11319 text WfDfAgent-1789768294815
+					11320 text NATIVE
+					11321 text 1
+					11322 text TOTAL
+					11323 text 1
+					11324 text IN REVIEW
+					11325 text 0
+					11326 text LIVE
+				11327 button E e2e-oc-deny-1789768323810-8336 dev 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					11328 text E
+					11329 text e2e-oc-deny-1789768323810-8336
+					11330 text dev
+					11331 text 4
+					11332 text TOTAL
+					11333 text 4
+					11334 text IN REVIEW
+					11335 text 0
+					11336 text LIVE
+				11337 button E e2e-git-gate-agent-1789768326586-8502 dev 5 TOTAL 5 IN REVIEW 0 LIVE CLICK TO OPEN
+					11338 text E
+					11339 text e2e-git-gate-agent-1789768326586-8502
+					11340 text dev
+					11341 text 5
+					11342 text TOTAL
+					11343 text 5
+					11344 text IN REVIEW
+					11345 text 0
+					11346 text LIVE
+				11347 button E e2e-oc-changes-1789768331282-4861 dev 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					11348 text E
+					11349 text e2e-oc-changes-1789768331282-4861
+					11350 text dev
+					11351 text 1
+					11352 text TOTAL
+					11353 text 1
+					11354 text IN REVIEW
+					11355 text 0
+					11356 text LIVE
+				11357 button E E2E-BA-1789768338657-4474 NATIVE 3 TOTAL 3 IN REVIEW 0 LIVE CLICK TO OPEN
+					11358 text E
+					11359 text E2E-BA-1789768338657-4474
+					11360 text NATIVE
+					11361 text 3
+					11362 text TOTAL
+					11363 text 3
+					11364 text IN REVIEW
+					11365 text 0
+					11366 text LIVE
+				11367 button E E2E-Dev-1789768338706-3470 NATIVE 5 TOTAL 3 IN REVIEW 2 LIVE CLICK TO OPEN
+					11368 text E
+					11369 text E2E-Dev-1789768338706-3470
+					11370 text NATIVE
+					11371 text 5
+					11372 text TOTAL
+					11373 text 3
+					11374 text IN REVIEW
+					11375 text 2
+					11376 text LIVE
+				11377 button E E2E-QA-1789768338723-38 NATIVE 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					11378 text E
+					11379 text E2E-QA-1789768338723-38
+					11380 text NATIVE
+					11381 text 3
+					11382 text TOTAL
+					11383 text 2
+					11384 text IN REVIEW
+					11385 text 1
+					11386 text LIVE
+				11387 button E E2E-Iso-A-1789768339161-2919 NATIVE 5 TOTAL 3 IN REVIEW 2 LIVE CLICK TO OPEN
+					11388 text E
+					11389 text E2E-Iso-A-1789768339161-2919
+					11390 text NATIVE
+					11391 text 5
+					11392 text TOTAL
+					11393 text 3
+					11394 text IN REVIEW
+					11395 text 2
+					11396 text LIVE
+				11397 button E E2E-Iso-B-1789768339162-2919 NATIVE 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					11398 text E
+					11399 text E2E-Iso-B-1789768339162-2919
+					11400 text NATIVE
+					11401 text 3
+					11402 text TOTAL
+					11403 text 2
+					11404 text IN REVIEW
+					11405 text 1
+					11406 text LIVE
+				11407 button E e2e-skill-agent-1789768340087-951 NATIVE 2 TOTAL 1 IN REVIEW 1 LIVE CLICK TO OPEN
+					11408 text E
+					11409 text e2e-skill-agent-1789768340087-951
+					11410 text NATIVE
+					11411 text 2
+					11412 text TOTAL
+					11413 text 1
+					11414 text IN REVIEW
+					11415 text 1
+					11416 text LIVE
+				11417 button E e2e-wf-agent-1789768340530-3880 NATIVE 6 TOTAL 5 IN REVIEW 1 LIVE CLICK TO OPEN
+					11418 text E
+					11419 text e2e-wf-agent-1789768340530-3880
+					11420 text NATIVE
+					11421 text 6
+					11422 text TOTAL
+					11423 text 5
+					11424 text IN REVIEW
+					11425 text 1
+					11426 text LIVE
+				11427 button E e2e-wf-guard-agent-1789768343024-8437 NATIVE 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11428 text E
+					11429 text e2e-wf-guard-agent-1789768343024-8437
+					11430 text NATIVE
+					11431 text 4
+					11432 text TOTAL
+					11433 text 3
+					11434 text IN REVIEW
+					11435 text 1
+					11436 text LIVE
+				11437 button E e2e-wf-cancel-agent-1789768354214-9002 NATIVE 0 TOTAL 0 IN REVIEW 0 LIVE CLICK TO OPEN
+					11438 text E
+					11439 text e2e-wf-cancel-agent-1789768354214-9002
+					11440 text NATIVE
+					11441 text 0
+					11442 text TOTAL
+					11443 text 0
+					11444 text IN REVIEW
+					11445 text 0
+					11446 text LIVE
+				11447 button E e2e-wf-merge-agent-1789768363247-6870 NATIVE 6 TOTAL 6 IN REVIEW 0 LIVE CLICK TO OPEN
+					11448 text E
+					11449 text e2e-wf-merge-agent-1789768363247-6870
+					11450 text NATIVE
+					11451 text 6
+					11452 text TOTAL
+					11453 text 6
+					11454 text IN REVIEW
+					11455 text 0
+					11456 text LIVE
+				11457 button E e2e-wf-yaml-agent-1789768375157-1985 NATIVE 3 TOTAL 3 IN REVIEW 0 LIVE CLICK TO OPEN
+					11458 text E
+					11459 text e2e-wf-yaml-agent-1789768375157-1985
+					11460 text NATIVE
+					11461 text 3
+					11462 text TOTAL
+					11463 text 3
+					11464 text IN REVIEW
+					11465 text 0
+					11466 text LIVE
+				11467 button E e2e-qoder-s4-1789768615850-6950 dev 3 TOTAL 2 IN REVIEW 1 LIVE CLICK TO OPEN
+					11468 text E
+					11469 text e2e-qoder-s4-1789768615850-6950
+					11470 text dev
+					11471 text 3
+					11472 text TOTAL
+					11473 text 2
+					11474 text IN REVIEW
+					11475 text 1
+					11476 text LIVE
+				11477 button E e2e-qoder-s4-1789768774124-4859 dev 1 TOTAL 1 IN REVIEW 0 LIVE CLICK TO OPEN
+					11478 text E
+					11479 text e2e-qoder-s4-1789768774124-4859
+					11480 text dev
+					11481 text 1
+					11482 text TOTAL
+					11483 text 1
+					11484 text IN REVIEW
+					11485 text 0
+					11486 text LIVE
+				11487 button C c6b-s5-20260918-220205 dev 2 TOTAL 1 IN REVIEW 1 LIVE CLICK TO OPEN
+					11488 text C
+					11489 text c6b-s5-20260918-220205
+					11490 text dev
+					11491 text 2
+					11492 text TOTAL
+					11493 text 1
+					11494 text IN REVIEW
+					11495 text 1
+					11496 text LIVE
+				11497 button E e2e-qoder-s9-1789768969567-6684 dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					11498 text E
+					11499 text e2e-qoder-s9-1789768969567-6684
+					11500 text dev
+					11501 text 2
+					11502 text TOTAL
+					11503 text 2
+					11504 text IN REVIEW
+					11505 text 0
+					11506 text LIVE
+				11507 button C c6b-s10-20260918-220325 dev 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11508 text C
+					11509 text c6b-s10-20260918-220325
+					11510 text dev
+					11511 text 4
+					11512 text TOTAL
+					11513 text 3
+					11514 text IN REVIEW
+					11515 text 1
+					11516 text LIVE
+				11517 button E e2e-qoder-s4-1789769417941-9935 dev 2 TOTAL 2 IN REVIEW 0 LIVE CLICK TO OPEN
+					11518 text E
+					11519 text e2e-qoder-s4-1789769417941-9935
+					11520 text dev
+					11521 text 2
+					11522 text TOTAL
+					11523 text 2
+					11524 text IN REVIEW
+					11525 text 0
+					11526 text LIVE
+				11527 button E e2e-qoder-s4-1789769576003-5027 dev 4 TOTAL 4 IN REVIEW 0 LIVE CLICK TO OPEN
+					11528 text E
+					11529 text e2e-qoder-s4-1789769576003-5027
+					11530 text dev
+					11531 text 4
+					11532 text TOTAL
+					11533 text 4
+					11534 text IN REVIEW
+					11535 text 0
+					11536 text LIVE
+				11537 button C c6b-s10-20260918-221526 dev 6 TOTAL 3 IN REVIEW 2 LIVE CLICK TO OPEN
+					11538 text C
+					11539 text c6b-s10-20260918-221526
+					11540 text dev
+					11541 text 6
+					11542 text TOTAL
+					11543 text 3
+					11544 text IN REVIEW
+					11545 text 2
+					11546 text LIVE
+				11547 button E e2e-qoder-s4-1789770099436-7004 dev 4 TOTAL 2 IN REVIEW 2 LIVE CLICK TO OPEN
+					11548 text E
+					11549 text e2e-qoder-s4-1789770099436-7004
+					11550 text dev
+					11551 text 4
+					11552 text TOTAL
+					11553 text 2
+					11554 text IN REVIEW
+					11555 text 2
+					11556 text LIVE
+				11557 button E e2e-qoder-s4-1789770522471-2262 dev 6 TOTAL 2 IN REVIEW 4 LIVE CLICK TO OPEN
+					11558 text E
+					11559 text e2e-qoder-s4-1789770522471-2262
+					11560 text dev
+					11561 text 6
+					11562 text TOTAL
+					11563 text 2
+					11564 text IN REVIEW
+					11565 text 4
+					11566 text LIVE
+				11567 button E e2e-qoder-s4-1789771034038-7768 dev 4 TOTAL 1 IN REVIEW 3 LIVE CLICK TO OPEN
+					11568 text E
+					11569 text e2e-qoder-s4-1789771034038-7768
+					11570 text dev
+					11571 text 4
+					11572 text TOTAL
+					11573 text 1
+					11574 text IN REVIEW
+					11575 text 3
+					11576 text LIVE
+				11577 button E e2e-qoder-s4-1789771459825-1503 dev 3 TOTAL 1 IN REVIEW 2 LIVE CLICK TO OPEN
+					11578 text E
+					11579 text e2e-qoder-s4-1789771459825-1503
+					11580 text dev
+					11581 text 3
+					11582 text TOTAL
+					11583 text 1
+					11584 text IN REVIEW
+					11585 text 2
+					11586 text LIVE
+				11587 button E e2e-qoder-s4-1789772001446-9888 dev 4 TOTAL 2 IN REVIEW 2 LIVE CLICK TO OPEN
+					11588 text E
+					11589 text e2e-qoder-s4-1789772001446-9888
+					11590 text dev
+					11591 text 4
+					11592 text TOTAL
+					11593 text 2
+					11594 text IN REVIEW
+					11595 text 2
+					11596 text LIVE
+				11597 button P PR90 UX Analyst 0919 ba 4 TOTAL 3 IN REVIEW 1 LIVE CLICK TO OPEN
+					11598 text P
+					11599 text PR90 UX Analyst 0919
+					11600 text ba
+					11601 text 4
+					11602 text TOTAL
+					11603 text 3
+					11604 text IN REVIEW
+					11605 text 1
+					11606 text LIVE
+				11607 button P PR90 UX Reviewer 0919 qa 11 TOTAL 8 IN REVIEW 2 LIVE CLICK TO OPEN
+					11608 text P
+					11609 text PR90 UX Reviewer 0919
+					11610 text qa
+					11611 text 11
+					11612 text TOTAL
+					11613 text 8
+					11614 text IN REVIEW
+					11615 text 2
+					11616 text LIVE
+			11617 container
+				11618 heading SUBMITTED FOR REVIEW / 260 PENDING, Value: 2
+					11619 text SUBMITTED FOR REVIEW
+					11620 text /
+					11621 text 260
+					11622 text PENDING
+				11623 checkbox (settable, integer) Select all visible, Value: 0
+				11624 text 0
+				11625 text selected
+				11626 button (disabled) ✓ Batch Approve
+				11627 button (disabled) ✗ Batch Reject
+				11641 checkbox (settable, integer), Value: 0
+				11642 text SKILL
+				11643 text e2e-promoted-skill-1789757950980-6564
+				11644 container
+					11645 text Developer Agent
+					11646 text · submitted
+					11647 text 02:59
+					11648 text · Promoted from GUIDELINE: e2e-knowledge-1789757931530-7755
+				11649 button ✓, Help: Approve
+				11650 button ✗, Help: Reject
+				11651 button ↗, Help: View
+				11652 checkbox (settable, integer), Value: 0
+				11653 text GUIDELINE
+				11654 text e2e-knowledge-load-1-1789758243669-7616
+				11655 container
+					11656 text e2e-agent-1789768099969-8723
+					11657 text · submitted
+					11658 text 03:04
+					11659 text · concurrent submit load
+				11660 button ✓, Help: Approve
+				11661 button ✗, Help: Reject
+				11662 button ↗, Help: View
+				11663 checkbox (settable, integer), Value: 0
+				11664 text GUIDELINE
+				11665 text e2e-knowledge-load-3-1789758243678-530
+				11666 container
+					11667 text WfSmAgent-1789758347804
+					11668 text · submitted
+					11669 text 03:04
+					11670 text · concurrent submit load
+				11671 button ✓, Help: Approve
+				11672 button ✗, Help: Reject
+				11673 button ↗, Help: View
+				11674 checkbox (settable, integer), Value: 0
+				11675 text GUIDELINE
+				11676 text e2e-knowledge-load-2-1789758243671-3245
+				11677 container
+					11678 text WfValAgent-1789768267571
+					11679 text · submitted
+					11680 text 03:04
+					11681 text · concurrent submit load
+				11682 button ✓, Help: Approve
+				11683 button ✗, Help: Reject
+				11684 button ↗, Help: View
+				11685 checkbox (settable, integer), Value: 0
+				11686 text GUIDELINE
+				11687 text e2e-knowledge-load-4-1789758243683-860
+				11688 container
+					11689 text E2E-Iso-B-1789758249850-7222
+					11690 text · submitted
+					11691 text 03:04
+					11692 text · concurrent submit load
+				11693 button ✓, Help: Approve
+				11694 button ✗, Help: Reject
+				11695 button ↗, Help: View
+				11696 checkbox (settable, integer), Value: 0
+				11697 text GUIDELINE
+				11698 text e2e-knowledge-load-5-1789758243685-4033
+				11699 container
+					11700 text WfE2EAgent-1789758186149
+					11701 text · submitted
+					11702 text 03:04
+					11703 text · concurrent submit load
+				11704 button ✓, Help: Approve
+				11705 button ✗, Help: Reject
+				11706 button ↗, Help: View
+				11707 checkbox (settable, integer), Value: 0
+				11708 text GUIDELINE
+				11709 text e2e-knowledge-load-6-1789758243687-4633
+				11710 container
+					11711 text SDD DEV Agent
+					11712 text · submitted
+					11713 text 03:04
+					11714 text · concurrent submit load
+				11715 button ✓, Help: Approve
+				11716 button ✗, Help: Reject
+				11717 button ↗, Help: View
+				11718 checkbox (settable, integer), Value: 0
+				11719 text GUIDELINE
+				11720 text e2e-knowledge-load-7-1789758243689-5289
+				11721 container
+					11722 text RecApply-1789758647416
+					11723 text · submitted
+					11724 text 03:04
+					11725 text · concurrent submit load
+				11726 button ✓, Help: Approve
+				11727 button ✗, Help: Reject
+				11728 button ↗, Help: View
+				11729 checkbox (settable, integer), Value: 0
+				11730 text GUIDELINE
+				11731 text e2e-knowledge-load-8-1789758243691-8748
+				11732 container
+					11733 text WfE2EAgent-1789768222873
+					11734 text · submitted
+					11735 text 03:04
+					11736 text · concurrent submit load
+				11737 button ✓, Help: Approve
+				11738 button ✗, Help: Reject
+				11739 button ↗, Help: View
+				11740 checkbox (settable, integer), Value: 0
+				11741 text GUIDELINE
+				11742 text e2e-knowledge-load-11-1789758243706-235
+				11743 container
+					11744 text e2e-wf-agent-1789768340530-3880
+					11745 text · submitted
+					11746 text 03:04
+					11747 text · concurrent submit load
+				11748 button ✓, Help: Approve
+				11749 button ✗, Help: Reject
+				11750 button ↗, Help: View
+				11751 checkbox (settable, integer), Value: 0
+				11752 text GUIDELINE
+				11753 text e2e-knowledge-load-9-1789758243693-4516
+				11754 container
+					11755 text E2E-Iso-A-1789758249848-6698
+					11756 text · submitted
+					11757 text 03:04
+					11758 text · concurrent submit load
+				11759 button ✓, Help: Approve
+				11760 button ✗, Help: Reject
+				11761 button ↗, Help: View
+				11762 checkbox (settable, integer), Value: 0
+				11763 text GUIDELINE
+				11764 text e2e-knowledge-load-10-1789758243695-8646
+				11765 container
+					11766 text e2e-agent-1789767946593-8463
+					11767 text · submitted
+					11768 text 03:04
+					11769 text · concurrent submit load
+				11770 button ✓, Help: Approve
+				11771 button ✗, Help: Reject
+				11772 button ↗, Help: View
+				11773 checkbox (settable, integer), Value: 0
+				11774 text GUIDELINE
+				11775 text e2e-knowledge-load-12-1789758243746-36
+				11776 container
+					11777 text PR90 UX Analyst 0919
+					11778 text · submitted
+					11779 text 03:04
+					11780 text · concurrent submit load
+				11781 button ✓, Help: Approve
+				11782 button ✗, Help: Reject
+				11783 button ↗, Help: View
+				11784 checkbox (settable, integer), Value: 0
+				11785 text GUIDELINE
+				11786 text e2e-knowledge-load-14-1789758243760-9617
+				11787 container
+					11788 text e2e-oc-uidz-1789768112085-1125
+					11789 text · submitted
+					11790 text 03:04
+					11791 text · concurrent submit load
+				11792 button ✓, Help: Approve
+				11793 button ✗, Help: Reject
+				11794 button ↗, Help: View
+				11795 checkbox (settable, integer), Value: 0
+				11796 text GUIDELINE
+				11797 text e2e-knowledge-load-16-1789758243767-5
+				11798 container
+					11799 text E2E-Dev-1789759243820-357
+					11800 text · submitted
+					11801 text 03:04
+					11802 text · concurrent submit load
+				11803 button ✓, Help: Approve
+				11804 button ✗, Help: Reject
+				11805 button ↗, Help: View
+				11806 checkbox (settable, integer), Value: 0
+				11807 text GUIDELINE
+				11808 text e2e-knowledge-load-15-1789758243762-7926
+				11809 container
+					11810 text E2E-BA-1789758249649-6797
+					11811 text · submitted
+					11812 text 03:04
+					11813 text · concurrent submit load
+				11814 button ✓, Help: Approve
+				11815 button ✗, Help: Reject
+				11816 button ↗, Help: View
+				11817 checkbox (settable, integer), Value: 0
+				11818 text GUIDELINE
+				11819 text e2e-knowledge-load-17-1789758243770-8396
+				11820 container
+					11821 text e2e-qoder-s4-1789771034038-7768
+					11822 text · submitted
+					11823 text 03:04
+					11824 text · concurrent submit load
+				11825 button ✓, Help: Approve
+				11826 button ✗, Help: Reject
+				11827 button ↗, Help: View
+				11828 checkbox (settable, integer), Value: 0
+				11829 text GUIDELINE
+				11830 text e2e-knowledge-load-18-1789758243774-622
+				11831 container
+					11832 text SDD DEV Agent
+					11833 text · submitted
+					11834 text 03:04
+					11835 text · concurrent submit load
+				11836 button ✓, Help: Approve
+				11837 button ✗, Help: Reject
+				11838 button ↗, Help: View
+				11839 checkbox (settable, integer), Value: 0
+				11840 text GUIDELINE
+				11841 text e2e-knowledge-load-20-1789758243787-7070
+				11842 container
+					11843 text WfYamlAgent-1789759177768
+					11844 text · submitted
+					11845 text 03:04
+					11846 text · concurrent submit load
+				11847 button ✓, Help: Approve
+				11848 button ✗, Help: Reject
+				11849 button ↗, Help: View
+				11850 checkbox (settable, integer), Value: 0
+				11851 text GUIDELINE
+				11852 text e2e-knowledge-load-22-1789758243796-8570
+				11853 container
+					11854 text Rec-1789757752359
+					11855 text · submitted
+					11856 text 03:04
+					11857 text · concurrent submit load
+				11858 button ✓, Help: Approve
+				11859 button ✗, Help: Reject
+				11860 button ↗, Help: View
+				11861 checkbox (settable, integer), Value: 0
+				11862 text GUIDELINE
+				11863 text e2e-knowledge-load-21-1789758243791-5475
+				11864 container
+					11865 text WfValAgent-1789758229037
+					11866 text · submitted
+					11867 text 03:04
+					11868 text · concurrent submit load
+				11869 button ✓, Help: Approve
+				11870 button ✗, Help: Reject
+				11871 button ↗, Help: View
+				11872 checkbox (settable, integer), Value: 0
+				11873 text GUIDELINE
+				11874 text e2e-knowledge-load-19-1789758243782-4755
+				11875 container
+					11876 text WfTplAgent-1789758161170
+					11877 text · submitted
+					11878 text 03:04
+					11879 text · concurrent submit load
+				11880 button ✓, Help: Approve
+				11881 button ✗, Help: Reject
+				11882 button ↗, Help: View
+				11883 checkbox (settable, integer), Value: 0
+				11884 text GUIDELINE
+				11885 text e2e-knowledge-load-23-1789758243801-8442
+				11886 container
+					11887 text e2e-wf-agent-1789768340530-3880
+					11888 text · submitted
+					11889 text 03:04
+					11890 text · concurrent submit load
+				11891 button ✓, Help: Approve
+				11892 button ✗, Help: Reject
+				11893 button ↗, Help: View
+				11894 checkbox (settable, integer), Value: 0
+				11895 text GUIDELINE
+				11896 text e2e-knowledge-load-13-1789758243751-512
+				11897 container
+					11898 text e2e-git-gate-agent-1789768326586-8502
+					11899 text · submitted
+					11900 text 03:04
+					11901 text · concurrent submit load
+				11902 button ✓, Help: Approve
+				11903 button ✗, Help: Reject
+				11904 button ↗, Help: View
+				11905 checkbox (settable, integer), Value: 0
+				11906 text GUIDELINE
+				11907 text e2e-knowledge-load-0-1789758243667-7770
+				11908 container
+					11909 text WfYamlAgent-1789759177768
+					11910 text · submitted
+					11911 text 03:04
+					11912 text · concurrent submit load
+				11913 button ✓, Help: Approve
+				11914 button ✗, Help: Reject
+				11915 button ↗, Help: View
+				11916 checkbox (settable, integer), Value: 0
+				11917 text GUIDELINE
+				11918 text e2e-load-k-1789758246539-7032
+				11919 container
+					11920 text WfE2EAgent-1789768222873
+					11921 text · submitted
+					11922 text 03:04
+				11923 button ✓, Help: Approve
+				11924 button ✗, Help: Reject
+				11925 button ↗, Help: View
+				11926 checkbox (settable, integer), Value: 0
+				11927 text GUIDELINE
+				11928 text e2e-load-k-1789758246528-1261
+				11929 container
+					11930 text e2e-qoder-s4-1789768774124-4859
+					11931 text · submitted
+					11932 text 03:04
+				11933 button ✓, Help: Approve
+				11934 button ✗, Help: Reject
+				11935 button ↗, Help: View
+				11936 checkbox (settable, integer), Value: 0
+				11937 text GUIDELINE
+				11938 text e2e-load-k-1789758246550-2667
+				11939 container
+					11940 text e2e-oc-uidz-1789768112085-1125
+					11941 text · submitted
+					11942 text 03:04
+				11943 button ✓, Help: Approve
+				11944 button ✗, Help: Reject
+				11945 button ↗, Help: View
+				11946 checkbox (settable, integer), Value: 0
+				11947 text GUIDELINE
+				11948 text e2e-load-k-1789758246561-8149
+				11949 container
+					11950 text WfTplAgent-1789768240995
+					11951 text · submitted
+					11952 text 03:04
+				11953 button ✓, Help: Approve
+				11954 button ✗, Help: Reject
+				11955 button ↗, Help: View
+				11956 checkbox (settable, integer), Value: 0
+				11957 text GUIDELINE
+				11958 text e2e-load-k-1789758246926-1922
+				11959 container
+					11960 text e2e-agent-1789767955897-1365
+					11961 text · submitted
+					11962 text 03:04
+				11963 button ✓, Help: Approve
+				11964 button ✗, Help: Reject
+				11965 button ↗, Help: View
+				11966 checkbox (settable, integer), Value: 0
+				11967 text GUIDELINE
+				11968 text e2e-load-k-1789758246932-6685
+				11969 container
+					11970 text c6b-s5-20260918-210137
+					11971 text · submitted
+					11972 text 03:04
+				11973 button ✓, Help: Approve
+				11974 button ✗, Help: Reject
+				11975 button ↗, Help: View
+				11976 checkbox (settable, integer), Value: 0
+				11977 text GUIDELINE
+				11978 text e2e-load-k-1789758246939-1950
+				11979 container
+					11980 text SDD DEV Agent
+					11981 text · submitted
+					11982 text 03:04
+				11983 button ✓, Help: Approve
+				11984 button ✗, Help: Reject
+				11985 button ↗, Help: View
+				11986 checkbox (settable, integer), Value: 0
+				11987 text GUIDELINE
+				11988 text e2e-load-k-1789758246945-4528
+				11989 container
+					11990 text e2e-qoder-s4-1789769417941-9935
+					11991 text · submitted
+					11992 text 03:04
+				11993 button ✓, Help: Approve
+				11994 button ✗, Help: Reject
+				11995 button ↗, Help: View
+				11996 checkbox (settable, integer), Value: 0
+				11997 text GUIDELINE
+				11998 text e2e-load-k-1789758247326-2836
+				11999 container
+					12000 text e2e-agent-1789767959967-8297
+					12001 text · submitted
+					12002 text 03:04
+				12003 button ✓, Help: Approve
+				12004 button ✗, Help: Reject
+				12005 button ↗, Help: View
+				12006 checkbox (settable, integer), Value: 0
+				12007 text GUIDELINE
+				12008 text e2e-load-k-1789758247320-1
+				12009 container
+					12010 text SDD BA Agent
+					12011 text · submitted
+					12012 text 03:04
+				12013 button ✓, Help: Approve
+				12014 button ✗, Help: Reject
+				12015 button ↗, Help: View
+				12016 checkbox (settable, integer), Value: 0
+				12017 text GUIDELINE
+				12018 text e2e-load-k-1789758247333-839
+				12019 container
+					12020 text e2e-wf-agent-1789768340530-3880
+					12021 text · submitted
+					12022 text 03:04
+				12023 button ✓, Help: Approve
+				12024 button ✗, Help: Reject
+				12025 button ↗, Help: View
+				12026 checkbox (settable, integer), Value: 0
+				12027 text GUIDELINE
+				12028 text e2e-load-k-1789758247339-5840
+				12029 container
+					12030 text c6b-s5-20260918-210137
+					12031 text · submitted
+					12032 text 03:04
+				12033 button ✓, Help: Approve
+				12034 button ✗, Help: Reject
+				12035 button ↗, Help: View
+				12036 checkbox (settable, integer), Value: 0
+				12037 text GUIDELINE
+				12038 text e2e-sat-k-1789758247696-9494
+				12039 container
+					12040 text c6b-s10-20260918-220325
+					12041 text · submitted
+					12042 text 03:04
+				12043 button ✓, Help: Approve
+				12044 button ✗, Help: Reject
+				12045 button ↗, Help: View
+				12046 checkbox (settable, integer), Value: 0
+				12047 text GUIDELINE
+				12048 text e2e-sat-k-1789758247694-7063
+				12049 container
+					12050 text WfDfAgent-1789768294815
+					12051 text · submitted
+					12052 text 03:04
+				12053 button ✓, Help: Approve
+				12054 button ✗, Help: Reject
+				12055 button ↗, Help: View
+				12056 checkbox (settable, integer), Value: 0
+				12057 text GUIDELINE
+				12058 text e2e-sat-k-1789758247707-7262
+				12059 container
+					12060 text e2e-qoder-s4-1789770522471-2262
+					12061 text · submitted
+					12062 text 03:04
+				12063 button ✓, Help: Approve
+				12064 button ✗, Help: Reject
+				12065 button ↗, Help: View
+				12066 checkbox (settable, integer), Value: 0
+				12067 text GUIDELINE
+				12068 text e2e-sat-k-1789758247698-8375
+				12069 container
+					12070 text c6b-s10-20260918-211613
+					12071 text · submitted
+					12072 text 03:04
+				12073 button ✓, Help: Approve
+				12074 button ✗, Help: Reject
+				12075 button ↗, Help: View
+				12076 checkbox (settable, integer), Value: 0
+				12077 text GUIDELINE
+				12078 text e2e-sat-k-1789758247701-4255
+				12079 container
+					12080 text e2e-git-gate-agent-1789768326586-8502
+					12081 text · submitted
+					12082 text 03:04
+				12083 button ✓, Help: Approve
+				12084 button ✗, Help: Reject
+				12085 button ↗, Help: View
+				12086 checkbox (settable, integer), Value: 0
+				12087 text GUIDELINE
+				12088 text e2e-sat-k-1789758247700-5858
+				12089 container
+					12090 text E2E-Iso-B-1789768339162-2919
+					12091 text · submitted
+					12092 text 03:04
+				12093 button ✓, Help: Approve
+				12094 button ✗, Help: Reject
+				12095 button ↗, Help: View
+				12096 checkbox (settable, integer), Value: 0
+				12097 text GUIDELINE
+				12098 text e2e-sat-k-1789758247706-9507
+				12099 container
+					12100 text E2E-QA-1789768338723-38
+					12101 text · submitted
+					12102 text 03:04
+				12103 button ✓, Help: Approve
+				12104 button ✗, Help: Reject
+				12105 button ↗, Help: View
+				12106 checkbox (settable, integer), Value: 0
+				12107 text GUIDELINE
+				12108 text e2e-sat-k-1789758247703-2222
+				12109 container
+					12110 text e2e-qoder-s4-1789771459825-1503
+					12111 text · submitted
+					12112 text 03:04
+				12113 button ✓, Help: Approve
+				12114 button ✗, Help: Reject
+				12115 button ↗, Help: View
+				12116 checkbox (settable, integer), Value: 0
+				12117 text GUIDELINE
+				12118 text e2e-sat-k-1789758247709-1750
+				12119 container
+					12120 text E2E-Dev-1789758249660-2967
+					12121 text · submitted
+					12122 text 03:04
+				12123 button ✓, Help: Approve
+				12124 button ✗, Help: Reject
+				12125 button ↗, Help: View
+				12126 checkbox (settable, integer), Value: 0
+				12127 text GUIDELINE
+				12128 text e2e-sat-k-1789758247710-6855
+				12129 container
+					12130 text WfTplAgent-1789759156191
+					12131 text · submitted
+					12132 text 03:04
+				12133 button ✓, Help: Approve
+				12134 button ✗, Help: Reject
+				12135 button ↗, Help: View
+				12136 checkbox (settable, integer), Value: 0
+				12137 text GUIDELINE
+				12138 text e2e-sat-k-1789758247712-3622
+				12139 container
+					12140 text WfE2EAgent-1789758132290
+					12141 text · submitted
+					12142 text 03:04
+				12143 button ✓, Help: Approve
+				12144 button ✗, Help: Reject
+				12145 button ↗, Help: View
+				12146 checkbox (settable, integer), Value: 0
+				12147 text GUIDELINE
+				12148 text e2e-sat-k-1789758247713-7397
+				12149 container
+					12150 text c6b-s5-20260918-184323
+					12151 text · submitted
+					12152 text 03:04
+				12153 button ✓, Help: Approve
+				12154 button ✗, Help: Reject
+				12155 button ↗, Help: View
+				12156 checkbox (settable, integer), Value: 0
+				12157 text GUIDELINE
+				12158 text e2e-sat-k-1789758247715-6797
+				12159 container
+					12160 text e2e-agent-1789767955897-1365
+					12161 text · submitted
+					12162 text 03:04
+				12163 button ✓, Help: Approve
+				12164 button ✗, Help: Reject
+				12165 button ↗, Help: View
+				12166 checkbox (settable, integer), Value: 0
+				12167 text GUIDELINE
+				12168 text e2e-sat-k-1789758247716-5218
+				12169 container
+					12170 text e2e-git-gate-agent-1789768326586-8502
+					12171 text · submitted
+					12172 text 03:04
+				12173 button ✓, Help: Approve
+				12174 button ✗, Help: Reject
+				12175 button ↗, Help: View
+				12176 checkbox (settable, integer), Value: 0
+				12177 text GUIDELINE
+				12178 text e2e-sat-k-1789758247718-9067
+				12179 container
+					12180 text WfUiAgent-1789758166454
+					12181 text · submitted
+					12182 text 03:04
+				12183 button ✓, Help: Approve
+				12184 button ✗, Help: Reject
+				12185 button ↗, Help: View
+				12186 checkbox (settable, integer), Value: 0
+				12187 text GUIDELINE
+				12188 text e2e-sat-k-1789758247722-7653
+				12189 container
+					12190 text WfSmAgent-1789768233301
+					12191 text · submitted
+					12192 text 03:04
+				12193 button ✓, Help: Approve
+				12194 button ✗, Help: Reject
+				12195 button ↗, Help: View
+				12196 checkbox (settable, integer), Value: 0
+				12197 text GUIDELINE
+				12198 text e2e-sat-k-1789758247723-1950
+				12199 container
+					12200 text e2e-skill-agent-1789768340087-951
+					12201 text · submitted
+					12202 text 03:04
+				12203 button ✓, Help: Approve
+				12204 button ✗, Help: Reject
+				12205 button ↗, Help: View
+				12206 checkbox (settable, integer), Value: 0
+				12207 text GUIDELINE
+				12208 text e2e-sat-k-1789758247720-5100
+				12209 container
+					12210 text WfDfAgent-1789758120435
+					12211 text · submitted
+					12212 text 03:04
+				12213 button ✓, Help: Approve
+				12214 button ✗, Help: Reject
+				12215 button ↗, Help: View
+				12216 checkbox (settable, integer), Value: 0
+				12217 text GUIDELINE
+				12218 text e2e-sat-k-1789758247728-3175
+				12219 container
+					12220 text E2E-QA-1789768338723-38
+					12221 text · submitted
+					12222 text 03:04
+				12223 button ✓, Help: Approve
+				12224 button ✗, Help: Reject
+				12225 button ↗, Help: View
+				12226 checkbox (settable, integer), Value: 0
+				12227 text GUIDELINE
+				12228 text e2e-sat-k-1789758247734-3957
+				12229 container
+					12230 text E2E-BA-1789758249649-6797
+					12231 text · submitted
+					12232 text 03:04
+				12233 button ✓, Help: Approve
+				12234 button ✗, Help: Reject
+				12235 button ↗, Help: View
+				12236 checkbox (settable, integer), Value: 0
+				12237 text GUIDELINE
+				12238 text e2e-sat-k-1789758247735-9336
+				12239 container
+					12240 text WfE2EAgent-1789758132290
+					12241 text · submitted
+					12242 text 03:04
+				12243 button ✓, Help: Approve
+				12244 button ✗, Help: Reject
+				12245 button ↗, Help: View
+				12246 checkbox (settable, integer), Value: 0
+				12247 text GUIDELINE
+				12248 text e2e-sat-k-1789758247737-7076
+				12249 container
+					12250 text e2e-wf-guard-agent-1789768343024-8437
+					12251 text · submitted
+					12252 text 03:04
+				12253 button ✓, Help: Approve
+				12254 button ✗, Help: Reject
+				12255 button ↗, Help: View
+				12256 checkbox (settable, integer), Value: 0
+				12257 text GUIDELINE
+				12258 text e2e-sat-k-1789758247738-4066
+				12259 container
+					12260 text E2E-Iso-A-1789759244035-6180
+					12261 text · submitted
+					12262 text 03:04
+				12263 button ✓, Help: Approve
+				12264 button ✗, Help: Reject
+				12265 button ↗, Help: View
+				12266 checkbox (settable, integer), Value: 0
+				12267 text GUIDELINE
+				12268 text e2e-sat-k-1789758247743-956
+				12269 container
+					12270 text e2e-agent-1789768030192-1502
+					12271 text · submitted
+					12272 text 03:04
+				12273 button ✓, Help: Approve
+				12274 button ✗, Help: Reject
+				12275 button ↗, Help: View
+				12276 checkbox (settable, integer), Value: 0
+				12277 text GUIDELINE
+				12278 text e2e-sat-k-1789758247745-4193
+				12279 container
+					12280 text RecApply-1789758462156
+					12281 text · submitted
+					12282 text 03:04
+				12283 button ✓, Help: Approve
+				12284 button ✗, Help: Reject
+				12285 button ↗, Help: View
+				12286 checkbox (settable, integer), Value: 0
+				12287 text GUIDELINE
+				12288 text e2e-sat-k-1789758247747-9042
+				12289 container
+					12290 text WfDfAgent-1789768184601
+					12291 text · submitted
+					12292 text 03:04
+				12293 button ✓, Help: Approve
+				12294 button ✗, Help: Reject
+				12295 button ↗, Help: View
+				12296 checkbox (settable, integer), Value: 0
+				12297 text GUIDELINE
+				12298 text e2e-sat-k-1789758247748-2865
+				12299 container
+					12300 text WfE2EAgent-1789758132290
+					12301 text · submitted
+					12302 text 03:04
+				12303 button ✓, Help: Approve
+				12304 button ✗, Help: Reject
+				12305 button ↗, Help: View
+				12306 checkbox (settable, integer), Value: 0
+				12307 text GUIDELINE
+				12308 text e2e-sat-k-1789758247753-2605
+				12309 container
+					12310 text e2e-agent-1789767946593-8463
+					12311 text · submitted
+					12312 text 03:04
+				12313 button ✓, Help: Approve
+				12314 button ✗, Help: Reject
+				12315 button ↗, Help: View
+				12316 checkbox (settable, integer), Value: 0
+				12317 text GUIDELINE
+				12318 text e2e-sat-k-1789758247761-8462
+				12319 container
+					12320 text SDD DEV Agent
+					12321 text · submitted
+					12322 text 03:04
+				12323 button ✓, Help: Approve
+				12324 button ✗, Help: Reject
+				12325 button ↗, Help: View
+				12326 checkbox (settable, integer), Value: 0
+				12327 text GUIDELINE
+				12328 text e2e-sat-k-1789758247759-7442
+				12329 container
+					12330 text PR90 UX Reviewer 0919
+					12331 text · submitted
+					12332 text 03:04
+				12333 button ✓, Help: Approve
+				12334 button ✗, Help: Reject
+				12335 button ↗, Help: View
+				12336 checkbox (settable, integer), Value: 0
+				12337 text GUIDELINE
+				12338 text e2e-sat-k-1789758247769-5469
+				12339 container
+					12340 text E2E-Dev-1789768338706-3470
+					12341 text · submitted
+					12342 text 03:04
+				12343 button ✓, Help: Approve
+				12344 button ✗, Help: Reject
+				12345 button ↗, Help: View
+				12346 checkbox (settable, integer), Value: 0
+				12347 text GUIDELINE
+				12348 text e2e-sat-k-1789758247756-7314
+				12349 container
+					12350 text PR90 UX Reviewer 0919
+					12351 text · submitted
+					12352 text 03:04
+				12353 button ✓, Help: Approve
+				12354 button ✗, Help: Reject
+				12355 button ↗, Help: View
+				12356 checkbox (settable, integer), Value: 0
+				12357 text GUIDELINE
+				12358 text e2e-sat-k-1789758247763-8734
+				12359 container
+					12360 text Developer Agent
+					12361 text · submitted
+					12362 text 03:04
+				12363 button ✓, Help: Approve
+				12364 button ✗, Help: Reject
+				12365 button ↗, Help: View
+				12366 checkbox (settable, integer), Value: 0
+				12367 text GUIDELINE
+				12368 text e2e-sat-k-1789758247771-2624
+				12369 container
+					12370 text WfE2EAgent-1789758347769
+					12371 text · submitted
+					12372 text 03:04
+				12373 button ✓, Help: Approve
+				12374 button ✗, Help: Reject
+				12375 button ↗, Help: View
+				12376 checkbox (settable, integer), Value: 0
+				12377 text GUIDELINE
+				12378 text e2e-sat-k-1789758247775-3915
+				12379 container
+					12380 text PR90 UX Reviewer 0919
+					12381 text · submitted
+					12382 text 03:04
+				12383 button ✓, Help: Approve
+				12384 button ✗, Help: Reject
+				12385 button ↗, Help: View
+				12386 checkbox (settable, integer), Value: 0
+				12387 text GUIDELINE
+				12388 text e2e-sat-k-1789758247777-9825
+				12389 container
+					12390 text RecApply-1789767612704
+					12391 text · submitted
+					12392 text 03:04
+				12393 button ✓, Help: Approve
+				12394 button ✗, Help: Reject
+				12395 button ↗, Help: View
+				12396 checkbox (settable, integer), Value: 0
+				12397 text GUIDELINE
+				12398 text e2e-sat-k-1789758247786-6168
+				12399 container
+					12400 text WfSmAgent-1789758136414
+					12401 text · submitted
+					12402 text 03:04
+				12403 button ✓, Help: Approve
+				12404 button ✗, Help: Reject
+				12405 button ↗, Help: View
+				12406 checkbox (settable, integer), Value: 0
+				12407 text GUIDELINE
+				12408 text e2e-sat-k-1789758247794-1613
+				12409 container
+					12410 text RecApply-1789767612704
+					12411 text · submitted
+					12412 text 03:04
+				12413 button ✓, Help: Approve
+				12414 button ✗, Help: Reject
+				12415 button ↗, Help: View
+				12416 checkbox (settable, integer), Value: 0
+				12417 text GUIDELINE
+				12418 text e2e-sat-k-1789758247804-8612
+				12419 container
+					12420 text E2E-BA-1789758249649-6797
+					12421 text · submitted
+					12422 text 03:04
+				12423 button ✓, Help: Approve
+				12424 button ✗, Help: Reject
+				12425 button ↗, Help: View
+				12426 checkbox (settable, integer), Value: 0
+				12427 text GUIDELINE
+				12428 text e2e-sat-k-1789758247796-6158
+				12429 container
+					12430 text RecApply-1789767612704
+					12431 text · submitted
+					12432 text 03:04
+				12433 button ✓, Help: Approve
+				12434 button ✗, Help: Reject
+				12435 button ↗, Help: View
+				12436 checkbox (settable, integer), Value: 0
+				12437 text GUIDELINE
+				12438 text e2e-sat-k-1789758247801-2414
+				12439 container
+					12440 text Rec-1789757752359
+					12441 text · submitted
+					12442 text 03:04
+				12443 button ✓, Help: Approve
+				12444 button ✗, Help: Reject
+				12445 button ↗, Help: View
+				12446 checkbox (settable, integer), Value: 0
+				12447 text GUIDELINE
+				12448 text e2e-sat-k-1789758247806-9957
+				12449 container
+					12450 text E2E-BA-1789758249649-6797
+					12451 text · submitted
+					12452 text 03:04
+				12453 button ✓, Help: Approve
+				12454 button ✗, Help: Reject
+				12455 button ↗, Help: View
+				12456 checkbox (settable, integer), Value: 0
+				12457 text GUIDELINE
+				12458 text e2e-sat-k-1789758247808-1788
+				12459 container
+					12460 text c6b-s5-20260918-184323
+					12461 text · submitted
+					12462 text 03:04
+				12463 button ✓, Help: Approve
+				12464 button ✗, Help: Reject
+				12465 button ↗, Help: View
+				12466 checkbox (settable, integer), Value: 0
+				12467 text GUIDELINE
+				12468 text e2e-sat-k-1789758247790-8491
+				12469 container
+					12470 text E2E-QA-1789759243829-1543
+					12471 text · submitted
+					12472 text 03:04
+				12473 button ✓, Help: Approve
+				12474 button ✗, Help: Reject
+				12475 button ↗, Help: View
+				12476 checkbox (settable, integer), Value: 0
+				12477 text GUIDELINE
+				12478 text e2e-sat-k-1789758247809-3717
+				12479 container
+					12480 text WfUiAgent-1789758166454
+					12481 text · submitted
+					12482 text 03:04
+				12483 button ✓, Help: Approve
+				12484 button ✗, Help: Reject
+				12485 button ↗, Help: View
+				12486 checkbox (settable, integer), Value: 0
+				12487 text GUIDELINE
+				12488 text e2e-sat-k-1789758247792-5628
+				12489 container
+					12490 text WfSmAgent-1789758136414
+					12491 text · submitted
+					12492 text 03:04
+				12493 button ✓, Help: Approve
+				12494 button ✗, Help: Reject
+				12495 button ↗, Help: View
+				12496 checkbox (settable, integer), Value: 0
+				12497 text GUIDELINE
+				12498 text e2e-sat-k-1789758247811-4171
+				12499 container
+					12500 text PR90 UX Reviewer 0919
+					12501 text · submitted
+					12502 text 03:04
+				12503 button ✓, Help: Approve
+				12504 button ✗, Help: Reject
+				12505 button ↗, Help: View
+				12506 checkbox (settable, integer), Value: 0
+				12507 text GUIDELINE
+				12508 text e2e-sat-k-1789758247799-1800
+				12509 container
+					12510 text Rec-1789767589847
+					12511 text · submitted
+					12512 text 03:04
+				12513 button ✓, Help: Approve
+				12514 button ✗, Help: Reject
+				12515 button ↗, Help: View
+				12516 checkbox (settable, integer), Value: 0
+				12517 text SKILL
+				12518 text e2e-promoted-skill-1789758250237-4140
+				12519 container
+					12520 text e2e-git-gate-agent-1789768326586-8502
+					12521 text · submitted
+					12522 text 03:04
+					12523 text · Promoted from PROMPT: e2e-skill-source-1789758250187-2129
+				12524 button ✓, Help: Approve
+				12525 button ✗, Help: Reject
+				12526 button ↗, Help: View
+				12527 checkbox (settable, integer), Value: 0
+				12528 text SKILL
+				12529 text e2e-promoted-skill-1789758887871-7247
+				12530 container
+					12531 text c6b-s5-20260918-210137
+					12532 text · submitted
+					12533 text 03:14
+					12534 text · Promoted from GUIDELINE: e2e-knowledge-1789758877149-5889
+				12535 button ✓, Help: Approve
+				12536 button ✗, Help: Reject
+				12537 button ↗, Help: View
+				12538 checkbox (settable, integer), Value: 0
+				12539 text GUIDELINE
+				12540 text e2e-knowledge-load-2-1789759240770-60
+				12541 container
+					12542 text WfTplAgent-1789758161170
+					12543 text · submitted
+					12544 text 03:20
+					12545 text · concurrent submit load
+				12546 button ✓, Help: Approve
+				12547 button ✗, Help: Reject
+				12548 button ↗, Help: View
+				12549 checkbox (settable, integer), Value: 0
+				12550 text GUIDELINE
+				12551 text e2e-knowledge-load-1-1789759240769-9616
+				12552 container
+					12553 text e2e-agent-1789767959967-8297
+					12554 text · submitted
+					12555 text 03:20
+					12556 text · concurrent submit load
+				12557 button ✓, Help: Approve
+				12558 button ✗, Help: Reject
+				12559 button ↗, Help: View
+				12560 checkbox (settable, integer), Value: 0
+				12561 text GUIDELINE
+				12562 text e2e-knowledge-load-0-1789759240767-3474
+				12563 container
+					12564 text e2e-agent-1789768173879-1138
+					12565 text · submitted
+					12566 text 03:20
+					12567 text · concurrent submit load
+				12568 button ✓, Help: Approve
+				12569 button ✗, Help: Reject
+				12570 button ↗, Help: View
+				12571 checkbox (settable, integer), Value: 0
+				12572 text GUIDELINE
+				12573 text e2e-knowledge-load-3-1789759240772-6484
+				12574 container
+					12575 text E2E-BA-1789768338657-4474
+					12576 text · submitted
+					12577 text 03:20
+					12578 text · concurrent submit load
+				12579 button ✓, Help: Approve
+				12580 button ✗, Help: Reject
+				12581 button ↗, Help: View
+				12582 checkbox (settable, integer), Value: 0
+				12583 text GUIDELINE
+				12584 text e2e-knowledge-load-5-1789759240776-1658
+				12585 container
+					12586 text e2e-agent-1789768093709-7118
+					12587 text · submitted
+					12588 text 03:20
+					12589 text · concurrent submit load
+				12590 button ✓, Help: Approve
+				12591 button ✗, Help: Reject
+				12592 button ↗, Help: View
+				12593 checkbox (settable, integer), Value: 0
+				12594 text GUIDELINE
+				12595 text e2e-knowledge-load-4-1789759240774-9183
+				12596 container
+					12597 text E2E-Iso-B-1789759244036-6148
+					12598 text · submitted
+					12599 text 03:20
+					12600 text · concurrent submit load
+				12601 button ✓, Help: Approve
+				12602 button ✗, Help: Reject
+				12603 button ↗, Help: View
+				12604 checkbox (settable, integer), Value: 0
+				12605 text GUIDELINE
+				12606 text e2e-knowledge-load-6-1789759240778-4548
+				12607 container
+					12608 text c6b-s10-20260918-211613
+					12609 text · submitted
+					12610 text 03:20
+					12611 text · concurrent submit load
+				12612 button ✓, Help: Approve
+				12613 button ✗, Help: Reject
+				12614 button ↗, Help: View
+				12615 checkbox (settable, integer), Value: 0
+				12616 text GUIDELINE
+				12617 text e2e-knowledge-load-13-1789759240857-6465
+				12618 container
+					12619 text WfDfAgent-1789768184601
+					12620 text · submitted
+					12621 text 03:20
+					12622 text · concurrent submit load
+				12623 button ✓, Help: Approve
+				12624 button ✗, Help: Reject
+				12625 button ↗, Help: View
+				12626 checkbox (settable, integer), Value: 0
+				12627 text GUIDELINE
+				12628 text e2e-knowledge-load-8-1789759240782-610
+				12629 container
+					12630 text WfValAgent-1789758229037
+					12631 text · submitted
+					12632 text 03:20
+					12633 text · concurrent submit load
+				12634 button ✓, Help: Approve
+				12635 button ✗, Help: Reject
+				12636 button ↗, Help: View
+				12637 checkbox (settable, integer), Value: 0
+				12638 text GUIDELINE
+				12639 text e2e-knowledge-load-9-1789759240784-6818
+				12640 container
+					12641 text Rec-1789767589847
+					12642 text · submitted
+					12643 text 03:20
+					12644 text · concurrent submit load
+				12645 button ✓, Help: Approve
+				12646 button ✗, Help: Reject
+				12647 button ↗, Help: View
+				12648 checkbox (settable, integer), Value: 0
+				12649 text GUIDELINE
+				12650 text e2e-knowledge-load-10-1789759240786-6603
+				12651 container
+					12652 text QA Agent
+					12653 text · submitted
+					12654 text 03:20
+					12655 text · concurrent submit load
+				12656 button ✓, Help: Approve
+				12657 button ✗, Help: Reject
+				12658 button ↗, Help: View
+				12659 checkbox (settable, integer), Value: 0
+				12660 text GUIDELINE
+				12661 text e2e-knowledge-load-11-1789759240787-7377
+				12662 container
+					12663 text c6b-s5-20260918-210137
+					12664 text · submitted
+					12665 text 03:20
+					12666 text · concurrent submit load
+				12667 button ✓, Help: Approve
+				12668 button ✗, Help: Reject
+				12669 button ↗, Help: View
+				12670 checkbox (settable, integer), Value: 0
+				12671 text GUIDELINE
+				12672 text e2e-knowledge-load-12-1789759240840-96
+				12673 container
+					12674 text Rec-1789758453648
+					12675 text · submitted
+					12676 text 03:20
+					12677 text · concurrent submit load
+				12678 button ✓, Help: Approve
+				12679 button ✗, Help: Reject
+				12680 button ↗, Help: View
+				12681 checkbox (settable, integer), Value: 0
+				12682 text GUIDELINE
+				12683 text e2e-knowledge-load-7-1789759240780-4950
+				12684 container
+					12685 text WfTplAgent-1789758161170
+					12686 text · submitted
+					12687 text 03:20
+					12688 text · concurrent submit load
+				12689 button ✓, Help: Approve
+				12690 button ✗, Help: Reject
+				12691 button ↗, Help: View
+				12692 checkbox (settable, integer), Value: 0
+				12693 text GUIDELINE
+				12694 text e2e-knowledge-load-14-1789759240870-9200
+				12695 container
+					12696 text Developer Agent
+					12697 text · submitted
+					12698 text 03:20
+					12699 text · concurrent submit load
+				12700 button ✓, Help: Approve
+				12701 button ✗, Help: Reject
+				12702 button ↗, Help: View
+				12703 checkbox (settable, integer), Value: 0
+				12704 text GUIDELINE
+				12705 text e2e-knowledge-load-19-1789759240927-2446
+				12706 container
+					12707 text WfValAgent-1789759168353
+					12708 text · submitted
+					12709 text 03:20
+					12710 text · concurrent submit load
+				12711 button ✓, Help: Approve
+				12712 button ✗, Help: Reject
+				12713 button ↗, Help: View
+				12714 checkbox (settable, integer), Value: 0
+				12715 text GUIDELINE
+				12716 text e2e-knowledge-load-16-1789759240882-8904
+				12717 container
+					12718 text SDD DEV Agent
+					12719 text · submitted
+					12720 text 03:20
+					12721 text · concurrent submit load
+				12722 button ✓, Help: Approve
+				12723 button ✗, Help: Reject
+				12724 button ↗, Help: View
+				12725 checkbox (settable, integer), Value: 0
+				12726 text GUIDELINE
+				12727 text e2e-knowledge-load-20-1789759240934-4573
+				12728 container
+					12729 text E2E-Iso-B-1789768339162-2919
+					12730 text · submitted
+					12731 text 03:20
+					12732 text · concurrent submit load
+				12733 button ✓, Help: Approve
+				12734 button ✗, Help: Reject
+				12735 button ↗, Help: View
+				12736 checkbox (settable, integer), Value: 0
+				12737 text GUIDELINE
+				12738 text e2e-knowledge-load-17-1789759240911-1992
+				12739 container
+					12740 text e2e-oc-uidz-1789768112085-1125
+					12741 text · submitted
+					12742 text 03:20
+					12743 text · concurrent submit load
+				12744 button ✓, Help: Approve
+				12745 button ✗, Help: Reject
+				12746 button ↗, Help: View
+				12747 checkbox (settable, integer), Value: 0
+				12748 text GUIDELINE
+				12749 text e2e-knowledge-load-18-1789759240923-6238
+				12750 container
+					12751 text e2e-wf-merge-agent-1789768363247-6870
+					12752 text · submitted
+					12753 text 03:20
+					12754 text · concurrent submit load
+				12755 button ✓, Help: Approve
+				12756 button ✗, Help: Reject
+				12757 button ↗, Help: View
+				12758 checkbox (settable, integer), Value: 0
+				12759 text GUIDELINE
+				12760 text e2e-knowledge-load-21-1789759240937-538
+				12761 container
+					12762 text e2e-oc-deny-1789768323810-8336
+					12763 text · submitted
+					12764 text 03:20
+					12765 text · concurrent submit load
+				12766 button ✓, Help: Approve
+				12767 button ✗, Help: Reject
+				12768 button ↗, Help: View
+				12769 checkbox (settable, integer), Value: 0
+				12770 text GUIDELINE
+				12771 text e2e-knowledge-load-15-1789759240876-4881
+				12772 container
+					12773 text QA Agent
+					12774 text · submitted
+					12775 text 03:20
+					12776 text · concurrent submit load
+				12777 button ✓, Help: Approve
+				12778 button ✗, Help: Reject
+				12779 button ↗, Help: View
+				12780 checkbox (settable, integer), Value: 0
+				12781 text GUIDELINE
+				12782 text e2e-knowledge-load-22-1789759240947-4205
+				12783 container
+					12784 text c6b-s10-20260918-211613
+					12785 text · submitted
+					12786 text 03:20
+					12787 text · concurrent submit load
+				12788 button ✓, Help: Approve
+				12789 button ✗, Help: Reject
+				12790 button ↗, Help: View
+				12791 checkbox (settable, integer), Value: 0
+				12792 text GUIDELINE
+				12793 text e2e-knowledge-load-23-1789759240961-7832
+				12794 container
+					12795 text PR90 UX Reviewer 0919
+					12796 text · submitted
+					12797 text 03:20
+					12798 text · concurrent submit load
+				12799 button ✓, Help: Approve
+				12800 button ✗, Help: Reject
+				12801 button ↗, Help: View
+				12802 checkbox (settable, integer), Value: 0
+				12803 text GUIDELINE
+				12804 text e2e-load-k-1789759241126-6149
+				12805 container
+					12806 text SDD BA Agent
+					12807 text · submitted
+					12808 text 03:20
+				12809 button ✓, Help: Approve
+				12810 button ✗, Help: Reject
+				12811 button ↗, Help: View
+				12812 checkbox (settable, integer), Value: 0
+				12813 text GUIDELINE
+				12814 text e2e-load-k-1789759241155-9179
+				12815 container
+					12816 text E2E-Dev-1789759243820-357
+					12817 text · submitted
+					12818 text 03:20
+				12819 button ✓, Help: Approve
+				12820 button ✗, Help: Reject
+				12821 button ↗, Help: View
+				12822 checkbox (settable, integer), Value: 0
+				12823 text GUIDELINE
+				12824 text e2e-load-k-1789759241135-4770
+				12825 container
+					12826 text e2e-wf-agent-1789768340530-3880
+					12827 text · submitted
+					12828 text 03:20
+				12829 button ✓, Help: Approve
+				12830 button ✗, Help: Reject
+				12831 button ↗, Help: View
+				12832 checkbox (settable, integer), Value: 0
+				12833 text GUIDELINE
+				12834 text e2e-load-k-1789759241145-182
+				12835 container
+					12836 text e2e-agent-1789767978117-4292
+					12837 text · submitted
+					12838 text 03:20
+				12839 button ✓, Help: Approve
+				12840 button ✗, Help: Reject
+				12841 button ↗, Help: View
+				12842 checkbox (settable, integer), Value: 0
+				12843 text GUIDELINE
+				12844 text e2e-load-k-1789759241989-5254
+				12845 container
+					12846 text WfTplAgent-1789768240995
+					12847 text · submitted
+					12848 text 03:20
+				12849 button ✓, Help: Approve
+				12850 button ✗, Help: Reject
+				12851 button ↗, Help: View
+				12852 checkbox (settable, integer), Value: 0
+				12853 text GUIDELINE
+				12854 text e2e-load-k-1789759241984-6419
+				12855 container
+					12856 text E2E-Iso-B-1789759244036-6148
+					12857 text · submitted
+					12858 text 03:20
+				12859 button ✓, Help: Approve
+				12860 button ✗, Help: Reject
+				12861 button ↗, Help: View
+				12862 checkbox (settable, integer), Value: 0
+				12863 text GUIDELINE
+				12864 text e2e-load-k-1789759241995-7567
+				12865 container
+					12866 text WfSmAgent-1789758186185
+					12867 text · submitted
+					12868 text 03:20
+				12869 button ✓, Help: Approve
+				12870 button ✗, Help: Reject
+				12871 button ↗, Help: View
+				12872 checkbox (settable, integer), Value: 0
+				12873 text GUIDELINE
+				12874 text e2e-load-k-1789759242001-5610
+				12875 container
+					12876 text e2e-wf-yaml-agent-1789768375157-1985
+					12877 text · submitted
+					12878 text 03:20
+				12879 button ✓, Help: Approve
+				12880 button ✗, Help: Reject
+				12881 button ↗, Help: View
+				12882 checkbox (settable, integer), Value: 0
+				12883 text GUIDELINE
+				12884 text e2e-load-k-1789759242531-8335
+				12885 container
+					12886 text SDD DEV Agent
+					12887 text · submitted
+					12888 text 03:20
+				12889 button ✓, Help: Approve
+				12890 button ✗, Help: Reject
+				12891 button ↗, Help: View
+				12892 checkbox (settable, integer), Value: 0
+				12893 text GUIDELINE
+				12894 text e2e-load-k-1789759242524-9832
+				12895 container
+					12896 text WfTplAgent-1789768240995
+					12897 text · submitted
+					12898 text 03:20
+				12899 button ✓, Help: Approve
+				12900 button ✗, Help: Reject
+				12901 button ↗, Help: View
+				12902 checkbox (settable, integer), Value: 0
+				12903 text GUIDELINE
+				12904 text e2e-load-k-1789759242538-4917
+				12905 container
+					12906 text c6b-s5-20260918-210137
+					12907 text · submitted
+					12908 text 03:20
+				12909 button ✓, Help: Approve
+				12910 button ✗, Help: Reject
+				12911 button ↗, Help: View
+				12912 checkbox (settable, integer), Value: 0
+				12913 text GUIDELINE
+				12914 text e2e-load-k-1789759242545-137
+				12915 container
+					12916 text WfUiAgent-1789758166454
+					12917 text · submitted
+					12918 text 03:20
+				12919 button ✓, Help: Approve
+				12920 button ✗, Help: Reject
+				12921 button ↗, Help: View
+				12922 checkbox (settable, integer), Value: 0
+				12923 text GUIDELINE
+				12924 text e2e-sat-k-1789759243185-7117
+				12925 container
+					12926 text E2E-Dev-1789768338706-3470
+					12927 text · submitted
+					12928 text 03:20
+				12929 button ✓, Help: Approve
+				12930 button ✗, Help: Reject
+				12931 button ↗, Help: View
+				12932 checkbox (settable, integer), Value: 0
+				12933 text GUIDELINE
+				12934 text e2e-sat-k-1789759243192-9177
+				12935 container
+					12936 text e2e-qoder-s4-1789770522471-2262
+					12937 text · submitted
+					12938 text 03:20
+				12939 button ✓, Help: Approve
+				12940 button ✗, Help: Reject
+				12941 button ↗, Help: View
+				12942 checkbox (settable, integer), Value: 0
+				12943 text GUIDELINE
+				12944 text e2e-sat-k-1789759243196-5895
+				12945 container
+					12946 text e2e-qoder-s4-1789772001446-9888
+					12947 text · submitted
+					12948 text 03:20
+				12949 button ✓, Help: Approve
+				12950 button ✗, Help: Reject
+				12951 button ↗, Help: View
+				12952 checkbox (settable, integer), Value: 0
+				12953 text GUIDELINE
+				12954 text e2e-sat-k-1789759243200-1443
+				12955 container
+					12956 text WfValAgent-1789768267571
+					12957 text · submitted
+					12958 text 03:20
+				12959 button ✓, Help: Approve
+				12960 button ✗, Help: Reject
+				12961 button ↗, Help: View
+				12962 checkbox (settable, integer), Value: 0
+				12963 text GUIDELINE
+				12964 text e2e-sat-k-1789759243198-5678
+				12965 container
+					12966 text E2E-Iso-B-1789759244036-6148
+					12967 text · submitted
+					12968 text 03:20
+				12969 button ✓, Help: Approve
+				12970 button ✗, Help: Reject
+				12971 button ↗, Help: View
+				12972 checkbox (settable, integer), Value: 0
+				12973 text GUIDELINE
+				12974 text e2e-sat-k-1789759243190-9651
+				12975 container
+					12976 text PR90 UX Reviewer 0919
+					12977 text · submitted
+					12978 text 03:20
+				12979 button ✓, Help: Approve
+				12980 button ✗, Help: Reject
+				12981 button ↗, Help: View
+				12982 checkbox (settable, integer), Value: 0
+				12983 text GUIDELINE
+				12984 text e2e-sat-k-1789759243202-2648
+				12985 container
+					12986 text PR90 UX Reviewer 0919
+					12987 text · submitted
+					12988 text 03:20
+				12989 button ✓, Help: Approve
+				12990 button ✗, Help: Reject
+				12991 button ↗, Help: View
+				12992 checkbox (settable, integer), Value: 0
+				12993 text GUIDELINE
+				12994 text e2e-sat-k-1789759243194-1068
+				12995 container
+					12996 text WfE2EAgent-1789768222873
+					12997 text · submitted
+					12998 text 03:20
+				12999 button ✓, Help: Approve
+				13000 button ✗, Help: Reject
+				13001 button ↗, Help: View
+				13002 checkbox (settable, integer), Value: 0
+				13003 text GUIDELINE
+				13004 text e2e-sat-k-1789759243206-6141
+				13005 container
+					13006 text Rec-1789758453648
+					13007 text · submitted
+					13008 text 03:20
+				13009 button ✓, Help: Approve
+				13010 button ✗, Help: Reject
+				13011 button ↗, Help: View
+				13012 checkbox (settable, integer), Value: 0
+				13013 text GUIDELINE
+				13014 text e2e-sat-k-1789759243207-1968
+				13015 container
+					13016 text E2E-BA-1789768338657-4474
+					13017 text · submitted
+					13018 text 03:20
+				13019 button ✓, Help: Approve
+				13020 button ✗, Help: Reject
+				13021 button ↗, Help: View
+				13022 checkbox (settable, integer), Value: 0
+				13023 text GUIDELINE
+				13024 text e2e-sat-k-1789759243210-3871
+				13025 container
+					13026 text WfDfAgent-1789768184601
+					13027 text · submitted
+					13028 text 03:20
+				13029 button ✓, Help: Approve
+				13030 button ✗, Help: Reject
+				13031 button ↗, Help: View
+				13032 checkbox (settable, integer), Value: 0
+				13033 text GUIDELINE
+				13034 text e2e-sat-k-1789759243204-5741
+				13035 container
+					13036 text E2E-QA-1789758249670-7443
+					13037 text · submitted
+					13038 text 03:20
+				13039 button ✓, Help: Approve
+				13040 button ✗, Help: Reject
+				13041 button ↗, Help: View
+				13042 checkbox (settable, integer), Value: 0
+				13043 text GUIDELINE
+				13044 text e2e-sat-k-1789759243215-2358
+				13045 container
+					13046 text e2e-oc-changes-1789768331282-4861
+					13047 text · submitted
+					13048 text 03:20
+				13049 button ✓, Help: Approve
+				13050 button ✗, Help: Reject
+				13051 button ↗, Help: View
+				13052 checkbox (settable, integer), Value: 0
+				13053 text GUIDELINE
+				13054 text e2e-sat-k-1789759243213-3847
+				13055 container
+					13056 text e2e-qoder-s4-1789769417941-9935
+					13057 text · submitted
+					13058 text 03:20
+				13059 button ✓, Help: Approve
+				13060 button ✗, Help: Reject
+				13061 button ↗, Help: View
+				13062 checkbox (settable, integer), Value: 0
+				13063 text GUIDELINE
+				13064 text e2e-sat-k-1789759243212-594
+				13065 container
+					13066 text E2E-Iso-A-1789768339161-2919
+					13067 text · submitted
+					13068 text 03:20
+				13069 button ✓, Help: Approve
+				13070 button ✗, Help: Reject
+				13071 button ↗, Help: View
+				13072 checkbox (settable, integer), Value: 0
+				13073 text GUIDELINE
+				13074 text e2e-sat-k-1789759243219-9792
+				13075 container
+					13076 text WfSmAgent-1789759120287
+					13077 text · submitted
+					13078 text 03:20
+				13079 button ✓, Help: Approve
+				13080 button ✗, Help: Reject
+				13081 button ↗, Help: View
+				13082 checkbox (settable, integer), Value: 0
+				13083 text GUIDELINE
+				13084 text e2e-sat-k-1789759243217-1556
+				13085 container
+					13086 text RecApply-1789757756681
+					13087 text · submitted
+					13088 text 03:20
+				13089 button ✓, Help: Approve
+				13090 button ✗, Help: Reject
+				13091 button ↗, Help: View
+				13092 checkbox (settable, integer), Value: 0
+				13093 text GUIDELINE
+				13094 text e2e-sat-k-1789759243221-7584
+				13095 container
+					13096 text e2e-wf-merge-agent-1789768363247-6870
+					13097 text · submitted
+					13098 text 03:20
+				13099 button ✓, Help: Approve
+				13100 button ✗, Help: Reject
+				13101 button ↗, Help: View
+				13102 checkbox (settable, integer), Value: 0
+				13103 text GUIDELINE
+				13104 text e2e-sat-k-1789759243313-3500
+				13105 container
+					13106 text c6b-s10-20260918-220325
+					13107 text · submitted
+					13108 text 03:20
+				13109 button ✓, Help: Approve
+				13110 button ✗, Help: Reject
+				13111 button ↗, Help: View
+				13112 checkbox (settable, integer), Value: 0
+				13113 text GUIDELINE
+				13114 text e2e-sat-k-1789759243311-5945
+				13115 container
+					13116 text WfSmAgent-1789768233301
+					13117 text · submitted
+					13118 text 03:20
+				13119 button ✓, Help: Approve
+				13120 button ✗, Help: Reject
+				13121 button ↗, Help: View
+				13122 checkbox (settable, integer), Value: 0
+				13123 text GUIDELINE
+				13124 text e2e-sat-k-1789759243338-6869
+				13125 container
+					13126 text PR90 UX Analyst 0919
+					13127 text · submitted
+					13128 text 03:20
+				13129 button ✓, Help: Approve
+				13130 button ✗, Help: Reject
+				13131 button ↗, Help: View
+				13132 checkbox (settable, integer), Value: 0
+				13133 text GUIDELINE
+				13134 text e2e-sat-k-1789759243335-3403
+				13135 container
+					13136 text e2e-qoder-s4-1789772001446-9888
+					13137 text · submitted
+					13138 text 03:20
+				13139 button ✓, Help: Approve
+				13140 button ✗, Help: Reject
+				13141 button ↗, Help: View
+				13142 checkbox (settable, integer), Value: 0
+				13143 text GUIDELINE
+				13144 text e2e-sat-k-1789759243222-2460
+				13145 container
+					13146 text WfE2EAgent-1789768222873
+					13147 text · submitted
+					13148 text 03:20
+				13149 button ✓, Help: Approve
+				13150 button ✗, Help: Reject
+				13151 button ↗, Help: View
+				13152 checkbox (settable, integer), Value: 0
+				13153 text GUIDELINE
+				13154 text e2e-sat-k-1789759243298-8430
+				13155 container
+					13156 text E2E-BA-1789759243794-1202
+					13157 text · submitted
+					13158 text 03:20
+				13159 button ✓, Help: Approve
+				13160 button ✗, Help: Reject
+				13161 button ↗, Help: View
+				13162 checkbox (settable, integer), Value: 0
+				13163 text GUIDELINE
+				13164 text e2e-sat-k-1789759243269-5591
+				13165 container
+					13166 text WfDfAgent-1789758120435
+					13167 text · submitted
+					13168 text 03:20
+				13169 button ✓, Help: Approve
+				13170 button ✗, Help: Reject
+				13171 button ↗, Help: View
+				13172 checkbox (settable, integer), Value: 0
+				13173 text GUIDELINE
+				13174 text e2e-sat-k-1789759243341-9374
+				13175 container
+					13176 text e2e-wf-merge-agent-1789768363247-6870
+					13177 text · submitted
+					13178 text 03:20
+				13179 button ✓, Help: Approve
+				13180 button ✗, Help: Reject
+				13181 button ↗, Help: View
+				13182 checkbox (settable, integer), Value: 0
+				13183 text GUIDELINE
+				13184 text e2e-sat-k-1789759243349-2549
+				13185 container
+					13186 text e2e-wf-merge-agent-1789768363247-6870
+					13187 text · submitted
+					13188 text 03:20
+				13189 button ✓, Help: Approve
+				13190 button ✗, Help: Reject
+				13191 button ↗, Help: View
+				13192 checkbox (settable, integer), Value: 0
+				13193 text GUIDELINE
+				13194 text e2e-sat-k-1789759243343-389
+				13195 container
+					13196 text E2E-Iso-A-1789768339161-2919
+					13197 text · submitted
+					13198 text 03:20
+				13199 button ✓, Help: Approve
+				13200 button ✗, Help: Reject
+				13201 button ↗, Help: View
+				13202 checkbox (settable, integer), Value: 0
+				13203 text GUIDELINE
+				13204 text e2e-sat-k-1789759243351-4586
+				13205 container
+					13206 text e2e-wf-merge-agent-1789768363247-6870
+					13207 text · submitted
+					13208 text 03:20
+				13209 button ✓, Help: Approve
+				13210 button ✗, Help: Reject
+				13211 button ↗, Help: View
+				13212 checkbox (settable, integer), Value: 0
+				13213 text GUIDELINE
+				13214 text e2e-sat-k-1789759243345-4545
+				13215 container
+					13216 text e2e-oc-deny-1789768323810-8336
+					13217 text · submitted
+					13218 text 03:20
+				13219 button ✓, Help: Approve
+				13220 button ✗, Help: Reject
+				13221 button ↗, Help: View
+				13222 checkbox (settable, integer), Value: 0
+				13223 text GUIDELINE
+				13224 text e2e-sat-k-1789759243358-2859
+				13225 container
+					13226 text E2E-QA-1789759243829-1543
+					13227 text · submitted
+					13228 text 03:20
+				13229 button ✓, Help: Approve
+				13230 button ✗, Help: Reject
+				13231 button ↗, Help: View
+				13232 checkbox (settable, integer), Value: 0
+				13233 text GUIDELINE
+				13234 text e2e-sat-k-1789759243354-3331
+				13235 container
+					13236 text QA Agent
+					13237 text · submitted
+					13238 text 03:20
+				13239 button ✓, Help: Approve
+				13240 button ✗, Help: Reject
+				13241 button ↗, Help: View
+				13242 checkbox (settable, integer), Value: 0
+				13243 text GUIDELINE
+				13244 text e2e-sat-k-1789759243423-9518
+				13245 container
+					13246 text WfYamlAgent-1789768277456
+					13247 text · submitted
+					13248 text 03:20
+				13249 button ✓, Help: Approve
+				13250 button ✗, Help: Reject
+				13251 button ↗, Help: View
+				13252 checkbox (settable, integer), Value: 0
+				13253 text GUIDELINE
+				13254 text e2e-sat-k-1789759243361-5823
+				13255 container
+					13256 text e2e-agent-1789768099969-8723
+					13257 text · submitted
+					13258 text 03:20
+				13259 button ✓, Help: Approve
+				13260 button ✗, Help: Reject
+				13261 button ↗, Help: View
+				13262 checkbox (settable, integer), Value: 0
+				13263 text GUIDELINE
+				13264 text e2e-sat-k-1789759243420-7124
+				13265 container
+					13266 text WfValAgent-1789758229037
+					13267 text · submitted
+					13268 text 03:20
+				13269 button ✓, Help: Approve
+				13270 button ✗, Help: Reject
+				13271 button ↗, Help: View
+				13272 checkbox (settable, integer), Value: 0
+				13273 text GUIDELINE
+				13274 text e2e-sat-k-1789759243363-6054
+				13275 container
+					13276 text e2e-oc-uiaz-1789768127387-7074
+					13277 text · submitted
+					13278 text 03:20
+				13279 button ✓, Help: Approve
+				13280 button ✗, Help: Reject
+				13281 button ↗, Help: View
+				13282 checkbox (settable, integer), Value: 0
+				13283 text GUIDELINE
+				13284 text e2e-sat-k-1789759243414-3564
+				13285 container
+					13286 text e2e-oc-deny-1789768323810-8336
+					13287 text · submitted
+					13288 text 03:20
+				13289 button ✓, Help: Approve
+				13290 button ✗, Help: Reject
+				13291 button ↗, Help: View
+				13292 checkbox (settable, integer), Value: 0
+				13293 text GUIDELINE
+				13294 text e2e-sat-k-1789759243425-6378
+				13295 container
+					13296 text e2e-qoder-s4-1789769576003-5027
+					13297 text · submitted
+					13298 text 03:20
+				13299 button ✓, Help: Approve
+				13300 button ✗, Help: Reject
+				13301 button ↗, Help: View
+				13302 checkbox (settable, integer), Value: 0
+				13303 text GUIDELINE
+				13304 text e2e-sat-k-1789759243416-828
+				13305 container
+					13306 text e2e-agent-1789767971290-194
+					13307 text · submitted
+					13308 text 03:20
+				13309 button ✓, Help: Approve
+				13310 button ✗, Help: Reject
+				13311 button ↗, Help: View
+				13312 checkbox (settable, integer), Value: 0
+				13313 text GUIDELINE
+				13314 text e2e-sat-k-1789759243427-9074
+				13315 container
+					13316 text e2e-qoder-s4-1789768615850-6950
+					13317 text · submitted
+					13318 text 03:20
+				13319 button ✓, Help: Approve
+				13320 button ✗, Help: Reject
+				13321 button ↗, Help: View
+				13322 checkbox (settable, integer), Value: 0
+				13323 text GUIDELINE
+				13324 text e2e-sat-k-1789759243429-4867
+				13325 container
+					13326 text WfYamlAgent-1789758234999
+					13327 text · submitted
+					13328 text 03:20
+				13329 button ✓, Help: Approve
+				13330 button ✗, Help: Reject
+				13331 button ↗, Help: View
+				13332 checkbox (settable, integer), Value: 0
+				13333 text GUIDELINE
+				13334 text e2e-sat-k-1789759243431-8081
+				13335 container
+					13336 text e2e-qoder-s9-1789768969567-6684
+					13337 text · submitted
+					13338 text 03:20
+				13339 button ✓, Help: Approve
+				13340 button ✗, Help: Reject
+				13341 button ↗, Help: View
+				13342 checkbox (settable, integer), Value: 0
+				13343 text GUIDELINE
+				13344 text e2e-sat-k-1789759243441-9247
+				13345 container
+					13346 text Rec-1789758453648
+					13347 text · submitted
+					13348 text 03:20
+				13349 button ✓, Help: Approve
+				13350 button ✗, Help: Reject
+				13351 button ↗, Help: View
+				13352 checkbox (settable, integer), Value: 0
+				13353 text GUIDELINE
+				13354 text e2e-sat-k-1789759243445-7963
+				13355 container
+					13356 text SDD DEV Agent
+					13357 text · submitted
+					13358 text 03:20
+				13359 button ✓, Help: Approve
+				13360 button ✗, Help: Reject
+				13361 button ↗, Help: View
+				13362 checkbox (settable, integer), Value: 0
+				13363 text GUIDELINE
+				13364 text e2e-sat-k-1789759243438-6272
+				13365 container
+					13366 text e2e-agent-1789768093709-7118
+					13367 text · submitted
+					13368 text 03:20
+				13369 button ✓, Help: Approve
+				13370 button ✗, Help: Reject
+				13371 button ↗, Help: View
+				13372 checkbox (settable, integer), Value: 0
+				13373 text GUIDELINE
+				13374 text e2e-sat-k-1789759243435-3797
+				13375 container
+					13376 text RecApply-1789757756681
+					13377 text · submitted
+					13378 text 03:20
+				13379 button ✓, Help: Approve
+				13380 button ✗, Help: Reject
+				13381 button ↗, Help: View
+				13382 checkbox (settable, integer), Value: 0
+				13383 text GUIDELINE
+				13384 text e2e-sat-k-1789759243443-1704
+				13385 container
+					13386 text c6b-s10-20260918-221526
+					13387 text · submitted
+					13388 text 03:20
+				13389 button ✓, Help: Approve
+				13390 button ✗, Help: Reject
+				13391 button ↗, Help: View
+				13392 checkbox (settable, integer), Value: 0
+				13393 text GUIDELINE
+				13394 text e2e-sat-k-1789759243433-7347
+				13395 container
+					13396 text e2e-qoder-s4-1789768615850-6950
+					13397 text · submitted
+					13398 text 03:20
+				13399 button ✓, Help: Approve
+				13400 button ✗, Help: Reject
+				13401 button ↗, Help: View
+				13402 checkbox (settable, integer), Value: 0
+				13403 text SKILL
+				13404 text e2e-promoted-skill-1789759245409-6833
+				13405 container
+					13406 text c6b-s10-20260918-221526
+					13407 text · submitted
+					13408 text 03:20
+					13409 text · Promoted from PROMPT: e2e-skill-source-1789759245222-8802
+				13410 button ✓, Help: Approve
+				13411 button ✗, Help: Reject
+				13412 button ↗, Help: View
+				13413 checkbox (settable, integer), Value: 0
+				13414 text WORKFLOW
+				13415 text wf-e2e-collab-structure-1789759243836-3755
+				13416 container
+					13417 text e2e-agent-1789767998159-897
+					13418 text · submitted
+					13419 text 03:20
+					13420 text · Auto-captured from workflow chain 09e07935-218b-4c12-9015-e0…
+				13421 button ✓, Help: Approve
+				13422 button ✗, Help: Reject
+				13423 button ↗, Help: View
+				13424 checkbox (settable, integer), Value: 0
+				13425 text SKILL
+				13426 text s11-marker-1789766361113-5594
+				13427 container
+					13428 text e2e-qoder-s4-1789770099436-7004
+					13429 text · submitted
+					13430 text 05:19
+				13431 button ✓, Help: Approve
+				13432 button ✗, Help: Reject
+				13433 button ↗, Help: View
+				13434 checkbox (settable, integer), Value: 0
+				13435 text SKILL
+				13436 text e2e-promoted-skill-1789767953146-9091
+				13437 container
+					13438 text E2E-BA-1789759243794-1202
+					13439 text · submitted
+					13440 text 05:45
+					13441 text · Promoted from GUIDELINE: e2e-knowledge-1789767945841-6681
+				13442 button ✓, Help: Approve
+				13443 button ✗, Help: Reject
+				13444 button ↗, Help: View
+				13445 checkbox (settable, integer), Value: 0
+				13446 text GUIDELINE
+				13447 text e2e-knowledge-load-1-1789768333598-4489
+				13448 container
+					13449 text e2e-agent-1789768093709-7118
+					13450 text · submitted
+					13451 text 05:52
+					13452 text · concurrent submit load
+				13453 button ✓, Help: Approve
+				13454 button ✗, Help: Reject
+				13455 button ↗, Help: View
+				13456 checkbox (settable, integer), Value: 0
+				13457 text GUIDELINE
+				13458 text e2e-knowledge-load-0-1789768333596-6728
+				13459 container
+					13460 text e2e-agent-1789767955897-1365
+					13461 text · submitted
+					13462 text 05:52
+					13463 text · concurrent submit load
+				13464 button ✓, Help: Approve
+				13465 button ✗, Help: Reject
+				13466 button ↗, Help: View
+				13467 checkbox (settable, integer), Value: 0
+				13468 text GUIDELINE
+				13469 text e2e-knowledge-load-2-1789768333600-7508
+				13470 container
+					13471 text WfE2EAgent-1789768222873
+					13472 text · submitted
+					13473 text 05:52
+					13474 text · concurrent submit load
+				13475 button ✓, Help: Approve
+				13476 button ✗, Help: Reject
+				13477 button ↗, Help: View
+				13478 checkbox (settable, integer), Value: 0
+				13479 text GUIDELINE
+				13480 text e2e-knowledge-load-4-1789768333606-3661
+				13481 container
+					13482 text WfYamlAgent-1789759177768
+					13483 text · submitted
+					13484 text 05:52
+					13485 text · concurrent submit load
+				13486 button ✓, Help: Approve
+				13487 button ✗, Help: Reject
+				13488 button ↗, Help: View
+				13489 checkbox (settable, integer), Value: 0
+				13490 text GUIDELINE
+				13491 text e2e-knowledge-load-3-1789768333603-211
+				13492 container
+					13493 text e2e-agent-1789768099969-8723
+					13494 text · submitted
+					13495 text 05:52
+					13496 text · concurrent submit load
+				13497 button ✓, Help: Approve
+				13498 button ✗, Help: Reject
+				13499 button ↗, Help: View
+				13500 checkbox (settable, integer), Value: 0
+				13501 text GUIDELINE
+				13502 text e2e-knowledge-load-5-1789768333608-228
+				13503 container
+					13504 text E2E-Dev-1789759243820-357
+					13505 text · submitted
+					13506 text 05:52
+					13507 text · concurrent submit load
+				13508 button ✓, Help: Approve
+				13509 button ✗, Help: Reject
+				13510 button ↗, Help: View
+				13511 checkbox (settable, integer), Value: 0
+				13512 text GUIDELINE
+				13513 text e2e-knowledge-load-6-1789768333610-7340
+				13514 container
+					13515 text c6b-s10-20260918-221526
+					13516 text · submitted
+					13517 text 05:52
+					13518 text · concurrent submit load
+				13519 button ✓, Help: Approve
+				13520 button ✗, Help: Reject
+				13521 button ↗, Help: View
+				13522 checkbox (settable, integer), Value: 0
+				13523 text GUIDELINE
+				13524 text e2e-knowledge-load-7-1789768333616-6343
+				13525 container
+					13526 text WfValAgent-1789768267571
+					13527 text · submitted
+					13528 text 05:52
+					13529 text · concurrent submit load
+				13530 button ✓, Help: Approve
+				13531 button ✗, Help: Reject
+				13532 button ↗, Help: View
+				13533 checkbox (settable, integer), Value: 0
+				13534 text GUIDELINE
+				13535 text e2e-knowledge-load-9-1789768333621-3850
+				13536 container
+					13537 text PR90 UX Analyst 0919
+					13538 text · submitted
+					13539 text 05:52
+					13540 text · concurrent submit load
+				13541 button ✓, Help: Approve
+				13542 button ✗, Help: Reject
+				13543 button ↗, Help: View
+				13544 checkbox (settable, integer), Value: 0
+				13545 text GUIDELINE
+				13546 text e2e-knowledge-load-8-1789768333617-1241
+				13547 container
+					13548 text e2e-agent-1789767988303-3267
+					13549 text · submitted
+					13550 text 05:52
+					13551 text · concurrent submit load
+				13552 button ✓, Help: Approve
+				13553 button ✗, Help: Reject
+				13554 button ↗, Help: View
+				13555 checkbox (settable, integer), Value: 0
+				13556 text GUIDELINE
+				13557 text e2e-knowledge-load-10-1789768333629-6598
+				13558 container
+					13559 text e2e-wf-agent-1789768340530-3880
+					13560 text · submitted
+					13561 text 05:52
+					13562 text · concurrent submit load
+				13563 button ✓, Help: Approve
+				13564 button ✗, Help: Reject
+				13565 button ↗, Help: View
+				13566 checkbox (settable, integer), Value: 0
+				13567 text GUIDELINE
+				13568 text e2e-knowledge-load-11-1789768333634-4398
+				13569 container
+					13570 text E2E-Iso-B-1789759244036-6148
+					13571 text · submitted
+					13572 text 05:52
+					13573 text · concurrent submit load
+				13574 button ✓, Help: Approve
+				13575 button ✗, Help: Reject
+				13576 button ↗, Help: View
+				13577 checkbox (settable, integer), Value: 0
+				13578 text GUIDELINE
+				13579 text e2e-knowledge-load-16-1789768333814-9354
+				13580 container
+					13581 text e2e-qoder-s9-1789768969567-6684
+					13582 text · submitted
+					13583 text 05:52
+					13584 text · concurrent submit load
+				13585 button ✓, Help: Approve
+				13586 button ✗, Help: Reject
+				13587 button ↗, Help: View
+				13588 checkbox (settable, integer), Value: 0
+				13589 text GUIDELINE
+				13590 text e2e-knowledge-load-12-1789768333806-1162
+				13591 container
+					13592 text WfUiAgent-1789758166454
+					13593 text · submitted
+					13594 text 05:52
+					13595 text · concurrent submit load
+				13596 button ✓, Help: Approve
+				13597 button ✗, Help: Reject
+				13598 button ↗, Help: View
+				13599 checkbox (settable, integer), Value: 0
+				13600 text GUIDELINE
+				13601 text e2e-knowledge-load-15-1789768333811-4737
+				13602 container
+					13603 text WfSmAgent-1789758186185
+					13604 text · submitted
+					13605 text 05:52
+					13606 text · concurrent submit load
+				13607 button ✓, Help: Approve
+				13608 button ✗, Help: Reject
+				13609 button ↗, Help: View
+				13610 checkbox (settable, integer), Value: 0
+				13611 text GUIDELINE
+				13612 text e2e-knowledge-load-14-1789768333810-5660
+				13613 container
+					13614 text e2e-qoder-s4-1789769576003-5027
+					13615 text · submitted
+					13616 text 05:52
+					13617 text · concurrent submit load
+				13618 button ✓, Help: Approve
+				13619 button ✗, Help: Reject
+				13620 button ↗, Help: View
+				13621 checkbox (settable, integer), Value: 0
+				13622 text GUIDELINE
+				13623 text e2e-knowledge-load-17-1789768333818-6849
+				13624 container
+					13625 text E2E-Iso-A-1789758249848-6698
+					13626 text · submitted
+					13627 text 05:52
+					13628 text · concurrent submit load
+				13629 button ✓, Help: Approve
+				13630 button ✗, Help: Reject
+				13631 button ↗, Help: View
+				13632 checkbox (settable, integer), Value: 0
+				13633 text GUIDELINE
+				13634 text e2e-knowledge-load-13-1789768333808-7917
+				13635 container
+					13636 text c6b-s5-20260918-220205
+					13637 text · submitted
+					13638 text 05:52
+					13639 text · concurrent submit load
+				13640 button ✓, Help: Approve
+				13641 button ✗, Help: Reject
+				13642 button ↗, Help: View
+				13643 checkbox (settable, integer), Value: 0
+				13644 text GUIDELINE
+				13645 text e2e-knowledge-load-18-1789768333820-3714
+				13646 container
+					13647 text e2e-agent-1789768099969-8723
+					13648 text · submitted
+					13649 text 05:52
+					13650 text · concurrent submit load
+				13651 button ✓, Help: Approve
+				13652 button ✗, Help: Reject
+				13653 button ↗, Help: View
+				13654 checkbox (settable, integer), Value: 0
+				13655 text GUIDELINE
+				13656 text e2e-knowledge-load-19-1789768333822-8784
+				13657 container
+					13658 text e2e-oc-uidz-1789768112085-1125
+					13659 text · submitted
+					13660 text 05:52
+					13661 text · concurrent submit load
+				13662 button ✓, Help: Approve
+				13663 button ✗, Help: Reject
+				13664 button ↗, Help: View
+				13665 checkbox (settable, integer), Value: 0
+				13666 text GUIDELINE
+				13667 text e2e-knowledge-load-20-1789768333825-1132
+				13668 container
+					13669 text Developer Agent
+					13670 text · submitted
+					13671 text 05:52
+					13672 text · concurrent submit load
+				13673 button ✓, Help: Approve
+				13674 button ✗, Help: Reject
+				13675 button ↗, Help: View
+				13676 checkbox (settable, integer), Value: 0
+				13677 text GUIDELINE
+				13678 text e2e-knowledge-load-21-1789768333831-8205
+				13679 container
+					13680 text WfE2EAgent-1789758186149
+					13681 text · submitted
+					13682 text 05:52
+					13683 text · concurrent submit load
+				13684 button ✓, Help: Approve
+				13685 button ✗, Help: Reject
+				13686 button ↗, Help: View
+				13687 checkbox (settable, integer), Value: 0
+				13688 text GUIDELINE
+				13689 text e2e-knowledge-load-22-1789768333876-8133
+				13690 container
+					13691 text c6b-s5-20260918-184323
+					13692 text · submitted
+					13693 text 05:52
+					13694 text · concurrent submit load
+				13695 button ✓, Help: Approve
+				13696 button ✗, Help: Reject
+				13697 button ↗, Help: View
+				13698 checkbox (settable, integer), Value: 0
+				13699 text GUIDELINE
+				13700 text e2e-knowledge-load-23-1789768333879-2056
+				13701 container
+					13702 text WfYamlAgent-1789759177768
+					13703 text · submitted
+					13704 text 05:52
+					13705 text · concurrent submit load
+				13706 button ✓, Help: Approve
+				13707 button ✗, Help: Reject
+				13708 button ↗, Help: View
+				13709 checkbox (settable, integer), Value: 0
+				13710 text GUIDELINE
+				13711 text e2e-load-k-1789768339095-4252
+				13712 container
+					13713 text e2e-qoder-s4-1789769576003-5027
+					13714 text · submitted
+					13715 text 05:52
+				13716 button ✓, Help: Approve
+				13717 button ✗, Help: Reject
+				13718 button ↗, Help: View
+				13719 checkbox (settable, integer), Value: 0
+				13720 text GUIDELINE
+				13721 text e2e-load-k-1789768339087-882
+				13722 container
+					13723 text E2E-Iso-A-1789768339161-2919
+					13724 text · submitted
+					13725 text 05:52
+				13726 button ✓, Help: Approve
+				13727 button ✗, Help: Reject
+				13728 button ↗, Help: View
+				13729 checkbox (settable, integer), Value: 0
+				13730 text GUIDELINE
+				13731 text e2e-load-k-1789768339102-2454
+				13732 container
+					13733 text WfYamlAgent-1789768277456
+					13734 text · submitted
+					13735 text 05:52
+				13736 button ✓, Help: Approve
+				13737 button ✗, Help: Reject
+				13738 button ↗, Help: View
+				13739 checkbox (settable, integer), Value: 0
+				13740 text GUIDELINE
+				13741 text e2e-load-k-1789768339110-9770
+				13742 container
+					13743 text WfYamlAgent-1789758234999
+					13744 text · submitted
+					13745 text 05:52
+				13746 button ✓, Help: Approve
+				13747 button ✗, Help: Reject
+				13748 button ↗, Help: View
+				13749 checkbox (settable, integer), Value: 0
+				13750 text SKILL
+				13751 text e2e-promoted-skill-1789768340014-9241
+				13752 container
+					13753 text e2e-wf-yaml-agent-1789768375157-1985
+					13754 text · submitted
+					13755 text 05:52
+					13756 text · Promoted from PROMPT: e2e-skill-source-1789768339948-2742
+				13757 button ✓, Help: Approve
+				13758 button ✗, Help: Reject
+				13759 button ↗, Help: View
+				13760 checkbox (settable, integer), Value: 0
+				13761 text GUIDELINE
+				13762 text e2e-load-k-1789768340173-7138
+				13763 container
+					13764 text e2e-agent-1789767946593-8463
+					13765 text · submitted
+					13766 text 05:52
+				13767 button ✓, Help: Approve
+				13768 button ✗, Help: Reject
+				13769 button ↗, Help: View
+				13770 checkbox (settable, integer), Value: 0
+				13771 text GUIDELINE
+				13772 text e2e-load-k-1789768340211-1630
+				13773 container
+					13774 text e2e-agent-1789767978117-4292
+					13775 text · submitted
+					13776 text 05:52
+				13777 button ✓, Help: Approve
+				13778 button ✗, Help: Reject
+				13779 button ↗, Help: View
+				13780 checkbox (settable, integer), Value: 0
+				13781 text GUIDELINE
+				13782 text e2e-load-k-1789768340228-4977
+				13783 container
+					13784 text e2e-agent-1789767978117-4292
+					13785 text · submitted
+					13786 text 05:52
+				13787 button ✓, Help: Approve
+				13788 button ✗, Help: Reject
+				13789 button ↗, Help: View
+				13790 checkbox (settable, integer), Value: 0
+				13791 text GUIDELINE
+				13792 text e2e-load-k-1789768340294-6575
+				13793 container
+					13794 text Developer Agent
+					13795 text · submitted
+					13796 text 05:52
+				13797 button ✓, Help: Approve
+				13798 button ✗, Help: Reject
+				13799 button ↗, Help: View
+				13800 checkbox (settable, integer), Value: 0
+				13801 text GUIDELINE
+				13802 text e2e-load-k-1789768340987-5107
+				13803 container
+					13804 text e2e-wf-merge-agent-1789768363247-6870
+					13805 text · submitted
+					13806 text 05:52
+				13807 button ✓, Help: Approve
+				13808 button ✗, Help: Reject
+				13809 button ↗, Help: View
+				13810 checkbox (settable, integer), Value: 0
+				13811 text GUIDELINE
+				13812 text e2e-load-k-1789768341055-5604
+				13813 container
+					13814 text WfYamlAgent-1789768277456
+					13815 text · submitted
+					13816 text 05:52
+				13817 button ✓, Help: Approve
+				13818 button ✗, Help: Reject
+				13819 button ↗, Help: View
+				13820 checkbox (settable, integer), Value: 0
+				13821 text GUIDELINE
+				13822 text e2e-load-k-1789768341066-8337
+				13823 container
+					13824 text e2e-wf-yaml-agent-1789768375157-1985
+					13825 text · submitted
+					13826 text 05:52
+				13827 button ✓, Help: Approve
+				13828 button ✗, Help: Reject
+				13829 button ↗, Help: View
+				13830 checkbox (settable, integer), Value: 0
+				13831 text GUIDELINE
+				13832 text e2e-load-k-1789768341075-0
+				13833 container
+					13834 text SDD DEV Agent
+					13835 text · submitted
+					13836 text 05:52
+				13837 button ✓, Help: Approve
+				13838 button ✗, Help: Reject
+				13839 button ↗, Help: View
+				13840 checkbox (settable, integer), Value: 0
+				13841 text GUIDELINE
+				13842 text e2e-sat-k-1789768342101-1471
+				13843 container
+					13844 text WfYamlAgent-1789758234999
+					13845 text · submitted
+					13846 text 05:52
+				13847 button ✓, Help: Approve
+				13848 button ✗, Help: Reject
+				13849 button ↗, Help: View
+				13850 checkbox (settable, integer), Value: 0
+				13851 text GUIDELINE
+				13852 text e2e-sat-k-1789768342181-3243
+				13853 container
+					13854 text WfE2EAgent-1789759118171
+					13855 text · submitted
+					13856 text 05:52
+				13857 button ✓, Help: Approve
+				13858 button ✗, Help: Reject
+				13859 button ↗, Help: View
+				13860 checkbox (settable, integer), Value: 0
+				13861 text GUIDELINE
+				13862 text e2e-sat-k-1789768342100-8025
+				13863 container
+					13864 text e2e-git-gate-agent-1789768326586-8502
+					13865 text · submitted
+					13866 text 05:52
+				13867 button ✓, Help: Approve
+				13868 button ✗, Help: Reject
+				13869 button ↗, Help: View
+				13870 checkbox (settable, integer), Value: 0
+				13871 text GUIDELINE
+				13872 text e2e-sat-k-1789768342106-4087
+				13873 container
+					13874 text E2E-QA-1789759243829-1543
+					13875 text · submitted
+					13876 text 05:52
+				13877 button ✓, Help: Approve
+				13878 button ✗, Help: Reject
+				13879 button ↗, Help: View
+				13880 checkbox (settable, integer), Value: 0
+				13881 text GUIDELINE
+				13882 text e2e-sat-k-1789768342183-7845
+				13883 container
+					13884 text WfSmAgent-1789758186185
+					13885 text · submitted
+					13886 text 05:52
+				13887 button ✓, Help: Approve
+				13888 button ✗, Help: Reject
+				13889 button ↗, Help: View
+				13890 checkbox (settable, integer), Value: 0
+				13891 text GUIDELINE
+				13892 text e2e-sat-k-1789768342189-3684
+				13893 container
+					13894 text WfE2EAgent-1789768222873
+					13895 text · submitted
+					13896 text 05:52
+				13897 button ✓, Help: Approve
+				13898 button ✗, Help: Reject
+				13899 button ↗, Help: View
+				13900 checkbox (settable, integer), Value: 0
+				13901 text GUIDELINE
+				13902 text e2e-sat-k-1789768342177-6711
+				13903 container
+					13904 text QA Agent
+					13905 text · submitted
+					13906 text 05:52
+				13907 button ✓, Help: Approve
+				13908 button ✗, Help: Reject
+				13909 button ↗, Help: View
+				13910 checkbox (settable, integer), Value: 0
+				13911 text GUIDELINE
+				13912 text e2e-sat-k-1789768342108-5491
+				13913 container
+					13914 text WfDfAgent-1789758120435
+					13915 text · submitted
+					13916 text 05:52
+				13917 button ✓, Help: Approve
+				13918 button ✗, Help: Reject
+				13919 button ↗, Help: View
+				13920 checkbox (settable, integer), Value: 0
+				13921 text GUIDELINE
+				13922 text e2e-sat-k-1789768342185-7863
+				13923 container
+					13924 text e2e-agent-1789767988303-3267
+					13925 text · submitted
+					13926 text 05:52
+				13927 button ✓, Help: Approve
+				13928 button ✗, Help: Reject
+				13929 button ↗, Help: View
+				13930 checkbox (settable, integer), Value: 0
+				13931 text GUIDELINE
+				13932 text e2e-sat-k-1789768342196-36
+				13933 container
+					13934 text e2e-qoder-s4-1789770099436-7004
+					13935 text · submitted
+					13936 text 05:52
+				13937 button ✓, Help: Approve
+				13938 button ✗, Help: Reject
+				13939 button ↗, Help: View
+				13940 checkbox (settable, integer), Value: 0
+				13941 text GUIDELINE
+				13942 text e2e-sat-k-1789768342191-7730
+				13943 container
+					13944 text e2e-agent-1789768126418-7734
+					13945 text · submitted
+					13946 text 05:52
+				13947 button ✓, Help: Approve
+				13948 button ✗, Help: Reject
+				13949 button ↗, Help: View
+				13950 checkbox (settable, integer), Value: 0
+				13951 text GUIDELINE
+				13952 text e2e-sat-k-1789768342193-9223
+				13953 container
+					13954 text RecApply-1789758462156
+					13955 text · submitted
+					13956 text 05:52
+				13957 button ✓, Help: Approve
+				13958 button ✗, Help: Reject
+				13959 button ↗, Help: View
+				13960 checkbox (settable, integer), Value: 0
+				13961 text GUIDELINE
+				13962 text e2e-sat-k-1789768342207-2742
+				13963 container
+					13964 text c6b-s5-20260918-210137
+					13965 text · submitted
+					13966 text 05:52
+				13967 button ✓, Help: Approve
+				13968 button ✗, Help: Reject
+				13969 button ↗, Help: View
+				13970 checkbox (settable, integer), Value: 0
+				13971 text GUIDELINE
+				13972 text e2e-sat-k-1789768342200-8303
+				13973 container
+					13974 text Developer Agent
+					13975 text · submitted
+					13976 text 05:52
+				13977 button ✓, Help: Approve
+				13978 button ✗, Help: Reject
+				13979 button ↗, Help: View
+				13980 checkbox (settable, integer), Value: 0
+				13981 text GUIDELINE
+				13982 text e2e-sat-k-1789768342203-7981
+				13983 container
+					13984 text E2E-Iso-B-1789758249850-7222
+					13985 text · submitted
+					13986 text 05:52
+				13987 button ✓, Help: Approve
+				13988 button ✗, Help: Reject
+				13989 button ↗, Help: View
+				13990 checkbox (settable, integer), Value: 0
+				13991 text GUIDELINE
+				13992 text e2e-sat-k-1789768342205-4030
+				13993 container
+					13994 text QA Agent
+					13995 text · submitted
+					13996 text 05:52
+				13997 button ✓, Help: Approve
+				13998 button ✗, Help: Reject
+				13999 button ↗, Help: View
+				14000 checkbox (settable, integer), Value: 0
+				14001 text GUIDELINE
+				14002 text e2e-sat-k-1789768342213-8067
+				14003 container
+					14004 text c6b-s10-20260918-184450
+					14005 text · submitted
+					14006 text 05:52
+				14007 button ✓, Help: Approve
+				14008 button ✗, Help: Reject
+				14009 button ↗, Help: View
+				14010 checkbox (settable, integer), Value: 0
+				14011 text GUIDELINE
+				14012 text e2e-sat-k-1789768342238-9369
+				14013 container
+					14014 text E2E-BA-1789768338657-4474
+					14015 text · submitted
+					14016 text 05:52
+				14017 button ✓, Help: Approve
+				14018 button ✗, Help: Reject
+				14019 button ↗, Help: View
+				14020 checkbox (settable, integer), Value: 0
+				14021 text GUIDELINE
+				14022 text e2e-sat-k-1789768342378-4740
+				14023 container
+					14024 text E2E-Dev-1789759243820-357
+					14025 text · submitted
+					14026 text 05:52
+				14027 button ✓, Help: Approve
+				14028 button ✗, Help: Reject
+				14029 button ↗, Help: View
+				14030 checkbox (settable, integer), Value: 0
+				14031 text GUIDELINE
+				14032 text e2e-sat-k-1789768342209-990
+				14033 container
+					14034 text WfTplAgent-1789768240995
+					14035 text · submitted
+					14036 text 05:52
+				14037 button ✓, Help: Approve
+				14038 button ✗, Help: Reject
+				14039 button ↗, Help: View
+				14040 checkbox (settable, integer), Value: 0
+				14041 text GUIDELINE
+				14042 text e2e-sat-k-1789768342380-1927
+				14043 container
+					14044 text c6b-s10-20260918-211613
+					14045 text · submitted
+					14046 text 05:52
+				14047 button ✓, Help: Approve
+				14048 button ✗, Help: Reject
+				14049 button ↗, Help: View
+				14050 checkbox (settable, integer), Value: 0
+				14051 text GUIDELINE
+				14052 text e2e-sat-k-1789768342211-8490
+				14053 container
+					14054 text E2E-Dev-1789768338706-3470
+					14055 text · submitted
+					14056 text 05:52
+				14057 button ✓, Help: Approve
+				14058 button ✗, Help: Reject
+				14059 button ↗, Help: View
+				14060 checkbox (settable, integer), Value: 0
+				14061 text GUIDELINE
+				14062 text e2e-sat-k-1789768342233-4340
+				14063 container
+					14064 text WfSmAgent-1789758186185
+					14065 text · submitted
+					14066 text 05:52
+				14067 button ✓, Help: Approve
+				14068 button ✗, Help: Reject
+				14069 button ↗, Help: View
+				14070 checkbox (settable, integer), Value: 0
+				14071 text GUIDELINE
+				14072 text e2e-sat-k-1789768342411-6814
+				14073 container
+					14074 text e2e-agent-1789767946593-8463
+					14075 text · submitted
+					14076 text 05:52
+				14077 button ✓, Help: Approve
+				14078 button ✗, Help: Reject
+				14079 button ↗, Help: View
+				14080 checkbox (settable, integer), Value: 0
+				14081 text GUIDELINE
+				14082 text e2e-sat-k-1789768342405-8688
+				14083 container
+					14084 text c6b-s10-20260918-184450
+					14085 text · submitted
+					14086 text 05:52
+				14087 button ✓, Help: Approve
+				14088 button ✗, Help: Reject
+				14089 button ↗, Help: View
+				14090 checkbox (settable, integer), Value: 0
+				14091 text GUIDELINE
+				14092 text e2e-sat-k-1789768342416-9738
+				14093 container
+					14094 text Developer Agent
+					14095 text · submitted
+					14096 text 05:52
+				14097 button ✓, Help: Approve
+				14098 button ✗, Help: Reject
+				14099 button ↗, Help: View
+				14100 checkbox (settable, integer), Value: 0
+				14101 text GUIDELINE
+				14102 text e2e-sat-k-1789768342409-5790
+				14103 container
+					14104 text e2e-qoder-s4-1789769576003-5027
+					14105 text · submitted
+					14106 text 05:52
+				14107 button ✓, Help: Approve
+				14108 button ✗, Help: Reject
+				14109 button ↗, Help: View
+				14110 checkbox (settable, integer), Value: 0
+				14111 text GUIDELINE
+				14112 text e2e-sat-k-1789768342413-1589
+				14113 container
+					14114 text Rec-1789758453648
+					14115 text · submitted
+					14116 text 05:52
+				14117 button ✓, Help: Approve
+				14118 button ✗, Help: Reject
+				14119 button ↗, Help: View
+				14120 checkbox (settable, integer), Value: 0
+				14121 text GUIDELINE
+				14122 text e2e-sat-k-1789768342419-5296
+				14123 container
+					14124 text e2e-oc-deny-1789768323810-8336
+					14125 text · submitted
+					14126 text 05:52
+				14127 button ✓, Help: Approve
+				14128 button ✗, Help: Reject
+				14129 button ↗, Help: View
+				14130 checkbox (settable, integer), Value: 0
+				14131 text GUIDELINE
+				14132 text e2e-sat-k-1789768342418-1797
+				14133 container
+					14134 text WfDfAgent-1789758120435
+					14135 text · submitted
+					14136 text 05:52
+				14137 button ✓, Help: Approve
+				14138 button ✗, Help: Reject
+				14139 button ↗, Help: View
+				14140 checkbox (settable, integer), Value: 0
+				14141 text GUIDELINE
+				14142 text e2e-sat-k-1789768342423-4705
+				14143 container
+					14144 text SDD QA Agent
+					14145 text · submitted
+					14146 text 05:52
+				14147 button ✓, Help: Approve
+				14148 button ✗, Help: Reject
+				14149 button ↗, Help: View
+				14150 checkbox (settable, integer), Value: 0
+				14151 text GUIDELINE
+				14152 text e2e-sat-k-1789768342422-3346
+				14153 container
+					14154 text E2E-Iso-A-1789759244035-6180
+					14155 text · submitted
+					14156 text 05:52
+				14157 button ✓, Help: Approve
+				14158 button ✗, Help: Reject
+				14159 button ↗, Help: View
+				14160 checkbox (settable, integer), Value: 0
+				14161 text GUIDELINE
+				14162 text e2e-sat-k-1789768342426-7916
+				14163 container
+					14164 text PR90 UX Reviewer 0919
+					14165 text · submitted
+					14166 text 05:52
+				14167 button ✓, Help: Approve
+				14168 button ✗, Help: Reject
+				14169 button ↗, Help: View
+				14170 checkbox (settable, integer), Value: 0
+				14171 text GUIDELINE
+				14172 text e2e-sat-k-1789768342421-2093
+				14173 container
+					14174 text e2e-agent-1789768099969-8723
+					14175 text · submitted
+					14176 text 05:52
+				14177 button ✓, Help: Approve
+				14178 button ✗, Help: Reject
+				14179 button ↗, Help: View
+				14180 checkbox (settable, integer), Value: 0
+				14181 text GUIDELINE
+				14182 text e2e-sat-k-1789768342428-4633
+				14183 container
+					14184 text WfSmAgent-1789768233301
+					14185 text · submitted
+					14186 text 05:52
+				14187 button ✓, Help: Approve
+				14188 button ✗, Help: Reject
+				14189 button ↗, Help: View
+				14190 checkbox (settable, integer), Value: 0
+				14191 text GUIDELINE
+				14192 text e2e-sat-k-1789768342425-3237
+				14193 container
+					14194 text c6b-s5-20260918-210137
+					14195 text · submitted
+					14196 text 05:52
+				14197 button ✓, Help: Approve
+				14198 button ✗, Help: Reject
+				14199 button ↗, Help: View
+				14200 checkbox (settable, integer), Value: 0
+				14201 text GUIDELINE
+				14202 text e2e-sat-k-1789768342434-4249
+				14203 container
+					14204 text WfTplAgent-1789768240995
+					14205 text · submitted
+					14206 text 05:52
+				14207 button ✓, Help: Approve
+				14208 button ✗, Help: Reject
+				14209 button ↗, Help: View
+				14210 checkbox (settable, integer), Value: 0
+				14211 text GUIDELINE
+				14212 text e2e-sat-k-1789768342429-1976
+				14213 container
+					14214 text e2e-agent-1789768173879-1138
+					14215 text · submitted
+					14216 text 05:52
+				14217 button ✓, Help: Approve
+				14218 button ✗, Help: Reject
+				14219 button ↗, Help: View
+				14220 checkbox (settable, integer), Value: 0
+				14221 text GUIDELINE
+				14222 text e2e-sat-k-1789768342431-1206
+				14223 container
+					14224 text e2e-oc-uidz-1789768112085-1125
+					14225 text · submitted
+					14226 text 05:52
+				14227 button ✓, Help: Approve
+				14228 button ✗, Help: Reject
+				14229 button ↗, Help: View
+				14230 checkbox (settable, integer), Value: 0
+				14231 text GUIDELINE
+				14232 text e2e-sat-k-1789768342436-3985
+				14233 container
+					14234 text e2e-wf-guard-agent-1789768343024-8437
+					14235 text · submitted
+					14236 text 05:52
+				14237 button ✓, Help: Approve
+				14238 button ✗, Help: Reject
+				14239 button ↗, Help: View
+				14240 checkbox (settable, integer), Value: 0
+				14241 text GUIDELINE
+				14242 text e2e-sat-k-1789768342439-1583
+				14243 container
+					14244 text e2e-agent-1789767988303-3267
+					14245 text · submitted
+					14246 text 05:52
+				14247 button ✓, Help: Approve
+				14248 button ✗, Help: Reject
+				14249 button ↗, Help: View
+				14250 checkbox (settable, integer), Value: 0
+				14251 text GUIDELINE
+				14252 text e2e-sat-k-1789768342432-8555
+				14253 container
+					14254 text e2e-wf-guard-agent-1789768343024-8437
+					14255 text · submitted
+					14256 text 05:52
+				14257 button ✓, Help: Approve
+				14258 button ✗, Help: Reject
+				14259 button ↗, Help: View
+				14260 checkbox (settable, integer), Value: 0
+				14261 text GUIDELINE
+				14262 text e2e-sat-k-1789768342440-2542
+				14263 container
+					14264 text e2e-oc-uidz-1789768112085-1125
+					14265 text · submitted
+					14266 text 05:52
+				14267 button ✓, Help: Approve
+				14268 button ✗, Help: Reject
+				14269 button ↗, Help: View
+				14270 checkbox (settable, integer), Value: 0
+				14271 text GUIDELINE
+				14272 text e2e-sat-k-1789768342437-5406
+				14273 container
+					14274 text Developer Agent
+					14275 text · submitted
+					14276 text 05:52
+				14277 button ✓, Help: Approve
+				14278 button ✗, Help: Reject
+				14279 button ↗, Help: View
+				14280 checkbox (settable, integer), Value: 0
+				14281 text GUIDELINE
+				14282 text e2e-sat-k-1789768342444-8977
+				14283 container
+					14284 text SDD DEV Agent
+					14285 text · submitted
+					14286 text 05:52
+				14287 button ✓, Help: Approve
+				14288 button ✗, Help: Reject
+				14289 button ↗, Help: View
+				14290 checkbox (settable, integer), Value: 0
+				14291 text GUIDELINE
+				14292 text e2e-sat-k-1789768342442-8377
+				14293 container
+					14294 text c6b-s10-20260918-220325
+					14295 text · submitted
+					14296 text 05:52
+				14297 button ✓, Help: Approve
+				14298 button ✗, Help: Reject
+				14299 button ↗, Help: View
+				14300 checkbox (settable, integer), Value: 0
+				14301 text GUIDELINE
+				14302 text e2e-sat-k-1789768342446-1453
+				14303 container
+					14304 text e2e-agent-1789768126418-7734
+					14305 text · submitted
+					14306 text 05:52
+				14307 button ✓, Help: Approve
+				14308 button ✗, Help: Reject
+				14309 button ↗, Help: View
+				14310 checkbox (settable, integer), Value: 0
+				14311 text GUIDELINE
+				14312 text e2e-sat-k-1789768342447-1179
+				14313 container
+					14314 text WfTplAgent-1789758161170
+					14315 text · submitted
+					14316 text 05:52
+				14317 button ✓, Help: Approve
+				14318 button ✗, Help: Reject
+				14319 button ↗, Help: View
+				14320 text REVIEW NOTE (OPTIONAL)
+				14321 text field (settable) e.g. Approved per security review SR-2031
+			11629 container
+				11630 heading UNIFIED KNOWLEDGE SPACE / 101 APPROVED, Value: 2
+					11631 text UNIFIED KNOWLEDGE SPACE
+					11632 text /
+					11633 text 101
+					11634 text APPROVED
+				11635 text field (settable) Search title, description, type…
+				11636 text 101
+				11637 text total
+				14322 container
+					14323 container
+						14324 text TOOL
+						14325 text Seed tool: web_search
+						14326 container
+							14327 text —
+							14328 text ·
+							14329 text Developer Agent
+							14330 text ·
+							14331 text 02:42
+						14332 text INTERNAL
+					14333 container
+						14334 text TOOL
+						14335 text Seed tool: web_fetch
+						14336 container
+							14337 text —
+							14338 text ·
+							14339 text WfDfAgent-1789759102064
+							14340 text ·
+							14341 text 02:42
+						14342 text INTERNAL
+					14343 container
+						14344 text TOOL
+						14345 text Seed tool: read_file
+						14346 container
+							14347 text —
+							14348 text ·
+							14349 text WfE2EAgent-1789759118171
+							14350 text ·
+							14351 text 02:42
+						14352 text INTERNAL
+					14353 container
+						14354 text TOOL
+						14355 text Seed tool: write_file
+						14356 container
+							14357 text —
+							14358 text ·
+							14359 text WfSmAgent-1789759120287
+							14360 text ·
+							14361 text 02:42
+						14362 text INTERNAL
+					14363 container
+						14364 text TOOL
+						14365 text Seed tool: list_files
+						14366 container
+							14367 text —
+							14368 text ·
+							14369 text WfTplAgent-1789759156191
+							14370 text ·
+							14371 text 02:42
+						14372 text INTERNAL
+					14373 container
+						14374 text TOOL
+						14375 text Seed tool: http_request
+						14376 container
+							14377 text —
+							14378 text ·
+							14379 text WfUiAgent-1789759160894
+							14380 text ·
+							14381 text 02:42
+						14382 text INTERNAL
+					14383 container
+						14384 text TOOL
+						14385 text Seed tool: shell_exec
+						14386 container
+							14387 text —
+							14388 text ·
+							14389 text WfValAgent-1789759168353
+							14390 text ·
+							14391 text 02:42
+						14392 text INTERNAL
+					14393 container
+						14394 text TOOL
+						14395 text Seed tool: list_agents
+						14396 container
+							14397 text —
+							14398 text ·
+							14399 text WfYamlAgent-1789759177768
+							14400 text ·
+							14401 text 02:42
+						14402 text INTERNAL
+					14403 container
+						14404 text TOOL
+						14405 text Seed tool: get_agent
+						14406 container
+							14407 text —
+							14408 text ·
+							14409 text E2E-BA-1789759243794-1202
+							14410 text ·
+							14411 text 02:42
+						14412 text INTERNAL
+					14413 container
+						14414 text TOOL
+						14415 text Seed tool: create_agent
+						14416 container
+							14417 text —
+							14418 text ·
+							14419 text E2E-Dev-1789768338706-3470
+							14420 text ·
+							14421 text 02:42
+						14422 text INTERNAL
+					14423 container
+						14424 text TOOL
+						14425 text Seed tool: update_agent
+						14426 container
+							14427 text —
+							14428 text ·
+							14429 text E2E-QA-1789768338723-38
+							14430 text ·
+							14431 text 02:42
+						14432 text INTERNAL
+					14433 container
+						14434 text TOOL
+						14435 text Seed tool: retire_agent
+						14436 container
+							14437 text —
+							14438 text ·
+							14439 text E2E-Iso-A-1789768339161-2919
+							14440 text ·
+							14441 text 02:42
+						14442 text INTERNAL
+					14443 container
+						14444 text TOOL
+						14445 text Seed tool: run_agent
+						14446 container
+							14447 text —
+							14448 text ·
+							14449 text E2E-Iso-B-1789768339162-2919
+							14450 text ·
+							14451 text 02:42
+						14452 text INTERNAL
+					14453 container
+						14454 text TOOL
+						14455 text Seed tool: get_run_status
+						14456 container
+							14457 text —
+							14458 text ·
+							14459 text e2e-skill-agent-1789768340087-951
+							14460 text ·
+							14461 text 02:42
+						14462 text INTERNAL
+					14463 container
+						14464 text TOOL
+						14465 text Seed tool: list_runs
+						14466 container
+							14467 text —
+							14468 text ·
+							14469 text e2e-wf-agent-1789768340530-3880
+							14470 text ·
+							14471 text 02:42
+						14472 text INTERNAL
+					14473 container
+						14474 text TOOL
+						14475 text Seed tool: cancel_run
+						14476 container
+							14477 text —
+							14478 text ·
+							14479 text RecApply-1789767612704
+							14480 text ·
+							14481 text 02:42
+						14482 text INTERNAL
+					14483 container
+						14484 text TOOL
+						14485 text Seed tool: create_knowledge
+						14486 container
+							14487 text —
+							14488 text ·
+							14489 text QA Agent
+							14490 text ·
+							14491 text 02:42
+						14492 text INTERNAL
+					14493 container
+						14494 text TOOL
+						14495 text Seed tool: search_knowledge
+						14496 container
+							14497 text —
+							14498 text ·
+							14499 text QA Agent
+							14500 text ·
+							14501 text 02:42
+						14502 text INTERNAL
+					14503 container
+						14504 text TOOL
+						14505 text Seed tool: list_knowledge
+						14506 container
+							14507 text —
+							14508 text ·
+							14509 text e2e-agent-1789767946593-8463
+							14510 text ·
+							14511 text 02:42
+						14512 text INTERNAL
+					14513 container
+						14514 text TOOL
+						14515 text Seed tool: review_knowledge
+						14516 container
+							14517 text —
+							14518 text ·
+							14519 text e2e-agent-1789767955897-1365
+							14520 text ·
+							14521 text 02:42
+						14522 text INTERNAL
+					14523 container
+						14524 text TOOL
+						14525 text Seed tool: pause_run
+						14526 container
+							14527 text —
+							14528 text ·
+							14529 text e2e-agent-1789767959967-8297
+							14530 text ·
+							14531 text 02:42
+						14532 text INTERNAL
+					14533 container
+						14534 text TOOL
+						14535 text Seed tool: resume_run
+						14536 container
+							14537 text —
+							14538 text ·
+							14539 text e2e-agent-1789767971290-194
+							14540 text ·
+							14541 text 02:42
+						14542 text INTERNAL
+					14543 container
+						14544 text TOOL
+						14545 text Seed tool: get_run
+						14546 container
+							14547 text —
+							14548 text ·
+							14549 text e2e-agent-1789767978117-4292
+							14550 text ·
+							14551 text 02:42
+						14552 text INTERNAL
+					14553 container
+						14554 text TOOL
+						14555 text Seed tool: query_knowledge
+						14556 container
+							14557 text —
+							14558 text ·
+							14559 text e2e-agent-1789767988303-3267
+							14560 text ·
+							14561 text 02:42
+						14562 text INTERNAL
+					14563 container
+						14564 text TOOL
+						14565 text Seed tool: retire_knowledge
+						14566 container
+							14567 text —
+							14568 text ·
+							14569 text e2e-agent-1789767998159-897
+							14570 text ·
+							14571 text 02:42
+						14572 text INTERNAL
+					14573 container
+						14574 text TOOL
+						14575 text Seed tool: create_kanban_item
+						14576 container
+							14577 text —
+							14578 text ·
+							14579 text c6b-s10-20260918-221526
+							14580 text ·
+							14581 text 02:42
+						14582 text INTERNAL
+					14583 container
+						14584 text TOOL
+						14585 text Seed tool: list_kanban_items
+						14586 container
+							14587 text —
+							14588 text ·
+							14589 text e2e-qoder-s4-1789770099436-7004
+							14590 text ·
+							14591 text 02:42
+						14592 text INTERNAL
+					14593 container
+						14594 text TOOL
+						14595 text Seed tool: update_kanban_item
+						14596 container
+							14597 text —
+							14598 text ·
+							14599 text e2e-qoder-s4-1789770522471-2262
+							14600 text ·
+							14601 text 02:42
+						14602 text INTERNAL
+					14603 container
+						14604 text TOOL
+						14605 text Seed tool: transition_kanban_item
+						14606 container
+							14607 text —
+							14608 text ·
+							14609 text e2e-qoder-s4-1789771034038-7768
+							14610 text ·
+							14611 text 02:42
+						14612 text INTERNAL
+					14613 container
+						14614 text TOOL
+						14615 text Seed tool: init_dod
+						14616 container
+							14617 text —
+							14618 text ·
+							14619 text e2e-qoder-s4-1789771459825-1503
+							14620 text ·
+							14621 text 02:42
+						14622 text INTERNAL
+					14623 container
+						14624 text TOOL
+						14625 text Seed tool: submit_dod_review
+						14626 container
+							14627 text —
+							14628 text ·
+							14629 text e2e-qoder-s4-1789772001446-9888
+							14630 text ·
+							14631 text 02:42
+						14632 text INTERNAL
+					14633 container
+						14634 text TOOL
+						14635 text Seed tool: get_dod_status
+						14636 container
+							14637 text —
+							14638 text ·
+							14639 text e2e-agent-1789768126418-7734
+							14640 text ·
+							14641 text 02:42
+						14642 text INTERNAL
+					14643 container
+						14644 text TOOL
+						14645 text Seed tool: generate_report
+						14646 container
+							14647 text —
+							14648 text ·
+							14649 text e2e-oc-uiaz-1789768127387-7074
+							14650 text ·
+							14651 text 02:42
+						14652 text INTERNAL
+					14653 container
+						14654 text TOOL
+						14655 text Seed tool: list_reports
+						14656 container
+							14657 text —
+							14658 text ·
+							14659 text e2e-agent-1789768173879-1138
+							14660 text ·
+							14661 text 02:42
+						14662 text INTERNAL
+					14663 container
+						14664 text TOOL
+						14665 text Seed tool: amend_report
+						14666 container
+							14667 text —
+							14668 text ·
+							14669 text WfDfAgent-1789768184601
+							14670 text ·
+							14671 text 02:42
+						14672 text INTERNAL
+					14673 container
+						14674 text TOOL
+						14675 text Seed tool: get_dashboard_summary
+						14676 container
+							14677 text —
+							14678 text ·
+							14679 text WfE2EAgent-1789768222873
+							14680 text ·
+							14681 text 02:42
+						14682 text INTERNAL
+					14683 container
+						14684 text TOOL
+						14685 text Seed tool: list_pending_approvals
+						14686 container
+							14687 text —
+							14688 text ·
+							14689 text WfSmAgent-1789768233301
+							14690 text ·
+							14691 text 02:42
+						14692 text INTERNAL
+					14693 container
+						14694 text TOOL
+						14695 text Seed tool: decide_approval
+						14696 container
+							14697 text —
+							14698 text ·
+							14699 text WfTplAgent-1789768240995
+							14700 text ·
+							14701 text 02:42
+						14702 text INTERNAL
+					14703 container
+						14704 text TOOL
+						14705 text Seed tool: list_running_runs
+						14706 container
+							14707 text —
+							14708 text ·
+							14709 text WfUiAgent-1789768249769
+							14710 text ·
+							14711 text 02:42
+						14712 text INTERNAL
+					14713 container
+						14714 text TOOL
+						14715 text Seed tool: store_knowledge
+						14716 container
+							14717 text —
+							14718 text ·
+							14719 text WfValAgent-1789768267571
+							14720 text ·
+							14721 text 02:42
+						14722 text INTERNAL
+					14723 container
+						14724 text TOOL
+						14725 text Seed tool: delete_agent
+						14726 container
+							14727 text —
+							14728 text ·
+							14729 text WfYamlAgent-1789768277456
+							14730 text ·
+							14731 text 02:42
+						14732 text INTERNAL
+					14733 container
+						14734 text TOOL
+						14735 text Seed tool: request_approval
+						14736 container
+							14737 text —
+							14738 text ·
+							14739 text c6b-s10-20260918-221526
+							14740 text ·
+							14741 text 02:42
+						14742 text INTERNAL
+					14743 container
+						14744 text TOOL
+						14745 text Seed tool: git_status
+						14746 container
+							14747 text —
+							14748 text ·
+							14749 text e2e-qoder-s4-1789770099436-7004
+							14750 text ·
+							14751 text 02:42
+						14752 text INTERNAL
+					14753 container
+						14754 text TOOL
+						14755 text Seed tool: git_diff
+						14756 container
+							14757 text —
+							14758 text ·
+							14759 text e2e-qoder-s4-1789770522471-2262
+							14760 text ·
+							14761 text 02:42
+						14762 text INTERNAL
+					14763 container
+						14764 text TOOL
+						14765 text Seed tool: git_log
+						14766 container
+							14767 text —
+							14768 text ·
+							14769 text e2e-qoder-s4-1789771034038-7768
+							14770 text ·
+							14771 text 02:42
+						14772 text INTERNAL
+					14773 container
+						14774 text TOOL
+						14775 text Seed tool: git_add
+						14776 container
+							14777 text —
+							14778 text ·
+							14779 text e2e-qoder-s4-1789771459825-1503
+							14780 text ·
+							14781 text 02:42
+						14782 text INTERNAL
+					14783 container
+						14784 text TOOL
+						14785 text Seed tool: git_commit
+						14786 container
+							14787 text —
+							14788 text ·
+							14789 text e2e-qoder-s4-1789772001446-9888
+							14790 text ·
+							14791 text 02:42
+						14792 text INTERNAL
+					14793 container
+						14794 text TOOL
+						14795 text Seed tool: git_checkout
+						14796 container
+							14797 text —
+							14798 text ·
+							14799 text PR90 UX Analyst 0919
+							14800 text ·
+							14801 text 02:42
+						14802 text INTERNAL
+					14803 container
+						14804 text TOOL
+						14805 text Seed tool: git_clone
+						14806 container
+							14807 text —
+							14808 text ·
+							14809 text PR90 UX Reviewer 0919
+							14810 text ·
+							14811 text 02:42
+						14812 text INTERNAL
+					14813 container
+						14814 text TOOL
+						14815 text Seed tool: git_push
+						14816 container
+							14817 text —
+							14818 text ·
+							14819 text SDD BA Agent
+							14820 text ·
+							14821 text 02:42
+						14822 text INTERNAL
+					14823 container
+						14824 text TOOL
+						14825 text Seed tool: git_create_pr
+						14826 container
+							14827 text —
+							14828 text ·
+							14829 text E2E-Iso-A-1789759244035-6180
+							14830 text ·
+							14831 text 02:42
+						14832 text INTERNAL
+					14833 container
+						14834 text TOOL
+						14835 text Seed tool: git_reset_hard
+						14836 container
+							14837 text —
+							14838 text ·
+							14839 text E2E-Iso-B-1789759244036-6148
+							14840 text ·
+							14841 text 02:42
+						14842 text INTERNAL
+					14843 container
+						14844 text TOOL
+						14845 text Seed tool: git_force_push
+						14846 container
+							14847 text —
+							14848 text ·
+							14849 text c6b-s5-20260918-210137
+							14850 text ·
+							14851 text 02:42
+						14852 text INTERNAL
+					14853 container
+						14854 text TOOL
+						14855 text Seed tool: create_workflow
+						14856 container
+							14857 text —
+							14858 text ·
+							14859 text e2e-oc-opsap-1789768047026-3547
+							14860 text ·
+							14861 text 02:42
+						14862 text INTERNAL
+					14863 container
+						14864 text TOOL
+						14865 text Seed tool: get_workflow
+						14866 container
+							14867 text —
+							14868 text ·
+							14869 text e2e-agent-1789768066859-240
+							14870 text ·
+							14871 text 02:42
+						14872 text INTERNAL
+					14873 container
+						14874 text TOOL
+						14875 text Seed tool: list_workflows
+						14876 container
+							14877 text —
+							14878 text ·
+							14879 text e2e-agent-1789768093709-7118
+							14880 text ·
+							14881 text 02:42
+						14882 text INTERNAL
+					14883 container
+						14884 text TOOL
+						14885 text Seed tool: cancel_workflow
+						14886 container
+							14887 text —
+							14888 text ·
+							14889 text e2e-agent-1789768099969-8723
+							14890 text ·
+							14891 text 02:42
+						14892 text INTERNAL
+					14893 container
+						14894 text TOOL
+						14895 text Seed tool: retry_workflow_step
+						14896 container
+							14897 text —
+							14898 text ·
+							14899 text e2e-oc-uidz-1789768112085-1125
+							14900 text ·
+							14901 text 02:42
+						14902 text INTERNAL
+					14903 container
+						14904 text WORKFLOW
+						14905 text development-workflow
+						14906 container
+							14907 text v1.0.0
+							14908 text ·
+							14909 text E2E-QA-1789758249670-7443
+							14910 text ·
+							14911 text 02:42
+						14912 text INTERNAL
+					14913 container
+						14914 text TOOL
+						14915 text Seed tool: instantiate_template
+						14916 container
+							14917 text —
+							14918 text ·
+							14919 text e2e-agent-1789768126418-7734
+							14920 text ·
+							14921 text 02:42
+						14922 text INTERNAL
+					14923 container
+						14924 text TOOL
+						14925 text Seed tool: housekeeping_scan
+						14926 container
+							14927 text —
+							14928 text ·
+							14929 text e2e-oc-uiaz-1789768127387-7074
+							14930 text ·
+							14931 text 02:42
+						14932 text INTERNAL
+					14933 container
+						14934 text TOOL
+						14935 text Seed tool: housekeeping_execute
+						14936 container
+							14937 text —
+							14938 text ·
+							14939 text e2e-agent-1789768173879-1138
+							14940 text ·
+							14941 text 02:42
+						14942 text INTERNAL
+					14943 container
+						14944 text GUIDELINE
+						14945 text e2e-knowledge-1789757931530-7755
+						14946 container
+							14947 text v0.1.0
+							14948 text ·
+							14949 text e2e-qoder-s4-1789770522471-2262
+							14950 text ·
+							14951 text 02:58
+						14952 text INTERNAL
+					14953 container
+						14954 text GUIDELINE
+						14955 text e2e-knowledge-1789757976281-5003
+						14956 container
+							14957 text v0.1.0
+							14958 text ·
+							14959 text c6b-s5-20260918-220205
+							14960 text ·
+							14961 text 02:59
+						14962 text INTERNAL
+					14963 container
+						14964 text GUIDELINE
+						14965 text e2e-knowledge-lifecycle-1789758243029-8448
+						14966 container
+							14967 text v0.1.0
+							14968 text ·
+							14969 text e2e-qoder-s4-1789768615850-6950
+							14970 text ·
+							14971 text 03:04
+						14972 text INTERNAL
+					14973 container
+						14974 text GUIDELINE
+						14975 text e2e-knowledge-guard-1789758243166-5839
+						14976 container
+							14977 text v0.1.0
+							14978 text ·
+							14979 text E2E-Dev-1789759243820-357
+							14980 text ·
+							14981 text 03:04
+						14982 text INTERNAL
+					14983 container
+						14984 text GUIDELINE
+						14985 text e2e-knowledge-race-0-1789758243249-6395
+						14986 container
+							14987 text v0.1.0
+							14988 text ·
+							14989 text E2E-QA-1789758249670-7443
+							14990 text ·
+							14991 text 03:04
+						14992 text INTERNAL
+					14993 container
+						14994 text GUIDELINE
+						14995 text e2e-knowledge-race-2-1789758243256-8771
+						14996 container
+							14997 text v0.1.0
+							14998 text ·
+							14999 text e2e-qoder-s4-1789770522471-2262
+							15000 text ·
+							15001 text 03:04
+						15002 text INTERNAL
+					15003 container
+						15004 text GUIDELINE
+						15005 text e2e-knowledge-race-4-1789758243261-3633
+						15006 container
+							15007 text v0.1.0
+							15008 text ·
+							15009 text WfDfAgent-1789759102064
+							15010 text ·
+							15011 text 03:04
+						15012 text INTERNAL
+					15013 container
+						15014 text GUIDELINE
+						15015 text e2e-knowledge-race-5-1789758243263-7193
+						15016 container
+							15017 text v0.1.0
+							15018 text ·
+							15019 text e2e-agent-1789768066859-240
+							15020 text ·
+							15021 text 03:04
+						15022 text INTERNAL
+					15023 container
+						15024 text GUIDELINE
+						15025 text e2e-knowledge-race-6-1789758243265-6515
+						15026 container
+							15027 text v0.1.0
+							15028 text ·
+							15029 text e2e-agent-1789767955897-1365
+							15030 text ·
+							15031 text 03:04
+						15032 text INTERNAL
+					15033 container
+						15034 text GUIDELINE
+						15035 text e2e-knowledge-race-7-1789758243266-9876
+						15036 container
+							15037 text v0.1.0
+							15038 text ·
+							15039 text QA Agent
+							15040 text ·
+							15041 text 03:04
+						15042 text INTERNAL
+					15043 container
+						15044 text GUIDELINE
+						15045 text e2e-knowledge-race-1-1789758243253-8947
+						15046 container
+							15047 text v0.1.0
+							15048 text ·
+							15049 text E2E-QA-1789758249670-7443
+							15050 text ·
+							15051 text 03:04
+						15052 text INTERNAL
+					15053 container
+						15054 text GUIDELINE
+						15055 text e2e-shared-guideline-1789758249728-2341
+						15056 container
+							15057 text v0.1.0
+							15058 text ·
+							15059 text WfE2EAgent-1789758186149
+							15060 text ·
+							15061 text 03:04
+						15062 text INTERNAL
+					15063 container
+						15064 text PROMPT
+						15065 text e2e-skill-source-1789758250187-2129
+						15066 container
+							15067 text v0.1.0
+							15068 text ·
+							15069 text WfValAgent-1789759168353
+							15070 text ·
+							15071 text 03:04
+						15072 text INTERNAL
+					15073 container
+						15074 text GUIDELINE
+						15075 text e2e-knowledge-1789758877149-5889
+						15076 container
+							15077 text v0.1.0
+							15078 text ·
+							15079 text E2E-QA-1789758249670-7443
+							15080 text ·
+							15081 text 03:14
+						15082 text INTERNAL
+					15083 container
+						15084 text GUIDELINE
+						15085 text e2e-knowledge-1789758943082-2170
+						15086 container
+							15087 text v0.1.0
+							15088 text ·
+							15089 text WfValAgent-1789758229037
+							15090 text ·
+							15091 text 03:15
+						15092 text INTERNAL
+					15093 container
+						15094 text GUIDELINE
+						15095 text e2e-knowledge-lifecycle-1789759237693-2191
+						15096 container
+							15097 text v0.1.0
+							15098 text ·
+							15099 text e2e-agent-1789767971290-194
+							15100 text ·
+							15101 text 03:20
+						15102 text INTERNAL
+					15103 container
+						15104 text GUIDELINE
+						15105 text e2e-knowledge-guard-1789759237883-1937
+						15106 container
+							15107 text v0.1.0
+							15108 text ·
+							15109 text PR90 UX Reviewer 0919
+							15110 text ·
+							15111 text 03:20
+						15112 text INTERNAL
+					15113 container
+						15114 text GUIDELINE
+						15115 text e2e-knowledge-race-0-1789759237954-9058
+						15116 container
+							15117 text v0.1.0
+							15118 text ·
+							15119 text WfValAgent-1789768267571
+							15120 text ·
+							15121 text 03:20
+						15122 text INTERNAL
+					15123 container
+						15124 text GUIDELINE
+						15125 text e2e-knowledge-race-1-1789759237956-5724
+						15126 container
+							15127 text v0.1.0
+							15128 text ·
+							15129 text c6b-s10-20260918-220325
+							15130 text ·
+							15131 text 03:20
+						15132 text INTERNAL
+					15133 container
+						15134 text GUIDELINE
+						15135 text e2e-knowledge-race-3-1789759237960-5693
+						15136 container
+							15137 text v0.1.0
+							15138 text ·
+							15139 text E2E-Dev-1789759243820-357
+							15140 text ·
+							15141 text 03:20
+						15142 text INTERNAL
+					15143 container
+						15144 text GUIDELINE
+						15145 text e2e-knowledge-race-4-1789759237962-8599
+						15146 container
+							15147 text v0.1.0
+							15148 text ·
+							15149 text E2E-Dev-1789759243820-357
+							15150 text ·
+							15151 text 03:20
+						15152 text INTERNAL
+					15153 container
+						15154 text GUIDELINE
+						15155 text e2e-knowledge-race-2-1789759237957-8538
+						15156 container
+							15157 text v0.1.0
+							15158 text ·
+							15159 text WfE2EAgent-1789768222873
+							15160 text ·
+							15161 text 03:20
+						15162 text INTERNAL
+					15163 container
+						15164 text GUIDELINE
+						15165 text e2e-knowledge-race-6-1789759237966-1391
+						15166 container
+							15167 text v0.1.0
+							15168 text ·
+							15169 text Rec-1789758453648
+							15170 text ·
+							15171 text 03:20
+						15172 text INTERNAL
+					15173 container
+						15174 text GUIDELINE
+						15175 text e2e-knowledge-race-7-1789759237967-7962
+						15176 container
+							15177 text v0.1.0
+							15178 text ·
+							15179 text WfTplAgent-1789759156191
+							15180 text ·
+							15181 text 03:20
+						15182 text INTERNAL
+					15183 container
+						15184 text GUIDELINE
+						15185 text e2e-shared-guideline-1789759243895-8459
+						15186 container
+							15187 text v0.1.0
+							15188 text ·
+							15189 text WfE2EAgent-1789758132290
+							15190 text ·
+							15191 text 03:20
+						15192 text INTERNAL
+					15193 container
+						15194 text PROMPT
+						15195 text e2e-skill-source-1789759245222-8802
+						15196 container
+							15197 text v0.1.0
+							15198 text ·
+							15199 text RecApply-1789757756681
+							15200 text ·
+							15201 text 03:20
+						15202 text INTERNAL
+					15203 container
+						15204 text GUIDELINE
+						15205 text e2e-knowledge-1789767945841-6681
+						15206 container
+							15207 text v0.1.0
+							15208 text ·
+							15209 text e2e-agent-1789767955897-1365
+							15210 text ·
+							15211 text 05:45
+						15212 text INTERNAL
+					15213 container
+						15214 text GUIDELINE
+						15215 text e2e-knowledge-1789767999324-6751
+						15216 container
+							15217 text v0.1.0
+							15218 text ·
+							15219 text e2e-agent-1789767959967-8297
+							15220 text ·
+							15221 text 05:46
+						15222 text INTERNAL
+					15223 container
+						15224 text GUIDELINE
+						15225 text e2e-knowledge-lifecycle-1789768332160-9635
+						15226 container
+							15227 text v0.1.0
+							15228 text ·
+							15229 text c6b-s5-20260918-210137
+							15230 text ·
+							15231 text 05:52
+						15232 text INTERNAL
+					15233 container
+						15234 text GUIDELINE
+						15235 text e2e-knowledge-guard-1789768332633-4153
+						15236 container
+							15237 text v0.1.0
+							15238 text ·
+							15239 text E2E-Dev-1789768338706-3470
+							15240 text ·
+							15241 text 05:52
+						15242 text INTERNAL
+					15243 container
+						15244 text GUIDELINE
+						15245 text e2e-knowledge-race-0-1789768332916-8926
+						15246 container
+							15247 text v0.1.0
+							15248 text ·
+							15249 text e2e-qoder-s4-1789771034038-7768
+							15250 text ·
+							15251 text 05:52
+						15252 text INTERNAL
+					15253 container
+						15254 text GUIDELINE
+						15255 text e2e-knowledge-race-2-1789768332923-9851
+						15256 container
+							15257 text v0.1.0
+							15258 text ·
+							15259 text Rec-1789757752359
+							15260 text ·
+							15261 text 05:52
+						15262 text INTERNAL
+					15263 container
+						15264 text GUIDELINE
+						15265 text e2e-knowledge-race-1-1789768332920-4833
+						15266 container
+							15267 text v0.1.0
+							15268 text ·
+							15269 text e2e-wf-guard-agent-1789768343024-8437
+							15270 text ·
+							15271 text 05:52
+						15272 text INTERNAL
+					15273 container
+						15274 text GUIDELINE
+						15275 text e2e-knowledge-race-3-1789768332926-9816
+						15276 container
+							15277 text v0.1.0
+							15278 text ·
+							15279 text e2e-oc-hitl-1789767999717-8015
+							15280 text ·
+							15281 text 05:52
+						15282 text INTERNAL
+					15283 container
+						15284 text GUIDELINE
+						15285 text e2e-knowledge-race-4-1789768332928-9063
+						15286 container
+							15287 text v0.1.0
+							15288 text ·
+							15289 text e2e-agent-1789768066859-240
+							15290 text ·
+							15291 text 05:52
+						15292 text INTERNAL
+					15293 container
+						15294 text GUIDELINE
+						15295 text e2e-knowledge-race-5-1789768332930-928
+						15296 container
+							15297 text v0.1.0
+							15298 text ·
+							15299 text E2E-Iso-A-1789768339161-2919
+							15300 text ·
+							15301 text 05:52
+						15302 text INTERNAL
+					15303 container
+						15304 text GUIDELINE
+						15305 text e2e-knowledge-race-7-1789768332934-942
+						15306 container
+							15307 text v0.1.0
+							15308 text ·
+							15309 text WfSmAgent-1789758136414
+							15310 text ·
+							15311 text 05:52
+						15312 text INTERNAL
+					15313 container
+						15314 text GUIDELINE
+						15315 text e2e-shared-guideline-1789768338829-3528
+						15316 container
+							15317 text v0.1.0
+							15318 text ·
+							15319 text e2e-oc-opsap-1789768047026-3547
+							15320 text ·
+							15321 text 05:52
+						15322 text INTERNAL
+					15323 container
+						15324 text PROMPT
+						15325 text e2e-skill-source-1789768339948-2742
+						15326 container
+							15327 text v0.1.0
+							15328 text ·
+							15329 text E2E-BA-1789759243794-1202
+							15330 text ·
+							15331 text 05:52
+						15332 text INTERNAL
+				11639 text Select a knowledge item
+				11640 text Pick any approved entry on the left to inspect its content, lineage and access scope. Items in the unified library are versioned, signed and indexed across the entire fleet.
+			15333 container
+				15334 strong
+					15335 text Submit New Knowledge
+				15336 text Enters governance at
+				15337 emphasis
+					15338 text Stage 02 · Peer Review
+				15339 button ✕
+				15340 container
+					15341 container
+						15342 text TITLE
+						15343 text field (settable) TITLE
+					15344 container
+						15345 text TYPE
+						15346 pop up button (collapsed, settable) TYPE, Value: Skill, Secondary Actions: Expand
+							15347 menu
+								15348 (selected) Skill
+								15349 Script
+								15350 Prompt
+								15351 Tool
+								15352 Template
+								15353 Guideline
+								15354 Workflow
+								15355 Spec
+					15356 container
+						15357 text SENSITIVITY
+						15358 pop up button (collapsed, settable) SENSITIVITY, Value: Internal, Secondary Actions: Expand
+							15359 menu
+								15360 Public
+								15361 (selected) Internal
+								15362 Confidential
+								15363 Restricted
+					15364 container
+						15365 text DESCRIPTION
+						15366 text entry area (settable) DESCRIPTION
+					15367 container
+						15368 text CONTENT
+						15369 text entry area (settable) CONTENT
+					15370 button Cancel
+					15371 button Submit for Review
+		6825 button (collapsed) Open Aria panel, Secondary Actions: Expand
+		15372 container
+			15373 container
+				15374 text Run failed
+				15375 button View
+			15376 container
+				15377 text Run Failed
+				15378 button View
+
+The focused UI element is 0 AXWebArea Aria Conductor, URL: localhost:5273/knowledge

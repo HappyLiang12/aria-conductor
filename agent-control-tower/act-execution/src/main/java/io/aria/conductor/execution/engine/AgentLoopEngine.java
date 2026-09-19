@@ -774,26 +774,66 @@ public class AgentLoopEngine {
      * {@link #buildMessages}, merged with the user request into one string
      * ({@code ---} + {@code User request:} separator). Degrades gracefully when
      * either half is missing.
+     *
+     * <p>Conversation memory (H1): every user/assistant message that precedes the
+     * final user request is included as a readable transcript section
+     * ({@code ## Conversation so far} with {@code user:}/{@code assistant:} lines
+     * in turn order) placed before the user-request suffix, so task-execution
+     * providers see the whole Aria conversation instead of only the last request.
+     * When there are no prior turns the prompt stays byte-identical to the previous
+     * single-turn shape (blast-radius guard: the E-series evidence and every
+     * fresh-run scenario rely on that exact shape).</p>
      */
     private String buildTaskPrompt(RunContext ctx) {
         List<LlmMessage> messages = buildMessages(ctx);
+
+        // The final user request is the LAST user message in the history; everything
+        // user/assistant before it is a prior conversation turn (H1 transcript).
+        int lastUserIndex = -1;
+        for (int i = 0; i < messages.size(); i++) {
+            if ("user".equals(messages.get(i).role())) {
+                lastUserIndex = i;
+            }
+        }
+
         StringBuilder system = new StringBuilder();
+        List<LlmMessage> priorTurns = new ArrayList<>();
         String userRequest = null;
-        for (LlmMessage msg : messages) {
+        for (int i = 0; i < messages.size(); i++) {
+            LlmMessage msg = messages.get(i);
             if ("system".equals(msg.role())) {
                 if (!system.isEmpty()) system.append("\n\n");
                 system.append(msg.content());
             } else if ("user".equals(msg.role())) {
-                userRequest = msg.content();
+                if (i == lastUserIndex) {
+                    userRequest = msg.content();
+                } else if (i < lastUserIndex) {
+                    priorTurns.add(msg);
+                }
+            } else if ("assistant".equals(msg.role()) && i < lastUserIndex) {
+                priorTurns.add(msg);
             }
+            // tool/other roles remain ignored (unchanged pre/post H1)
         }
+        // Keep blank-content turns out of the transcript — an empty message is not a
+        // readable conversation turn and would only add noise for the model.
+        priorTurns.removeIf(turn -> turn.content() == null || turn.content().isBlank());
         if (userRequest == null || userRequest.isBlank()) {
             return system.toString();
         }
-        if (system.isEmpty()) {
+        if (system.isEmpty() && priorTurns.isEmpty()) {
             return userRequest;
         }
-        return system + "\n\n---\nUser request: " + userRequest;
+        StringBuilder prompt = new StringBuilder(system);
+        if (!priorTurns.isEmpty()) {
+            if (prompt.length() > 0) prompt.append("\n\n");
+            prompt.append("## Conversation so far\n");
+            for (LlmMessage turn : priorTurns) {
+                prompt.append(turn.role()).append(": ").append(turn.content()).append("\n");
+            }
+        }
+        prompt.append("\n\n---\nUser request: ").append(userRequest);
+        return prompt.toString();
     }
 
     /**

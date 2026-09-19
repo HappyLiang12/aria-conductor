@@ -30,8 +30,8 @@ vi.mock('../../components/ManageToolsDialog', () => ({
 }));
 
 import { listAdkProviders } from '../../api/adk';
-import { createAgent } from '../../api/agents';
-import type { AdkProviderInfo } from '../../types';
+import { createAgent, getTemplates } from '../../api/agents';
+import type { AdkProviderInfo, AgentTemplate } from '../../types';
 
 const PROVIDERS: AdkProviderInfo[] = [
   { id: 'langchain', displayName: 'LangChain ADK', supportsTaskExecution: false, isDefault: false },
@@ -95,5 +95,57 @@ describe('CrewPage ADK provider selector (B9)', () => {
 
     await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(1));
     expect(createAgent).toHaveBeenCalledWith(expect.objectContaining({ adkProvider: 'qoder' }));
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  UX-4: a role change must not silently reset an explicit provider pick      */
+/* -------------------------------------------------------------------------- */
+
+const DEV_TEMPLATE: AgentTemplate = {
+  id: 'tpl-dev',
+  label: 'Dev Agent',
+  agentType: 'ADK',
+  role: 'dev',
+  model: 'gpt-4o-mini',
+  provider: 'openai',
+  adkProvider: 'langchain',
+  description: 'Developer role preset',
+};
+
+describe('CrewPage role change vs ADK provider (UX-4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(listAdkProviders).mockResolvedValue(PROVIDERS);
+    vi.mocked(getTemplates).mockResolvedValue([DEV_TEMPLATE]);
+  });
+
+  it('keeps an explicit qoder pick when a role is chosen afterwards', async () => {
+    ui();
+    const select = await openAddAgent();
+
+    fireEvent.change(select, { target: { value: 'qoder' } });
+    expect(select.value).toBe('qoder');
+
+    const roleSelect = screen.getByLabelText('Role') as HTMLSelectElement;
+    await waitFor(() => expect(roleSelect.querySelectorAll('option').length).toBeGreaterThan(0));
+    fireEvent.change(roleSelect, { target: { value: 'dev' } });
+
+    // The user touched the provider select: the role's template back-fill
+    // (every catalog template pins langchain) must not clobber their choice.
+    expect(select.value).toBe('qoder');
+  });
+
+  it('back-fills the template provider when a role is chosen before any provider pick', async () => {
+    ui();
+    const select = await openAddAgent();
+
+    const roleSelect = screen.getByLabelText('Role') as HTMLSelectElement;
+    await waitFor(() => expect(roleSelect.querySelectorAll('option').length).toBeGreaterThan(0));
+    fireEvent.change(roleSelect, { target: { value: 'dev' } });
+
+    // Untouched provider: the template-driven back-fill applies as today
+    // (the catalog pins langchain, so a fresh role pick lands on langchain).
+    expect(select.value).toBe('langchain');
   });
 });

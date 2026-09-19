@@ -88,3 +88,32 @@ describe('AgentCard pickup eligibility', () => {
     expect(roleTag.getAttribute('title')).toBe(longRole);
   });
 });
+
+/**
+ * UX-3: the status pill renders the agent lifecycle flag (set at creation /
+ * retire, not a live probe), so the labels must not claim online/offline
+ * connectivity. Active / Degraded / Retired describe the flag honestly; the
+ * underlying LiveStatus values stay as CSS class hooks.
+ */
+describe('AgentCard lifecycle status labels (UX-3)', () => {
+  it('labels a HEALTHY agent "Active" instead of a probed-sounding "Online"', () => {
+    render(<AgentCard agent={baseAgent} {...cardProps} />);
+
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+  });
+
+  it('labels a DEGRADED agent "Degraded" instead of "Idle"', () => {
+    render(<AgentCard agent={{ ...baseAgent, healthStatus: 'DEGRADED' }} {...cardProps} />);
+
+    expect(screen.getByText('Degraded')).toBeInTheDocument();
+    expect(screen.queryByText('Idle')).not.toBeInTheDocument();
+  });
+
+  it('labels a RETIRED agent "Retired" instead of "Offline"', () => {
+    render(<AgentCard agent={{ ...baseAgent, healthStatus: 'RETIRED' }} {...cardProps} />);
+
+    expect(screen.getByText('Retired')).toBeInTheDocument();
+    expect(screen.queryByText('Offline')).not.toBeInTheDocument();
+  });
+});

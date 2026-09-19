@@ -98,6 +98,9 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
         {items.map((approval, idx) => {
           const isFirst = idx === 0;
           const acp = isAcpAsk(approval);
+          // UX-6: the expiry gate covers every ask that carries an `expiresAt`, not just ACP
+          // asks — a stale legacy row must not offer enabled buttons for a decision the
+          // backend would no longer honour.
           const expired = isAskExpired(approval);
           const pending = approveMutation.isPending || rejectMutation.isPending;
           // F3/R4: the backend refuses an approval the bridge truncated (or whose
@@ -142,7 +145,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                 <button
                   className="btn primary"
                   style={{ flex: 1 }}
-                  disabled={pending || (acp && (expired || !hasAllowOnce(approval))) || undecidable}
+                  disabled={pending || expired || (acp && !hasAllowOnce(approval)) || undecidable}
                   onClick={() => approveMutation.mutate(approval)}
                 >
                   {approveMutation.isPending && approveMutation.variables?.id === approval.id
@@ -154,7 +157,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                 <button
                   className="btn danger"
                   style={{ flex: 1 }}
-                  disabled={pending || (acp && expired)}
+                  disabled={pending || expired}
                   onClick={() => rejectMutation.mutate(approval)}
                 >
                   {rejectMutation.isPending && rejectMutation.variables?.id === approval.id

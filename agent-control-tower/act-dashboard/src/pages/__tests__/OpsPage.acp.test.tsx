@@ -8,11 +8,11 @@
  * Fixtures/harness mirror ReviewPanels.acp.test.tsx so the three review
  * surfaces pin the same wire shapes.
  */
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import OpsPage from '../OpsPage';
-import type { Approval, DashboardSummary } from '../../types';
+import type { Agent, Approval, DashboardSummary, Run } from '../../types';
 
 vi.mock('../../api/ops', () => ({
   listRecentRuns: vi.fn(),
@@ -150,5 +150,141 @@ describe('OpsPage — undecidable ACP asks in the pending queue', () => {
     // flag-missing ask's row — the one whose Allow once is disabled. (A click on
     // a disabled control cannot dispatch, so it would pin nothing.)
     expect(allowButtons[0].closest('.qitem')?.textContent).toContain('cannot be approved');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  UX-6: legacy rows gate on expiry — no enabled Approve/Deny past expiresAt  */
+/* -------------------------------------------------------------------------- */
+
+describe('OpsPage — legacy rows gate on expiry (UX-6)', () => {
+  /**
+   * UX-6 regression pin: `expired` used to be scoped to ACP asks only, so a stale
+   * PENDING legacy row past its `expiresAt` kept enabled Approve/Deny buttons even
+   * though the backend would not honour the decision. `isAskExpired` gates every
+   * row that carries an `expiresAt` — the disabled presentation matches ACP rows.
+   */
+  it('disables Approve and Deny on a PENDING legacy row past its expiresAt', async () => {
+    renderOps([
+      {
+        id: 'legacy-expired',
+        runId: 'run-abc',
+        toolCallId: null,
+        status: 'PENDING',
+        reason: 'Agent requests approval to execute deploy',
+        requestedAt: new Date().toISOString(),
+        decidedAt: null,
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+    ]);
+
+    const approve = await screen.findByRole('button', { name: '✓ Approve' });
+    expect(approve).toBeDisabled();
+    expect(screen.getByRole('button', { name: '✕ Deny' })).toBeDisabled();
+  });
+
+  // Control: the expiry gate must not over-reach — a fresh legacy row stays decidable.
+  it('keeps a fresh legacy row decidable', async () => {
+    renderOps([
+      {
+        id: 'legacy-fresh',
+        runId: 'run-abc',
+        toolCallId: null,
+        status: 'PENDING',
+        reason: 'Agent requests approval to execute deploy',
+        requestedAt: new Date().toISOString(),
+        decidedAt: null,
+        expiresAt: future(),
+      },
+    ]);
+
+    const approve = await screen.findByRole('button', { name: '✓ Approve' });
+    expect(approve).toBeEnabled();
+    expect(screen.getByRole('button', { name: '✕ Deny' })).toBeEnabled();
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  UX-2: requester resolution (runId → agentId bridge) + one line of context  */
+/* -------------------------------------------------------------------------- */
+
+const BRIDGE_RUN: Run = {
+  id: 'run-abc',
+  agentId: 'agent-9',
+  status: 'RUNNING',
+  promptSeed: 'Draft the Q3 vendor brief',
+  maxIterations: 10,
+  totalTokensUsed: 0,
+  iterationCount: 0,
+  errorMessage: null,
+  finalOutput: null,
+  createdAt: new Date().toISOString(),
+  completedAt: null,
+};
+
+const REQUESTER: Agent = {
+  id: 'agent-9',
+  name: 'Atlas QA',
+  description: '',
+  agentType: 'ADK',
+  role: 'qa',
+  model: '',
+  provider: '',
+  healthStatus: 'HEALTHY',
+  createdAt: '2026-01-01T00:00:00Z',
+};
+
+describe('OpsPage — requester resolution and row context (UX-2)', () => {
+  beforeEach(() => {
+    // The approval bridges to its requester through the run: an approval
+    // carries runId, the run carries agentId, the agent list has the name.
+    vi.mocked(listRecentRuns).mockResolvedValue([BRIDGE_RUN]);
+    vi.mocked(listAgents).mockResolvedValue([REQUESTER]);
+  });
+
+  /** Scoped to the approval row: the run-history table legitimately shows the
+   *  same agent name / promptSeed, so document-wide lookups cannot pin the fix.
+   *  The matcher runs inside waitFor because the row renders before the runs
+   *  query (the requester/context source) resolves. */
+  const expectRowText = async (
+    approvalId: string,
+    matcher: (text: string) => void,
+  ) => {
+    await waitFor(() => {
+      const row = document.querySelector(`[data-approval-id="${approvalId}"]`);
+      expect(row).not.toBeNull();
+      matcher(row!.textContent ?? '');
+    });
+  };
+
+  it('resolves the queue requester via runId → agentId instead of "Unknown agent"', async () => {
+    const { container } = renderOps([acpAsk()]); // runId 'run-abc' → run.agentId 'agent-9' → Atlas QA
+
+    await expectRowText('acp-1', (t) => expect(t).toContain('Atlas QA'));
+    expect(container.querySelector('[data-approval-id="acp-1"]')?.textContent).not.toContain('Unknown agent');
+  });
+
+  it('shows the backend-redacted rawInput as the ACP row context', async () => {
+    renderOps([acpAsk()]);
+
+    // Verbatim from displayJson — already sanitized by the backend.
+    await expectRowText('acp-1', (t) => expect(t).toContain('file_path: /workspace/out.csv'));
+  });
+
+  it('falls back to the run promptSeed as the legacy-gate row context', async () => {
+    renderOps([
+      {
+        id: 'legacy-1',
+        runId: 'run-abc',
+        toolCallId: null,
+        status: 'PENDING',
+        reason: 'Tool call requires sign-off',
+        requestedAt: new Date().toISOString(),
+        decidedAt: null,
+        expiresAt: future(),
+      },
+    ]);
+
+    await expectRowText('legacy-1', (t) => expect(t).toContain('Draft the Q3 vendor brief'));
   });
 });

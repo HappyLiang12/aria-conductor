@@ -17,6 +17,7 @@ import {
   isAcpAsk,
   isAskExpired,
   isUndecidableAcpAsk,
+  parseAcpDisplay,
 } from '../utils/acpAsk';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
 import type {
@@ -197,6 +198,23 @@ export default function OpsPage() {
     (agentsQ.data ?? []).forEach((a) => m.set(a.id, a));
     return m;
   }, [agentsQ.data]);
+
+  // UX-2: an approval bridges to its requester through the run — it carries
+  // runId, the run carries agentId, and the agent list has the name. Keying the
+  // lookup by runId could never match, so every row showed "Unknown agent".
+  const runToAgent = useMemo(() => {
+    const m = new Map<string, string>();
+    (runsQ.data ?? []).forEach((r) => m.set(r.id, r.agentId));
+    return m;
+  }, [runsQ.data]);
+
+  // UX-2: run details by id — the legacy-gate rows fall back to the run's
+  // promptSeed for their one line of operator context.
+  const runById = useMemo(() => {
+    const m = new Map<string, Run>();
+    (runsQ.data ?? []).forEach((r) => m.set(r.id, r));
+    return m;
+  }, [runsQ.data]);
 
   /* ---------- Mutations ---------- */
   // ACP asks decide through the same /decide endpoint; the ask (not just its
@@ -429,14 +447,27 @@ export default function OpsPage() {
             {pending.length > 0 && (
               <div className="queue">
                 {pending.map((a, idx) => {
-                  const agent = agentMap.get(/* runId is the bridge */ a.runId);
+                  // UX-2: resolve the requester through the run bridge — the
+                  // approval's runId → run.agentId → agent name.
+                  const requesterId = runToAgent.get(a.runId);
+                  const agent = requesterId ? agentMap.get(requesterId) : undefined;
                   const requester = agent ?? null;
                   const acp = isAcpAsk(a);
+                  // UX-2: one line of context per row — an ACP ask shows the
+                  // backend-redacted rawInput verbatim; a legacy-gate ask falls
+                  // back to the run's promptSeed instead of the opaque
+                  // `task_execution {}` reason.
+                  const contextLine = acp
+                    ? parseAcpDisplay(a)?.rawInput ?? null
+                    : runById.get(a.runId)?.promptSeed ?? null;
                   const kind = approvalKindOf(a.reason);
                   const ageMs = Date.now() - new Date(a.requestedAt).getTime();
                   const stale = ageMs > 5 * 60_000;
                   const busy = approveM.isPending || rejectM.isPending;
-                  const expired = acp && isAskExpired(a);
+                  // UX-6: the expiry gate covers every ask that carries an `expiresAt`, not
+                  // just ACP asks — a stale legacy row must not offer enabled buttons for a
+                  // decision the backend would no longer honour.
+                  const expired = isAskExpired(a);
                   // F3/R4: the backend refuses an approval the bridge truncated (or
                   // whose display record cannot prove decidability) with a typed 409
                   // UNDECIDABLE_ASK, so Allow once must not be offered enabled here
@@ -446,8 +477,8 @@ export default function OpsPage() {
                   const fallbackTitle =
                     a.reason?.trim() ||
                     (a.toolCallId ? `Tool call ${a.toolCallId.slice(0, 8)} requires sign-off` : 'Approval requires sign-off');
-                  const allowDisabled = busy || (acp && (expired || !hasAllowOnce(a))) || undecidable;
-                  const denyDisabled = busy || (acp && expired);
+                  const allowDisabled = busy || expired || (acp && !hasAllowOnce(a)) || undecidable;
+                  const denyDisabled = busy || expired;
                   return (
                     <div
                       key={a.id}
@@ -490,6 +521,17 @@ export default function OpsPage() {
                         <span style={{ color: 'var(--text)' }}>{requester?.name ?? 'Unknown agent'}</span>
                         <span style={{ color: 'var(--text-mute)' }}>· run {a.runId.slice(0, 8)}</span>
                       </div>
+                      {contextLine && (
+                        <div
+                          style={{
+                            marginTop: 4, fontSize: 12, color: 'var(--text-mute)',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}
+                          title={contextLine}
+                        >
+                          {contextLine}
+                        </div>
+                      )}
 
                       <div className="row">
                         <button

@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.approval;
 
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
@@ -296,6 +297,10 @@ public class ApprovalGate {
 
     /**
      * Handle approval timeout — mark as expired and reject.
+     *
+     * <p>UX-6: the expiry is not silent — the operator saw the "approval requested"
+     * notification and must learn the ask is gone, so the same expiry event the
+     * scheduled sweep publishes is emitted here with the reason this path recorded.
      */
     private void handleTimeout(UUID approvalId) {
         try {
@@ -304,6 +309,8 @@ public class ApprovalGate {
                 approval.setReason("Auto-rejected: approval timed out");
                 approval.setDecidedAt(Instant.now());
                 approvalRepository.save(approval);
+                eventPublisher.publishEvent(new ApprovalExpiredEvent(
+                        this, approval.getId(), approval.getRunId(), approval.getReason()));
             });
         } catch (Exception e) {
             log.error("Failed to mark approval {} as expired", approvalId, e);

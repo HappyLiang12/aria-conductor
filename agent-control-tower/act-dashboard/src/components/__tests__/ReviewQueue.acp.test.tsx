@@ -124,3 +124,52 @@ describe('ReviewQueue — undecidable ACP asks', () => {
     expect(allowButtons[0].closest('.qitem')?.textContent).toContain('cannot be approved');
   });
 });
+
+describe('ReviewQueue — legacy rows gate on expiry (UX-6)', () => {
+  /**
+   * UX-6 regression pin: the expiry gate used to be scoped to ACP asks only, so a stale
+   * PENDING legacy row past its `expiresAt` kept enabled Approve/Deny buttons even though
+   * the backend would not honour the decision. `isAskExpired` gates every row that carries
+   * an `expiresAt` — the disabled-state presentation matches the ACP rows.
+   */
+  it('disables Approve and Deny on a PENDING legacy row past its expiresAt', async () => {
+    renderQueue([
+      {
+        id: 'legacy-expired',
+        runId: 'run-abc',
+        toolCallId: null,
+        status: 'PENDING',
+        reason: 'Agent requests approval to execute deploy',
+        requestedAt: new Date().toISOString(),
+        decidedAt: null,
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        toolName: 'deploy',
+      } as Approval,
+    ]);
+
+    const approve = await screen.findByRole('button', { name: 'Approve' });
+    expect(approve).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
+  });
+
+  // Control: the expiry gate must not over-reach — a fresh legacy row stays decidable.
+  it('keeps a fresh legacy row decidable', async () => {
+    renderQueue([
+      {
+        id: 'legacy-fresh',
+        runId: 'run-abc',
+        toolCallId: null,
+        status: 'PENDING',
+        reason: 'Agent requests approval to execute deploy',
+        requestedAt: new Date().toISOString(),
+        decidedAt: null,
+        expiresAt: future(),
+        toolName: 'deploy',
+      } as Approval,
+    ]);
+
+    const approve = await screen.findByRole('button', { name: 'Approve' });
+    expect(approve).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled();
+  });
+});

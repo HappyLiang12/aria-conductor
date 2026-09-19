@@ -5,6 +5,7 @@ const LABELS: Record<string, string> = {
   'run.failed': 'Run Failed',
   'approval.requested': 'Approval Needed',
   'approval.decided': 'Approval Decided',
+  'approval.expired': 'Approval Expired',
   'agent.created': 'Agent Created',
   'agent.retired': 'Agent Retired',
   'tool_call': 'Tool Call',

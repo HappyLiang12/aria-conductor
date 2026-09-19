@@ -14,7 +14,9 @@ function HealthBadge({ healthy }: HealthBadgeProps) {
       className="status-badge status-badge-md"
       style={{ backgroundColor: color + '22', color, borderColor: color }}
     >
-      {healthy ? 'Healthy' : 'Unhealthy'}
+      {/* UX-3: the probe is service reachability only (credential-free), so the
+          label must not read as "run-ready". */}
+      {healthy ? 'Service OK' : 'Service Unreachable'}
     </span>
   );
 }

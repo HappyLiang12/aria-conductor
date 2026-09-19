@@ -138,3 +138,40 @@ describe('ProvidersPage qoder provider-health retry policy', () => {
     }
   });
 });
+
+/**
+ * UX-3: the inventory badge probes service reachability only (credential-free
+ * `isServiceHealthy`), so its label must not read as "run-ready". The badge is
+ * relabeled to Service OK / Service Unreachable without changing the probe.
+ */
+describe('ProvidersPage health badge semantics (UX-3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(listAdkProviders).mockResolvedValue(PROVIDERS);
+  });
+
+  it('labels a reachable provider "Service OK" in the inventory table — not "Healthy"', async () => {
+    vi.mocked(getAdkProviderHealth).mockImplementation(async (id: string) => ({
+      providerId: id,
+      healthy: true,
+    }));
+    const { container } = ui();
+
+    expect((await screen.findAllByText('Service OK')).length).toBeGreaterThan(0);
+    // Scoped to the inventory table: the qoder credential card keeps its own
+    // distinct service/credential states.
+    const table = container.querySelector('table.data-table');
+    expect(table?.textContent).not.toContain('Healthy');
+    expect(table?.textContent).not.toContain('Unhealthy');
+  });
+
+  it('labels an unreachable provider "Service Unreachable"', async () => {
+    vi.mocked(getAdkProviderHealth).mockImplementation(async (id: string) => ({
+      providerId: id,
+      healthy: false,
+    }));
+    ui();
+
+    expect((await screen.findAllByText('Service Unreachable')).length).toBeGreaterThan(0);
+  });
+});

@@ -43,6 +43,18 @@ class NotificationTriggerListenerTest {
                 "Approval " + approvalId + " is waiting for your decision.", "APPROVAL", approvalId.toString());
     }
 
+    // UX-6: an expired approval must persist an unread notification (resource APPROVAL) so
+    // the bell and the persisted feed behave like approval.requested instead of staying silent.
+    @Test
+    void onApprovalExpired() {
+        UUID approvalId = UUID.randomUUID();
+        listener.onApprovalExpired(new ApprovalExpiredEvent(this, approvalId, UUID.randomUUID(),
+                "expired before decision"));
+        verify(notificationService).create("approval.expired", "Approval expired",
+                "Approval " + approvalId + " expired without a decision (expired before decision).",
+                "APPROVAL", approvalId.toString());
+    }
+
     @Test
     void onKnowledgeSubmitted() {
         UUID itemId = UUID.randomUUID();

@@ -1,5 +1,7 @@
 package io.aria.conductor.common.model;
 
+import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.common.runtime.WorkspaceMode;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -38,6 +40,31 @@ public class Agent {
     private String provider;
 
     private String adkProvider;
+
+    /**
+     * Explicit execution placement ({@code HOST}/{@code SANDBOX}). Nullable so
+     * legacy rows keep unknown metadata; migration V59 backfills only the
+     * pre-existing OpenCode agents to Sandbox.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private ExecutionMode executionMode;
+
+    /**
+     * Host workspace selection ({@code WORKTREE}/{@code DIRECT}); unknown for
+     * legacy and sandbox-only rows.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private WorkspaceMode workspaceMode;
+
+    /** Trusted backend-local directory for Host execution. */
+    @Column(columnDefinition = "TEXT")
+    private String workspacePath;
+
+    /** Optional git base ref used to create the Host worktree. */
+    @Column(length = 255)
+    private String workspaceBaseRef;
 
     @Column(nullable = false)
     private Boolean pickupEnabled;

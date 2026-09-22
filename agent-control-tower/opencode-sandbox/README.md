@@ -18,11 +18,29 @@ Aria Conductor's `OpenCodeAdkProvider` (exchangeable agent provider architecture
 
 ## Build
 
+The build context is the repository root, because the image consumes the shared
+run-owned launcher/control scripts from `agent-control-tower/runtime-sandbox`
+(they are copied, never re-implemented in this directory):
+
 ```bash
-docker build -t aria-conductor/opencode-sandbox:1.1 .
+docker build -t aria-conductor/opencode-sandbox:1.1 \
+  -f agent-control-tower/opencode-sandbox/Dockerfile .
 # or with podman:
-podman build -t aria-conductor/opencode-sandbox:1.1 .
+podman build -t aria-conductor/opencode-sandbox:1.1 \
+  -f agent-control-tower/opencode-sandbox/Dockerfile .
 ```
+
+## Isolation contract
+
+- the image runs the CLI as the unprivileged user `aria` (uid 10001);
+- it carries no host credential material and no container-runtime socket, and the
+  backend never mounts either into a run sandbox;
+- a core is only started through `/opt/aria/launch.mjs` with the trusted launch
+  manifest the backend uploads (explicit argv array, `shell: false`), and the
+  manifest may only name the image's own entrypoint allowlist;
+- `/opt/aria/stop-writers.mjs` stops the run's writer tree while leaving the
+  Sandbox export facility (execd) alive, so the sandbox can be exported before it
+  is destroyed.
 
 ## Smoke test
 

@@ -1,0 +1,1122 @@
+{
+  "document": "Task 1 test-preservation inventory and replacement map",
+  "program": "docs/superpowers/plans/2026-09-22-agent-core-execution-modes.md",
+  "spec": "docs/superpowers/specs/2026-09-22-agent-core-execution-modes-design.md",
+  "scope": "Playwright specs under agent-control-tower/act-dashboard/e2e/ plus the LangChain/Python-dependent Java and CI test entry points that the cutover/removal tasks (T17-T20) affect. This is an inventory with replacement mapping, not a whole-repo test census.",
+  "rule": "A spec or test entry may only be removed on cutover when its business purpose is carried by the mapped replacement. Credential-gated or disabled cases are listed explicitly in disabledOrGated; every retained business purpose there must land in a runnable deterministic replacement.",
+  "notes": [
+    "Case-count rule (recount performed mechanically on 2026-09-23, fix round B, with a node script over the `path` values below): a `cases` value counts Playwright case declarations in the spec file text - a bare `test('...')` or a modifier declaration `test.skip('...')` / `test.fixme('...')` / `test.fail('...')` / `test.only('...')` / `test.slow('...')` whose first argument is a string literal, at any nesting depth. Cases inside `test.describe` and `test.describe.skip` suites are counted; a whole-file `test.describe.skip` makes every case in the file a disabled case but still counts it. Suites (`test.describe`, `test.describe.configure`) and hooks (`test.beforeEach/afterEach/beforeAll/afterAll`, `test.use`, `test.step`, `test.extend`) are not case declarations, and a runtime `test.skip(condition, '...')` inside a case body does not add a case. Recount total across the 62 specs: 245 case declarations; 15 entries disagreed with their previous value and were corrected."
+  ],
+  "replacementArtifacts": {
+    "coreExecutionModes": "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts (T17)",
+    "corePermissions": "agent-control-tower/act-dashboard/e2e/core-permissions.spec.ts (T17)",
+    "coreWorkspaces": "agent-control-tower/act-dashboard/e2e/core-workspaces.spec.ts (T17)",
+    "deterministicHarness": "core-e2e-harness distribution: act-app/src/assembly/backend-e2e-harness.xml + io.aria.conductor.app.e2e.{CoreE2eApplication,CoreE2eConfiguration,DeterministicLlmClient,CoreE2eSetup} (T16)",
+    "deterministicPeers": "agent-control-tower/act-app/src/test/resources/e2e/peers/{mock-qoder.mjs,mock-opencode.mjs,peer-actions.mjs} + scenarios.json (T7)",
+    "sandboxLifecycle": "e2e/agent-core/sandbox-lifecycle.test.mjs (T10)",
+    "ciContract": "e2e/agent-core/ci-contract.test.mjs (T19)",
+    "liveMatrix": "e2e/agent-core/live-matrix.ps1 / e2e/agent-core/live-matrix.sh (T20)",
+    "sandboxLifecycleWorkflow": ".github/workflows/sandbox-lifecycle.yml (T19)"
+  },
+  "playwrightSpecs": [
+    {
+      "id": "pw:adk-providers.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/adk-providers.spec.ts",
+      "cases": 2,
+      "representativeCases": [
+        "Providers page renders provider table + Per-Agent Backends",
+        "Crew create form renders langchain + opencode options"
+      ],
+      "purpose": "Providers page surfaces the selectable ADK providers and their per-agent backends.",
+      "runtimeAffected": true,
+      "replacement": "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts",
+      "rationale": "The provider list becomes the core catalog (qoder/opencode) plus execution mode/sandbox selection (T15). The 'langchain + opencode options' assertion is retired with the LangChain provider; the deterministic harness serves the page so the case no longer needs a live ADK.",
+      "status": "port"
+    },
+    {
+      "id": "pw:agent-dev-workflow-governance.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/agent-dev-workflow-governance.spec.ts",
+      "cases": 4,
+      "representativeCases": [
+        "Aria is scoped to orchestration tools only (#25)",
+        "git pack tools carry the correct governance risk tiers"
+      ],
+      "purpose": "Dev-workflow governance: tool scoping, risk tiers and approval enrichment.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Governance assertions are runtime-agnostic; T17 keeps this spec and only its fixture base URL changes.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:agent-tool-skill-recommendations.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/agent-tool-skill-recommendations.spec.ts",
+      "cases": 3,
+      "purpose": "Role-based tool/skill recommendations in the agent create/edit flow.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Pure catalog/UI behavior, independent of the execution runtime.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:approvals-decision-flow.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/approvals-decision-flow.spec.ts",
+      "cases": 2,
+      "purpose": "Approval decisions surface on kanban Review and reject unknown approvals.",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "T12 makes approvals permission-kind aware (allow_once/reject), so the decision-zone cases must assert the offered permission kinds rather than a generic approve/deny.",
+      "status": "extend"
+    },
+    {
+      "id": "pw:aria-conversation-id-regression.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/aria-conversation-id-regression.spec.ts",
+      "cases": 5,
+      "purpose": "Aria chat keeps runId + conversationId across streaming and non-streaming turns.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "The conversation/run identity contract survives, but the message-event case is LLM-gated today and must become deterministic against DeterministicLlmClient.",
+      "status": "port"
+    },
+    {
+      "id": "pw:aria-engine-unification.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/aria-engine-unification.spec.ts",
+      "cases": 4,
+      "purpose": "Aria runs on the shared Run-based engine and streams the expected SSE events.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "Same contract, but the provider is the core session, and the LLM-gated event assertions become harness-driven.",
+      "status": "port"
+    },
+    {
+      "id": "pw:aria-session-id.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/aria-session-id.spec.ts",
+      "cases": 5,
+      "purpose": "Conversation ID display, copy and reset behavior in the Aria panel.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "UI-only identity display.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:aria-timeout-cancel.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/aria-timeout-cancel.spec.ts",
+      "cases": 3,
+      "purpose": "Cancel and silent-stream-close handling for Aria requests.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "Cancel semantics move to the run coordinator (T13); the harness must reproduce the stalled/closed stream deterministically instead of relying on a live provider.",
+      "status": "port"
+    },
+    {
+      "id": "pw:chat-smoke.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/chat-smoke.spec.ts",
+      "cases": 2,
+      "purpose": "Chat panel renders threads and a seeded run shows up as a thread.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Seeded-data rendering.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:concurrent-collaboration-ui.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/concurrent-collaboration-ui.spec.ts",
+      "cases": 1,
+      "purpose": "Concurrent workflows render with live status.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Workflow UI status rendering.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:configure-modal-close.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/configure-modal-close.spec.ts",
+      "cases": 2,
+      "purpose": "Configure modal closed-state visibility and reopen behavior.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Pure UI regression.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:crew-crud.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/crew-crud.spec.ts",
+      "cases": 4,
+      "purpose": "Crew roster, cost banner, hiring from catalog and name validation.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Agent CRUD surface; T15 adds settings fields but keeps these cases.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:crew-telemetry.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/crew-telemetry.spec.ts",
+      "cases": 4,
+      "purpose": "Agent telemetry cards and roster cost aggregation.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Aggregation rendering from seeded telemetry.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:dod-lifecycle.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/dod-lifecycle.spec.ts",
+      "cases": 6,
+      "purpose": "Definition-of-Done record lifecycle and review recording.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "SDD governance lifecycle, unaffected by provider cutover.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:fab-send-overlap.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/fab-send-overlap.spec.ts",
+      "cases": 2,
+      "purpose": "Aria FAB does not occlude the chat inject Send button.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Layout regression.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:git-pack-governance.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/git-pack-governance.spec.ts",
+      "cases": 3,
+      "purpose": "git_push approval gate, pack registration/approval, destructive risk-tier gate.",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "The file-write permission path is replaced by one-use write grants (T12); the risk-tier gate assertion is retained and must be re-pointed at the permission coordinator contract.",
+      "status": "port"
+    },
+    {
+      "id": "pw:harness-governance.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/harness-governance.spec.ts",
+      "cases": 6,
+      "purpose": "Harness profiles, weak-model-safe tool removal, workspace-diff preview.",
+      "runtimeAffected": true,
+      "replacement": "core-execution-modes.spec.ts",
+      "rationale": "Harness profile selection feeds execution settings (T2/T3); the tool-set assertions are preserved but bound to the new settings contract.",
+      "status": "port"
+    },
+    {
+      "id": "pw:housekeeping-cleanup.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/housekeeping-cleanup.spec.ts",
+      "cases": 4,
+      "purpose": "Ops cleanup scan, kanban quick-clear, leftovers and crew bulk-retire.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) plus T14 retirement coverage",
+      "rationale": "Retention/cleanup now also purges run_execution_bindings and retirement artifacts (T13/T14 rulings), so the counts asserted here change.",
+      "status": "port"
+    },
+    {
+      "id": "pw:journey-agent-run-report.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/journey-agent-run-report.spec.ts",
+      "cases": 4,
+      "purpose": "Agent to run to generated report journey, with fail-fast behavior without a key.",
+      "runtimeAffected": true,
+      "replacement": "core-execution-modes.spec.ts against the deterministic harness",
+      "rationale": "The LLM-gated tail must run deterministically; the 'fails fast without a key' case becomes an explicit denied-launch assertion.",
+      "status": "port"
+    },
+    {
+      "id": "pw:journey-crew-deploy-run.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/journey-crew-deploy-run.spec.ts",
+      "cases": 1,
+      "purpose": "Deploy from Crew catalog then start a run from the Runs page.",
+      "runtimeAffected": true,
+      "replacement": "core-execution-modes.spec.ts against the deterministic harness",
+      "rationale": "Run startup now traverses launch-profile and workspace-lease admission; the journey is retained with seed/proof data from the harness.",
+      "status": "port"
+    },
+    {
+      "id": "pw:journey-knowledge-promotion.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/journey-knowledge-promotion.spec.ts",
+      "cases": 5,
+      "purpose": "Knowledge promotion through review queue with a knowledge-informed run tail.",
+      "runtimeAffected": true,
+      "replacement": "kept, LLM-gated tail moved to core-workspaces.spec.ts (retained-artifact/export assertions)",
+      "rationale": "Promotion pipeline is runtime-agnostic; the knowledge-informed run tail depends on a live provider and must be replaced by a harness-driven deterministic run.",
+      "status": "port"
+    },
+    {
+      "id": "pw:journey-workflow-yaml.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/journey-workflow-yaml.spec.ts",
+      "cases": 5,
+      "purpose": "YAML import to a runnable chain with cancel and unknown-agent rejection.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Workflow definition/governance only.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:kanban-board.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/kanban-board.spec.ts",
+      "cases": 4,
+      "purpose": "Governed-flow kanban columns, seeded card placement, create and dispatch/pause transitions.",
+      "runtimeAffected": true,
+      "replacement": "core-execution-modes.spec.ts",
+      "rationale": "Dispatch/pause now goes through the run coordinator's pause/resume control (T13); the board assertions are retained and the pause case must assert the observed control ack.",
+      "status": "port"
+    },
+    {
+      "id": "pw:kanban-hitl.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/kanban-hitl.spec.ts",
+      "cases": 5,
+      "purpose": "HITL board columns, dispatch, pause, cancel and review decision zone.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) + core-permissions.spec.ts for the decision zone",
+      "rationale": "The card transitions are kept; the ask badge/decision assertions move to the permission-kind contract.",
+      "status": "port"
+    },
+    {
+      "id": "pw:knowledge-review.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/knowledge-review.spec.ts",
+      "cases": 4,
+      "purpose": "Pending knowledge review queue approval and negative re-review.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Knowledge module behavior.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:langchain-adk-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/langchain-adk-e2e.spec.ts",
+      "cases": 1,
+      "purpose": "End-to-end LangChain ADK path: configure LLM, create agent, run, verify result.",
+      "runtimeAffected": true,
+      "langchainOnly": true,
+      "replacement": "core-execution-modes.spec.ts (core/sandbox selection and run verification) + deterministic harness",
+      "rationale": "The LangChain runtime is removed at cutover (T18); its business purpose is the exchangeable-provider run path, which the core-catalog flow now carries. Removal is only permitted once the replacement spec runs against the harness.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "pw:multi-agent-lifecycle.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/multi-agent-lifecycle.spec.ts",
+      "cases": 1,
+      "purpose": "Multi-agent Research to Verify to Report orchestration via Aria.",
+      "runtimeAffected": true,
+      "replacement": "core-execution-modes.spec.ts against the deterministic harness",
+      "rationale": "Orchestration behavior is retained; the live-provider dependency must be replaced by DeterministicLlmClient so the case stops skipping.",
+      "status": "port"
+    },
+    {
+      "id": "pw:notification-bell.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/notification-bell.spec.ts",
+      "cases": 6,
+      "purpose": "Notification bell, unread badge, dropdown states.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "UI/WebSocket surface.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:notification-toast.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/notification-toast.spec.ts",
+      "cases": 1,
+      "purpose": "Toast on aria.notification WebSocket event.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Event-to-UI mapping.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:observability-live.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/observability-live.spec.ts",
+      "cases": 4,
+      "purpose": "Live observability: drawer stream, run trajectory, kanban transition, opencode progress replay.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17): Track A stays no-LLM, Track B re-pointed at the deterministic harness peer",
+      "rationale": "Track B currently needs LLM_API_KEY plus a sandbox stack; the mock peer must feed run.progress lines so the replay chain stays covered without a provider.",
+      "status": "port"
+    },
+    {
+      "id": "pw:opencode-adk-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/opencode-adk-e2e.spec.ts",
+      "cases": 1,
+      "purpose": "OpenCode path: configure LLM, create agent, runtime switch, run, verify.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17): deterministic harness + mock opencode peer, plus live coverage in e2e/agent-core/live-matrix.*",
+      "rationale": "The opencode core survives the cutover but the sandbox lifecycle and session transport change (T10/T11); the DEEPSEEK-gated live case is supplemented by a deterministic case and the operator live matrix.",
+      "status": "port"
+    },
+    {
+      "id": "pw:ops-approval-surface.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/ops-approval-surface.spec.ts",
+      "cases": 1,
+      "purpose": "Approving from the Operations surface resolves the ask.",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "Approval resolution becomes a permission grant; the case must assert the granted option identity.",
+      "status": "port"
+    },
+    {
+      "id": "pw:ops-monitoring.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/ops-monitoring.spec.ts",
+      "cases": 3,
+      "purpose": "Ops command-surface panels, approvals mirror, recent runs.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Read-only monitoring panels.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:overview-dashboard.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/overview-dashboard.spec.ts",
+      "cases": 3,
+      "purpose": "Executive summary stats, rail navigation, active-agent count.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Dashboard aggregation.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:real-llm-scenarios.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/real-llm-scenarios.spec.ts",
+      "cases": 2,
+      "purpose": "Live-stack scenarios: providers render both ADKs; an OpenCode agent runs a real LLM call end to end.",
+      "runtimeAffected": true,
+      "replacement": "rl-01 -> core-execution-modes.spec.ts (deterministic); rl-02 -> opencode live coverage via e2e/agent-core/live-matrix.* on an operator machine",
+      "rationale": "rl-01 asserts 'opencode + langchain ADK' and loses its langchain half at cutover; rl-02 is the real-LLM acceptance case that cannot run in required PR CI and therefore moves to the operator live matrix (T20).",
+      "status": "port"
+    },
+    {
+      "id": "pw:reports-generation.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/reports-generation.spec.ts",
+      "cases": 3,
+      "purpose": "Reports workspace header, archive state and generate-dialog validation.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Validation and archive assertions are runtime-agnostic; the LLM-dependent generation itself was already out of scope for the case.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:review-decision-zone.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/review-decision-zone.spec.ts",
+      "cases": 2,
+      "purpose": "Approve/Deny in the decision zone resolves the ask.",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "Approve = one-use write grant, Deny = reject option; the assertions must name the permission kind.",
+      "status": "port"
+    },
+    {
+      "id": "pw:runs-page.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/runs-page.spec.ts",
+      "cases": 3,
+      "purpose": "Runs page header/filters, start-run validation, UI-started run status badge.",
+      "runtimeAffected": true,
+      "replacement": "core-execution-modes.spec.ts against the deterministic harness",
+      "rationale": "Run start requires a resolved core/mode and workspace lease under the new admission rules; the harness supplies them deterministically.",
+      "status": "port"
+    },
+    {
+      "id": "pw:scheduled-jobs-page.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/scheduled-jobs-page.spec.ts",
+      "cases": 2,
+      "purpose": "Scheduled job persistence plus pause/resume.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Server-side job state, unrelated to the agent runtime.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:sdd-workflow.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts",
+      "cases": 2,
+      "purpose": "Spec approval to PASS verdict chain, and EXPIRED approval resubmission.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "The chain drives real runs; a git-credential-gated case is skipped today and must become deterministic (mock diff/push peer) to keep the business purpose runnable.",
+      "status": "port"
+    },
+    {
+      "id": "pw:settings-navigation.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/settings-navigation.spec.ts",
+      "cases": 6,
+      "purpose": "Settings-route navigation, rail highlight and the retired Configure rail entry. The whole suite is dead: a file-level test.describe.skip (line 6) disables all six cases, so the file carries zero runnable coverage today.",
+      "runtimeAffected": false,
+      "replacement": "No replacement owed for the Settings surface: it no longer exists (act-dashboard/src/App.tsx has no /settings route and RailNav.tsx ITEMS has no Settings entry), so there is nothing to navigate to. The rail-navigation contract for the surviving items is runnable in overview-dashboard.spec.ts ('rail navigation drives the SPA routes'); the Configure entry point that replaced Settings navigation is runnable in configure-modal-close.spec.ts.",
+      "rationale": "Corrected in fix round B: this entry previously claimed 'retain / retained unchanged' with the skip only noted as a side remark, which violated the map rule that every retained business purpose in disabledOrGated needs a runnable deterministic replacement. The truth is that all six cases are disabled and the surface they assert against was removed by the UI redesign; the spec is therefore removable at T17 rather than retained, and the two runnable specs named above carry the rail/Configure affordances that still exist. It stays listed so the cutover review treats it as an explicit dead-suite exemption rather than silently dropped coverage.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "pw:template-api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/template-api.spec.ts",
+      "cases": 5,
+      "purpose": "Template API migration: catalog data, deploy via API, createFromTemplate path.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Template CRUD is unaffected; one case is permanently disabled today (see disabledOrGated).",
+      "status": "retain"
+    },
+    {
+      "id": "pw:unknown-route.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/unknown-route.spec.ts",
+      "cases": 1,
+      "purpose": "Unknown route renders the not-found surface.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Router smoke.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:workflow-data-flow-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-data-flow-e2e.spec.ts",
+      "cases": 5,
+      "purpose": "Multi-step workflow runIds, {previousOutput} substitution, step iteration config.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "The chain executor stays, but the runs it creates must be served deterministically so no provider key is needed.",
+      "status": "port"
+    },
+    {
+      "id": "pw:workflow-governance.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-governance.spec.ts",
+      "cases": 6,
+      "purpose": "Workflow page load, cancel affordance, YAML execute button, knowledge WORKFLOW type, JS-error regression.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Page-level governance assertions.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:workflow-lifecycle-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-lifecycle-e2e.spec.ts",
+      "cases": 14,
+      "purpose": "Workflow CRUD, cancel semantics, 404s, update name.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Workflow API lifecycle; no provider execution.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:workflow-state-machine-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-state-machine-e2e.spec.ts",
+      "cases": 13,
+      "purpose": "Workflow state transitions, cancel, retry step, name update.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "Retry/cancel of steps now interacts with the run coordinator; RUNNING/FAILED expectations must be produced by the harness rather than by a provider failure.",
+      "status": "port"
+    },
+    {
+      "id": "pw:workflow-template-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-template-e2e.spec.ts",
+      "cases": 7,
+      "purpose": "Template reuse rejection rules and isTemplate field exposure.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Definition-level validation.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:workflow-ui-interaction-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-ui-interaction-e2e.spec.ts",
+      "cases": 16,
+      "purpose": "Workflow card rendering, status badge, retry/delete interactions.",
+      "runtimeAffected": true,
+      "replacement": "modified in place (T17) against the deterministic harness",
+      "rationale": "Status badges reflect coordinator-reported run state, so the harness must drive terminal states.",
+      "status": "port"
+    },
+    {
+      "id": "pw:workflow-validation-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-validation-e2e.spec.ts",
+      "cases": 11,
+      "purpose": "Workflow create/merge validation errors.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Request validation only.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:workflow-yaml-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-yaml-e2e.spec.ts",
+      "cases": 6,
+      "purpose": "YAML execution endpoint, parameter substitution and error cases.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "YAML parsing/definition behavior.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:api/approval-denial.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/approval-denial.api.spec.ts",
+      "cases": 1,
+      "purpose": "Denying an approval with a reason persists the reason and cancels the run.",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "Denial becomes the offered reject option and the run cancel goes through the coordinator (T12/T13); the reason payload assertion is retained.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/approval-request-changes.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/approval-request-changes.api.spec.ts",
+      "cases": 1,
+      "purpose": "Request-changes loop resolves the ask and creates a new attempt.",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "Same permission-decision surface; the attempt lifecycle assertion must follow the permission request record (V62).",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/branch-governance.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/branch-governance.api.spec.ts",
+      "cases": 1,
+      "purpose": "SDD branch handoff creates the chain branch on a real GitHub remote (local-only).",
+      "runtimeAffected": false,
+      "replacement": "retained; the credential-gated branch case gains a deterministic mock-diff/push peer (T7/T17)",
+      "rationale": "Git governance is unaffected by the runtime cutover, but the case skips today (see disabledOrGated) so the business purpose is currently uncovered.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/fault-injection.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/fault-injection.api.spec.ts",
+      "cases": 2,
+      "purpose": "OpenCode task-path fault injection: serve budget overrun aborts the run, cancelling an executing run reaches a terminal state within 15s.",
+      "runtimeAffected": true,
+      "replacement": "act-execution SandboxExecutionBackendTest + CoreExecutionServiceTest (T10/T13) for the deterministic arms, e2e/agent-core/sandbox-lifecycle.test.mjs for the sandbox arms, and the live opencode path in e2e/agent-core/live-matrix.* (T20)",
+      "rationale": "Timeout-abort and bounded cancel are retained product guarantees; they must be asserted deterministically rather than through a live opencode run (which skips without an LLM key).",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/git-pack-gate.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/git-pack-gate.api.spec.ts",
+      "cases": 1,
+      "purpose": "A run blocks on the git_push PUSH gate and resumes after approval (pushing to the local remote).",
+      "runtimeAffected": true,
+      "replacement": "core-permissions.spec.ts",
+      "rationale": "The gate becomes a one-use write grant delivered through the permission coordinator (T12); the block-then-resume assertion is retained.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/knowledge-approval-concurrency.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/knowledge-approval-concurrency.api.spec.ts",
+      "cases": 4,
+      "purpose": "Knowledge lifecycle, decided-item guard and the concurrent-opposing-review race.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Knowledge module behavior with no run dependency.",
+      "status": "retain"
+    },
+    {
+      "id": "pw:api/load-stress.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/load-stress.api.spec.ts",
+      "cases": 3,
+      "purpose": "LLM-free load and stability: read burst, mixed load, saturation probe.",
+      "runtimeAffected": true,
+      "replacement": "retained; re-pointed at the core-e2e-harness distribution (T16) so no provider process is needed",
+      "rationale": "The load envelope must remain covered after the backend swap; the harness keeps it provider-free.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/mcp-sdd-workflow.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/mcp-sdd-workflow.api.spec.ts",
+      "cases": 1,
+      "purpose": "An external MCP client instantiates development-workflow, approves the gate and the chain leaves WAITING_APPROVAL.",
+      "runtimeAffected": true,
+      "replacement": "retained; run-scoped actor identity from T4 and the deterministic git peer replace the credential-gated steps",
+      "rationale": "The MCP boundary is a retained contract (T12 changes its permission semantics); the two skipped steps must become deterministic so the boundary stays covered.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/multi-agent-collab.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/multi-agent-collab.api.spec.ts",
+      "cases": 5,
+      "purpose": "Three-role chain structure, shared approved knowledge and concurrent-chain isolation.",
+      "runtimeAffected": true,
+      "replacement": "retained; the LLM-gated collaboration case runs against the deterministic harness",
+      "rationale": "Structure/isolation assertions are runtime-agnostic; the run-dependent case must stop skipping.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/skill-lifecycle.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/skill-lifecycle.api.spec.ts",
+      "cases": 5,
+      "purpose": "Skill registry reachability, knowledge-to-SKILL promotion and assignment governance.",
+      "runtimeAffected": false,
+      "replacement": "retained; the two currently skipped cases get deterministic seeds (T16/T17)",
+      "rationale": "Skill governance is unaffected by the runtime cutover; the skips are recorded in disabledOrGated.",
+      "status": "port"
+    },
+    {
+      "id": "pw:api/workflow-state-concurrency.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/workflow-state-concurrency.api.spec.ts",
+      "cases": 6,
+      "purpose": "Workflow definition/query, terminal-state guards and the concurrent-cancel race.",
+      "runtimeAffected": false,
+      "replacement": "retained unchanged",
+      "rationale": "Definition-level and state-machine behavior.",
+      "status": "retain"
+    }
+  ],
+  "javaTests": [
+    {
+      "id": "java:act-execution/adk/LangChainAdkProviderTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/LangChainAdkProviderTest.java",
+      "purpose": "LangChain ADK provider launch, request/response transport and failure mapping.",
+      "replacement": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/runtime/core/CoreAdapterContractTest.java (T11) + HostExecutionBackendIntegrationTest (T9)",
+      "rationale": "Provider-specific transport is replaced by core sessions behind shared ports; the invariants (launch, mapped failures, cancellation) must be asserted on the adapter contract so no runtime behavior is lost.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "java:act-execution/adk/LangChainAdkServerScriptResolverTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/LangChainAdkServerScriptResolverTest.java",
+      "purpose": "Resolves the LangChain server script path and Python interpreter.",
+      "replacement": "removed with the Python runtime (T18); launch-config resolution is covered by CoreConfigurationServiceTest (T5)",
+      "rationale": "Script/interpreter resolution has no meaning once the Python runtime is gone; the retained purpose is controlled launch configuration, which T5 already tests.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "java:act-execution/adk/AdkProcessReaperTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/AdkProcessReaperTest.java",
+      "purpose": "Reaps orphaned ADK child processes on shutdown/health reconciliation.",
+      "replacement": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/runtime/host/HostExecutionBackendIntegrationTest.java (T9)",
+      "rationale": "Process ownership moves to the owned-process controller; the reaping guarantee must be re-asserted there (job-object/PID liveness, not success text).",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/AdkHttpClientTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/AdkHttpClientTest.java",
+      "purpose": "ADK HTTP client behavior against the Python server (retries, payloads, errors).",
+      "replacement": "act-execution/src/test/java/io/aria/conductor/execution/runtime/core/CoreAdapterContractTest.java (T11)",
+      "rationale": "The HTTP client is LangChain-runtime-specific; the same guarantees are asserted against core sessions using the recorded fixtures.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "java:act-execution/adk/AdkErrorMessagesTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/AdkErrorMessagesTest.java",
+      "purpose": "User-facing error message mapping for ADK failures.",
+      "replacement": "CoreAdapterContractTest (T11) error-mapping cases",
+      "rationale": "Failure taxonomy must survive the transport swap; case identity preserved in the adapter contract test.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/AdkProviderRegistryTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/AdkProviderRegistryTest.java",
+      "purpose": "Provider registry defaults and explicit-failure resolution.",
+      "replacement": "modified in place at cutover (T18) so the registry only resolves core catalog entries and fails explicitly on unknown providers",
+      "rationale": "T18 narrows defaults to opencode and deletes obsolete turn-level resolution; the registry test keeps its assertions minus the langchain entry.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/AdkOpenApiGoldenTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/AdkOpenApiGoldenTest.java",
+      "purpose": "Golden contract of the ADK OpenAPI surface used by the Python runtime.",
+      "replacement": "act-execution/src/test/resources/e2e/peers fixtures from Task 7 plus CoreAdapterContractTest (T11)",
+      "rationale": "The golden schema belongs to the removed runtime; its preservation purpose is wire-contract freezing, now owned by the sanitized protocol fixtures and mock peers.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "java:act-execution/adk/opencode/OpenCodeAdkProviderTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/opencode/OpenCodeAdkProviderTest.java",
+      "purpose": "OpenCode provider launch, session and run behavior.",
+      "replacement": "act-execution/src/test/java/io/aria/conductor/execution/runtime/sandbox/SandboxExecutionBackendTest.java (T10) + OpenCodeCoreAdapter tests (T11)",
+      "rationale": "The opencode provider survives as a core adapter; the test moves to the new adapter/backend split rather than being deleted.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/opencode/OpenCodeSandboxManagerTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/opencode/OpenCodeSandboxManagerTest.java",
+      "purpose": "Sandbox creation, endpoint transport and teardown for opencode runs.",
+      "replacement": "SandboxExecutionBackendTest (T10) + e2e/agent-core/sandbox-lifecycle.test.mjs",
+      "rationale": "Extracted into the run-owned sandbox backend with export-safe shutdown; the same lifecycle guarantees must be asserted there, and the JS lane covers the real OpenSandbox server.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/opencode/OpenCodeHttpClientTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/opencode/OpenCodeHttpClientTest.java",
+      "purpose": "OpenCode HTTP transport (event stream, payload shape).",
+      "replacement": "CoreAdapterContractTest (T11) with the T7 mock opencode peer",
+      "rationale": "Transport is retained but bound to the core session contract; the mock peer replaces ad-hoc stubs.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/opencode/OpenCodeHttpClientRetryTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/opencode/OpenCodeHttpClientRetryTest.java",
+      "purpose": "Retry/backoff behavior for the OpenCode transport.",
+      "replacement": "CoreAdapterContractTest (T11) retry cases",
+      "rationale": "Retry policy is still required after the refactor; case identity preserved.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/opencode/OpenCodeProgressPumpTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/opencode/OpenCodeProgressPumpTest.java",
+      "purpose": "Progress event pumping into run progress lines.",
+      "replacement": "CoreAdapterContractTest (T11) + observability-live.spec.ts Track B re-pointed at the mock peer (T17)",
+      "rationale": "Progress reporting is a retained business purpose; both the unit and the live UI chain must keep covering it.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-execution/adk/opencode/OpenCodePropertiesBindingTest.java",
+      "path": "agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/adk/opencode/OpenCodePropertiesBindingTest.java",
+      "purpose": "Configuration property binding for the OpenCode integration.",
+      "replacement": "act-execution/src/test/java/io/aria/conductor/execution/runtime/CoreConfigurationServiceTest.java (T5) plus the retained properties binding at cutover (T18)",
+      "rationale": "Runtime configuration moves to the launch profile/config service; binding coverage must move with it.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/AgentLoopRetryE2ETest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/AgentLoopRetryE2ETest.java",
+      "purpose": "Agent loop retry behavior end to end through the provider layer.",
+      "replacement": "modified in place (T18) to run on the retained core provider; deterministic peer (T7) supplies the faulting transport",
+      "rationale": "Retry semantics are retained business behavior; only the provider binding changes, so the test must be re-pointed rather than deleted.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/AgentLoopInjectionIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/AgentLoopInjectionIntegrationTest.java",
+      "purpose": "Wiring of the agent loop engine with the resolved provider.",
+      "replacement": "modified in place at cutover (T18): the injected provider becomes the core adapter",
+      "rationale": "Wiring coverage must survive; the design expects the loop to be provider-agnostic after the consolidation.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/OpenCodeProviderWiringTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/OpenCodeProviderWiringTest.java",
+      "purpose": "Spring wiring of the opencode provider as the default.",
+      "replacement": "retained; extended at cutover (T18) to assert opencode is the only default and langchain resolution fails explicitly",
+      "rationale": "This is the wiring guard for the new single-provider default.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/OpenCodeTaskExecutionIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/OpenCodeTaskExecutionIntegrationTest.java",
+      "purpose": "Task execution through the opencode provider with sandbox lifecycle.",
+      "replacement": "retained; re-pointed at the extracted sandbox backend (T10/T11)",
+      "rationale": "The business purpose (task executes in a sandbox) is unchanged.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/ActIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/ActIntegrationTest.java",
+      "purpose": "Application context and cross-module integration smoke.",
+      "replacement": "retained with default-provider expectation updated at cutover (T18)",
+      "rationale": "Context wiring assertion referencing the legacy default must follow the narrowed catalog.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/sdd/SddWorkflowIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/sdd/SddWorkflowIntegrationTest.java",
+      "purpose": "SDD chain execution through the agent runtime.",
+      "replacement": "retained; deterministic harness distribution (T16) provides the runtime, mock peers (T7) the transport",
+      "rationale": "The SDD business flow is retained; only the runtime underneath changes.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/sdd/SddGoldenChainRegressionTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/sdd/SddGoldenChainRegressionTest.java",
+      "purpose": "Golden regression of the SDD chain outcomes.",
+      "replacement": "retained; assertions unchanged, runtime served deterministically",
+      "rationale": "Golden outcomes are provider-independent by design.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/KanbanPickupIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/KanbanPickupIntegrationTest.java",
+      "purpose": "Kanban pickup dispatch creates and drives a run.",
+      "replacement": "retained; run start path re-pointed to the run coordinator (T13)",
+      "rationale": "Pickup semantics are retained; admission now requires a resolved core/mode and lease.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/KanbanTransitionIntegrityIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/KanbanTransitionIntegrityIntegrationTest.java",
+      "purpose": "Kanban transition integrity against run state.",
+      "replacement": "retained; state expectations sourced from the coordinator",
+      "rationale": "Same transitions, new state owner.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-app/ExecutionBindingMigrationIntegrationTest.java",
+      "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/ExecutionBindingMigrationIntegrationTest.java",
+      "purpose": "V59 execution-binding migration (Task 2 deliverable).",
+      "replacement": "retained; extended by later migrations V60-V62",
+      "rationale": "This is new in-program coverage, not legacy removal surface.",
+      "status": "retain"
+    },
+    {
+      "id": "java:act-agent/service/AgentTemplateServiceTest.java",
+      "path": "agent-control-tower/act-agent/src/test/java/io/aria/conductor/agent/service/AgentTemplateServiceTest.java",
+      "purpose": "Template provider defaults when creating agents.",
+      "replacement": "modified in place (T18): template defaults drop the langchain entry",
+      "rationale": "T18 edits AgentTemplateService defaults; the test must follow so the removed provider cannot be reintroduced.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-aria/AriaDefaultAgentInitializerTest.java",
+      "path": "agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/init/AriaDefaultAgentInitializerTest.java",
+      "purpose": "Aria default agent seeding incl. provider field.",
+      "replacement": "modified in place (T18)",
+      "rationale": "T18 edits the initializer's provider defaults; coverage follows the change.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-aria/AriaDefaultAgentInitializerUpsertTest.java",
+      "path": "agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/init/AriaDefaultAgentInitializerUpsertTest.java",
+      "purpose": "Aria default agent upsert idempotency.",
+      "replacement": "modified in place (T18)",
+      "rationale": "Same initializer edit as above.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-aria/tools/handlers/AgentToolHandlerEdgeCasesTest.java",
+      "path": "agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/tools/handlers/AgentToolHandlerEdgeCasesTest.java",
+      "purpose": "Agent tool handler edge cases where the handler hard-codes a legacy provider.",
+      "replacement": "modified in place (T18) alongside AgentToolHandler",
+      "rationale": "T18 changes the handler's provider reference; edge-case coverage must be kept.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-mcp/tools/AgentToolsTest.java",
+      "path": "agent-control-tower/act-mcp/src/test/java/io/aria/conductor/mcp/tools/AgentToolsTest.java",
+      "purpose": "MCP agent tools provider field passthrough.",
+      "replacement": "modified in place (T18) alongside AgentTools.java and packages/mcp-server/src/tools/agents.ts",
+      "rationale": "Provider enumeration changes on both sides of the MCP boundary.",
+      "status": "port"
+    },
+    {
+      "id": "java:act-dashboard-api/QaReportCaptureListenerTest.java",
+      "path": "agent-control-tower/act-dashboard-api/src/test/java/io/aria/conductor/dashboard/listener/QaReportCaptureListenerTest.java",
+      "purpose": "Captures QA report artifacts from run events.",
+      "replacement": "retained; artifact path expectations updated by T6 workspaces when needed",
+      "rationale": "Artifact retention becomes run-owned (T6); assertions on paths may need re-pointing but the purpose is retained.",
+      "status": "port"
+    }
+  ],
+  "ciEntries": [
+    {
+      "id": "ci:ci.yml#python-tests",
+      "path": ".github/workflows/ci.yml",
+      "entry": "job python-tests (pytest --cov-fail-under=70 on langchain-adk/)",
+      "purpose": "Python runtime unit coverage gate.",
+      "replacement": "removed with the Python runtime; replaced by .github/workflows/sandbox-lifecycle.yml plus e2e/agent-core/ci-contract.test.mjs assertions",
+      "rationale": "T18 removes langchain-adk; T19 rewires CI so no job references it. The contract test is what makes the absence enforceable.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "ci:ci.yml#build-langchain-venv",
+      "path": ".github/workflows/ci.yml",
+      "entry": "build job steps 87-99 (setup-python 3.11 + pip install -r langchain-adk/requirements.txt)",
+      "purpose": "Vendors the Python runtime for the integration/E2E jobs.",
+      "replacement": "core-e2e-harness distribution built by the Java build (T16) and consumed by the E2E job (T19)",
+      "rationale": "The harness replaces the Python runtime as the deterministic backend under test.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "ci:ci.yml#java-integration-tests",
+      "path": ".github/workflows/ci.yml",
+      "entry": "job java-integration-tests steps 120-128 (python venv + mvn integration tests)",
+      "purpose": "Java integration suite with the Python runtime available.",
+      "replacement": "retained job, Python setup removed (T19); integration tests bind to the core adapters/peers",
+      "rationale": "The Java integration tier is retained; only the Python prerequisite disappears.",
+      "status": "port"
+    },
+    {
+      "id": "ci:ci.yml#e2e-playwright",
+      "path": ".github/workflows/ci.yml",
+      "entry": "job e2e-playwright shards 1-4 (DEEPSEEK_API_KEY env; specs langchain-adk-e2e, opencode-adk-e2e, real-llm-scenarios)",
+      "purpose": "Browser E2E across the dashboard.",
+      "replacement": "retained job consuming the core-e2e-harness artifact; langchain-adk-e2e removed and the DEEPSEEK-gated cases replaced by deterministic harness runs (T17); no required PR job needs DEEPSEEK_API_KEY afterwards (T19)",
+      "rationale": "Retaining a silently-skipping credential-gated spec would leave the provider run path untested; the deterministic replacement keeps the business purpose.",
+      "status": "port"
+    },
+    {
+      "id": "ci:ci.yml#docker-build",
+      "path": ".github/workflows/ci.yml",
+      "entry": "docker-build step building aria-adk from ./langchain-adk",
+      "purpose": "Builds the legacy runtime image.",
+      "replacement": "sandbox-lifecycle workflow builds the runtime-sandbox test image (T19)",
+      "rationale": "The Python image has no consumer after cutover.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "ci:ci.yml#changes-filter-python",
+      "path": ".github/workflows/ci.yml",
+      "entry": "changes job path filter 'python: langchain-adk/**'",
+      "purpose": "Skips Python-dependent jobs for unaffected PRs.",
+      "replacement": "filter removed (T19); ci-contract.test.mjs asserts no job/action references langchain-adk",
+      "rationale": "Dead filter entries would silently keep the removed lane alive.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "ci:nightly.yml#langchain-venv-audit",
+      "path": ".github/workflows/nightly.yml",
+      "entry": "setup-python + venv (lines 20-27) and pip-audit langchain-adk/requirements.txt (lines 49-75)",
+      "purpose": "Nightly dependency audit of the Python runtime.",
+      "replacement": "removed with the Python runtime (T19)",
+      "rationale": "No Python runtime remains to audit.",
+      "status": "remove-on-cutover"
+    },
+    {
+      "id": "ci:nightly-sdd-llm-smoke.yml",
+      "path": ".github/workflows/nightly-sdd-llm-smoke.yml",
+      "entry": "setup-python + 'Start backend (H2 + langchain ADK)' with --adk.default-provider=langchain (lines 31-58)",
+      "purpose": "Nightly real-LLM SDD smoke on the langchain runtime.",
+      "replacement": "same nightly smoke re-pointed at the core runtime (T19); real-LLM coverage for the qoder/opencode cores runs in the operator live matrix lane (T20)",
+      "rationale": "The nightly smoke is the only real-LLM coverage; it must follow the product default rather than being deleted.",
+      "status": "port"
+    }
+  ],
+  "disabledOrGated": [
+    {
+      "id": "gate:langchain-adk-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/langchain-adk-e2e.spec.ts:102",
+      "condition": "test.skip(!DEEPSEEK_API_KEY)",
+      "businessPurpose": "End-to-end provider run path with a real LLM.",
+      "replacement": "core-execution-modes.spec.ts on the deterministic harness; live path in e2e/agent-core/live-matrix.* (T20)",
+      "rationale": "The spec is removed at cutover; its purpose must be covered by a deterministic replacement so the run path is not left untested in PR CI."
+    },
+    {
+      "id": "gate:opencode-adk-e2e.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/opencode-adk-e2e.spec.ts:73",
+      "condition": "test.skip(!DEEPSEEK_API_KEY)",
+      "businessPurpose": "OpenCode provider run path with a real LLM.",
+      "replacement": "modified spec served by the deterministic harness + mock opencode peer (T17); live path in live-matrix (T20)",
+      "rationale": "Same purpose, deterministic in PR CI."
+    },
+    {
+      "id": "gate:real-llm-scenarios.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/real-llm-scenarios.spec.ts:29",
+      "condition": "test.skip(!LIVE_STACK_ENABLED) — requires DEEPSEEK_API_KEY + OPENSANDBOX_API_KEY + live stack",
+      "businessPurpose": "Real-LLM acceptance: providers page and a full OpenCode agent run.",
+      "replacement": "rl-01 deterministic via core-execution-modes.spec.ts; rl-02 to the operator live matrix e2e/agent-core/live-matrix.* (T20)",
+      "rationale": "A required PR job must not depend on live credentials; the acceptance purpose moves to the authorized operator lane."
+    },
+    {
+      "id": "gate:aria-conversation-id-regression.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/aria-conversation-id-regression.spec.ts:83",
+      "condition": "test.skip(!HAS_LLM_KEY) on the message-event case",
+      "businessPurpose": "Run/conversation identity in streaming message events.",
+      "replacement": "modified in place against the deterministic harness (T17)",
+      "rationale": "Identity assertions must run in PR CI, so the message event must be produced deterministically."
+    },
+    {
+      "id": "gate:aria-engine-unification.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/aria-engine-unification.spec.ts:31",
+      "condition": "test.skip(!HAS_LLM_KEY)",
+      "businessPurpose": "Aria SSE event contract on the shared Run engine.",
+      "replacement": "modified in place against the deterministic harness (T17)",
+      "rationale": "The SSE contract is the replacement interface for the removed runtime; untested means unenforced."
+    },
+    {
+      "id": "gate:journey-agent-run-report.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/journey-agent-run-report.spec.ts:97",
+      "condition": "test.skip(!HAS_LLM_KEY) on the run-completes tail",
+      "businessPurpose": "Run completion produces a generated report artifact.",
+      "replacement": "core-execution-modes.spec.ts + core-workspaces.spec.ts (retained artifact) on the harness (T17)",
+      "rationale": "The report artifact path is a retained product behavior."
+    },
+    {
+      "id": "gate:journey-knowledge-promotion.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/journey-knowledge-promotion.spec.ts:83",
+      "condition": "test.skip(!HAS_LLM_KEY) on the knowledge-informed run tail",
+      "businessPurpose": "Knowledge-informed run completion.",
+      "replacement": "harness-driven deterministic case (T17)",
+      "rationale": "Same as above."
+    },
+    {
+      "id": "gate:multi-agent-lifecycle.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/multi-agent-lifecycle.spec.ts:21",
+      "condition": "test.skip(...) without LLM configuration",
+      "businessPurpose": "Multi-agent orchestration run.",
+      "replacement": "harness-driven deterministic case (T17)",
+      "rationale": "Orchestration must remain covered without a live provider."
+    },
+    {
+      "id": "gate:observability-live.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/observability-live.spec.ts:176",
+      "condition": "test.skip(!LLM_API_KEY) on Track B (opencode progress replay)",
+      "businessPurpose": "Live progress replay chain in the UI.",
+      "replacement": "Track B re-pointed at the T7 mock opencode peer (T17)",
+      "rationale": "Replay is a retained behavior; the mock peer removes the credential dependency."
+    },
+    {
+      "id": "disabled:sdd-workflow.spec.ts:82",
+      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts:82",
+      "condition": "test.skip(true, 'no git credential configured in this environment (TP1 credential gate)')",
+      "businessPurpose": "Push/PR credential-gated SDD chain step.",
+      "replacement": "deterministic mock diff/push peer in the T17 spec revision",
+      "rationale": "An unconditional skip is permanent loss of coverage unless replaced."
+    },
+    {
+      "id": "disabled:sdd-workflow.spec.ts:101",
+      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts:101",
+      "condition": "conditional skip (fixture-dependent branch)",
+      "businessPurpose": "WAITING_APPROVAL chain resubmission path.",
+      "replacement": "seeded WAITING_APPROVAL fixture from the harness (T16/T17)",
+      "rationale": "The state must be seeded deterministically instead of skipped."
+    },
+    {
+      "id": "disabled:sdd-workflow.spec.ts:141",
+      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts:141",
+      "condition": "test.skip(!waiting, 'requires a WAITING_APPROVAL chain (fixture-dependent)')",
+      "businessPurpose": "Expired-approval resubmission.",
+      "replacement": "same seeded fixture as above",
+      "rationale": "Same as above."
+    },
+    {
+      "id": "disabled:template-api.spec.ts:146",
+      "path": "agent-control-tower/act-dashboard/e2e/template-api.spec.ts:146",
+      "condition": "permanently disabled case 'CrewPage role dropdown populates from API'",
+      "businessPurpose": "Role dropdown data is API-driven.",
+      "replacement": "agent-tool-skill-recommendations.spec.ts already covers role-driven tool defaults; re-enable in T17 only with a deterministic assertion",
+      "rationale": "Recorded so the removal review can see this purpose remains uncovered today."
+    },
+    {
+      "id": "disabled:workflow-state-machine-e2e.spec.ts:154",
+      "path": "agent-control-tower/act-dashboard/e2e/workflow-state-machine-e2e.spec.ts:154",
+      "condition": "test.skip() (unconditional inside the case)",
+      "businessPurpose": "Branch inside the workflow state machine matrix.",
+      "replacement": "re-enable with a deterministic expectation in the T17 revision",
+      "rationale": "An unconditional skip is a silent coverage hole."
+    },
+    {
+      "id": "disabled:settings-navigation.spec.ts (whole file)",
+      "path": "agent-control-tower/act-dashboard/e2e/settings-navigation.spec.ts:6",
+      "condition": "test.describe.skip on the whole suite - all 6 cases disabled (unconditional; stale UI: the /settings route and rail Settings button were removed by the redesign)",
+      "businessPurpose": "Settings-route navigation and rail highlight for a surface that no longer exists (the Configure rail entry the suite also pinned is now a standalone modal button).",
+      "replacement": "No replacement needed, recorded as an explicit exemption: the /settings route and the rail Settings item were removed (App.tsx; RailNav.tsx ITEMS), so no live navigation purpose survives to be carried. What still exists is runnable elsewhere - rail navigation in overview-dashboard.spec.ts ('rail navigation drives the SPA routes') and the Configure entry point in configure-modal-close.spec.ts.",
+      "rationale": "Corrected in fix round B (was 'retained; skip reviewed in T17', which wrongly implied a retained purpose and a future replacement). The map rule - every retained business purpose in this list needs a runnable deterministic replacement - is satisfied by exemption: nothing in this suite runs, its target surface is deleted from the product, and the surviving rail/Configure affordances are already covered by the named runnable specs. The spec is recorded for removal at T17."
+    },
+    {
+      "id": "gate:api/fault-injection.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/fault-injection.api.spec.ts:33,39,69",
+      "condition": "test.skip(!HAS_LLM_KEY, 'requires an LLM key for a real opencode run')",
+      "businessPurpose": "Serve-budget overrun abort and bounded cancel of an executing opencode run.",
+      "replacement": "deterministic backend fault arms (T10/T13) plus the operator live matrix (T20)",
+      "rationale": "Both arms are product guarantees; a required CI lane must not depend on an LLM key."
+    },
+    {
+      "id": "gate:api/multi-agent-collab.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/api/multi-agent-collab.api.spec.ts:98",
+      "condition": "test.skip(!HAS_LLM_KEY, 'requires a real LLM API key')",
+      "businessPurpose": "Multi-agent collaboration run.",
+      "replacement": "deterministic harness case (T16/T17)",
+      "rationale": "Same as the Playwright multi-agent coverage above."
+    },
+    {
+      "id": "disabled:api/branch-governance.api.spec.ts:92",
+      "path": "agent-control-tower/act-dashboard/e2e/api/branch-governance.api.spec.ts:92",
+      "condition": "conditional skip on the real-remote branch handoff",
+      "businessPurpose": "Chain branch creation against a git remote.",
+      "replacement": "deterministic mock diff/push peer (T7/T17)",
+      "rationale": "Uncovered today; must be replaced rather than silently dropped."
+    },
+    {
+      "id": "disabled:api/mcp-sdd-workflow.api.spec.ts:101,121",
+      "path": "agent-control-tower/act-dashboard/e2e/api/mcp-sdd-workflow.api.spec.ts:101,121",
+      "condition": "test.skip(true, 'no git credential configured in this environment (TP1 credential gate)') and a second conditional skip",
+      "businessPurpose": "MCP client drives the SDD gate to WAITING_APPROVAL and back.",
+      "replacement": "deterministic mock git/approval peer (T7/T17)",
+      "rationale": "Permanent skips in the MCP boundary path are a coverage hole at the exact seam T12 changes."
+    },
+    {
+      "id": "disabled:api/skill-lifecycle.api.spec.ts:84,106",
+      "path": "agent-control-tower/act-dashboard/e2e/api/skill-lifecycle.api.spec.ts:84,106",
+      "condition": "conditional skips (seed-dependent skill assignment/execution cases)",
+      "businessPurpose": "Skill assignment governance and execution.",
+      "replacement": "deterministic seeded fixtures (T16/T17)",
+      "rationale": "Same purpose is retainable once seeding is deterministic."
+    }
+  ]
+}

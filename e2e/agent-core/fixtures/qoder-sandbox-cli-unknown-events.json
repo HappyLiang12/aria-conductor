@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "probe": "e2e/agent-core/probe-native.mjs",
+  "name": "qoder-SANDBOX",
+  "startedAt": "2026-09-22T16:08:06.430Z",
+  "finishedAt": "2026-09-22T16:08:07.867Z",
+  "messages": [],
+  "events": [
+    {
+      "at": "2026-09-22T16:08:07.865Z",
+      "type": "sandbox.prerequisites",
+      "data": {
+        "sandboxEndpoint": "http://127.0.0.1:8090",
+        "sandboxServerReachable": false,
+        "sandboxServerProbe": {
+          "reachable": false,
+          "reason": "ECONNREFUSED"
+        },
+        "sandboxHealth": null,
+        "requestedImage": null,
+        "containerImages": {
+          "docker": {
+            "exitCode": 1,
+            "imageCount": 0,
+            "sandboxLike": []
+          },
+          "podman": {
+            "exitCode": 125,
+            "imageCount": 0,
+            "sandboxLike": []
+          }
+        }
+      }
+    }
+  ]
+}

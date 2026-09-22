@@ -1,6 +1,8 @@
 # Qoder CLI Provider (Slices A-C) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Superseded by the [cross-core Host/Sandbox design](../specs/2026-09-22-agent-core-execution-modes-design.md). Do not execute this historical plan. Its sandbox-only lifecycle, retention of LangChain, and prohibition on CI changes conflict with the newly approved scope; a replacement implementation plan requires review of the new specification first.
+
+> **Historical worker guidance:** This plan originally required superpowers:subagent-driven-development or superpowers:executing-plans. Its unchecked steps do not authorize execution under the superseding design.
 
 **Goal:** Add `qoder` as a third selectable, governed ADK provider — real Qoder CLI inside OpenSandbox, driven through an in-sandbox ACP bridge, with per-tool HITL for every run, encrypted PAT storage, worker/operator authorization, and a mandatory local real-E2E regression suite pinned to the zero-credit `efficient` model.
 

@@ -177,3 +177,47 @@ describe('http request()', () => {
     await expect(http.get('/api/v1/agents')).rejects.toThrow('fetch failed');
   });
 });
+
+describe('actor token propagation', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function freshClient() {
+    vi.resetModules();
+    return import('../http-client.js');
+  }
+
+  function stubFetch(body: string | null, init: ResponseInit = { status: 200 }) {
+    const fn = vi.fn(async () => new Response(body, init));
+    globalThis.fetch = fn as any;
+    return fn;
+  }
+
+  it('sends the configured worker token as a Bearer Authorization header', async () => {
+    vi.stubEnv('ACT_ACTOR_TOKEN', 'run-scoped-token-1');
+    const { http } = await freshClient();
+    const fetchFn = stubFetch(JSON.stringify({ ok: true }));
+
+    await http.post('/api/v1/runs/x/complete', { status: 'DONE' });
+
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer run-scoped-token-1');
+    expect(url).not.toContain('run-scoped-token-1');
+  });
+
+  it('omits the Authorization header when no actor token is configured', async () => {
+    vi.stubEnv('ACT_ACTOR_TOKEN', '');
+    const { http } = await freshClient();
+    const fetchFn = stubFetch(JSON.stringify({ ok: true }));
+
+    await http.get('/api/v1/agents');
+
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty('Authorization');
+  });
+});

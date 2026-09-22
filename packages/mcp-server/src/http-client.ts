@@ -1,9 +1,17 @@
 /**
  * Lightweight HTTP client for ACT backend REST APIs.
  * Configurable via ACT_BASE_URL env var (default: http://localhost:8080).
+ * ACT_ACTOR_TOKEN carries the run-scoped worker token this process acts with;
+ * it is sent as a Bearer credential and never appended to a URL.
  */
 
 const BASE_URL = process.env.ACT_BASE_URL?.replace(/\/$/, '') || 'http://localhost:8080';
+
+/**
+ * Run-scoped worker credential for the run this MCP server serves. Only the
+ * worker token belongs here — never the operator credential or a core secret.
+ */
+const ACTOR_TOKEN = process.env.ACT_ACTOR_TOKEN?.trim() || '';
 
 export interface ApiError {
   status: number;
@@ -21,6 +29,9 @@ export class ActHttpError extends Error {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const url = `${BASE_URL}${path}`;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (ACTOR_TOKEN) {
+    headers['Authorization'] = `Bearer ${ACTOR_TOKEN}`;
+  }
 
   const res = await fetch(url, {
     method,

@@ -16,7 +16,11 @@ public class McpProperties {
 
     private boolean enabled = true;
 
-    /** {@code none} (v1 default, auth deferred) or {@code token} (Bearer filter active). */
+    /**
+     * {@code none} (v1 default, auth deferred), {@code token} (legacy static Bearer
+     * filter), or {@code actor} (run-scoped worker tokens verified through
+     * ActorTokenService, with the MCP session bound to the authenticated actor).
+     */
     private String authMode = "none";
 
     /** When true, MCP tool error results include full stack traces (external-agent debugging). */

@@ -2,6 +2,8 @@ package io.aria.conductor.agent.dto;
 
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
+import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.common.runtime.WorkspaceMode;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -25,6 +27,10 @@ public class AgentResponse {
     private String model;
     private String provider;
     private String adkProvider;
+    private ExecutionMode executionMode;
+    private WorkspaceMode workspaceMode;
+    private String workspacePath;
+    private String workspaceBaseRef;
     private String config;
     private HealthStatus healthStatus;
     private Instant createdAt;

@@ -73,6 +73,11 @@ class McpActorTransportIntegrationTest {
             {"jsonrpc":"2.0","method":"notifications/initialized"}""";
     private static final String CALL_BODY = """
             {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"test_who_am_i","arguments":{}}}""";
+    /** Worker self-approval attempt over the MCP surface (Task 12 boundary). */
+    private static final String DECIDE_APPROVAL_BODY = """
+            {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"decide_approval",
+            "arguments":{"approvalId":"00000000-0000-0000-0000-000000000303","approved":true,
+            "reason":"self-approval"}}}""";
 
     @LocalServerPort
     int port;
@@ -91,6 +96,7 @@ class McpActorTransportIntegrationTest {
     @MockitoBean io.aria.conductor.knowledge.service.KnowledgeService knowledgeService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalQueryService approvalQueryService;
     @MockitoBean io.aria.conductor.execution.approval.ApprovalGate approvalGate;
+    @MockitoBean io.aria.conductor.execution.approval.PermissionCoordinator permissionCoordinator;
     @MockitoBean io.aria.conductor.agent.service.AgentService agentService;
     @MockitoBean io.aria.conductor.agent.service.RunService runService;
     @MockitoBean io.aria.conductor.agent.service.LlmProviderService llmProviderService;
@@ -342,6 +348,80 @@ class McpActorTransportIntegrationTest {
         assertThat(rawPost("/mcp/message", OPERATOR_CREDENTIAL, "some-session", CALL_BODY).getStatusCode().value())
                 .isEqualTo(401);
         assertThat(rawGetStatus("/sse", OPERATOR_CREDENTIAL)).isEqualTo(401);
+    }
+
+    // ------------------------------------------------------------------
+    // Task 12: the MCP approval boundary — a run-scoped worker can never
+    // self-approve, on either transport.
+    // ------------------------------------------------------------------
+
+    /**
+     * Streamable transport (the endpoint opencode negotiates): a worker token
+     * calling {@code decide_approval} gets the FORBIDDEN tool error and the
+     * permission coordinator is never asked.
+     */
+    @Test
+    void streamableTransport_workerSelfApprovalIsForbiddenAndReachesNoCoordinator() {
+        String token = actorTokens.issueWorker(RUN_ID, Instant.now().plus(Duration.ofMinutes(10)));
+        try (McpSyncClient client = streamableClient(token)) {
+            client.initialize();
+
+            McpSchema.CallToolResult result = client.callTool(new McpSchema.CallToolRequest(
+                    "decide_approval", Map.of(
+                    "approvalId", "00000000-0000-0000-0000-000000000303",
+                    "approved", true,
+                    "reason", "self-approval")));
+
+            assertThat(result.isError()).isFalse();
+            String text = ((McpSchema.TextContent) result.content().get(0)).text();
+            assertThat(text).contains("\"ok\":false")
+                    .contains("\"errorType\":\"FORBIDDEN\"")
+                    .contains("\"message\":\"Operator authority required\"");
+        }
+        org.mockito.Mockito.verify(permissionCoordinator, org.mockito.Mockito.never())
+                .decide(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    /**
+     * SSE transport: the same tool callback is invoked and refused; a live echo
+     * call on the same authenticated session proves the request was handled as a
+     * tool call rather than rejected at the transport.
+     */
+    @Test
+    @Timeout(60)
+    void sseTransport_workerSelfApprovalIsRefusedByTheToolBoundary() throws Exception {
+        String token = actorTokens.issueWorker(RUN_ID, Instant.now().plus(Duration.ofMinutes(10)));
+        try (HttpClient http = HttpClient.newHttpClient()) {
+            HttpResponse<Stream<String>> stream = http.send(
+                    HttpRequest.newBuilder(URI.create(baseUrl() + "/sse"))
+                            .header("Authorization", "Bearer " + token)
+                            .header("Accept", "text/event-stream")
+                            .timeout(Duration.ofSeconds(30))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofLines());
+            assertThat(stream.statusCode()).isEqualTo(200);
+            String sessionId = sseSessionId(stream.body());
+            try {
+                assertThat(sseMessage(token, sessionId, INITIALIZE_BODY, Map.of()).getStatusCode().value())
+                        .isEqualTo(200);
+                assertThat(sseMessage(token, sessionId, INITIALIZED_NOTIFICATION_BODY, Map.of())
+                        .getStatusCode().value()).isEqualTo(200);
+
+                // the worker's self-approval attempt is handled (200) and refused inside the tool
+                assertThat(sseMessage(token, sessionId, DECIDE_APPROVAL_BODY, Map.of())
+                        .getStatusCode().value()).isEqualTo(200);
+                org.mockito.Mockito.verify(permissionCoordinator, org.mockito.Mockito.never())
+                        .decide(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                                org.mockito.ArgumentMatchers.any());
+
+                // the same live session still executes an ordinary tool call
+                assertThat(sseMessage(token, sessionId, CALL_BODY, Map.of()).getStatusCode().value())
+                        .isEqualTo(200);
+            } finally {
+                stream.body().close();
+            }
+        }
     }
 
     // ------------------------------------------------------------------

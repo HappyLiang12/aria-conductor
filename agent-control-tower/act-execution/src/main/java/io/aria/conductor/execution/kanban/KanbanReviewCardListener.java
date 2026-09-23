@@ -94,6 +94,16 @@ public class KanbanReviewCardListener {
         }
     }
 
+    /**
+     * Links the ask by writing only the {@code kanban_item_id} column, guarded
+     * on it still being null — never by saving the loaded entity. The approval
+     * is read while it may still be PENDING and the operator's decision can
+     * commit while this mirror is in flight: a full-row write from the stale
+     * snapshot would revert a settled decision to PENDING (a lost update the
+     * decision path's row lock cannot prevent), and a further decision could
+     * then re-arm an already consumed one-use grant. The entity is neither
+     * mutated nor saved, so no dirty snapshot can flush over the decision.
+     */
     private void linkReviewCard(ApprovalRequestedEvent event) {
         approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
             if (approval.getKanbanItemId() != null) return;
@@ -104,9 +114,8 @@ public class KanbanReviewCardListener {
                             || card.getStatus() == KanbanStatus.TODO)
                     .findFirst()
                     .ifPresentOrElse(
-                            card -> approval.setKanbanItemId(card.getId()),
+                            card -> approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), card.getId()),
                             () -> createCard(approval, event));
-            approvalRepository.save(approval);
         });
     }
 
@@ -120,7 +129,7 @@ public class KanbanReviewCardListener {
                 .status(KanbanStatus.REVIEW)
                 .linkedRunId(event.getRunId().toString())
                 .build());
-        approval.setKanbanItemId(card.getId());
+        approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), card.getId());
         log.info("Auto-created review card {} for orphan approval {}", card.getId(), approval.getId());
     }
 }

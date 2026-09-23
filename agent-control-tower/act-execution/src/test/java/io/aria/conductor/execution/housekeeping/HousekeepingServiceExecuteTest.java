@@ -75,6 +75,7 @@ class HousekeepingServiceExecuteTest {
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
     @Mock PromptCallRepository promptCallRepository;
+    @Mock io.aria.conductor.common.repository.AcpPermissionRequestRepository acpPermissionRequestRepository;
     @Mock AgentSessionRepository agentSessionRepository;
     @Mock KanbanService kanbanService;
     @Mock AgentService agentService;
@@ -91,8 +92,8 @@ class HousekeepingServiceExecuteTest {
     void setUp() {
         service = new HousekeepingService(runRepository, kanbanRepository, agentRepository,
                 approvalRepository, trajectoryRepository, toolCallRepository, promptCallRepository,
-                agentSessionRepository, kanbanService, agentService, runService, approvalGate,
-                eventPublisher, tx);
+                acpPermissionRequestRepository, agentSessionRepository, kanbanService, agentService,
+                runService, approvalGate, eventPublisher, tx);
         lenient().when(runRepository.findByStatusIn(anyList())).thenReturn(List.of());
         lenient().when(runRepository.findByStatus(any())).thenReturn(List.of());
         lenient().when(kanbanRepository.findByStatus(any())).thenReturn(List.of());
@@ -155,13 +156,41 @@ class HousekeepingServiceExecuteTest {
         verify(runRepository, times(2)).deleteByIdInBulk(anyList());
         // children deleted before the parent runs within each chunk
         InOrder order = Mockito.inOrder(trajectoryRepository, toolCallRepository,
-                promptCallRepository, approvalRepository, agentSessionRepository, runRepository);
+                promptCallRepository, acpPermissionRequestRepository, approvalRepository,
+                agentSessionRepository, runRepository);
         order.verify(trajectoryRepository).deleteByRunIdInBulk(anyList());
         order.verify(toolCallRepository).deleteByRunIdInBulk(anyList());
         order.verify(promptCallRepository).deleteByRunIdInBulk(anyList());
+        order.verify(acpPermissionRequestRepository).deleteByRunIdInBulk(anyList());
         order.verify(approvalRepository).deleteByRunIdInBulk(anyList());
         order.verify(agentSessionRepository).deleteByRunIdInBulk(anyList());
         order.verify(runRepository).deleteByIdInBulk(anyList());
+    }
+
+    /**
+     * Task-12 registration: the run-scoped permission ledger
+     * ({@code acp_permission_request}) is deleted with the run, in the same
+     * chunk and with the exact run id list, before the run row itself.
+     */
+    @Test
+    void runsPurge_deletesTheRunOwnedPermissionLedgerWithTheExactRunIds() {
+        Instant old = Instant.now().minus(30, ChronoUnit.HOURS);
+        UUID purged = UUID.fromString("00000000-0000-0000-0000-000000000501");
+        Run run = new Run();
+        run.setId(purged);
+        run.setStatus(RunStatus.COMPLETED);
+        run.setCreatedAt(old);
+        run.setUpdatedAt(old);
+        when(runRepository.findByStatusIn(anyList())).thenReturn(List.of(run));
+
+        HousekeepingReceipt r = service.execute(
+                new HousekeepingRequest(List.of("runs"), false, Exclusions.empty(), true));
+
+        assertThat(receipt(r, "runs").cleared()).isEqualTo(1);
+        verify(acpPermissionRequestRepository).deleteByRunIdInBulk(List.of(purged));
+        InOrder order = Mockito.inOrder(acpPermissionRequestRepository, runRepository);
+        order.verify(acpPermissionRequestRepository).deleteByRunIdInBulk(List.of(purged));
+        order.verify(runRepository).deleteByIdInBulk(List.of(purged));
     }
 
     @Test

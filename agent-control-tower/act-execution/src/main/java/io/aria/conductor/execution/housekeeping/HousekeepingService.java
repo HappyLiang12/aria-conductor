@@ -13,6 +13,7 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.CategoryItem;
 import io.aria.conductor.execution.housekeeping.HousekeepingModel.CategoryReceipt;
@@ -84,6 +85,7 @@ public class HousekeepingService {
     private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
     private final PromptCallRepository promptCallRepository;
+    private final AcpPermissionRequestRepository acpPermissionRequestRepository;
     private final AgentSessionRepository agentSessionRepository;
     private final KanbanService kanbanService;
     private final AgentService agentService;
@@ -99,6 +101,7 @@ public class HousekeepingService {
                                SessionTrajectoryRepository trajectoryRepository,
                                ToolCallRepository toolCallRepository,
                                PromptCallRepository promptCallRepository,
+                               AcpPermissionRequestRepository acpPermissionRequestRepository,
                                AgentSessionRepository agentSessionRepository,
                                KanbanService kanbanService, AgentService agentService,
                                RunService runService, ApprovalGate approvalGate,
@@ -111,6 +114,7 @@ public class HousekeepingService {
         this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;
         this.promptCallRepository = promptCallRepository;
+        this.acpPermissionRequestRepository = acpPermissionRequestRepository;
         this.agentSessionRepository = agentSessionRepository;
         this.kanbanService = kanbanService;
         this.agentService = agentService;
@@ -291,9 +295,12 @@ public class HousekeepingService {
             try {
                 transactionTemplate.executeWithoutResult(status -> {
                     // FK children first, parent last (no cascades in schema).
+                    // The permission ledger is a registered run child (Task 12/Task 14):
+                    // every acp_permission_request row of a purged run goes with it.
                     trajectoryRepository.deleteByRunIdInBulk(chunk);
                     toolCallRepository.deleteByRunIdInBulk(chunk);
                     promptCallRepository.deleteByRunIdInBulk(chunk);
+                    acpPermissionRequestRepository.deleteByRunIdInBulk(chunk);
                     approvalRepository.deleteByRunIdInBulk(chunk);
                     agentSessionRepository.deleteByRunIdInBulk(chunk);
                     runRepository.deleteByIdInBulk(chunk);

@@ -399,7 +399,10 @@ test('scenarios.json declares every scenario both peers implement', async () => 
       'non-cooperative',
       'pause-resume',
       'permission-expiry',
+      'reported-usage',
       'timeout',
+      'two-turn-nonce',
+      'unknown-usage',
       'unsupported-mode',
       'unsupported-model',
       'write-twice',
@@ -1589,5 +1592,151 @@ test('opencode background writer survives the message response and stops with it
     const frozen = fileSize(ticks);
     await sleep(600);
     assert.equal(fileSize(ticks), frozen);
+  });
+});
+
+// ------------------------------------------------ task 11 contract scenarios
+
+// The three scenarios below were added for the native core session adapters
+// (task 11). Their envelopes are the recorded ones; the values are
+// fixture-defined, exactly like the failure texts Task 7 introduced. They are
+// pinned here so the adapters' contract test can rely on the peer shapes.
+
+test('qoder peer reports the fixture usage counters and the observed model exactly', async () => {
+  await withQoder('reported-usage', async (peer, workspace) => {
+    const { promptId } = await qoderSession(peer, { promptText: 'Reply with the fixture completion' });
+    const result = await peer.waitFor((p) => p.frames.find((frame) => frame.id === promptId && frame.result), {
+      label: 'prompt result',
+    });
+
+    assert.equal(result.result.stopReason, 'end_turn');
+    assert.deepEqual(result.result.usage, { inputTokens: 12, outputTokens: 7, totalTokens: 19 });
+    assert.deepEqual(result.result._meta.quota, {
+      token_count: { input_tokens: 12, output_tokens: 7 },
+      model_usage: [{ model: 'efficient', token_count: { input_tokens: 12, output_tokens: 7 } }],
+    });
+    const chunks = peer.frames.filter(
+      (frame) => frame.params?.update?.sessionUpdate === 'agent_message_chunk',
+    );
+    assert.deepEqual(chunks.map((frame) => frame.params.update.content.text), ['fixture-complete']);
+    assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
+  });
+});
+
+test('qoder peer omits usage and quota when the scenario reports them unknown', async () => {
+  await withQoder('unknown-usage', async (peer, workspace) => {
+    const { promptId } = await qoderSession(peer, { promptText: 'Reply with the fixture completion' });
+    const result = await peer.waitFor((p) => p.frames.find((frame) => frame.id === promptId && frame.result), {
+      label: 'prompt result',
+    });
+
+    assert.equal(result.result.stopReason, 'end_turn');
+    assert.deepEqual(Object.keys(result.result).sort(), ['stopReason', 'userMessageId']);
+    const chunks = peer.frames.filter(
+      (frame) => frame.params?.update?.sessionUpdate === 'agent_message_chunk',
+    );
+    assert.deepEqual(chunks.map((frame) => frame.params.update.content.text), ['fixture-usage-unknown']);
+    assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
+  });
+});
+
+test('qoder peer echoes the exact prompt text of every turn', async () => {
+  await withQoder('two-turn-nonce', async (peer, workspace) => {
+    const first = await qoderSession(peer, { promptText: 'nonce-first' });
+    await peer.waitFor((p) => p.frames.find((frame) => frame.id === first.promptId && frame.result), {
+      label: 'first result',
+    });
+
+    const secondText = 'fixture system material\n\nuser: nonce-first\nassistant: nonce-first\n\nnonce-second';
+    peer.send({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'session/prompt',
+      params: { sessionId: first.sessionId, prompt: [{ type: 'text', text: secondText }] },
+    });
+    await peer.waitFor((p) => p.frames.find((frame) => frame.id === 5 && frame.result), {
+      label: 'second result',
+    });
+
+    const chunks = peer.frames.filter(
+      (frame) => frame.params?.update?.sessionUpdate === 'agent_message_chunk',
+    );
+    assert.deepEqual(chunks.map((frame) => frame.params.update.content.text), ['nonce-first', secondText]);
+    assert.equal(permissionFrames(peer).length, 0, 'the scenario requests no permission');
+    assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
+  });
+});
+
+test('opencode peer reports the fixture counters and the observed model exactly', async () => {
+  await withOpencode('reported-usage', async (peer, workspace) => {
+    const created = await opencodeSession(peer);
+    const session = await created.json();
+    const response = await fetch(`${peer.base}/session/${session.id}/message`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ model: 'efficient', parts: [{ type: 'text', text: 'Reply with the fixture completion' }] }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.info.tokens.input, 12);
+    assert.equal(body.info.tokens.output, 7);
+    assert.equal(body.info.modelID, 'efficient');
+    assert.deepEqual(body.parts, [{ type: 'text', text: 'fixture-complete' }]);
+    assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
+  });
+});
+
+test('opencode peer omits tokens and modelID when the scenario reports them unknown', async () => {
+  await withOpencode('unknown-usage', async (peer) => {
+    const created = await opencodeSession(peer);
+    const session = await created.json();
+    const response = await fetch(`${peer.base}/session/${session.id}/message`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ model: 'efficient', parts: [{ type: 'text', text: 'Reply with the fixture completion' }] }),
+    });
+    const body = await response.json();
+
+    assert.equal('tokens' in body.info, false, 'an unreported counter must stay absent');
+    assert.equal('modelID' in body.info, false, 'an unreported model must stay absent');
+    assert.deepEqual(body.parts, [{ type: 'text', text: 'fixture-usage-unknown' }]);
+  });
+});
+
+test('opencode peer records the exact message request and echoes the received text', async () => {
+  await withOpencode('two-turn-nonce', async (peer, workspace) => {
+    const created = await opencodeSession(peer);
+    const session = await created.json();
+
+    const first = await (await fetch(`${peer.base}/session/${session.id}/message`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ model: 'efficient', parts: [{ type: 'text', text: 'nonce-first' }] }),
+    })).json();
+    assert.deepEqual(first.parts, [{ type: 'text', text: 'nonce-first' }]);
+
+    const secondRequest = {
+      model: 'efficient',
+      system: 'fixture system material',
+      parts: [
+        { type: 'text', text: 'user: nonce-first\nassistant: nonce-first' },
+        { type: 'text', text: 'nonce-second' },
+      ],
+    };
+    const second = await (await fetch(`${peer.base}/session/${session.id}/message`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify(secondRequest),
+    })).json();
+    assert.deepEqual(second.parts, [
+      { type: 'text', text: 'user: nonce-first\nassistant: nonce-first\nnonce-second' },
+    ]);
+
+    const requests = peer.stderrRecords().filter((record) => record.type === 'peer.message_request');
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[0].body, { model: 'efficient', parts: [{ type: 'text', text: 'nonce-first' }] });
+    assert.deepEqual(requests[1].body, secondRequest);
+    assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
   });
 });

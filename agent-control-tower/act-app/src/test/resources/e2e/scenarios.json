@@ -71,6 +71,61 @@
       "expected": ["no fixture write", "no external model request", "acknowledged model equals the requested model"]
     },
     {
+      "id": "reported-usage",
+      "title": "Completion that reports the observed model and the fixture usage counters",
+      "prompt": "Reply with the fixture completion",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "frames": ["initialize", "session/new", "session/set_model", "session/prompt", "session/update*", "prompt result end_turn"],
+        "usage": { "inputTokens": 12, "outputTokens": 7, "totalTokens": 19 },
+        "observedModel": "efficient",
+        "finalOutput": "fixture-complete",
+        "writes": 0
+      },
+      "opencode": {
+        "http": ["POST /session", "POST /session/:id/message"],
+        "tokens": { "input": 12, "output": 7 },
+        "modelID": "efficient",
+        "finalOutput": "fixture-complete",
+        "writes": 0
+      },
+      "expected": ["exact recorded usage values pass through", "the observed model comes from the core's report"]
+    },
+    {
+      "id": "unknown-usage",
+      "title": "The core reports no usage counters and no observed model: unknown stays unknown",
+      "prompt": "Reply with the fixture completion",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "result": "no usage member and no _meta.quota member",
+        "finalOutput": "fixture-usage-unknown",
+        "writes": 0
+      },
+      "opencode": {
+        "info": "no tokens member and no modelID member",
+        "finalOutput": "fixture-usage-unknown",
+        "writes": 0
+      },
+      "expected": ["unknown usage is null, never zero", "the requested model is never reported as an observed model"]
+    },
+    {
+      "id": "two-turn-nonce",
+      "title": "Two turns of one session: the core echoes the exact context it received",
+      "prompt": "Reply with the exact text you received",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "echo": "the agent_message_chunk text is the exact text of the received prompt",
+        "stopReason": "end_turn",
+        "writes": 0
+      },
+      "opencode": {
+        "echo": "the assistant message text is the exact received text parts joined by a newline",
+        "records": ["peer.message_request"],
+        "writes": 0
+      },
+      "expected": ["the second turn carries the exact prior user and assistant messages as context", "no fixture write and no permission request"]
+    },
+    {
       "id": "write-twice",
       "title": "Two permission requests with distinct ids: one granted write, one denied write",
       "prompt": "Create the fixture file, then run the fixture command",

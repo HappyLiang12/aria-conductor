@@ -40,6 +40,19 @@ const DEFAULT_MODEL = fixtures.models.default;
 const THOUGHT_CHUNKS = ['The', ' user wants exactly', ' the', ' word', ' "pong".\n'];
 const WRITER_LOG = fixtures.writer.logName;
 const WRITER_COMMAND = fixtures.writer.command;
+// Fixture-defined completion values of the task 11 contract scenarios. The
+// envelopes stay the recorded ones; only the values are fixture-defined.
+const COMPLETION_TEXT = {
+  'reported-usage': 'fixture-complete',
+  'unknown-usage': 'fixture-usage-unknown',
+};
+const REPORTED_USAGE_RESULT = {
+  usage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
+  quota: {
+    token_count: { input_tokens: 12, output_tokens: 7 },
+    model_usage: [{ model: 'efficient', token_count: { input_tokens: 12, output_tokens: 7 } }],
+  },
+};
 
 const AGENT_INFO = { name: 'qoder-cli', title: 'Qoder CLI', version: '1.1.61' };
 const AUTH_METHODS = [
@@ -86,6 +99,7 @@ const flushStdout = () => new Promise((resolve) => process.stdout.write('', () =
 let sessionId = null;
 let currentModel = DEFAULT_MODEL;
 let promptId = null;
+let turnPromptText = null;
 let outboundId = 0;
 let writerPid = null;
 let streaming = false;
@@ -274,33 +288,53 @@ function cancelPendingRequests() {
  * Close the live prompt with exactly one result frame. Clearing `promptId`
  * first makes finalization idempotent, so a later cancel can never answer the
  * same JSON-RPC id a second time (the recording contains no duplicate response).
+ *
+ * The `reported-usage` scenario reports the fixture's exact counters and quota;
+ * the `unknown-usage` scenario reports neither member, so the adapter must keep
+ * the unknown values unknown instead of inventing zeros.
  */
 function finishPrompt(stopReason) {
   if (promptId === null) return;
   const id = promptId;
   promptId = null;
+  const extras =
+    SCENARIO === 'reported-usage'
+      ? { usage: REPORTED_USAGE_RESULT.usage, _meta: { quota: REPORTED_USAGE_RESULT.quota } }
+      : SCENARIO === 'unknown-usage'
+        ? {}
+        : {
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            _meta: {
+              quota: {
+                token_count: { input_tokens: 0, output_tokens: 0 },
+                model_usage: [{ model: currentModel, token_count: { input_tokens: 0, output_tokens: 0 } }],
+              },
+            },
+          };
   send({
     jsonrpc: '2.0',
     id,
     result: {
       stopReason,
       userMessageId: randomUUID(),
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      _meta: {
-        quota: {
-          token_count: { input_tokens: 0, output_tokens: 0 },
-          model_usage: [{ model: currentModel, token_count: { input_tokens: 0, output_tokens: 0 } }],
-        },
-      },
+      ...extras,
     },
   });
 }
 
 function streamCompletions() {
+  if (SCENARIO === 'two-turn-nonce') {
+    // Echo: the assertion on what the core received is the reply itself.
+    emitUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: turnPromptText ?? '' } });
+    return;
+  }
   for (const text of THOUGHT_CHUNKS) {
     emitUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } });
   }
-  emitUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'pong' } });
+  emitUpdate({
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: COMPLETION_TEXT[SCENARIO] ?? 'pong' },
+  });
 }
 
 // ------------------------------------------------------------------ turn machines
@@ -500,6 +534,10 @@ function handleFrame(frame) {
   if (frame.method === 'session/prompt') {
     promptId = frame.id;
     if (sessionId === null) sessionId = frame.params?.sessionId ?? randomUUID();
+    turnPromptText = (Array.isArray(frame.params?.prompt) ? frame.params.prompt : [])
+      .filter((part) => part?.type === 'text')
+      .map((part) => part.text ?? '')
+      .join('\n');
     void runPrompt();
     return;
   }

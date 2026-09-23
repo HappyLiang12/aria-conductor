@@ -94,7 +94,12 @@ function readBody(request) {
   });
 }
 
-function assistantMessage({ text = 'pong', error = null } = {}) {
+/**
+ * The recorded assistant message envelope. `tokens` and `modelID` are omitted
+ * when the scenario reports them as unknown (the `unknown-usage` fixture), so
+ * the adapter has to keep a missing counter unknown instead of inventing zero.
+ */
+function assistantMessage({ text = 'pong', error = null, tokens = undefined, modelID = undefined } = {}) {
   const now = Date.now();
   return {
     info: {
@@ -104,14 +109,22 @@ function assistantMessage({ text = 'pong', error = null } = {}) {
       agent: 'build',
       path: { cwd: WORKSPACE, root: '/' },
       cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      modelID: DEFAULT_MODEL,
+      ...(tokens === null ? {} : { tokens: tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }),
+      ...(modelID === null ? {} : { modelID: modelID ?? DEFAULT_MODEL }),
       providerID: 'opencode',
       time: { created: now, completed: now },
       ...(error ? { error } : {}),
     },
     parts: error ? [] : [{ type: 'text', text }],
   };
+}
+
+/** Text parts of a message request, joined the way the native envelope concatenates them. */
+function requestText(body) {
+  return (Array.isArray(body?.parts) ? body.parts : [])
+    .filter((part) => part?.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('\n');
 }
 
 function pendingPayload() {
@@ -210,8 +223,27 @@ async function streamParts() {
  * return the immediate assistant message. The decision entry exists before the
  * caller answers the request.
  */
-function startDecisionFlow() {
+function startDecisionFlow(body) {
   switch (SCENARIO) {
+    case 'reported-usage':
+      return assistantMessage({
+        text: 'fixture-complete',
+        tokens: { input: 12, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: 'efficient',
+      });
+    case 'unknown-usage':
+      return assistantMessage({ text: 'fixture-usage-unknown', tokens: null, modelID: null });
+    case 'two-turn-nonce':
+      // The exact request the core received is both recorded (harness evidence)
+      // and echoed, so the adapter's context translation is directly observable.
+      record('peer.message_request', {
+        body: {
+          model: body?.model ?? null,
+          ...(body?.system === undefined ? {} : { system: body.system }),
+          parts: Array.isArray(body?.parts) ? body.parts : [],
+        },
+      });
+      return assistantMessage({ text: requestText(body) });
     case 'write-twice':
       void writeTwiceChain();
       return assistantMessage({ text: 'fixture write decisions applied' });
@@ -312,7 +344,7 @@ const server = createServer(async (request, response) => {
         return;
       }
       if (path === '/__peer/state' && request.method === 'GET') {
-        json(response, 200, { scenario: SCENARIO, writes, decisions, writerPid, messages: messages.length });
+        json(response, 200, { scenario: SCENARIO, sessionId, writes, decisions, writerPid, messages: messages.length });
         return;
       }
       json(response, 404, { error: 'not found' });
@@ -391,7 +423,7 @@ const server = createServer(async (request, response) => {
         setTimeout(() => response.destroy(), 20);
         return;
       }
-      const message = startDecisionFlow();
+      const message = startDecisionFlow(body);
       messages.push(message);
       json(response, 200, message);
       return;

@@ -7,6 +7,12 @@ import {
 } from '../api/ops';
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
+import { applyOperatorHeaders } from '../api/operatorSession';
+import {
+  NativePermissionFacts,
+  NativePermissionKindPill,
+  nativePermissionOf,
+} from '../components/NativePermissionAsk';
 import HousekeepingPanel from '../components/HousekeepingPanel';
 import { formatClock, formatTimestamp } from '../utils/formatTime';
 import type { Approval, Run, ActivityEvent, Agent, RunStatus } from '../types';
@@ -157,7 +163,11 @@ export default function OpsPage() {
 
   /* ---------- Mutations ---------- */
   const approveM = useMutation({
-    mutationFn: (id: string) => approveApproval(id),
+    mutationFn: (id: string) => {
+      // /decide is operator-only (Task 12): carry the local session's CSRF token.
+      applyOperatorHeaders();
+      return approveApproval(id);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
       setToast({ kind: 'ok', msg: 'Approval granted — agent unblocked.' });
@@ -166,7 +176,10 @@ export default function OpsPage() {
   });
 
   const rejectM = useMutation({
-    mutationFn: (id: string) => rejectApproval(id),
+    mutationFn: (id: string) => {
+      applyOperatorHeaders();
+      return rejectApproval(id);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
       setToast({ kind: 'ok', msg: 'Approval denied.' });
@@ -335,6 +348,7 @@ export default function OpsPage() {
                   const agent = agentMap.get(/* runId is the bridge */ a.runId);
                   const requester = agent ?? null;
                   const kind = approvalKindOf(a.reason);
+                  const permission = nativePermissionOf(a);
                   const ageMs = Date.now() - new Date(a.requestedAt).getTime();
                   const stale = ageMs > 5 * 60_000;
                   const busy = approveM.isPending || rejectM.isPending;
@@ -345,7 +359,11 @@ export default function OpsPage() {
                       className={`qitem ${idx === 0 ? 'highlight' : ''}`}
                     >
                       <div className="h">
-                        <span className={kind.pill}>{kind.label}</span>
+                        {permission ? (
+                          <NativePermissionKindPill permission={permission} />
+                        ) : (
+                          <span className={kind.pill}>{kind.label}</span>
+                        )}
                         <span
                           style={{
                             color: stale ? '#ffd884' : 'var(--text-mute)',
@@ -376,6 +394,12 @@ export default function OpsPage() {
                         <span style={{ color: 'var(--text)' }}>{requester?.name ?? 'Unknown agent'}</span>
                         <span style={{ color: 'var(--text-mute)' }}>· run {a.runId.slice(0, 8)}</span>
                       </div>
+
+                      {permission && (
+                        <div className="ask-meta">
+                          <NativePermissionFacts ask={a} permission={permission} />
+                        </div>
+                      )}
 
                       <div className="row">
                         <button

@@ -33,6 +33,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -65,6 +67,13 @@ class PermissionCoordinatorTest {
     private static final List<PermissionOption> OFFERED = List.of(
             new PermissionOption("cancel", PermissionChoice.DENY),
             new PermissionOption("proceed_once", PermissionChoice.ALLOW_ONCE));
+
+    /**
+     * Mirror of the dashboard's `NativePermissionAsk.NATIVE_PERMISSION_REASON`:
+     * group 1 = request id, group 2 = tool name, group 3 = normalized target.
+     */
+    private static final String UI_NATIVE_REASON_PATTERN =
+            "^Native permission request (\\S+) from session \\S+ for tool (\\S+) \\((NATIVE_TOOL|PLATFORM_MCP)\\)$";
 
     @Mock private ApprovalRepository approvalRepository;
     @Mock private ApprovalDecisionLockRepository decisionLocks;
@@ -218,6 +227,45 @@ class PermissionCoordinatorTest {
         assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
         assertThat(requestedEvents.get(0).getRunId()).isEqualTo(RUN_ID);
         assertThat(requestedEvents.get(0).getToolCallId()).isNull();
+    }
+
+    /**
+     * Contract pin with the Review surface (Task 15 fix round 1): the dashboard
+     * recognizes a normalized native ask by parsing the approval's registration
+     * reason with the anchored pattern below (see the dashboard's
+     * {@code NativePermissionAsk}). A wording change here silently demotes the
+     * ask to a plain gate approval — the kind/expiry row disappears and the ask
+     * enters the batch approval — so the rendered shape is pinned verbatim and
+     * parsed back into exactly the correlation facts the Review surface shows.
+     */
+    @Test
+    void registrationReasonRendersTheExactShapeTheReviewSurfaceParses() {
+        coordinator = coordinator(T0);
+
+        UUID nativeAskId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL));
+        String nativeReason = approvalStore.get(nativeAskId).getReason();
+        assertThat(nativeReason).isEqualTo(
+                "Native permission request 0 from session ses_fixture_1 for tool write_file (NATIVE_TOOL)");
+
+        NativePermission platformAsk = new NativePermission(OTHER_RUN, "ses_fixture_2", "req-9",
+                "shell_exec", PermissionTarget.PLATFORM_MCP, "{}", OFFERED, EXPIRES_AT);
+        UUID platformAskId = coordinator.register(platformAsk);
+        String platformReason = approvalStore.get(platformAskId).getReason();
+        assertThat(platformReason).isEqualTo(
+                "Native permission request req-9 from session ses_fixture_2 for tool shell_exec (PLATFORM_MCP)");
+
+        // The exact predicate the dashboard's NativePermissionAsk applies.
+        Matcher nativeMatch = Pattern.compile(UI_NATIVE_REASON_PATTERN).matcher(nativeReason);
+        assertThat(nativeMatch.matches()).isTrue();
+        assertThat(nativeMatch.group(1)).isEqualTo("0");
+        assertThat(nativeMatch.group(2)).isEqualTo("write_file");
+        assertThat(nativeMatch.group(3)).isEqualTo("NATIVE_TOOL");
+
+        Matcher platformMatch = Pattern.compile(UI_NATIVE_REASON_PATTERN).matcher(platformReason);
+        assertThat(platformMatch.matches()).isTrue();
+        assertThat(platformMatch.group(1)).isEqualTo("req-9");
+        assertThat(platformMatch.group(2)).isEqualTo("shell_exec");
+        assertThat(platformMatch.group(3)).isEqualTo("PLATFORM_MCP");
     }
 
     @Test

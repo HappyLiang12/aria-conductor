@@ -2,11 +2,36 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, rejectApproval } from '../api/approvals';
+import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { formatTimestamp } from '../utils/formatTime';
+import {
+  NativePermissionFacts,
+  NativePermissionKindPill,
+  nativePermissionOf,
+} from './NativePermissionAsk';
 import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus } from '../types';
 
 interface PanelProps {
   item: KanbanItem;
   pendingAsks: Approval[];
+}
+
+function AskMeta({ ask, permission }: { ask: Approval; permission: ReturnType<typeof nativePermissionOf> }) {
+  if (permission) {
+    return (
+      <div className="ask-meta">
+        <NativePermissionKindPill permission={permission} />
+        <NativePermissionFacts ask={ask} permission={permission} />
+      </div>
+    );
+  }
+  return (
+    <div className="ask-meta">
+      <span className="pill">{ask.approvalType ?? 'TOOL_CALL'}</span>
+      {ask.riskTier && <span className="pill warn">risk {ask.riskTier}</span>}
+      {ask.expiresAt && <span className="owner">expires {formatTimestamp(ask.expiresAt)}</span>}
+    </div>
+  );
 }
 
 /** Ask decision surface - used by the collapsed drawer and the ReviewWorkspace rail. */
@@ -15,6 +40,14 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [requestFeedback, setRequestFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [operatorRejected, setOperatorRejected] = useState(false);
+
+  // A native permission ask is authorizable exactly once, never in bulk: the
+  // batch control below skips them so a batch action can never stand in for a
+  // persistent native authorization (spec §6.3). They stay decidable one by one.
+  const nativeAsks = pendingAsks.filter((ask) => nativePermissionOf(ask) !== null);
+  const batchApprovable = pendingAsks.filter((ask) => nativePermissionOf(ask) === null);
+
   const resolveAsk = useMutation({
     mutationFn: ({
       ask,
@@ -24,25 +57,33 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       ask: Approval;
       approved: boolean;
       answer?: string;
-    }): Promise<Approval | ApprovalDecisionReceipt> =>
-      ask.askType === 'QUESTION'
+    }): Promise<Approval | ApprovalDecisionReceipt> => {
+      // Operator-only routes: carry the locally established session's CSRF token.
+      applyOperatorHeaders();
+      return ask.askType === 'QUESTION'
         ? answerAsk(ask.id, { approved, answer })
         : approved
           ? approveApproval(ask.id, answer)
-          : rejectApproval(ask.id, answer),
+          : rejectApproval(ask.id, answer);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
       // Badge + Waiting-on-you staleness: cards carry pendingAskCount.
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
     },
-    onError: () => setError('Action rejected — please retry.'),
+    onError: (err: unknown) => {
+      setOperatorRejected(isOperatorRejection(err));
+      setError(apiErrorMessage(err, 'Action rejected — please retry.'));
+    },
   });
   // Card-level fallback (spec 10.1): send the whole card back to the agent
   // with feedback even while asks are still pending on it.
   const requestChanges = useMutation({
-    mutationFn: (feedback: string) =>
-      transitionKanbanItem(item.id, { status: 'TODO', feedback: feedback.trim() || undefined }),
+    mutationFn: (feedback: string) => {
+      applyOperatorHeaders();
+      return transitionKanbanItem(item.id, { status: 'TODO', feedback: feedback.trim() || undefined });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
@@ -52,6 +93,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
 
   const resolve = (args: { ask: Approval; approved: boolean; answer?: string }) => {
     setError(null);
+    setOperatorRejected(false);
     resolveAsk.mutate(args);
   };
 
@@ -64,6 +106,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
             {ask.askType === 'QUESTION' ? 'Question' : ask.askType === 'REVIEW_REQUEST' ? 'Review' : 'Approval'}
             : {ask.content?.slice(0, 160)}
           </div>
+          <AskMeta ask={ask} permission={nativePermissionOf(ask)} />
           {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
           <textarea
             className="dod-textarea"
@@ -81,14 +124,20 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       ))}
       <button
         className="btn primary"
-        disabled={resolveAsk.isPending}
+        disabled={resolveAsk.isPending || batchApprovable.length === 0}
         onClick={() => {
           setError(null);
-          pendingAsks.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
+          batchApprovable.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
         }}
       >
         ✓ Approve all
       </button>
+      {nativeAsks.length > 0 && (
+        <div className="ask-ctx">
+          {nativeAsks.length} native permission ask{nativeAsks.length === 1 ? '' : 's'} not included in
+          Approve all: each is an allow-once decision and must be resolved individually.
+        </div>
+      )}
       <textarea
         className="dod-textarea"
         rows={2}
@@ -109,6 +158,12 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
         ✎ Request changes
       </button>
       {error && <div className="kanban-form-error">{error}</div>}
+      {operatorRejected && (
+        <div className="ask-ctx">
+          Approvals are operator-only — establish the operator session (Providers page, Operator
+          access) and retry. Nothing was decided by the refused call.
+        </div>
+      )}
     </div>
   );
 }

@@ -2,8 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentTools, setAgentSkills, retireAgent } from '../api/agents';
 import { getAgentTelemetry } from '../api/dashboard';
-import { listAdkProviders } from '../api/adk';
-import type { Agent, CreateAgentRequest, AgentTemplate, AgentTelemetry, AdkProviderInfo } from '../types';
+import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
+import { apiErrorMessage } from '../api/operatorSession';
+import type {
+  Agent,
+  AgentCore,
+  CreateAgentRequest,
+  AgentTelemetry,
+  ExecutionMode,
+  WorkspaceMode,
+} from '../types';
 import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
 import { ManageToolsDialog } from '../components/ManageToolsDialog';
@@ -24,14 +32,24 @@ interface CreateAgentError extends Error {
  *  4. Hire-from-catalog template grid (<AgentCatalog>).
  *
  * Add-Agent flow uses the .mini-scrim / .mini-dialog convention so the
- * roster page never navigates away to a separate form.
+ * roster page never navigates away to a separate form. The dialog selects the
+ * governed core explicitly from the provider inventory, the execution mode
+ * through an explicit picker (Host is never preselected) and, for Host runs,
+ * the workspace binding (worktree default, base ref, or an explicitly selected
+ * Direct directory). A removed-core value renders as an explicit unsupported
+ * state instead of silently falling back to another core.
  */
 
 interface AddAgentForm {
   name: string;
   role: string;
   model: string;
+  /** Core id from the live provider inventory; '' until one is selected. */
   adkProvider: string;
+  executionMode: ExecutionMode;
+  workspaceMode: WorkspaceMode;
+  workspacePath: string;
+  workspaceBaseRef: string;
   maxToolCallRounds: number;
 }
 
@@ -39,9 +57,102 @@ const EMPTY_FORM: AddAgentForm = {
   name: '',
   role: 'dev',
   model: '',
-  adkProvider: 'langchain',
+  // No invented core: the dialog applies the inventory's declared default (or
+  // asks for an explicit choice when none is declared).
+  adkProvider: '',
+  // The documented placement default; Host is never preselected.
+  executionMode: 'SANDBOX',
+  // Worktree is the default when a Host repository is configured.
+  workspaceMode: 'WORKTREE',
+  workspacePath: '',
+  workspaceBaseRef: '',
   maxToolCallRounds: 15,
 };
+
+const EXECUTION_MODE_LABELS: Record<ExecutionMode, string> = {
+  SANDBOX: 'Sandbox',
+  HOST: 'Host',
+};
+
+/** The execution contract's documented pair; a core's declared list wins over it. */
+const DOCUMENTED_EXECUTION_MODES: ExecutionMode[] = ['SANDBOX', 'HOST'];
+
+/**
+ * Explicit execution-mode selector. The trigger displays exactly the current
+ * mode; choosing another mode — including Host — is an explicit action in the
+ * opened list, so no mode is ever selected implicitly.
+ */
+function ExecutionModePicker({
+  value,
+  modes,
+  disabled,
+  onChange,
+}: {
+  value: ExecutionMode;
+  modes: ExecutionMode[];
+  disabled: boolean;
+  onChange: (mode: ExecutionMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: 'relative' }}>
+      <span
+        id="add-agent-execution-mode-label"
+        style={{ display: 'block', fontSize: 10.5, color: 'var(--text-dim)', margin: '8px 0 4px', letterSpacing: '.8px', textTransform: 'uppercase' }}
+      >
+        Execution mode
+      </span>
+      <button
+        type="button"
+        id="add-agent-execution-mode"
+        className="mode-picker-trigger"
+        aria-labelledby="add-agent-execution-mode-label"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        style={{
+          width: '100%', padding: '8px 10px', borderRadius: 8, textAlign: 'left',
+          background: 'rgba(0,0,0,.25)', color: 'var(--text)', border: '1px solid var(--line-2)',
+          font: 'inherit', fontSize: 13, cursor: 'pointer',
+        }}
+      >
+        {EXECUTION_MODE_LABELS[value]}
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Execution modes"
+          style={{
+            position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 20,
+            background: '#131b32', border: '1px solid var(--line-2)', borderRadius: 8,
+            boxShadow: '0 12px 30px rgba(0,0,0,.5)', padding: 4,
+          }}
+        >
+          {modes.map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              role="option"
+              aria-selected={mode === value}
+              onClick={() => {
+                onChange(mode);
+                setOpen(false);
+              }}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left', padding: '7px 8px',
+                borderRadius: 6, border: 'none', background: mode === value ? 'rgba(91,140,255,.16)' : 'transparent',
+                color: 'var(--text)', font: 'inherit', fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              {EXECUTION_MODE_LABELS[mode]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function CrewPage() {
   const queryClient = useQueryClient();
@@ -81,18 +192,72 @@ export default function CrewPage() {
     enabled: dialogOpen && !!form.role,
   });
 
-  const { data: adkProviders } = useQuery({
+  const { data: adkProviders, isLoading: coreInventoryLoading } = useQuery({
     queryKey: ['adk-providers'],
     queryFn: listAdkProviders,
   });
 
-  // Fall back to the built-in LangChain ADK option when the providers API is
-  // empty or unavailable (option text keeps the 'LangChain' substring so the
-  // existing E2E selectors that pick the langchain value stay compatible).
-  const adkProviderOptions: AdkProviderInfo[] =
-    adkProviders && adkProviders.length > 0
-      ? adkProviders
-      : [{ id: 'langchain', displayName: 'LangChain ADK', supportsTaskExecution: false, isDefault: true }];
+  // The live provider inventory is the only core list: no built-in fallback,
+  // so a removed core can never be offered as a selectable option.
+  const coreInventoryAvailable = (adkProviders?.length ?? 0) > 0;
+  const selectedCoreInfo = (adkProviders ?? []).find((p) => p.id === form.adkProvider);
+
+  // Apply the inventory's declared default core explicitly; an operator's (or a
+  // template's) own value is never overwritten.
+  useEffect(() => {
+    if (!dialogOpen || form.adkProvider !== '') return;
+    const declaredDefault = (adkProviders ?? []).find((p) => p.isDefault)?.id;
+    if (!declaredDefault) return;
+    setForm((prev) => (prev.adkProvider === '' ? { ...prev, adkProvider: declaredDefault } : prev));
+  }, [dialogOpen, adkProviders, form.adkProvider]);
+
+  // Readiness of the selected core: configuration/process health, probed
+  // without agent context (mode-aware in the sense that the pair being
+  // validated is named; the probe itself is core-scoped).
+  const { data: coreHealth, isLoading: coreHealthLoading, isError: coreHealthError } = useQuery({
+    queryKey: ['adk-provider-health', form.adkProvider],
+    queryFn: () => getAdkProviderHealth(form.adkProvider),
+    enabled: !!selectedCoreInfo,
+    retry: false,
+  });
+
+  // Modes the selected core declares; when the inventory declares none the
+  // documented pair is offered and the backend admission policy stays the
+  // authority that rejects an unsupported pair with its exact message.
+  const supportedModes: ExecutionMode[] =
+    selectedCoreInfo?.executionModes && selectedCoreInfo.executionModes.length > 0
+      ? selectedCoreInfo.executionModes
+      : DOCUMENTED_EXECUTION_MODES;
+
+  const trimmedWorkspacePath = form.workspacePath.trim();
+  const trimmedWorkspaceBaseRef = form.workspaceBaseRef.trim();
+
+  /**
+   * The blocking selection problem of the current form, or null. Messages
+   * mirror the backend admission policy's wording so the same rejection reads
+   * identically whether it is caught here or returned by the server.
+   */
+  const selectionError: string | null = coreInventoryLoading
+    ? null
+    : !coreInventoryAvailable
+      ? 'Agent core inventory unavailable — no governed core was reported.'
+      : form.adkProvider === ''
+        ? 'Select an agent core'
+        : !selectedCoreInfo
+          ? `Unsupported agent core: ${form.adkProvider}`
+          : !supportedModes.includes(form.executionMode)
+            ? `Unsupported execution mode: ${form.adkProvider}/${form.executionMode}`
+            : form.executionMode === 'HOST' && trimmedWorkspacePath === ''
+              ? form.workspaceMode === 'WORKTREE'
+                ? 'Host worktree mode requires a repository path'
+                : 'Direct mode requires an explicitly selected directory'
+              : null;
+
+  // The inventory is the only core source: before it answers, no core has been
+  // selected and a submit would carry an empty `adkProvider`, so submission
+  // stays closed until the loading resolves (unlike `selectionError`, which is
+  // deliberately null while loading).
+  const submissionBlocked = coreInventoryLoading || selectionError !== null;
 
   // Pre-check the role's recommended tools + skills when the dialog opens or the role changes.
   // Reset to the (possibly still-loading) defaults so a stale prior-role selection is never persisted.
@@ -144,7 +309,10 @@ export default function CrewPage() {
         setForm(EMPTY_FORM);
         setError('Agent created, but applying the recommended tools/skills failed. Adjust them in Manage Tools.');
       } else {
-        setError(e?.message ?? 'Failed to create agent');
+        // The admission policy's exact rejection ("Unsupported agent core: …",
+        // "Unsupported execution mode: …", "Direct workspace requires …") is
+        // surfaced instead of a generic message.
+        setError(apiErrorMessage(e, e?.message ?? 'Failed to create agent'));
       }
     },
   });
@@ -251,6 +419,12 @@ export default function CrewPage() {
       setError('Name is required');
       return;
     }
+    if (submissionBlocked) {
+      // The blocking selection problem is already rendered in the dialog and the
+      // submit control is disabled while it is present; the still-loading
+      // inventory is likewise not submittable (no core could be named yet).
+      return;
+    }
     const selectedTemplate = templates?.find((t) => t.role === form.role);
     const body: CreateAgentRequest = {
       name,
@@ -259,9 +433,21 @@ export default function CrewPage() {
       model: form.model.trim() || selectedTemplate?.model || undefined,
       provider: selectedTemplate?.provider || 'openai',
       description: selectedTemplate?.description,
-      adkProvider: form.adkProvider || selectedTemplate?.adkProvider || 'langchain',
+      // Guarded by `selectionError`: the id was validated against the live
+      // provider inventory, which is the same source the admission policy uses.
+      adkProvider: form.adkProvider as AgentCore,
+      executionMode: form.executionMode,
       config: { maxToolCallRounds: form.maxToolCallRounds },
     };
+    if (form.executionMode === 'HOST') {
+      // The workspace binding only travels with a Host run; a sandbox run has
+      // no workspace selection to carry.
+      body.workspaceMode = form.workspaceMode;
+      body.workspacePath = trimmedWorkspacePath;
+      if (form.workspaceMode === 'WORKTREE' && trimmedWorkspaceBaseRef !== '') {
+        body.workspaceBaseRef = trimmedWorkspaceBaseRef;
+      }
+    }
     createMutation.mutate(body);
   };
 
@@ -393,6 +579,7 @@ export default function CrewPage() {
         aria-labelledby="add-agent-title"
         aria-hidden={!dialogOpen}
         inert={!dialogOpen}
+        style={{ maxHeight: '86vh', overflowY: 'auto' }}
       >
         <h3 id="add-agent-title">Add Agent</h3>
         <p>Provision a new agent on the crew. You can refine its prompt in the drawer afterwards.</p>
@@ -413,13 +600,15 @@ export default function CrewPage() {
             value={form.role}
             onChange={(e) => {
               const role = e.target.value;
-              // Template-driven form: back-fill the template's ADK provider
-              // (fallback 'langchain') when a role/template is applied.
+              // Template-driven form: carry the template's core verbatim. A
+              // removed core is kept (and flagged unsupported) — never
+              // substituted for another; a template without a core leaves the
+              // choice to the inventory default / the operator.
               const template = templates?.find((t) => t.role === role);
               setForm((prev) => ({
                 ...prev,
                 role,
-                adkProvider: template?.adkProvider || 'langchain',
+                adkProvider: template?.adkProvider ?? '',
               }));
             }}
           >
@@ -437,16 +626,111 @@ export default function CrewPage() {
             onChange={(e) => setForm({ ...form, model: e.target.value })}
           />
 
-          <label htmlFor="add-agent-adk-provider">ADK Provider</label>
+          <label htmlFor="add-agent-core">Agent core</label>
           <select
-            id="add-agent-adk-provider"
+            id="add-agent-core"
             value={form.adkProvider}
             onChange={(e) => setForm({ ...form, adkProvider: e.target.value })}
           >
-            {adkProviderOptions.map((p) => (
+            {form.adkProvider === '' && (
+              <option value="" disabled>Select an agent core…</option>
+            )}
+            {form.adkProvider !== '' && !selectedCoreInfo && (
+              // A stored/removed core is shown as unsupported, never remapped.
+              <option value={form.adkProvider}>{form.adkProvider} — unsupported core</option>
+            )}
+            {(adkProviders ?? []).map((p) => (
               <option key={p.id} value={p.id}>{p.displayName}</option>
             ))}
           </select>
+
+          <ExecutionModePicker
+            value={form.executionMode}
+            modes={supportedModes}
+            disabled={!selectedCoreInfo}
+            onChange={(mode) =>
+              setForm((prev) => ({
+                ...prev,
+                executionMode: mode,
+                // Leaving Host drops nothing; entering Direct clears a base ref
+                // so a stale ref can never be submitted with a Direct run.
+                workspaceBaseRef: mode === 'HOST' ? prev.workspaceBaseRef : '',
+              }))
+            }
+          />
+
+          {selectedCoreInfo && (
+            <div
+              style={{
+                marginTop: 8, fontSize: 11.5,
+                color: coreHealthError || coreHealth?.healthy === false ? 'var(--amber)' : 'var(--text-mute)',
+              }}
+            >
+              {coreHealthLoading
+                ? `Probing ${selectedCoreInfo.displayName}…`
+                : coreHealth?.healthy
+                  ? `Readiness: ${selectedCoreInfo.displayName}/${form.executionMode} — the core answered its health probe.`
+                  : `Readiness: ${selectedCoreInfo.displayName}/${form.executionMode} — the core did not answer its health probe; launches may fail admission.`}
+            </div>
+          )}
+
+          {form.executionMode === 'HOST' && (
+            <>
+              <label htmlFor="add-agent-workspace-mode">Host workspace mode</label>
+              <select
+                id="add-agent-workspace-mode"
+                value={form.workspaceMode}
+                onChange={(e) => {
+                  const workspaceMode = e.target.value as WorkspaceMode;
+                  setForm((prev) => ({
+                    ...prev,
+                    workspaceMode,
+                    // Base ref applies only to a worktree.
+                    workspaceBaseRef: workspaceMode === 'DIRECT' ? '' : prev.workspaceBaseRef,
+                  }));
+                }}
+              >
+                <option value="WORKTREE">Worktree (managed from the admitted repository)</option>
+                <option value="DIRECT">Direct (an explicitly selected trusted directory)</option>
+              </select>
+
+              {form.workspaceMode === 'WORKTREE' ? (
+                <>
+                  <label htmlFor="add-agent-workspace-path">Repository path</label>
+                  <input
+                    id="add-agent-workspace-path"
+                    type="text"
+                    value={form.workspacePath}
+                    placeholder="e.g. /srv/repos/atlas"
+                    onChange={(e) => setForm({ ...form, workspacePath: e.target.value })}
+                  />
+                  <label htmlFor="add-agent-workspace-base-ref">Base ref (optional)</label>
+                  <input
+                    id="add-agent-workspace-base-ref"
+                    type="text"
+                    value={form.workspaceBaseRef}
+                    placeholder="e.g. main"
+                    onChange={(e) => setForm({ ...form, workspaceBaseRef: e.target.value })}
+                  />
+                </>
+              ) : (
+                <>
+                  <label htmlFor="add-agent-workspace-path">Direct directory</label>
+                  <input
+                    id="add-agent-workspace-path"
+                    type="text"
+                    value={form.workspacePath}
+                    placeholder="Trusted backend-local directory"
+                    onChange={(e) => setForm({ ...form, workspacePath: e.target.value })}
+                  />
+                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-mute)' }}>
+                    Direct is never inferred from the browser's location and never falls back to
+                    a worktree; it leases exactly the directory you name here.
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
           <div style={{ marginTop: 12 }}>
             <label>Recommended tools <span style={{ textTransform: 'none', color: 'var(--text-mute)' }}>· {selectedTools.size} selected</span></label>
@@ -486,6 +770,9 @@ export default function CrewPage() {
             </div>
           </div>
 
+          {selectionError && (
+            <div style={{ marginTop: 10, color: 'var(--amber)', fontSize: 11.5 }}>{selectionError}</div>
+          )}
           {error && (
             <div style={{ marginTop: 10, color: 'var(--red)', fontSize: 11.5 }}>{error}</div>
           )}
@@ -502,7 +789,7 @@ export default function CrewPage() {
             <button
               type="submit"
               className="btn primary"
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || submissionBlocked}
             >
               {createMutation.isPending ? 'Hiring…' : 'Hire Agent'}
             </button>

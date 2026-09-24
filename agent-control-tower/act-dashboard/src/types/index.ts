@@ -11,6 +11,21 @@ export type ToolCallStatus = 'PENDING' | 'EXECUTING' | 'COMPLETED' | 'FAILED' | 
 export type WorkflowStatus = 'PENDING' | 'RUNNING' | 'WAITING_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type WorkflowStepStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 
+// === Execution core / mode (agent-core agent execution, Tasks 3 + 15) ===
+/**
+ * The governed agent cores. `adkProvider` keeps its field name and becomes the
+ * core identifier; `langchain` is a removed core and is deliberately NOT part
+ * of this union — a stored value outside it renders as an explicit unsupported
+ * state and is never silently remapped to a supported core.
+ */
+export type AgentCore = 'qoder' | 'opencode';
+
+/** Where a run executes: on the backend machine (`HOST`) or in a run-owned sandbox. */
+export type ExecutionMode = 'HOST' | 'SANDBOX';
+
+/** How a Host run obtains its working directory (worktree default, Direct explicit). */
+export type WorkspaceMode = 'WORKTREE' | 'DIRECT';
+
 // === Entities ===
 export interface Agent {
   id: string;
@@ -20,7 +35,18 @@ export interface Agent {
   role: string;
   model: string;
   provider: string;
-  adkProvider?: string;
+  /**
+   * Stored core id (field name kept from the ADK era). Typed for the governed
+   * cores while still accepting a stored removed value (e.g. `langchain`) so
+   * the UI can render it as an explicit unsupported state.
+   */
+  adkProvider?: AgentCore | (string & {});
+  /** Stored execution placement; absent on records predating the mode field. */
+  executionMode?: ExecutionMode;
+  /** Host workspace selection; absent on records predating the field. */
+  workspaceMode?: WorkspaceMode;
+  workspacePath?: string;
+  workspaceBaseRef?: string;
   config?: Record<string, unknown>;
   healthStatus: AgentHealthStatus;
   createdAt: string;
@@ -52,6 +78,12 @@ export interface Approval {
   runId: string;
   toolCallId: string | null;
   status: ApprovalStatus;
+  /**
+   * Human-readable detail. A normalized native permission ask is carried here
+   * by the backend (`Native permission request <req> from session <sid> for
+   * tool <tool> (<NATIVE_TOOL|PLATFORM_MCP>)`), which is how the Review
+   * surface renders the permission kind of such an ask.
+   */
   reason: string;
   requestedAt: string;
   decidedAt: string | null;
@@ -140,7 +172,16 @@ export interface CreateAgentRequest {
   role?: string;
   model?: string;
   provider?: string;
-  adkProvider?: string;
+  /** Governed core id; omitted values are resolved by the backend admission policy. */
+  adkProvider?: AgentCore;
+  /** Explicit placement; omitted values are resolved to the documented default. */
+  executionMode?: ExecutionMode;
+  /** Host workspace selection; only meaningful with `executionMode: 'HOST'`. */
+  workspaceMode?: WorkspaceMode;
+  /** Admitted repository (worktree) or explicitly selected directory (direct). */
+  workspacePath?: string;
+  /** Optional base ref; only meaningful for a worktree. */
+  workspaceBaseRef?: string;
   config?: Record<string, unknown>;
 }
 
@@ -426,7 +467,8 @@ export interface AgentTemplate {
   role: string;
   model: string;
   provider: string;
-  adkProvider?: string;
+  /** Template core; a template from an older backend may still name a removed core. */
+  adkProvider?: AgentCore | (string & {});
   description: string;
 }
 
@@ -449,6 +491,13 @@ export interface AdkProviderInfo {
   displayName: string;
   supportsTaskExecution: boolean;
   isDefault: boolean;
+  /**
+   * Execution modes the backend catalog declares for this core (the same
+   * source of truth the admission policy validates against). Absent on a
+   * backend that does not declare per-core modes yet — absent is "not
+   * declared", never an invented capability.
+   */
+  executionModes?: ExecutionMode[];
 }
 
 export interface AdkProviderHealth {

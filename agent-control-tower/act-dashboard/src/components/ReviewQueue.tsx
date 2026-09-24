@@ -1,6 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
+import { applyOperatorHeaders } from '../api/operatorSession';
 import DiffPreview from './DiffPreview';
+import {
+  NativePermissionFacts,
+  NativePermissionKindPill,
+  nativePermissionOf,
+} from './NativePermissionAsk';
 
 function timeAgo(iso: string): string {
   const then = new Date(iso).getTime();
@@ -25,7 +31,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
   });
 
   const approveMutation = useMutation({
-    mutationFn: (id: string) => approveApproval(id),
+    mutationFn: (id: string) => {
+      // /decide is operator-only (Task 12): carry the local session's CSRF token.
+      applyOperatorHeaders();
+      return approveApproval(id);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
@@ -33,7 +43,10 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: (id: string) => rejectApproval(id),
+    mutationFn: (id: string) => {
+      applyOperatorHeaders();
+      return rejectApproval(id);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
@@ -67,10 +80,15 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
         {items.map((approval, idx) => {
           const isFirst = idx === 0;
           const pending = approveMutation.isPending || rejectMutation.isPending;
+          const permission = nativePermissionOf(approval);
           return (
             <div key={approval.id} className={`qitem${isFirst ? ' highlight' : ''}`}>
               <div className="h">
-                <span className="pill warn">Approval</span>
+                {permission ? (
+                  <NativePermissionKindPill permission={permission} />
+                ) : (
+                  <span className="pill warn">Approval</span>
+                )}
                 <span
                   className="owner"
                   style={{ marginLeft: 'auto', color: 'var(--text-mute)', fontSize: 11 }}
@@ -94,6 +112,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
               <div className="desc">
                 {approval.reason || 'Awaiting human verification before tool execution proceeds.'}
               </div>
+              {permission && (
+                <div className="ask-meta">
+                  <NativePermissionFacts ask={approval} permission={permission} />
+                </div>
+              )}
               {(approval.toolName === 'git_push' || approval.toolName === 'git_create_pr'
                 || approval.riskTier === 'PUSH') && <DiffPreview runId={approval.runId} />}
               <div className="row">

@@ -57,6 +57,22 @@ import java.util.concurrent.TimeUnit;
  * {@code GetExitCodeProcess} for liveness) and refuses to act when the recorded
  * creation identity does not match the process currently holding that PID.
  *
+ * <p>Every stop proof carries a <b>job-membership completeness net</b>, because
+ * the enumerated ownership alone cannot see a descendant whose intermediate
+ * parent died before the first enumeration (it is unreachable from the root's
+ * tree walk while it keeps writing). The job is shared by every run this
+ * controller supervises, so the net classifies every live member:
+ * <ul>
+ *   <li>a member that is one of <em>this</em> run's discovered records was killed
+ *       by identity like every other writer;</li>
+ *   <li>a member that belongs to another live run's enumerated tree is that
+ *       run's writer: it is deliberately left alive and excluded from this run's
+ *       proof (the per-run isolation ruling -- a per-run stop acts per run);</li>
+ *   <li>any member that is neither is unaccounted for and the proof
+ *       <b>fails closed</b> ({@code allWritersStopped=false}) instead of
+ *       certifying a workspace a live, unreachable writer can still mutate.</li>
+ * </ul>
+ *
  * <p>Every command is a synchronous JSON-free line exchange; a supervisor that
  * is missing, dead or silent fails the operation explicitly rather than
  * degrading to PID signalling. PowerShell, kernel32 and ntdll are the OS's own
@@ -189,17 +205,31 @@ final class WindowsProcessController implements OwnedProcessController {
                 operate("kill", stragglers);
                 Thread.sleep(SETTLE_MILLIS);
             }
-            if (!jobMembers().isEmpty()) {
-                // Best-effort backstop on this run's own job only.
-                command("jobkill");
+            // Per-run isolation ruling (Task 13): the job object is shared by every run
+            // this controller supervises, so a per-run stop never issues a job-wide kill
+            // and never lets a foreign run's membership decide this run's proof. Job
+            // members that ARE this run's own records (pid + creation identity verified
+            // above) are killed by identity like every other writer; the job's
+            // kill-on-close limit remains the OS backstop for a hard JVM death and is
+            // never an operation of a per-run stop.
+            List<String> ownJobSurvivors = jobMembers().stream().filter(known::contains).toList();
+            if (!ownJobSurvivors.isEmpty()) {
+                operate("kill", ownJobSurvivors);
                 Thread.sleep(SETTLE_MILLIS);
             }
-            boolean clean = liveRecords(process.rootPid()).isEmpty() && jobMembers().isEmpty();
+            boolean clean = liveRecords(process.rootPid()).isEmpty();
             for (String record : known) {
                 clean &= !"match".equals(verdictOf(record));
             }
             Thread.sleep(SETTLE_MILLIS);
             clean &= liveRecords(process.rootPid()).isEmpty();
+            // The job-membership completeness net (class javadoc): the enumerated tree
+            // cannot see a descendant whose intermediate parent died before the first
+            // enumeration, so the job inventory is the net that catches one. This run's
+            // own members are covered by the checks above; another live run's members are
+            // that run's writers -- left alone and excluded from this proof; anything
+            // unaccounted for fails the proof closed.
+            clean &= jobMembershipIsAccounted(process, known);
             return new StopProof(process.runId(), clean);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -207,6 +237,30 @@ final class WindowsProcessController implements OwnedProcessController {
         } catch (RuntimeException e) {
             return new StopProof(process.runId(), false);
         }
+    }
+
+    /**
+     * Classifies every live member of the shared job against this run's proof. A
+     * member that is one of this run's own discovered records was killed by
+     * identity (its liveness is already part of the proof); a member of another
+     * <em>live</em> run's enumerated tree is that run's writer and is excluded;
+     * any other member is unaccounted for and fails the proof closed. Nothing
+     * but this run's own records is ever signalled here.
+     */
+    private boolean jobMembershipIsAccounted(OwnedProcess process, List<String> ownRecords) {
+        List<String> foreignRunTrees = new ArrayList<>();
+        for (OwnedProcess other : started.values()) {
+            if (!other.runId().equals(process.runId()) && rootMatches(other)) {
+                foreignRunTrees.addAll(liveRecords(other.rootPid()));
+            }
+        }
+        for (String member : jobMembers()) {
+            if (ownRecords.contains(member) || foreignRunTrees.contains(member)) {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     @Override

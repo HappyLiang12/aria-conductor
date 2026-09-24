@@ -91,6 +91,21 @@ public interface AdkProvider {
     /** Shut down the runtime for a specific agent. */
     void shutdownAgent(UUID agentId);
 
+    /**
+     * Mode-neutral runtime reset before a rework/rerun loop-back (R9-F3): destroy
+     * any cached run runtime of the agent so the next attempt builds a fresh
+     * environment and session instead of reusing a stale one. Providers without a
+     * cached runtime treat this as a no-op, so a caller (the workflow chainer)
+     * never has to know which provider or execution mode an agent uses.
+     *
+     * <p>The default reuses {@link #shutdownAgent(UUID)}. A provider whose cached
+     * state is broader than that method (e.g. an in-flight preparation future)
+     * overrides this with its own reset.
+     */
+    default void resetRuntime(UUID agentId) {
+        shutdownAgent(agentId);
+    }
+
     /** Shut down all runtimes managed by this provider. */
     void shutdownAll();
 

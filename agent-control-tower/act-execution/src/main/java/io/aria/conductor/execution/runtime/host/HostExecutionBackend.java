@@ -261,13 +261,27 @@ public class HostExecutionBackend implements ExecutionBackend {
      */
     @Override
     public void destroy(RuntimeHandle handle) {
+        destroyAndReport(handle);
+    }
+
+    /**
+     * Destroys the run's placement record like {@link #destroy} and reports
+     * whether this backend actually held a run-owned placement (a supervised
+     * process and/or the prepared run-owned generated configuration) that the
+     * destroy ended. A {@code false} is the honest outcome for a run this
+     * process never prepared -- a record reconstructed after a restart: the
+     * destroy signals nothing (T9's fail-closed ownership property), deletes
+     * nothing and releases nothing, so a caller that records a reap can state
+     * exactly that instead of claiming a destruction that never happened.
+     */
+    public boolean destroyAndReport(RuntimeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         OwnedProcess owned = processes.remove(handle.runId());
         controller.release(owned != null ? owned : OwnedProcess.parse(handle.ownershipIdentity()));
         controlSecrets.remove(handle.runId());
         PreparedEnvironment environment = environments.remove(handle.runId());
         if (environment == null) {
-            return;
+            return owned != null;
         }
         Path generated = Path.of(environment.configurationDirectory()).toAbsolutePath().normalize();
         Path runConfigurationRoot = generated.getParent();
@@ -281,6 +295,7 @@ public class HostExecutionBackend implements ExecutionBackend {
             throw new IllegalStateException("Unable to remove the run-owned generated configuration " + generated
                     + ": " + e.getMessage(), e);
         }
+        return true;
     }
 
     /** The live owned record of a launched run (memory-only; empty on another backend). */

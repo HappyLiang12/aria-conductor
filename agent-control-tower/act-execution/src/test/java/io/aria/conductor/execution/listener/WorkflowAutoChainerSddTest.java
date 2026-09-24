@@ -2,14 +2,18 @@ package io.aria.conductor.execution.listener;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.AdkProvider;
+import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
@@ -63,6 +67,9 @@ class WorkflowAutoChainerSddTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private GitBranchService gitBranchService;
     @Mock private OpenCodeAdkProvider openCodeAdkProvider;
+    @Mock private AdkProviderRegistry providerRegistry;
+    @Mock private AgentRepository agentRepository;
+    @Mock private AdkProvider runtimeProvider;
 
     private WorkflowAutoChainer chainer;
 
@@ -73,7 +80,7 @@ class WorkflowAutoChainerSddTest {
     @BeforeEach
     void setUp() {
         chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher,
-                gitBranchService, openCodeAdkProvider);
+                gitBranchService, openCodeAdkProvider, providerRegistry, agentRepository);
     }
 
     // ---- 1. BA: hand off to the coordinator, do NOT advance ----
@@ -246,12 +253,16 @@ class WorkflowAutoChainerSddTest {
         when(dodService.latestQaReview(record)).thenReturn(review("DEFECT", "parser crashes on empty input"));
         when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
         when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
+        // The reset is resolved through the provider registry (mode-neutral), not one concrete provider.
+        Agent devAgent = Agent.builder().id(devStep.getAgentId()).name("dev").adkProvider("opencode").build();
+        when(agentRepository.findById(devStep.getAgentId())).thenReturn(Optional.of(devAgent));
+        when(providerRegistry.resolve(devAgent)).thenReturn(runtimeProvider);
 
         chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
 
-        // The rescheduled Dev agent's opencode instance must be reset so the rerun
-        // prepares a fresh sandbox + session instead of reusing a stale one.
-        verify(openCodeAdkProvider).resetAgent(devStep.getAgentId());
+        // The rescheduled Dev agent's run runtime must be reset so the rerun
+        // prepares a fresh environment + session instead of reusing a stale one.
+        verify(runtimeProvider).resetRuntime(devStep.getAgentId());
         verify(workflowService).rescheduleStep(chain.getId(), 0, "parser crashes on empty input");
     }
 

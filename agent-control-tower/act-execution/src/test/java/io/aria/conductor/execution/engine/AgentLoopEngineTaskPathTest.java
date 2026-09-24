@@ -12,6 +12,7 @@ import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SessionStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.exception.BudgetExceededException;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
@@ -20,7 +21,11 @@ import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskResult;
-import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
+import io.aria.conductor.execution.runtime.ControlAck;
+import io.aria.conductor.execution.runtime.ControlState;
+import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
+import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
@@ -46,7 +51,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -91,7 +98,8 @@ class AgentLoopEngineTaskPathTest {
     @Mock HarnessProfileService harnessProfileService;
     @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
-    @Mock OpenCodeProperties openCodeProperties;
+    @Mock TaskDeadlineProperties taskDeadlineProperties;
+    @Mock org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
 
     @InjectMocks
     AgentLoopEngine engine;
@@ -136,7 +144,7 @@ class AgentLoopEngineTaskPathTest {
         // circuit-breaker-tripped tests never get there) — lenient for strict-stub hygiene.
         lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
-        lenient().when(openCodeProperties.getMaxTaskMinutes()).thenReturn(30);
+        lenient().when(taskDeadlineProperties.deadline()).thenReturn(Duration.ofMinutes(30));
         lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
         // The task-level approval gate now REQUIRES approval by default (governance parity
         // with the turn path). Most success-path tests just need the gate to approve, so
@@ -191,7 +199,7 @@ class AgentLoopEngineTaskPathTest {
         TaskContext ctx = contextCaptor.getValue();
         // maxRounds comes from agent.config.maxToolCallRounds (7), not the 50 default
         assertThat(ctx.maxRounds()).isEqualTo(7);
-        // maxDuration comes from OpenCodeProperties.maxTaskMinutes (30)
+        // maxDuration comes from TaskDeadlineProperties.deadline() (30)
         assertThat(ctx.maxDuration()).isEqualTo(Duration.ofMinutes(30));
     }
 
@@ -249,9 +257,63 @@ class AgentLoopEngineTaskPathTest {
         }
     }
 
+    // ---- Task 13 fix round 1 (I1): a refused coordinated stop is surfaced, never claimed ----
+
+    /**
+     * A coordinator-owned run whose coordinated cancel is refused
+     * ({@code ControlAck(RUNNING, false)}: the writers may still be running) must never be
+     * finished as a stopped cancellation. The engine surfaces the exact pending-control
+     * failure reason (the pause/resume pattern) instead of swallowing the ack, so the run
+     * ends as a failure carrying that reason and the provider-level abort is never issued
+     * for a run the coordinator owns.
+     */
     @Test
-    void nonTaskProvider_keepsTurnLoopUntouched() {
-        // A turn-level provider must never enter the task path
+    void aRefusedCoordinatedCancelIsSurfacedInsteadOfClaimingAStoppedCancellation() throws Exception {
+        CoreExecutionService coordinator = org.mockito.Mockito.mock(CoreExecutionService.class);
+        when(coreExecutionServiceProvider.getIfAvailable()).thenReturn(coordinator);
+        // The run starts on the provider path (no coordinator-owned runtime yet); the same run
+        // is coordinator-owned by the time the cancel path stops it.
+        when(coordinator.activeRuns(agentId)).thenReturn(Set.of(), Set.of(runId));
+        when(coordinator.cancel(runId)).thenReturn(
+                CompletableFuture.completedFuture(new ControlAck(ControlState.RUNNING, false)));
+        when(coordinator.pendingControl(runId)).thenReturn(Optional.of(new RunRuntimeRegistry.ControlRequest(
+                ControlState.STOPPED, Instant.now(),
+                "Stop refused for run " + runId + ": the backend reported allWritersStopped=false")));
+
+        CountDownLatch taskStarted = new CountDownLatch(1);
+        CountDownLatch releaseTask = new CountDownLatch(1);
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenAnswer(inv -> {
+            taskStarted.countDown();
+            try {
+                releaseTask.await(60, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            }
+            return new TaskResult(runId, "sess-1", "done", 10, 5, false);
+        });
+
+        engine.startRun(runId);
+
+        assertThat(taskStarted.await(10, TimeUnit.SECONDS)).as("executeTask must start").isTrue();
+        engine.cancelRun(runId);
+
+        try {
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                verify(coordinator).cancel(runId);
+                // The exact pending-control reason is what the engine rejects on ...
+                verify(coordinator).pendingControl(runId);
+                // ... and the module never claims the stop the coordinator refused.
+                verify(taskProvider, never()).abortTask(runId);
+                verify(sessionStateManager).updateSessionStatus(runId, SessionStatus.FAILED);
+            });
+        } finally {
+            releaseTask.countDown();
+        }
+    }
+
+    @Test
+    void nonTaskProvider_keepsTurnLoopUntouched() {        // A turn-level provider must never enter the task path
         when(taskProvider.supportsTaskExecution()).thenReturn(false);
         when(taskProvider.call(any(), any(), any(), any()))
                 .thenReturn(new io.aria.conductor.execution.llm.LlmResponse("final answer", 10, 5, "stop", null));

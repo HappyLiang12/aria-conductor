@@ -19,7 +19,11 @@ import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
-import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
+import io.aria.conductor.execution.runtime.ControlAck;
+import io.aria.conductor.execution.runtime.ControlState;
+import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
+import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
@@ -45,6 +49,7 @@ import io.aria.conductor.execution.tool.WorkspaceManager;
 import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -55,7 +60,6 @@ import org.springframework.lang.Nullable;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
@@ -95,7 +99,15 @@ public class AgentLoopEngine {
     private final HarnessProfileService harnessProfileService;
     private final ToolSteeringGuard toolSteeringGuard;
     private final ApprovalRepository approvalRepository;
-    private final OpenCodeProperties openCodeProperties;
+    private final TaskDeadlineProperties taskDeadlineProperties;
+    /**
+     * The run coordinator, when the cutover wiring provides one (Task 18). A run
+     * whose runtime the coordinator owns has its runtime control (pause, resume,
+     * cancel) delegated to it; without a coordinator the legacy provider paths
+     * stay in charge, so this engine keeps its business state transitions either
+     * way.
+     */
+    private final ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
     private final DoDService dodService;
     private final KanbanService kanbanService;
 
@@ -123,7 +135,8 @@ public class AgentLoopEngine {
                            HarnessProfileService harnessProfileService,
                            ToolSteeringGuard toolSteeringGuard,
                            ApprovalRepository approvalRepository,
-                           OpenCodeProperties openCodeProperties,
+                           TaskDeadlineProperties taskDeadlineProperties,
+                           ObjectProvider<CoreExecutionService> coreExecutionServiceProvider,
                            DoDService dodService,
                            KanbanService kanbanService) {
         this.runRepository = runRepository;
@@ -147,7 +160,8 @@ public class AgentLoopEngine {
         this.harnessProfileService = harnessProfileService;
         this.toolSteeringGuard = toolSteeringGuard;
         this.approvalRepository = approvalRepository;
-        this.openCodeProperties = openCodeProperties;
+        this.taskDeadlineProperties = taskDeadlineProperties;
+        this.coreExecutionServiceProvider = coreExecutionServiceProvider;
         this.dodService = dodService;
         this.kanbanService = kanbanService;
     }
@@ -253,13 +267,27 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Pause a running run.
+     * Pause a running run. When the run's runtime is owned by the run
+     * coordinator, the pause is requested and verified through it first: the run
+     * is marked PAUSED only after the run-owned core confirmed the pause, and a
+     * refusal surfaces the exact reason instead of a state the runtime never
+     * reached.
      */
     public void pauseRun(UUID runId) {
         RunContext ctx = activeContexts.get(runId);
         if (ctx == null) {
             log.warn("Cannot pause run — no active context: runId={}", runId);
             return;
+        }
+        CoreExecutionService coordinator = runCoordinator();
+        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(runId)) {
+            ControlAck ack = awaitControl(coordinator.pause(runId), runId, "pause");
+            if (ack.state() != ControlState.PAUSED || !ack.verified()) {
+                throw new IllegalStateException("Run " + runId + " was not paused: "
+                        + coordinator.pendingControl(runId)
+                                .map(RunRuntimeRegistry.ControlRequest::failureReason)
+                                .orElse("the run-owned core did not verify the pause"));
+            }
         }
         ctx.pause();
         updateRunStatusDirect(runId, RunStatus.PAUSED);
@@ -268,7 +296,10 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Resume a paused run.
+     * Resume a paused run. For a coordinator-owned run the resume is verified on
+     * the same run-owned handle/session, which also releases the manual hold on
+     * permission delivery (a decision received while paused is delivered only
+     * after that re-validation).
      */
     public void resumeRun(UUID runId) {
         RunContext ctx = activeContexts.get(runId);
@@ -283,10 +314,42 @@ public class AgentLoopEngine {
             throw new IllegalStateException(
                     "Run " + runId + " is waiting for human approval; decide the approval instead of resuming.");
         }
+        CoreExecutionService coordinator = runCoordinator();
+        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(runId)) {
+            ControlAck ack = awaitControl(coordinator.resume(runId), runId, "resume");
+            if (ack.state() != ControlState.RUNNING || !ack.verified()) {
+                throw new IllegalStateException("Run " + runId + " was not resumed: "
+                        + coordinator.pendingControl(runId)
+                                .map(RunRuntimeRegistry.ControlRequest::failureReason)
+                                .orElse("the run-owned core did not verify the resume"));
+            }
+        }
         ctx.resume();
         updateRunStatusDirect(runId, RunStatus.RUNNING);
         sessionStateManager.updateSessionStatus(runId, SessionStatus.ACTIVE);
         log.info("Run resumed: runId={}", runId);
+    }
+
+    /** The run coordinator of the cutover wiring, or null when none is deployed (legacy paths). */
+    @Nullable
+    private CoreExecutionService runCoordinator() {
+        return coreExecutionServiceProvider == null ? null : coreExecutionServiceProvider.getIfAvailable();
+    }
+
+    /** Waits (bounded) for a control acknowledgement; a missing one is a refused control, never a success. */
+    private static ControlAck awaitControl(CompletionStage<ControlAck> stage, UUID runId, String action) {
+        try {
+            return stage.toCompletableFuture().get(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Run " + runId + " " + action + " was interrupted", e);
+        } catch (TimeoutException e) {
+            throw new IllegalStateException("Run " + runId + " " + action
+                    + " was not acknowledged within 30s; no state was claimed for it", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("Run " + runId + " " + action + " failed: "
+                    + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), e.getCause());
+        }
     }
 
     /** True when the run has at least one PENDING run-gate approval (HITL gate not yet decided). */
@@ -593,6 +656,17 @@ public class AgentLoopEngine {
             }
         }
 
+        // Runtime-coordination branch: a run whose runtime is owned by the run coordinator
+        // is driven by its run-owned core session (prompt, events, permissions, finalization).
+        // The legacy provider paths below -- the turn loop and the task delegation at the end
+        // of this branch -- must not start a second execution for that run.
+        CoreExecutionService coordinator = runCoordinator();
+        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
+            log.info("Run {} is owned by its run-owned core session; no provider-level execution is started",
+                    ctx.getRunId());
+            return;
+        }
+
         // Task-level delegation branch: a task-capable provider (e.g. OpenCode) takes
         // over the whole run via executeTask — the turn-level loop below is never
         // entered. Turn-loop logic remains untouched.
@@ -717,10 +791,10 @@ public class AgentLoopEngine {
             String taskPrompt = buildTaskPrompt(ctx);
 
             // Task-level constraints: agent-config round cap (same parse as the turn loop)
-            // + OpenCode max-task-minutes timeout.
+            // + the mode-neutral run deadline (aria.tasks.deadline-minutes, default 45).
             TaskContext taskContext = new TaskContext(
                     parseMaxIterationsFromConfig(ctx.getAgent(), ctx.getMaxIterations()),
-                    Duration.ofMinutes(openCodeProperties.getMaxTaskMinutes()));
+                    taskDeadlineProperties.deadline());
 
             // Execute on a virtual thread; poll every second so cancelRun() stays
             // responsive (abortTask on cancel → TaskExecutionException(ABORTED)).
@@ -831,14 +905,10 @@ public class AgentLoopEngine {
                 // future.get() would throw CancellationException, so it must never be
                 // called again (the throw below returns from this method directly).
                 // Note: CompletableFuture.cancel(true) does not interrupt the executing
-                // thread (mayInterruptIfRunning is a no-op there) — the provider-side
-                // abortTask is what actually stops in-flight work.
+                // thread (mayInterruptIfRunning is a no-op there) — the runtime stop below
+                // is what actually stops in-flight work.
                 future.cancel(true);
-                try {
-                    provider.abortTask(ctx.getRunId());
-                } catch (Exception abortEx) {
-                    log.warn("Abort call failed for cancelled run {}: {}", ctx.getRunId(), abortEx.getMessage());
-                }
+                stopCancelledRuntime(ctx, provider);
                 throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED, "Run cancelled");
             }
             try {
@@ -853,6 +923,37 @@ public class AgentLoopEngine {
                 throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
                         "Task execution failed: " + cause.getMessage(), cause);
             }
+        }
+    }
+
+    /**
+     * Stops the in-flight runtime of a cancelled run. A coordinator-owned run is
+     * stopped through the coordinator, which cancels its run-owned core session,
+     * verifiably stops the run's writers and revokes the run's worker authority;
+     * every other run keeps the provider-level abort. A coordinator-owned run is
+     * never merely "asked" to abort, and a refused stop is never reported as a
+     * stopped cancellation: only a matching verified {@link ControlAck}
+     * ({@code STOPPED}, verified) lets the cancellation stand, while a refusal
+     * surfaces the exact pending-control failure reason -- the same truthful
+     * pattern the pause/resume paths use -- so the run's writers are never
+     * silently left running behind a terminal state.
+     */
+    private void stopCancelledRuntime(RunContext ctx, AdkProvider provider) {
+        CoreExecutionService coordinator = runCoordinator();
+        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
+            ControlAck ack = awaitControl(coordinator.cancel(ctx.getRunId()), ctx.getRunId(), "cancel");
+            if (ack.state() != ControlState.STOPPED || !ack.verified()) {
+                throw new IllegalStateException("Run " + ctx.getRunId() + " was not cancelled: "
+                        + coordinator.pendingControl(ctx.getRunId())
+                                .map(RunRuntimeRegistry.ControlRequest::failureReason)
+                                .orElse("the run-owned core did not verify the stop"));
+            }
+            return;
+        }
+        try {
+            provider.abortTask(ctx.getRunId());
+        } catch (Exception abortEx) {
+            log.warn("Abort call failed for cancelled run {}: {}", ctx.getRunId(), abortEx.getMessage());
         }
     }
 

@@ -5,8 +5,11 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.runtime.RuntimeActivity;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -36,13 +39,34 @@ public class AgentHealthReconciler {
     private final AgentRepository agentRepository;
     private final AdkProviderRegistry providerRegistry;
     private final Environment environment;
+    /**
+     * Optional run-quiescence view (Task 13): when present, an UNREACHABLE probe
+     * only stamps UNHEALTHY for an agent that actually holds an active run-owned
+     * runtime. An idle configured agent -- the normal steady state once runtimes
+     * are run-owned -- is never stamped UNHEALTHY merely because no runtime
+     * exists. Absent (legacy wiring), the previous probe-only semantics stay.
+     */
+    private final RuntimeActivity runtimeActivity;
 
+    /**
+     * Production wiring: no run-quiescence view is deployed yet (Task 18 passes
+     * the run coordinator's registry into the explicit constructor below).
+     */
+    @Autowired
     public AgentHealthReconciler(AgentRepository agentRepository,
                                  AdkProviderRegistry providerRegistry,
                                  Environment environment) {
+        this(agentRepository, providerRegistry, environment, null);
+    }
+
+    public AgentHealthReconciler(AgentRepository agentRepository,
+                                 AdkProviderRegistry providerRegistry,
+                                 Environment environment,
+                                 @Nullable RuntimeActivity runtimeActivity) {
         this.agentRepository = agentRepository;
         this.providerRegistry = providerRegistry;
         this.environment = environment;
+        this.runtimeActivity = runtimeActivity;
     }
 
     @Scheduled(fixedRateString = "${adk.health.reconcile-interval-ms:60000}")
@@ -66,6 +90,12 @@ public class AgentHealthReconciler {
             // RunService.createRun and kanban pickup refuse an UNHEALTHY agent — for
             // providers that simply do not implement the probe (the interface default
             // is NOT_STARTED, and a Mockito mock of the interface yields null).
+            return;
+        }
+        if (probed == AdkProvider.RuntimeHealth.UNREACHABLE && runtimeActivity != null
+                && runtimeActivity.activeRuns(agent.getId()).isEmpty()) {
+            // Readiness, not a live-runtime verdict: an idle configured agent has no
+            // run-owned runtime to judge, so its stamp is left as configured.
             return;
         }
         HealthStatus target = probed == AdkProvider.RuntimeHealth.REACHABLE

@@ -45,6 +45,10 @@ opencode:
   sandbox-api-key: ${OPENSANDBOX_API_KEY:}
   image: aria-conductor/opencode-sandbox:1.1
   port: 4096
+  # Legacy provider-level fallback used only when a caller passes no
+  # TaskContext.maxDuration (OpenCodeAdkProvider.resolveMaxDuration). It no longer
+  # governs the engine/coordinator task path: that run deadline is
+  # aria.tasks.deadline-minutes below.
   max-task-minutes: 45
   # Default repo URL for SDD templates that declare {repoUrl} but the caller omits it (R8-F1).
   repo-url: ${SDD_REPO_URL:}
@@ -56,6 +60,11 @@ opencode:
 
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:
+  # Mode-neutral run deadline of a coordinated execution attempt
+  # (TaskDeadlineProperties; the frozen spec deadline and the engine task path
+  # both read this key). Default 45, same value as the legacy provider knob above.
+  tasks:
+    deadline-minutes: 45
   mcp:
     enabled: ${ARIA_MCP_ENABLED:true}
     auth-mode: ${ARIA_MCP_AUTH_MODE:none}

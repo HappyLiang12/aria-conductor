@@ -3,16 +3,20 @@ package io.aria.conductor.execution.runtime.host;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
+import io.aria.conductor.execution.runtime.ExecutionBackendRegistry;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
+import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
+import io.aria.conductor.execution.runtime.RuntimeRecoveryCoordinator;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import org.junit.jupiter.api.AfterEach;
@@ -820,6 +824,213 @@ class HostExecutionBackendIntegrationTest {
                 .isTrue();
     }
 
+    /**
+     * The per-run isolation ruling's exact point (Task 13 fix round 1, C1): two runs of
+     * one controller share its supervision channel and therefore one job object, but a
+     * per-run stop acts per run. Stopping run A must stop A's own tree and must neither
+     * kill nor be decided by run B's writer -- and B's own stop proof must stay truthful
+     * afterwards.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void stoppingOneRunLeavesAnotherRunsWriterAliveAndBothProofsTruthful() throws Exception {
+        WindowsProcessController controller = new WindowsProcessController();
+        cleanups.add(controller::close);
+        HostExecutionBackend shared = new HostExecutionBackend(controller);
+        PeerRun runA = new PeerRun("background-writer", shared);
+        PeerRun runB = new PeerRun("background-writer", shared);
+        runA.handshake();
+        Writer writerA = runA.promptAndApproveWriter(WRITER_PROMPT);
+        runA.awaitPromptResult();
+        runB.handshake();
+        Writer writerB = runB.promptAndApproveWriter(WRITER_PROMPT);
+        runB.awaitPromptResult();
+
+        Process sentinel = startSentinel();
+
+        StopProof proofA = shared.stopWriters(runA.handle(), runA.deadline());
+
+        assertThat(proofA.runId()).isEqualTo(runA.runId());
+        assertThat(proofA.allWritersStopped()).as("run A's own tree is stopped").isTrue();
+        assertThat(isAlive(runA.owned().rootPid())).as("run A's runtime is stopped").isFalse();
+        assertThat(ProcessHandle.of(writerA.writerPid()).map(ProcessHandle::isAlive).orElse(false))
+                .as("run A's writer is stopped").isFalse();
+
+        assertThat(isAlive(runB.owned().rootPid())).as("run B's runtime must survive run A's stop").isTrue();
+        assertThat(ProcessHandle.of(writerB.writerPid()).map(ProcessHandle::isAlive).orElse(false))
+                .as("run B's writer must survive run A's stop").isTrue();
+        Path ticksB = runB.workspace().resolve(WRITER_LOG);
+        long before = sizeOf(ticksB);
+        Thread.sleep(300);
+        assertThat(sizeOf(ticksB))
+                .as("run B's writer keeps writing: run A's stop never touched it")
+                .isGreaterThan(before);
+
+        StopProof proofB = shared.stopWriters(runB.handle(), runB.deadline());
+
+        assertThat(proofB.runId()).isEqualTo(runB.runId());
+        assertThat(proofB.allWritersStopped()).as("run B's own tree is stopped").isTrue();
+        assertThat(isAlive(runB.owned().rootPid())).isFalse();
+        assertThat(ProcessHandle.of(writerB.writerPid()).map(ProcessHandle::isAlive).orElse(false)).isFalse();
+        assertThat(sentinel.isAlive()).as("an unrelated process must survive").isTrue();
+    }
+
+    /**
+     * The Windows form of the T9 completeness net (Task 13 fix round 1, C1): a writer
+     * whose intermediate parent died before the first enumeration is unreachable from the
+     * root's tree walk while it keeps mutating the workspace -- the exact window T9 closed
+     * on POSIX. The enumerated sweep alone would report {@code allWritersStopped=true} for
+     * an empty tree while that live writer keeps writing, so the job inventory must fail
+     * the proof closed. The writer is a real job member (it inherits the job through the
+     * intermediate); the test asserts that premise non-vacuously at the end, where closing
+     * the last supervision channel must take it down through kill-on-close.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void stopRefusesWhenAJobMemberIsUnreachableFromTheEnumeratedTree() throws Exception {
+        Path dir = canonical(Files.createTempDirectory("host-orphaned-job-member"));
+        Path workspace = Files.createDirectories(dir.resolve("workspace"));
+        Path writerLog = workspace.resolve("orphan-writer.log");
+        Path writerPidFile = dir.resolve("orphan-writer.pid");
+        Path intermediatePidFile = dir.resolve("orphan-intermediate.pid");
+        Path writerScript = workspace.resolve("orphan-writer.mjs");
+        Files.writeString(writerScript, """
+                import { appendFileSync, writeFileSync } from 'node:fs';
+                writeFileSync(process.argv[2], String(process.pid));
+                setInterval(() => appendFileSync(process.argv[3], 'tick\\n'), 20);
+                """);
+        // The intermediate spawns the writer detached (its own console on Windows, so the
+        // console deaths below cannot take it down) and exits without holding a handle to
+        // it: the writer is then a live, orphaned process whose PPID names a PID the OS no
+        // longer lists, which is what makes it unreachable from the root's tree walk.
+        Path intermediateScript = workspace.resolve("orphan-intermediate.mjs");
+        Files.writeString(intermediateScript, """
+                import { spawn } from 'node:child_process';
+                import { writeFileSync } from 'node:fs';
+                const writer = spawn(process.execPath, [process.argv[2], process.argv[3], process.argv[4]],
+                        { stdio: 'ignore', detached: true });
+                writer.unref();
+                writeFileSync(process.argv[5], String(process.pid));
+                """);
+        Path rootScript = workspace.resolve("orphan-root.mjs");
+        Files.writeString(rootScript, """
+                import { spawn } from 'node:child_process';
+                spawn(process.execPath, [process.argv[2], process.argv[3], process.argv[4],
+                        process.argv[5], process.argv[6]], { stdio: 'ignore' });
+                setInterval(() => {}, 1000);
+                """);
+
+        WindowsProcessController controller = new WindowsProcessController();
+        UUID runId = UUID.randomUUID();
+        LaunchProfile profile = new LaunchProfile(List.of(nodeExecutable(), rootScript.toString(),
+                intermediateScript.toString(), writerScript.toString(), writerPidFile.toString(),
+                writerLog.toString(), intermediatePidFile.toString()), Map.of(), workspace.toString());
+        OwnedProcess owned = controller.start(runId, profile);
+        cleanups.add(() -> {
+            destroyPid(owned.rootPid());
+            controller.release(owned);
+            controller.close();
+        });
+        long writerPid = awaitPid(writerPidFile);
+        cleanups.add(() -> destroyPid(writerPid));
+        long intermediatePid = awaitPid(intermediatePidFile);
+        awaitDead(intermediatePid);
+        // Registered last: the tree must be gone before the directory deletion (the
+        // detached writer's working directory is the workspace).
+        cleanups.add(() -> deleteTree(dir));
+        Process sentinel = startSentinel();
+
+        assertThat(owned.technique())
+                .as("the orphan premise cannot be observed when the OS refused job membership")
+                .contains("job-backstop=assign:ok");
+        assertThat(isAlive(writerPid)).as("the unreachable writer must be alive").isTrue();
+        long before = sizeOf(writerLog);
+        Thread.sleep(300);
+        assertThat(sizeOf(writerLog)).as("the orphaned writer must keep writing").isGreaterThan(before);
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(60));
+
+        assertThat(proof.runId()).isEqualTo(runId);
+        assertThat(proof.allWritersStopped())
+                .as("a live job member unreachable from the enumerated tree must fail the proof closed,"
+                        + " not certify a workspace it can still mutate")
+                .isFalse();
+        assertThat(isAlive(owned.rootPid())).as("the enumerated tree is stopped").isFalse();
+        assertThat(isAlive(writerPid))
+                .as("a refused proof must leave an unaccounted member alone: it may belong to another run")
+                .isTrue();
+        long atRefusal = sizeOf(writerLog);
+        Thread.sleep(300);
+        assertThat(sizeOf(writerLog))
+                .as("the unreachable writer keeps writing behind the refused proof")
+                .isGreaterThan(atRefusal);
+        assertThat(sentinel.isAlive()).as("an unrelated process must survive").isTrue();
+
+        // The premise, non-vacuously: the writer is a real job member -- the job's
+        // kill-on-close limit takes it down with the last supervision channel.
+        controller.close();
+        awaitDead(writerPid);
+        assertThat(isAlive(writerPid))
+                .as("the writer must be a real job member (kill-on-close), or this test proved nothing")
+                .isFalse();
+    }
+
+    /**
+     * I3 (Task 13 fix round 1): a reap after a restart must record what its destroy dispatch
+     * actually ended. The Host destroy never signals a runtime it did not bind (T9's
+     * fail-closed property) and removes only what this process prepared, so a fresh process
+     * reaping a run-owned runtime it never prepared destroys and signals nothing -- and the
+     * record must say exactly that instead of claiming a destruction. The run's live root,
+     * writer and generated configuration all survive the reap untouched.
+     */
+    @Test
+    void aHostReapAfterARestartRecordsThatNothingWasDestroyedOrSignalled() throws Exception {
+        PeerRun run = new PeerRun("background-writer");
+        run.handshake();
+        Writer writer = run.promptAndApproveWriter(WRITER_PROMPT);
+        run.awaitPromptResult();
+
+        // The restarted process: a fresh backend and registry that hold nothing for the run.
+        HostExecutionBackend restarted = HostExecutionBackend.forCurrentPlatform();
+        RuntimeRecoveryCoordinator recovery = new RuntimeRecoveryCoordinator(
+                new ExecutionBackendRegistry(List.of(restarted)), new RunRuntimeRegistry());
+        RunExecutionBinding evidence = RunExecutionBinding.builder()
+                .runId(run.runId()).agentId(UUID.randomUUID()).coreId("qoder")
+                .executionMode(ExecutionMode.HOST).settingsJson("{}")
+                .runtimeEnvironmentId(run.environment().environmentId())
+                .runtimeOwnershipIdentity(run.handle().ownershipIdentity())
+                .runtimeEndpoint(run.environment().endpoint().toString())
+                .workspaceKind(WorkspaceKind.DIRECT)
+                .build();
+        Path generated = Path.of(run.environment().configurationDirectory());
+        Path ticks = run.workspace().resolve(WRITER_LOG);
+        Process sentinel = startSentinel();
+
+        RuntimeRecoveryCoordinator.RecoveryDecision decision = recovery.reconcile(evidence);
+
+        assertThat(decision.decision()).isEqualTo(RuntimeRecoveryCoordinator.Decision.REAPED);
+        assertThat(decision.reason()).isEqualTo("Issued the HOST destroy for run " + run.runId()
+                + "; this process held no run-owned runtime for it, so nothing was destroyed or signalled"
+                + " (a restart-reconstructed record is never signalled)"
+                + "; its Direct workspace lease stays held (recovery holds no verified stop proof)");
+        assertThat(isAlive(run.owned().rootPid()))
+                .as("a restart-reconstructed record is never signalled").isTrue();
+        assertThat(ProcessHandle.of(writer.writerPid()).map(ProcessHandle::isAlive).orElse(false))
+                .as("the run's writer is never signalled").isTrue();
+        assertThat(Files.isDirectory(generated))
+                .as("a process that never prepared the run destroys nothing of its placement").isTrue();
+        long before = sizeOf(ticks);
+        Thread.sleep(300);
+        assertThat(sizeOf(ticks)).as("the untouched writer keeps writing after the reap record").isGreaterThan(before);
+        assertThat(sentinel.isAlive()).isTrue();
+
+        // The process that still holds the live binding can stop the run as usual.
+        StopProof proof = run.backend().stopWriters(run.handle(), run.deadline());
+        assertThat(proof.allWritersStopped()).isTrue();
+        assertThat(isAlive(run.owned().rootPid())).isFalse();
+        assertThat(ProcessHandle.of(writer.writerPid()).map(ProcessHandle::isAlive).orElse(false)).isFalse();
+    }
+
     // ------------------------------------------------------------------ harness
 
     /** One real mock-core run launched through the backend under test. */
@@ -845,16 +1056,29 @@ class HostExecutionBackendIntegrationTest {
         private String sessionId;
 
         PeerRun(String scenario) throws IOException, InterruptedException {
-            this(scenario, Instant.now().plus(Duration.ofMinutes(10)));
+            this(scenario, Instant.now().plus(Duration.ofMinutes(10)), null);
         }
 
         PeerRun(String scenario, Instant deadline) throws IOException, InterruptedException {
+            this(scenario, deadline, null);
+        }
+
+        /**
+         * A run on an explicitly shared backend: two of these exercise one
+         * controller's shared supervision channel and job object.
+         */
+        PeerRun(String scenario, HostExecutionBackend sharedBackend) throws IOException, InterruptedException {
+            this(scenario, Instant.now().plus(Duration.ofMinutes(10)), sharedBackend);
+        }
+
+        private PeerRun(String scenario, Instant deadline, HostExecutionBackend sharedBackend)
+                throws IOException, InterruptedException {
             root = canonical(Files.createTempDirectory("host-backend-it"));
             workspace = Files.createDirectories(root.resolve("workspace"));
             runtimeRoot = Files.createDirectories(root.resolve("runtime"));
             runId = UUID.randomUUID();
             this.deadline = deadline;
-            backend = HostExecutionBackend.forCurrentPlatform();
+            backend = sharedBackend != null ? sharedBackend : HostExecutionBackend.forCurrentPlatform();
             environment = backend.prepare(spec(runId, workspace, deadline), lease(runId, workspace, runtimeRoot));
             // The launched runtime is bridge-shaped: the endpoint shim serves the
             // run's authenticated bridge contract from the secret the backend

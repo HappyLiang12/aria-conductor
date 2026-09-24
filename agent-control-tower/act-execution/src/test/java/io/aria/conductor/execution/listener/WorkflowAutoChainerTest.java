@@ -1,11 +1,15 @@
 package io.aria.conductor.execution.listener;
 
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.execution.adk.AdkProvider;
+import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.git.GitBranchService;
@@ -45,6 +49,8 @@ class WorkflowAutoChainerTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private GitBranchService gitBranchService;
     @Mock private OpenCodeAdkProvider openCodeAdkProvider;
+    @Mock private AdkProviderRegistry providerRegistry;
+    @Mock private AgentRepository agentRepository;
 
     private WorkflowAutoChainer chainer;
 
@@ -55,7 +61,7 @@ class WorkflowAutoChainerTest {
     @BeforeEach
     void setUp() {
         chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher,
-                gitBranchService, openCodeAdkProvider);
+                gitBranchService, openCodeAdkProvider, providerRegistry, agentRepository);
         chain = TestDataBuilder.aWorkflowChain()
                 .withName("release-train")
                 .withStatus(WorkflowChain.Status.RUNNING)

@@ -29,6 +29,7 @@ import io.aria.conductor.execution.kanban.KanbanStatus;
 import io.aria.conductor.execution.repository.AgentSessionRepository;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.PromptCallRepository;
+import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -86,6 +87,7 @@ public class HousekeepingService {
     private final ToolCallRepository toolCallRepository;
     private final PromptCallRepository promptCallRepository;
     private final AcpPermissionRequestRepository acpPermissionRequestRepository;
+    private final RunExecutionBindingRepository runExecutionBindingRepository;
     private final AgentSessionRepository agentSessionRepository;
     private final KanbanService kanbanService;
     private final AgentService agentService;
@@ -102,6 +104,7 @@ public class HousekeepingService {
                                ToolCallRepository toolCallRepository,
                                PromptCallRepository promptCallRepository,
                                AcpPermissionRequestRepository acpPermissionRequestRepository,
+                               RunExecutionBindingRepository runExecutionBindingRepository,
                                AgentSessionRepository agentSessionRepository,
                                KanbanService kanbanService, AgentService agentService,
                                RunService runService, ApprovalGate approvalGate,
@@ -115,6 +118,7 @@ public class HousekeepingService {
         this.toolCallRepository = toolCallRepository;
         this.promptCallRepository = promptCallRepository;
         this.acpPermissionRequestRepository = acpPermissionRequestRepository;
+        this.runExecutionBindingRepository = runExecutionBindingRepository;
         this.agentSessionRepository = agentSessionRepository;
         this.kanbanService = kanbanService;
         this.agentService = agentService;
@@ -301,6 +305,10 @@ public class HousekeepingService {
                     toolCallRepository.deleteByRunIdInBulk(chunk);
                     promptCallRepository.deleteByRunIdInBulk(chunk);
                     acpPermissionRequestRepository.deleteByRunIdInBulk(chunk);
+                    // The run's immutable execution binding is a run-scoped child too
+                    // (Task 13 registration): no cascade exists from runs, so a purged
+                    // run must not leave its binding row behind.
+                    runExecutionBindingRepository.deleteByRunIdInBulk(chunk);
                     approvalRepository.deleteByRunIdInBulk(chunk);
                     agentSessionRepository.deleteByRunIdInBulk(chunk);
                     runRepository.deleteByIdInBulk(chunk);

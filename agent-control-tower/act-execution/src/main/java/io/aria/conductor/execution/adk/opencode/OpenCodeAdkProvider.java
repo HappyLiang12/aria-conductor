@@ -383,6 +383,16 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         shutdownAgent(agentId);
     }
 
+    /**
+     * The mode-neutral reset the workflow chainer reaches through the provider
+     * registry: identical to {@link #resetAgent(UUID)}, including the cached
+     * preparation future that {@code shutdownAgent} alone does not clear.
+     */
+    @Override
+    public void resetRuntime(UUID agentId) {
+        resetAgent(agentId);
+    }
+
     @PreDestroy
     @Override
     public void shutdownAll() {

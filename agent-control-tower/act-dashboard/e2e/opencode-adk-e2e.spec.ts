@@ -1,62 +1,46 @@
 import { test, expect, type Page } from '@playwright/test';
+import {
+  BACKEND,
+  apiCall,
+  approveRunApproval,
+  pollUntil,
+  setScenario,
+  uniqueName,
+} from './fixtures';
 
 /**
- * E2E test: OpenCode ADK agent lifecycle (exchangeable agent provider).
+ * E2E test: OpenCode core agent lifecycle (exchangeable agent core) — revised in
+ * Task 17 for the governed cores and the deterministic harness.
  *
- * Mirrors langchain-adk-e2e.spec.ts full flow, plus provider-specific
- * scenarios for the exchangeable-agent-provider feature:
- * 1. Configure DeepSeek LLM provider (Configure modal → LLM Providers tab)
- * 2. Create an OpenCode agent via Crew view (ADK Provider dropdown = opencode)
- * 3. Verify persistence via API: adkProvider == 'opencode'; runtime switch
- *    opencode → langchain → opencode via PUT /api/v1/agents/{id}
- * 4. Providers page: provider table (OpenCode + LangChain ADK, langchain default)
- *    and Per-Agent Backends block shows the agent with 'opencode'
- * 5. Start a run from Runs view, approve the task-level approval gate (default-on
- *    for opencode since 632d3de — POST /api/v1/approvals/{id}/decide {approved:true}),
- *    then poll until the run leaves PENDING/RUNNING and reaches a terminal state
- *    (COMPLETED / FAILED / ABORTED / CANCELLED).
- *    No OpenSandbox in CI → FAILED with a sandbox-layer errorMessage is the
- *    expected path and still proves the delegation path was triggered; COMPLETED
- *    only occurs with a full local stack (sandbox + LLM). A run that never leaves
- *    PENDING/RUNNING times out and fails the test — it is never tolerated.
+ * Mirrors langchain-adk-e2e.spec.ts full flow, plus core-specific scenarios for
+ * the exchangeable-agent-core feature. Deterministic in PR CI:
+ * 1. The harness supplies the deterministic LLM (the live lane configures a real
+ *    provider instead: e2e/agent-core/live-matrix.* for T20). The former
+ *    Configure-modal/DeepSeek setup and its DEEPSEEK_API_KEY gate are removed.
+ * 2. Create an OpenCode agent via Crew view: the core select offers exactly the
+ *    production catalog (opencode + qoder, opencode the single default);
+ *    persistence is verified via API: adkProvider == 'opencode'; the runtime
+ *    switch is opencode → qoder → opencode via PUT /api/v1/agents/{id} (no
+ *    LangChain option, row or switch target exists anymore).
+ * 3. Providers page: the core table lists opencode + qoder with exactly one
+ *    Default row (opencode) and no langchain row; Per-Agent Backends shows the
+ *    agent with its core.
+ * 4. Start a run from the Runs view against the deterministic harness scenario,
+ *    approve the task-level permission ask (operator authority, Task 12) and
+ *    poll until the run reaches exactly COMPLETED with the exact fixture output.
+ *    The former FAILED/ABORTED/CANCELLED alternatives and the sandbox-error
+ *    branch are gone: without a container runtime the harness runs the
+ *    SANDBOX placement through its process transport.
  *
- * LLM API key is injected via env var DEEPSEEK_API_KEY (DeepSeek-compatible).
  * Idempotency: agent name carries a unique suffix; the agent is retired at the
  * end so reruns do not accumulate dirty state.
  */
 
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
-const DEEPSEEK_MODEL = 'deepseek-chat';
-
 const RUN_TIMEOUT = 180_000; // 3 min for a run to complete
 const POLL_INTERVAL = 5_000;
-
-/** Helper: wait for a backend REST condition via fetch inside the browser page. */
-async function waitForBackend(
-  page: Page,
-  url: string,
-  predicate: (json: any) => boolean,
-  timeout: number = RUN_TIMEOUT,
-  intervalMs: number = POLL_INTERVAL,
-): Promise<any> {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    try {
-      const result = await page.evaluate(
-        async ({ u }) => {
-          const r = await fetch(u);
-          if (!r.ok) return null;
-          return r.json();
-        },
-        { u: url },
-      );
-      if (result && predicate(result)) return result;
-    } catch { /* ignore */ }
-    await page.waitForTimeout(intervalMs);
-  }
-  throw new Error(`waitForBackend timed out for ${url}`);
-}
+/** The recorded scenario whose fixture completion is exactly 'fixture-complete'. */
+const SCENARIO = 'reported-usage';
+const FINAL_OUTPUT = 'fixture-complete';
 
 /** Navigate to a view by clicking the rail button. */
 async function navigateTo(page: Page, view: string) {
@@ -68,10 +52,7 @@ async function navigateTo(page: Page, view: string) {
 test.describe.configure({ mode: 'serial', timeout: 600_000 }); // 10 min total
 
 // ─────────────────────────────────────────────────────────────────────
-test('OpenCode ADK: configure LLM → create agent → runtime switch → run → verify', async ({ page }) => {
-  // Guard: skip if no API key configured
-  test.skip(!DEEPSEEK_API_KEY, 'DEEPSEEK_API_KEY env var is required');
-
+test('OpenCode core: create agent → runtime switch → run → verify', async ({ page, request }) => {
   const agentName = `E2E OpenCode Agent ${Date.now()}`;
   let agentId: string | null = null;
 
@@ -85,73 +66,7 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
   await expect(page.locator('.rail')).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/screenshots/oc-01-dashboard.png' });
 
-  // ── Step 1: Configure DeepSeek LLM provider ──
-  // The rail has no data-view="settings" anymore: LLM providers live in the
-  // Configure modal (rail 'Configure' button) under the 'LLM Providers' tab.
-  await page.locator('.rail-btn', { hasText: 'Configure' }).click();
-  await expect(page.locator('.modal.open')).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('tab', { name: /LLM Providers/ }).click();
-  await expect(page.locator('.modal h2', { hasText: 'Settings' })).toBeVisible({ timeout: 10_000 });
-
-  // Wait for the provider list to finish loading BEFORE checking whether DeepSeek
-  // already exists (same guard as langchain spec): checking too early races the
-  // GET /api/v1/llm-providers fetch and would attempt a duplicate create, which
-  // the backend rejects with a 500 (llm_providers.name has a unique index). That
-  // would leave a stray "Add LLM Provider" form inside the (hidden but still
-  // mounted) modal DOM, which then trips strict-mode locators like .form-card.
-  await expect(
-    page.locator('.modal .data-table, .modal .empty-state').first(),
-  ).toBeVisible({ timeout: 10_000 });
-
-  // Check if DeepSeek provider already exists (rerun / persistent H2 db)
-  let deepSeekExists = await page.getByText('DeepSeek').isVisible().catch(() => false);
-
-  if (!deepSeekExists) {
-    // Click "Add Provider"
-    await page.getByRole('button', { name: '+ Add Provider' }).click();
-    await expect(page.locator('.form-card')).toBeVisible({ timeout: 5_000 });
-
-    // Fill in DeepSeek provider details (same field layout as langchain spec)
-    await page.locator('.form-card input').first().fill('DeepSeek');
-    // Type: select OPENAI (DeepSeek is OpenAI-compatible)
-    const typeSelect = page.locator('.form-card select').first();
-    await typeSelect.selectOption('OPENAI');
-
-    await page.locator('input[placeholder="https://api.openai.com/v1"]').fill(DEEPSEEK_BASE_URL);
-    await page.locator('input[type="password"]').fill(DEEPSEEK_API_KEY);
-    await page.locator('input[placeholder="gpt-4"]').fill(DEEPSEEK_MODEL);
-    await page.locator('.form-card input[type="number"]').fill('4096');
-
-    // Submit
-    await page.getByRole('button', { name: 'Create' }).click();
-  }
-
-  // Idempotency guard: wait until the backend actually has a DeepSeek provider.
-  // The modal table only refreshes when a create succeeds — the API is the
-  // authoritative source (same guard as langchain spec).
-  await waitForBackend(
-    page,
-    'http://localhost:8080/api/v1/llm-providers',
-    (providers: any[]) =>
-      Array.isArray(providers) && providers.some((p: any) => p.name === 'DeepSeek'),
-    30_000,
-    2_000,
-  );
-
-  // Activate DeepSeek provider if not active
-  const activateBtn = page.getByRole('button', { name: 'Activate' }).first();
-  if (await activateBtn.isVisible().catch(() => false)) {
-    await activateBtn.click();
-    await page.waitForTimeout(2000);
-  }
-
-  await page.screenshot({ path: 'e2e/screenshots/oc-02-llm-configured.png' });
-
-  // Close the Configure modal before navigating (it overlays the rail)
-  await page.getByRole('button', { name: 'Done' }).click();
-  await expect(page.locator('.modal.open')).toHaveCount(0, { timeout: 5_000 });
-
-  // ── Step 2: Create an OpenCode agent via Crew view ──
+  // ── Step 1: Create an OpenCode agent via Crew view ──
   await navigateTo(page, 'crew');
 
   // Crew view uses the .mini-dialog add-agent form ('+ Add Agent' CTA)
@@ -161,19 +76,21 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
   // Name
   await page.locator('#add-agent-name').fill(agentName);
   // Role select defaults to 'dev' (template → agentType ADK); model override
-  await page.locator('#add-agent-model').fill(DEEPSEEK_MODEL);
+  await page.locator('#add-agent-model').fill('efficient');
 
-  // ADK Provider dropdown: rendered dynamically from GET /api/v1/adk/providers.
-  // Option text contains 'OpenCode' (and 'LangChain'), value is the provider id.
-  const adkProviderSelect = page.locator('#add-agent-adk-provider');
-  await expect(adkProviderSelect).toBeVisible({ timeout: 10_000 });
-  const adkOptionTexts = await adkProviderSelect.locator('option').allTextContents();
-  expect(
-    adkOptionTexts.some((t) => t.includes('OpenCode')),
-    `ADK Provider dropdown should contain an OpenCode option (got: ${adkOptionTexts.join(', ')})`,
-  ).toBeTruthy();
-  expect(adkOptionTexts.some((t) => t.includes('LangChain'))).toBeTruthy();
-  await adkProviderSelect.selectOption('opencode');
+  // Agent core select: rendered from GET /api/v1/adk/providers. The options are
+  // exactly the production catalog; the LangChain option no longer exists.
+  const coreSelect = page.locator('#add-agent-core');
+  await expect(coreSelect).toBeVisible({ timeout: 10_000 });
+  const coreValues = await coreSelect.locator('option').evaluateAll(
+    (options) => options.map((o) => (o as HTMLOptionElement).value).filter((v) => v !== ''),
+  );
+  expect(coreValues.sort()).toEqual(['opencode', 'qoder']);
+  // The dialog applies the inventory's declared default: exactly one core is
+  // marked default and it is opencode.
+  await expect(coreSelect).toHaveValue('opencode');
+  const selectedLabel = await coreSelect.locator('option:checked').textContent();
+  expect(selectedLabel).not.toContain('unsupported');
 
   await page.screenshot({ path: 'e2e/screenshots/oc-03-create-opencode-agent.png' });
 
@@ -184,62 +101,51 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
   await expect(page.locator('.crew-card', { hasText: agentName })).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: 'e2e/screenshots/oc-04-opencode-agent-created.png' });
 
-  // ── Step 3: API verification of persistence + runtime provider switch ──
-  const agentInfo = await page.evaluate(async (name) => {
-    const r = await fetch('/api/v1/agents');
-    if (!r.ok) return null;
-    const agents = await r.json();
-    return agents.find((a: any) => a.name === name) ?? null;
-  }, agentName);
+  // ── Step 2: API verification of persistence + core switch ──
+  const agents = await apiCall(request, 'GET', '/agents');
+  expect(agents.status).toBe(200);
+  const agentInfo = (agents.data as any[]).find((a) => a.name === agentName);
   expect(agentInfo, `agent '${agentName}' should be persisted via API`).toBeTruthy();
-  agentId = agentInfo.id;
-  expect(agentInfo.adkProvider, 'created agent should have adkProvider=opencode').toBe('opencode');
+  agentId = agentInfo!.id;
+  expect(agentInfo!.adkProvider, 'created agent should have adkProvider=opencode').toBe('opencode');
 
-  const getAdkProvider = (id: string) =>
-    page.evaluate(async (aid) => {
-      const r = await fetch(`/api/v1/agents/${aid}`);
-      if (!r.ok) return null;
-      const a = await r.json();
-      return a.adkProvider;
-    }, id);
+  // The run path is deterministic: select the recorded scenario for this agent
+  // (harness-only control; the peer is launched with it).
+  await setScenario(request, agentId!, SCENARIO);
 
-  const setAdkProvider = (id: string, provider: string) =>
-    page.evaluate(
-      async ({ aid, adk }) => {
-        await fetch(`/api/v1/agents/${aid}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ adkProvider: adk }),
-        });
-      },
-      { aid: id, adk: provider },
-    );
+  const setCore = async (core: string) => {
+    const put = await apiCall(request, 'PUT', `/agents/${agentId}`, { adkProvider: core });
+    expect(put.status, JSON.stringify(put.data)).toBe(200);
+    const read = await apiCall(request, 'GET', `/agents/${agentId}`);
+    expect(read.status).toBe(200);
+    return read.data.adkProvider;
+  };
 
-  // opencode → langchain (runtime switch, persistence)
-  await setAdkProvider(agentId, 'langchain');
-  expect(await getAdkProvider(agentId), 'after PUT adkProvider should be langchain').toBe('langchain');
-  // langchain → opencode (switch back)
-  await setAdkProvider(agentId, 'opencode');
-  expect(await getAdkProvider(agentId), 'after PUT back adkProvider should be opencode').toBe('opencode');
+  // opencode → qoder (core switch, persistence)
+  expect(await setCore('qoder'), 'after PUT adkProvider should be qoder').toBe('qoder');
+  // qoder → opencode (switch back)
+  expect(await setCore('opencode'), 'after PUT back adkProvider should be opencode').toBe('opencode');
 
-  // ── Step 4: Providers page ──
+  // ── Step 3: Providers page ──
   await navigateTo(page, 'providers');
 
   const providerTable = page.locator('.data-table').first();
   await expect(providerTable).toBeVisible({ timeout: 15_000 });
   await expect(providerTable).toContainText('OpenCode');
-  await expect(providerTable).toContainText('LangChain ADK');
-  // isDefault marker: langchain is the configured default; opencode is not
-  await expect(providerTable.locator('tr', { hasText: 'langchain' }).first()).toContainText('Default');
-  await expect(providerTable.locator('tr', { hasText: 'opencode' }).first()).not.toContainText('Default');
+  await expect(providerTable).toContainText('Qoder');
+  // No LangChain row may render: the provider is removed from the catalog.
+  await expect(providerTable.locator('tr', { hasText: 'langchain' })).toHaveCount(0);
+  // isDefault marker: opencode is the single configured default; qoder is not.
+  await expect(providerTable.locator('tr', { hasText: 'opencode' }).first()).toContainText('Default');
+  await expect(providerTable.locator('tr', { hasText: 'qoder' }).first()).not.toContainText('Default');
 
-  // Per-Agent Backends block shows the E2E OpenCode Agent with backend 'opencode'
+  // Per-Agent Backends block shows the E2E OpenCode Agent with core 'opencode'
   const perAgentCard = page.locator('.card', { hasText: 'Per-Agent Backends' });
   await expect(perAgentCard).toBeVisible();
   await expect(perAgentCard.locator('tr', { hasText: agentName })).toContainText('opencode');
   await page.screenshot({ path: 'e2e/screenshots/oc-05-providers-page.png' });
 
-  // ── Step 5: Start a run for the OpenCode agent ──
+  // ── Step 4: Start a run for the OpenCode agent ──
   await navigateTo(page, 'runs');
   await page.getByRole('button', { name: '+ Start Run' }).click();
   // Scope to the visible route content (<main className="content">): the Configure
@@ -269,109 +175,47 @@ test('OpenCode ADK: configure LLM → create agent → runtime switch → run �
 
   await page.screenshot({ path: 'e2e/screenshots/oc-07-run-started.png' });
 
-  const TERMINAL_RUN_STATUSES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
-
-  // ── Step 6: Approve the task-level approval gate ──
-  // Since 632d3de the task-level path (opencode provider) REQUIRES human approval
-  // by default: AgentLoopEngine calls ApprovalGate.requestApproval, creating a
-  // PENDING approval, and blocks until a human decides (approvals.timeout-ms,
-  // default 30 min). The run stays non-terminal until approved. The backend
-  // exposes only PENDING approvals via GET /api/v1/approvals; a decision is
-  // granted with POST /api/v1/approvals/{id}/decide { approved: true }.
-  // If the run already reached a terminal state (e.g. it failed before the gate),
-  // skip approval and let the terminal poll below assert that state. A run that
-  // never produces an approval times out here and fails the test — never tolerated:
-  // that would indicate the gate/approvals API is broken.
-  const alreadyTerminal = await page.evaluate(
-    async ({ agentId, terminalStatuses }) => {
-      const r = await fetch(`http://localhost:8080/api/v1/runs?agentId=${agentId}`);
-      if (!r.ok) return false;
-      const runs = await r.json();
-      return Array.isArray(runs) && runs.some((x: any) => terminalStatuses.includes(x.status));
-    },
-    { agentId, terminalStatuses: TERMINAL_RUN_STATUSES },
-  );
-
-  if (!alreadyTerminal) {
-    // Resolve this agent's run ids, then wait for a PENDING approval tied to one
-    // of those runs.
-    const agentRuns = await waitForBackend(
-      page,
-      `http://localhost:8080/api/v1/runs?agentId=${agentId}`,
-      (runs: any[]) => Array.isArray(runs) && runs.length > 0,
-      RUN_TIMEOUT,
-    );
-    const runIds = new Set(agentRuns.map((r: any) => r.id));
-    const approvals = await waitForBackend(
-      page,
-      'http://localhost:8080/api/v1/approvals',
-      (list: any[]) =>
-        Array.isArray(list) && list.some((a: any) => a.status === 'PENDING' && runIds.has(a.runId)),
-      RUN_TIMEOUT,
-    );
-    const approval = approvals.find((a: any) => a.status === 'PENDING' && runIds.has(a.runId));
-    console.log(`Task-level approval ${approval.id} requested for run ${approval.runId}; approving…`);
-    const decided = await page.evaluate(
-      async ({ id }) => {
-        const r = await fetch(`/api/v1/approvals/${id}/decide`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approved: true, reason: 'E2E auto-approval (task-level gate)' }),
-        });
-        if (!r.ok) throw new Error(`approval decide failed: HTTP ${r.status}`);
-        return r.json();
-      },
-      { id: approval.id },
-    );
-    console.log(`Approval ${approval.id} decided: ${JSON.stringify(decided)}`);
-  }
-
-  // ── Step 7: Poll until the run leaves PENDING/RUNNING ──
-  // The spec runs without an OpenSandbox in CI, so the delegated OpenCode path
-  // fails inside the sandbox layer with TaskExecutionException(SANDBOX_UNAVAILABLE)
-  // → run FAILED with a sandbox-layer errorMessage. COMPLETED only occurs with a
-  // full local stack (sandbox + LLM). Either terminal state proves the delegation
-  // path was actually triggered; a run that never leaves PENDING/RUNNING (or never
-  // appears in the list) makes waitForBackend throw — the timeout is NOT tolerated.
-  const runResult = await waitForBackend(
-    page,
-    `http://localhost:8080/api/v1/runs?agentId=${agentId}`,
-    (runs: any[]) =>
-      Array.isArray(runs) &&
-      runs.some((r: any) => TERMINAL_RUN_STATUSES.includes(r.status)),
+  // ── Step 5: Approve the task-level permission ask (operator authority) ──
+  // The run is created by the UI; resolve its captured id from the API, then
+  // approve its pending ask through the operator-only /decide route (Task 12).
+  const runs = await pollUntil<any[]>(
+    request,
+    `/runs?agentId=${agentId}`,
+    (list) => Array.isArray(list) && list.length > 0,
     RUN_TIMEOUT,
+    2_000,
   );
+  const runId = (runs[0] as any).id as string;
+  expect(runId).toMatch(/^[0-9a-f-]{36}$/);
+  const ask = await approveRunApproval(request, runId, RUN_TIMEOUT);
+  expect(ask.runId).toBe(runId);
 
-  const run = runResult.find((r: any) => TERMINAL_RUN_STATUSES.includes(r.status));
-  expect(run, 'run object must exist in the runs list (delegation path triggered)').toBeTruthy();
-  console.log(`OpenCode run ${run.id} finished with status: ${run.status}`);
-
-  if (run.status === 'FAILED') {
-    // CI (no OpenSandbox): the sandbox layer rejects the delegation before any LLM
-    // call. errorMessage is the exception message — e.g. "OpenSandbox sandbox
-    // creation failed for agent …" — the enum name SANDBOX_UNAVAILABLE itself is
-    // NOT part of the message, so match the sandbox-layer wording instead.
-    expect(run.errorMessage, 'FAILED run must carry a sandbox-layer errorMessage').toBeTruthy();
-    expect(
-      run.errorMessage,
-      'FAILED run errorMessage must originate from the sandbox layer',
-    ).toMatch(/sandbox|serve|OpenSandbox/i);
-  } else if (run.status === 'COMPLETED') {
-    expect(run.finalOutput, 'COMPLETED run must have non-empty finalOutput').toBeTruthy();
-  }
+  // ── Step 6: The run must reach exactly COMPLETED with the exact fixture output ──
+  const run = await pollUntil<any>(
+    request,
+    `/runs/${runId}`,
+    (r) => ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'].includes(r?.status),
+    RUN_TIMEOUT,
+    POLL_INTERVAL,
+  );
+  expect(run.status, JSON.stringify(run).slice(0, 400)).toBe('COMPLETED');
+  expect(run.finalOutput).toBe(FINAL_OUTPUT);
   await page.screenshot({ path: 'e2e/screenshots/oc-08-run-completed.png' });
 
   // ── Cleanup: retire the test agent (idempotency for reruns) ──
+  // POST /agents/{id}/retire is a 200-only route: AgentController.java:59-61
+  // returns ResponseEntity.ok(AgentResponse), and AgentService.retireAgent is
+  // idempotent for an existing agent (it re-sets RETIRED and returns the
+  // retired entity), so a repeated retire is exactly 200 with healthStatus
+  // RETIRED, never 204.
   if (agentId) {
-    await page
-      .evaluate(async (id) => {
-        await fetch(`/api/v1/agents/${id}/retire`, { method: 'POST' });
-      }, agentId)
-      .catch(() => {});
+    const retired = await apiCall(request, 'POST', `/agents/${agentId}/retire`);
+    expect(retired.status, JSON.stringify(retired.data)).toBe(200);
+    expect(retired.data?.healthStatus).toBe('RETIRED');
   }
 
   // ── Final screenshot ──
   await page.screenshot({ path: 'e2e/screenshots/oc-12-final-state.png' });
 
-  console.log('✅ E2E OpenCode ADK test passed!');
+  console.log('E2E OpenCode core test passed!');
 });

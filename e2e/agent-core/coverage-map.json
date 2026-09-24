@@ -968,11 +968,11 @@
     },
     {
       "id": "gate:opencode-adk-e2e.spec.ts",
-      "path": "agent-control-tower/act-dashboard/e2e/opencode-adk-e2e.spec.ts:73",
-      "condition": "test.skip(!DEEPSEEK_API_KEY)",
-      "businessPurpose": "OpenCode provider run path with a real LLM.",
-      "replacement": "modified spec served by the deterministic harness + mock opencode peer (T17); live path in live-matrix (T20)",
-      "rationale": "Same purpose, deterministic in PR CI."
+      "path": "agent-control-tower/act-dashboard/e2e/opencode-adk-e2e.spec.ts",
+      "condition": "test.skip(!DEEPSEEK_API_KEY) REMOVED in fix round 2; the same revision also removed the Configure-modal LLM-provider setup and every LangChain selector (core select, runtime switch, providers table)",
+      "businessPurpose": "OpenCode core run path with a deterministic (formerly real-LLM) completion.",
+      "replacement": "same file, deterministic harness + mock opencode peer: scenario 'reported-usage' selected for the agent, run pinned to exactly COMPLETED with finalOutput 'fixture-complete'. Live path stays in e2e/agent-core/live-matrix.* (T20).",
+      "rationale": "The skip is gone (no coverage is silently gated any more); the case is RED on the T18 catalog/selection/scenario wiring with an exact cause captured in perPurposeStatus."
     },
     {
       "id": "gate:real-llm-scenarios.spec.ts",
@@ -984,11 +984,11 @@
     },
     {
       "id": "gate:aria-conversation-id-regression.spec.ts",
-      "path": "agent-control-tower/act-dashboard/e2e/aria-conversation-id-regression.spec.ts:83",
-      "condition": "test.skip(!HAS_LLM_KEY) on the message-event case",
-      "businessPurpose": "Run/conversation identity in streaming message events.",
-      "replacement": "modified in place against the deterministic harness (T17)",
-      "rationale": "Identity assertions must run in PR CI, so the message event must be produced deterministically."
+      "path": "agent-control-tower/act-dashboard/e2e/aria-conversation-id-regression.spec.ts",
+      "condition": "the HAS_LLM_KEY constant and the test.skip(!HAS_LLM_KEY) on the message-event case are REMOVED in fix round 2 (no skip remains in the file)",
+      "businessPurpose": "Run/conversation identity in streaming message events, with the exact stored history content.",
+      "replacement": "modified in place against the deterministic harness: the SSE case asserts thinking/message/done + the exact done payload, and the reuse case asserts the exact stored timeline (user:remember 1 / assistant:<captured message> under the captured runId) plus the four-entry timeline after turn 2.",
+      "rationale": "Identity assertions run in PR CI; the message event itself needs the harness's Aria scenario registered (captured RED: expect(eventNames).toContain('message') with [thinking, thinking, done, error]) - Owner: T18."
     },
     {
       "id": "gate:aria-engine-unification.spec.ts",
@@ -1031,28 +1031,12 @@
       "rationale": "Replay is a retained behavior; the mock peer removes the credential dependency."
     },
     {
-      "id": "disabled:sdd-workflow.spec.ts:82",
-      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts:82",
-      "condition": "test.skip(true, 'no git credential configured in this environment (TP1 credential gate)')",
-      "businessPurpose": "Push/PR credential-gated SDD chain step.",
-      "replacement": "deterministic mock diff/push peer in the T17 spec revision",
-      "rationale": "An unconditional skip is permanent loss of coverage unless replaced."
-    },
-    {
-      "id": "disabled:sdd-workflow.spec.ts:101",
-      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts:101",
-      "condition": "conditional skip (fixture-dependent branch)",
-      "businessPurpose": "WAITING_APPROVAL chain resubmission path.",
-      "replacement": "seeded WAITING_APPROVAL fixture from the harness (T16/T17)",
-      "rationale": "The state must be seeded deterministically instead of skipped."
-    },
-    {
-      "id": "disabled:sdd-workflow.spec.ts:141",
-      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts:141",
-      "condition": "test.skip(!waiting, 'requires a WAITING_APPROVAL chain (fixture-dependent)')",
-      "businessPurpose": "Expired-approval resubmission.",
-      "replacement": "same seeded fixture as above",
-      "rationale": "Same as above."
+      "id": "disabled:sdd-workflow.spec.ts:82,101,141",
+      "path": "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts",
+      "condition": "ALL THREE skips REMOVED in fix round 2: the unconditional TP1 credential-gate skip (was :82) and the two conditional BA-runtime skips (was :101/:141). No skip remains in the file; the resumed chain is pinned to exactly COMPLETED.",
+      "businessPurpose": "SDD spec approval to PASS verdict, and the EXPIRED-approval resubmission path.",
+      "replacement": "same file on the deterministic harness: case 1 drives instantiate (must succeed) -> exactly WAITING_APPROVAL -> operator approval -> exactly COMPLETED; case 2 seeds its own chain, waits for the ask to reach exactly EXPIRED and asserts the resubmitted PENDING ask exactly (new id, exact reason, same BA runId).",
+      "rationale": "The business purpose is now runnable without credentials: the harness supplies the git handoff credential and a short approvals.timeout-ms (recorded in task18Obligations). Captured RED: both cases stop at the BA step with the chain reaching exactly FAILED before WAITING_APPROVAL (T18's wired runtime)."
     },
     {
       "id": "disabled:template-api.spec.ts:146",
@@ -1118,5 +1102,310 @@
       "replacement": "deterministic seeded fixtures (T16/T17)",
       "rationale": "Same purpose is retainable once seeding is deterministic."
     }
-  ]
+  ],
+  "task17PortRecord": {
+    "task": "Task 17 — port existing E2E scenarios onto the governed cores and the deterministic harness",
+    "date": "2026-09-25",
+    "replacementSpecsCreated": [
+      "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts - 5 case declarations in the file text by this map's counting rule (the Step-1 four-combination loop is a single declaration whose first argument is a template literal; it expands to four runtime tests, so 8 tests run). Recounted mechanically in fix round 3 (was 4 declarations / 7 runtime tests before the round-2 pause case)",
+      "agent-control-tower/act-dashboard/e2e/core-permissions.spec.ts - 11 case declarations (11 runtime tests). Recounted mechanically in fix round 3 (was 7 before the round-2 MCP-parity, two worker self-approval and git-push cases)",
+      "agent-control-tower/act-dashboard/e2e/core-workspaces.spec.ts - 5 case declarations (5 runtime tests). Recounted mechanically in fix round 3 (was 4 before the round-2 dirty-source case). The seven revised/replacement specs list 37 tests in 7 files (exec-modes 8, permissions 11, workspaces 5, aria 5, kanban-hitl 5, sdd-workflow 2, opencode-adk-e2e 1) - the fix round 3 recount of the playwright --list output"
+    ],
+    "fixRound2": {
+      "date": "2026-09-25",
+      "revisedLegacySpecs": [
+        "agent-control-tower/act-dashboard/e2e/aria-conversation-id-regression.spec.ts - HAS_LLM_KEY + the message-event skip removed; the reuse case now asserts the exact stored timeline (4 entries, 2 captured runIds)",
+        "agent-control-tower/act-dashboard/e2e/kanban-hitl.spec.ts - alternative-outcome polls replaced by exact card states, the review case asserts the exact one-use option set",
+        "agent-control-tower/act-dashboard/e2e/sdd-workflow.spec.ts - all three skips removed, resumed chain pinned to exactly COMPLETED, the expired-approval case re-seeded and asserted exactly",
+        "agent-control-tower/act-dashboard/e2e/opencode-adk-e2e.spec.ts - DEEPSEEK skip and the LLM-provider setup removed; core catalog, core switch, providers table and the deterministic COMPLETED run pinned exactly"
+      ],
+      "extendedCoreSpecs": [
+        "core-workspaces.spec.ts + 'a dirty source repository is preserved byte-for-byte by a worktree run'",
+        "core-execution-modes.spec.ts + 'a pause is acknowledged truthfully and freezes the export until resume'",
+        "core-permissions.spec.ts + MCP parity over both transports, worker self-approval 403 at REST, worker self-approval FORBIDDEN over both transports, the governed git_push gate to a disposable bare remote",
+        "fixtures.ts + runWorkerToken(request, runId) (the harness-only worker-credential route; see task18Obligations (a))"
+      ],
+      "noSkipAdded": "No skip was added anywhere in this round; four credential-gated skips and one unconditional skip were removed (aria-conversation-id-regression, opencode-adk-e2e, sdd-workflow x3).",
+      "capturedRuns": "See harnessRun for the exact per-spec outcomes and causes.",
+      "stillUnported": "aria-engine-unification, aria-timeout-cancel, housekeeping-cleanup, observability-live, workflow-data-flow, workflow-state-machine, workflow-ui-interaction (notRevisedRows) and the two disabled cases (template-api:146, workflow-state-machine:154) - all with the T17 remainder as deferral owner."
+    },
+    "fixturesChanged": "agent-control-tower/act-dashboard/e2e/fixtures.ts - operator-only routes authenticate with the environment credential as a bearer header (`Authorization: Bearer $ARIA_OPERATOR_BEARER_TOKEN`; ActorAuthenticationFilter step 1 is the header-authenticated operator branch with no CSRF surface). The committed UI client src/api/operatorSession.ts uses a different flow (cookie + X-CSRF-Token) and is not the header contract the fixtures follow; fix round 1 corrected the citation. seedAdkAgent(request, {adkProvider, executionMode, workspaceMode, workspacePath, workspaceBaseRef}); setScenario(request, agentId, scenario) against the harness-only operator-authenticated peer scenario control (POST /api/v1/maintenance/core-e2e/scenario, never a database outcome); approveRunApproval/decideApproval operator-authenticated with exact processed-ack verification; permissionOptions parses the recorded one-use grant set. SeedAdkAgentOpts.adkProvider keeps 'langchain' in the runtime shape only for the pre-existing caller api/git-pack-gate.api.spec.ts:233 until that row is ported (T18 cutover); the production catalog is exactly qoder|opencode. Fix round 2 added runWorkerToken(request, runId) reading the run-scoped worker credential from the harness-only operator route GET /api/v1/maintenance/core-e2e/worker-token?runId=... (404 today; T18 obligation (a)).",
+    "perPurposeStatus": {
+      "note": "Rewritten in fix round 1 because the previous record claimed coverage that was not carried and omitted rows. Each entry states what the port carries (covered) and every assertion/purpose it does NOT carry (residual). The port has NO UI half: all three replacement specs drive the REST API only (Playwright APIRequestContext), so every original browser case is a residual unless an entry says otherwise. A row may only be removed at cutover when every purpose below is covered; any residual blocks its removal.",
+      "pw:adk-providers.spec.ts": {
+        "covered": [
+          "the selectable core inventory: GET /adk/providers returns exactly ['opencode','qoder'] with opencode the single default (core-execution-modes.spec.ts 'the provider inventory is exactly the production core catalog'; RED until T18 narrows the catalog and deletes the LangChain row)"
+        ],
+        "residual": [
+          "no UI half: the Providers-page provider table, its single Default-badge row and the Per-Agent Backends block are not carried (original case 1); the Crew create form's dynamic ADK Provider dropdown options - today langchain + OpenCode - are not carried (original case 2). Owner: the adk-providers.spec.ts revision, which T18's catalog narrowing unblocks (the langchain option assertion is retired only with the provider)."
+        ]
+      },
+      "pw:harness-governance.spec.ts": {
+        "covered": [
+          "workspace-diff preview for an unknown run answers exactly hasWorkspace=false (core-workspaces.spec.ts, ported verbatim)",
+          "the execution-settings intent of the harness-profile contract is only partially carried: 'agent create/configure keeps the captured core, mode and workspace selection' (core-execution-modes.spec.ts; RED until T18 persists the fields)",
+          "the owned-workspace half of the diff preview: core-workspaces.spec.ts 'a dirty source repository is preserved byte-for-byte by a worktree run' binds a WORKTREE run over a spec-owned repository and core-execution-modes.spec.ts 'a pause is acknowledged truthfully and freezes the export until resume' asserts hasWorkspace=true plus a byte-stable export across two reads (both RED until T18's scenario/coordinator wiring)"
+        ],
+        "residual": [
+          "harness profiles are seeded/exposed with the expected tuning: GET /harness-profiles default + weak-model-safe (toolDenylist contains shell_exec, steering.shellExecToGitPack true, non-empty selfVerify.escalateTiers, default a pure no-op) - the toolDenylist/steering assertions are NOT carried",
+          "tool removal by harness profile: shell_exec absent and the git pack retained for an explicit weak-model-safe agent; the free-text dev worker's auto-adopt - NOT carried",
+          "git pack risk tiers (git_push/git_create_pr PUSH, git_clone WRITE_LOCAL) - NOT carried",
+          "approvals API enrichment (riskTier/toolName/arguments) and the UI render (no hardcoded Medium badge) - NOT carried"
+        ]
+      },
+      "pw:aria-conversation-id-regression.spec.ts": {
+        "covered": [
+          "revised in place (fix round 2): the LLM-gated message-event skip is REMOVED; the spec runs against the deterministic harness with every original assertion kept (runId uuid + exact conversationId echo, sessions 404 x2, SSE thinking/message/done plus the exact done payload)",
+          "'conversationId is reused across two turns with exact history content (#36)' (aria-conversation-id-regression.spec.ts): turn 1 is read back from GET /aria/conversations/{id} and the timeline must equal exactly [user:remember 1, assistant:<turn1.message>] under the captured turn-1 runId; turn 2 is sent with that exact history and the same conversationId and the timeline must then equal exactly all four entries under the two captured runIds",
+          "the SSE case additionally pins the streamed turn to the stored history: GET /aria/conversations/{CONV_STREAM} must hold exactly the user prompt 'list all agents' and one assistant entry, both under the runId the done event carried"
+        ],
+        "residual": [
+          "the SSE message event itself needs the harness's Aria scenario registered (DeterministicLlmClient fails loudly on unmatched requests): captured RED is exactly 'expect(eventNames).toContain('message')' with the observed events [thinking, thinking, done, error] - Owner: T18 (see task18Obligations)",
+          "captured RED (fix round 3, re-run on the same harness recipe after the serial mode was removed): the reuse case now EXECUTES and fails deterministically at its first stored-timeline assertion - aria-conversation-id-regression.spec.ts:196 received exactly ['user:remember 1'] vs expected ['user:remember 1', 'assistant:Still working — reasoning models can take a little longer. ...'] (turn1.message is the sync-window placeholder from AriaService.java:180-185). Cause (harness boot log): the turn's run never completes ('Aria sync chat: run <id> still not complete after grace wait'; the run dies on the missing OpenSandbox localhost:8090), so no assistant entry lands in the stored timeline - Owner: T18, the same Aria scenario registration as the SSE message event (obligation (c))"
+        ]
+      },
+      "pw:kanban-hitl.spec.ts": {
+        "covered": [
+          "revised in place (fix round 2): the D8 alternative-outcome polls are gone - the dispatch case pins the card to exactly IN_PROGRESS and pins the pickup's linkedRunId to this test's captured agent (GET /runs/{linkedRunId} -> agentId), the pause case pins the card to exactly {status: TODO, linkedRunId: null} (the coordinated stop detaches the link), the cancel case keeps the exact CANCELLED poll",
+          "the review case asserts the ask's exact offered grant set through permissionOptions: [{proceed_once, ALLOW_ONCE},{cancel, DENY}], exactly the Task 12 one-use contract (kanban-hitl.spec.ts 'review card shows ask badge and opens decision zone')",
+          "the UI half is kept: five columns, the retired-column absences, the board drag path, the '.pill.warn' '1 asks' badge and the '.decision-zone .dz-title' 'NEEDS YOUR DECISION' / '1 asks' render, with the exact-ack cleanup (fix round 3: the cleanup now asserts the exact 200 + body status CANCELLED, so the claim is backed by the spec text; only the disclosed optimistic-lock 409 is retried)"
+        ],
+        "residual": [
+          "the option-set assertion is RED until the native permission ask serves a real run (the current task-gate ask carries optionsJson: null) - Owner: T18 (see task18Obligations)"
+        ]
+      },
+      "pw:sdd-workflow.spec.ts": {
+        "covered": [
+          "revised in place (fix round 2): ALL THREE credential/runtime skips are REMOVED (the unconditional TP1 skip and the two conditional BA-runtime skips) and the resumed chain is pinned to exactly COMPLETED instead of accepting RUNNING/COMPLETED/FAILED",
+          "case 1 asserts the full approval chain with exact values: instantiate must succeed (no GITHUB_TOKEN refusal accepted), the chain reaches exactly WAITING_APPROVAL, the SPEC_REVIEW ask carries markdown content, a uuid knowledgeItemId and a null toolCallId, the linked knowledge item is named exactly 'spec-<chainId>' with status PENDING, and the operator approval is exactly 200 before COMPLETED",
+          "case 2 ('resubmit-approval recreates an EXPIRED approval') is now self-seeded: its own chain is driven to WAITING_APPROVAL, the ask must reach exactly EXPIRED, then POST /workflows/{id}/resubmit-approval must answer exactly 200 with a new PENDING SPEC_REVIEW whose id differs from the expired one, whose reason is exactly 'Spec resubmitted for review: spec-<chainId>', whose runId equals the BA run's captured id, and the chain stays exactly WAITING_APPROVAL",
+          "the serial mode is removed so both cases report their own evidence"
+        ],
+        "residual": [
+          "captured RED (fix round 2): both cases stop at the BA step - the chain reaches exactly FAILED before WAITING_APPROVAL ('chain <id> reached FAILED before WAITING_APPROVAL ... step 0 status FAILED'). Owner: T18's wired runtime (the harness build cannot execute a core run yet)",
+          "harness prerequisites for case 2 (recorded in task18Obligations): a synthetic git handoff credential in the harness environment (the TP1 gate reads gitBranchService.isAvailable()) and a short approvals.timeout-ms so the ask actually expires"
+        ]
+      },
+      "pw:opencode-adk-e2e.spec.ts": {
+        "covered": [
+          "revised in place (fix round 2): the DEEPSEEK_API_KEY skip and the legacy Configure-modal/DeepSeek LLM-provider setup are REMOVED; the harness supplies the deterministic LLM (live provider configuration is the T20 live-matrix lane)",
+          "the LangChain idioms are removed: the Crew create dialog's core select must offer exactly ['opencode','qoder'] with opencode selected (no langchain option), the runtime switch is opencode -> qoder -> opencode through PUT /agents/{id} with exact read-backs, and the Providers page asserts opencode + qoder rows, exactly one Default row (opencode), a zero-count langchain row and the Per-Agent Backends core",
+          "the run path is pinned to the deterministic harness: scenario 'reported-usage' is selected for the agent, the task ask is approved with the operator credential, and the run must reach exactly COMPLETED with finalOutput exactly 'fixture-complete' (the FAILED/ABORTED/CANCELLED alternatives and the sandbox-error branch are gone)"
+        ],
+        "residual": [
+          "captured RED (fix round 2): the first assertion fails - the running build still offers the LangChain row (received ['langchain','opencode'], expected ['opencode','qoder']); the run verdict additionally needs T18's catalog narrowing, agent selection persistence, scenario route and coordinator"
+        ]
+      },
+      "workspaces acceptance matrix V2 (dirty source preserved)": {
+        "covered": [
+          "core-workspaces.spec.ts 'a dirty source repository is preserved byte-for-byte by a worktree run': a spec-owned source repository with one exact uncommitted change runs a WORKTREE/HOST run whose exact deterministic completion is asserted (COMPLETED + 'fixture-complete'), and the source must stay bit-identical - the exact dirty bytes, the captured HEAD sha and the captured porcelain status ('M tracked.txt') are all re-asserted after the run"
+        ],
+        "residual": [
+          "captured RED (fix round 2): the case fails at the harness scenario control (404 POST /api/v1/maintenance/core-e2e/scenario) before the run can execute - Owner: T18"
+        ]
+      },
+      "control: truthful pause ack, no writes after pause, stable export": {
+        "covered": [
+          "core-execution-modes.spec.ts 'a pause is acknowledged truthfully and freezes the export until resume': every ask opened before RUNNING is approved exactly once (task gate then the execute permission), then POST /runs/{id}/pause must answer exactly 200 with status PAUSED and the read-back must be exactly PAUSED (a PAUSED ack is only written on a verified ControlAck)",
+          "no writes after pause / stable export: GET /runs/{id}/workspace-diff must answer hasWorkspace=true with a diff containing ticks.log, and a second read 3 s later must be byte-identical; after a resume ack exactly 200/status RUNNING the same export must change again; the cancel ack and the terminal state are exactly CANCELLED"
+        ],
+        "residual": [
+          "captured RED (fix round 2): the case fails at the harness scenario control (404) before the run exists - Owner: T18"
+        ]
+      },
+      "pw:api/git-pack-gate.api.spec.ts (governed git push)": {
+        "covered": [
+          "core-permissions.spec.ts 'a run blocks on the git_push PUSH gate and the approved push lands in a disposable bare remote': the spec owns the bare remote and the source repository, the run's worktree is discovered from the source's worktree list, the captured TOOL_CALL ask must carry a uuid toolCallId, a reason containing 'git_push' and approvalType TOOL_CALL, the git_push tool call must be exactly PENDING with a null result, the run exactly PAUSED; after the operator allow-once grant the tool call must be exactly COMPLETED, the run exactly COMPLETED, and refs/heads/<branch> in the disposable bare remote must point at exactly the sha the spec committed in the run's worktree"
+        ],
+        "residual": [
+          "captured RED (fix round 2): fails at the harness scenario control (404) before the run; the recorded peer scenario 'git-push' (a git_push tool-call scenario) is a T18 obligation - the committed peers have no git scenario today"
+        ]
+      },
+      "pw:api/mcp-sdd-workflow.api.spec.ts (permission half: worker boundary + MCP parity)": {
+        "covered": [
+          "core-permissions.spec.ts 'an authenticated worker sees the same MCP answer over both transports': one real HTTP MCP client per Java transport (streamable /mcp and SSE /sse + /mcp/message), both authenticated with the run's worker credential, must return the identical list_approvals envelope (toEqual) containing this run's captured ask id",
+          "core-permissions.spec.ts 'a run-scoped worker credential cannot self-approve at REST': the valid worker credential on POST /approvals/{id}/decide must answer exactly 403 (not 401) and the ask must stay exactly PENDING",
+          "core-permissions.spec.ts 'a run-scoped worker credential cannot self-approve over either MCP transport': both transports must return exactly {ok:false, errorType:FORBIDDEN, message:'Operator authority required'} and the ask must stay exactly PENDING"
+        ],
+        "residual": [
+          "captured RED (fix round 2): all three cases fail at the harness-only worker-token route (404 GET /api/v1/maintenance/core-e2e/worker-token) - the helper that reads the run's credential is a T18 obligation (see task18Obligations); the file api/mcp-sdd-workflow.api.spec.ts itself is untouched"
+        ]
+      },
+      "pw:runs-page.spec.ts": {
+        "covered": [
+          "the run-start path on the deterministic harness: a core-bound agent's run reaches exactly COMPLETED with the exact fixture output (the four-combination loop and the cancel control in core-execution-modes.spec.ts; RED until T18)"
+        ],
+        "residual": [
+          "no UI half: the Runs page header/filters, the start-run form's empty-submission validation ('Agent selection is required' / 'Prompt seed is required') and the UI-started run's table row with a status badge are not carried. Owner: the runs-page.spec.ts revision (the browser assertions can be re-pointed only once T18's wired runtime serves the UI lane)."
+        ]
+      },
+      "pw:journey-crew-deploy-run.spec.ts": {
+        "covered": [
+          "the exchangeable-provider run path (agent -> run -> exact terminal output with the exact final output) on the deterministic harness; RED until T18"
+        ],
+        "residual": [
+          "no UI half: the Crew catalog deploy journey (template card click -> POST /agents/from-template/{template} -> exactly one more roster card) and the Runs-page form start with the submitted agentId assertion are not carried. Owner: the journey-crew-deploy-run.spec.ts revision."
+        ]
+      },
+      "pw:journey-agent-run-report.spec.ts": {
+        "covered": [
+          "agent -> run -> exact terminal output on the deterministic harness (the four-combination loop); RED until T18"
+        ],
+        "residual": [
+          "the crew-roster card reflection, the runs-table row/status badge, the approvals-surface consistency poll are not carried",
+          "the generated report artifact (POST /reports then the Reports tab showing the title) is not carried",
+          "the 'fails fast without a key' case's explicit denied-launch assertion promised by this map's rationale is not carried. Owner: the journey-agent-run-report.spec.ts revision."
+        ]
+      },
+      "pw:multi-agent-lifecycle.spec.ts": {
+        "covered": [],
+        "residual": [
+          "the whole purpose (multi-agent Research -> Verify -> Report orchestration via Aria) is not carried by any ported case, and the original's test.skip without LLM configuration is untouched. Owner: the multi-agent-lifecycle.spec.ts revision on the wired runtime (T18)."
+        ]
+      },
+      "pw:kanban-board.spec.ts": {
+        "covered": [
+          "the REST dispatch contract: a dispatched card reaches exactly IN_PROGRESS and the pickup creates the run plus the PENDING ask (core-permissions.spec.ts dispatchAsk; RED until T18)"
+        ],
+        "residual": [
+          "no UI half: the governed-flow board render (all five columns, the retired qa_gate/archived absence, column header text), the API-seeded card's Todo placement, the New Task modal with empty-title validation and the dispatch/pause transitions through the board are not carried. Owner: the kanban-board.spec.ts revision."
+        ]
+      },
+      "pw:real-llm-scenarios.spec.ts": {
+        "covered": [
+          "rl-01's providers half is carried as the exact core inventory (core-execution-modes.spec.ts core-catalog case; RED until T18)"
+        ],
+        "residual": [
+          "rl-01's UI half (the providers page rendering both provider rows) is not carried",
+          "rl-02 (a real OpenCode agent run end to end, final output in the UI) is NOT covered by this port; it is the operator live matrix lane owned by T20, and the original's DEEPSEEK/LIVE_STACK skips are untouched. Owner: T20 evidence."
+        ]
+      },
+      "pw:langchain-adk-e2e.spec.ts": {
+        "covered": [
+          "the exchangeable-provider run path (core selection -> run -> exact terminal output) on the deterministic harness; RED until T18"
+        ],
+        "residual": [
+          "the file itself is retained untouched (removal deferred to the cutover commit; see removalDecisions). Its Configure-modal LLM-provider setup, Crew agent creation and Runs-page polling are not carried."
+        ]
+      },
+      "pw:review-decision-zone.spec.ts": {
+        "covered": [
+          "the REST decision contract: operator decide -> ask exactly APPROVED and the linked run leaves exactly PAUSED; operator denial -> ask exactly DENIED and the linked run reaches exactly CANCELLED; the operator-only refusal (401 'Operator session required', forged bearer also 401) (core-permissions.spec.ts)"
+        ],
+        "residual": [
+          "no UI half: the decision-zone render ('NEEDS YOUR DECISION'), the scoped Deny/Approve control clicks and the resulting card states (CANCELLED / REVIEW) are not carried; both original cases are browser cases. Also not carried: the card-transition and run-PAUSED card-path assertions. Owner: the review-decision-zone.spec.ts revision (T18's native asks must serve a real run first)."
+        ]
+      },
+      "pw:approvals-decision-flow.spec.ts": {
+        "covered": [
+          "the approvals REST surface the operator-decision cases exercise (GET /approvals returns the ask list; a decision resolves it)"
+        ],
+        "residual": [
+          "the Review-column render plus the absence of the rail Approvals entry (original case 1's UI half) is not carried",
+          "the negative decision on a non-existent approval id (original case 2) is not carried; the port's negative is the authority refusal, a different assertion. Owner: the approvals-decision-flow.spec.ts revision."
+        ]
+      },
+      "pw:ops-approval-surface.spec.ts": {
+        "covered": [
+          "approving from an operator surface resolves the ask, asserted through the REST decide path (ask exactly APPROVED, core-permissions.spec.ts)"
+        ],
+        "residual": [
+          "no UI half: the Ops page approval card and the request-path assertion that POST /api/v1/approvals/{id}/decide is the endpoint used (the regression the original guards) are not carried. Owner: the ops-approval-surface.spec.ts revision."
+        ]
+      },
+      "pw:git-pack-governance.spec.ts": {
+        "covered": [
+          "the operator decision half of the gate lifecycle only (an operator's approve/deny resolves the ask with an exact ack)"
+        ],
+        "residual": [
+          "the git_push PUSH-tier approval gate with resume after approval is NOT carried (no tool-level gate case exists in the port)",
+          "the tool registry / risk-tier assertions (git_push PUSH, request_approval present, DESTRUCTIVE vs READ) are NOT carried",
+          "the pack lifecycle endpoints (register -> PENDING, approve -> APPROVED + enabled) are NOT carried. Owner: the git-pack-governance.spec.ts revision with the deterministic git peer named in this map."
+        ]
+      },
+      "pw:api/approval-denial.api.spec.ts": {
+        "covered": [
+          "denial is recorded: the ask reaches exactly DENIED and the linked run reaches exactly CANCELLED (core-permissions.spec.ts)"
+        ],
+        "residual": [
+          "the reason/decidedAt persistence assertions are DROPPED by the port: the original asserts GET /approvals/{id}.reason equals the exact sent reason and decidedAt is present; the ported case asserts neither. Owner: amending the ported case (the native ask path serving a real run, T18) or restoring the assertions."
+        ]
+      },
+      "pw:api/git-pack-gate.api.spec.ts": {
+        "covered": [
+          "ported in fix round 2 as 'core-permissions.spec.ts / a run blocks on the git_push PUSH gate and the approved push lands in a disposable bare remote' - see the governed-git-push entry above for the exact assertions (TOOL_CALL ask with a uuid toolCallId, reason containing git_push, tool call exactly PENDING with a null result, run exactly PAUSED, COMPLETED after the grant, and the bare remote ref equal to the spec's committed sha)"
+        ],
+        "residual": [
+          "the case is RED until T18 (scenario route 404 today) and needs the recorded 'git-push' peer scenario (recorded in task18Obligations); the original file is untouched"
+        ]
+      },
+      "pw:api/approval-request-changes.api.spec.ts": {
+        "covered": [],
+        "residual": [
+          "the whole purpose is NOT carried: no ported case asserts REVIEW -> TODO with feedback (the stale ask reaching exactly EXPIRED, a new linked run whose promptSeed contains the operator feedback while the first run's seed does not, and the card cleanup). Owner: the request-changes port."
+        ]
+      },
+      "pw:journey-knowledge-promotion.spec.ts": {
+        "covered": [
+          "the promotion pipeline (review APPROVED -> promote -> exactly 201 with derived status PENDING) and the deterministic run tail (COMPLETED with finalOutput exactly 'fixture-complete') in core-workspaces.spec.ts; RED until T18"
+        ],
+        "residual": [
+          "the knowledge-page UI assertions (PENDING queue panel, unified space after approval) are not carried",
+          "the prompt-call accumulation semantics of the original LLM-gated tail are not asserted; the replacement asserts the completed trajectory's exact output only. Owner: the journey-knowledge-promotion.spec.ts revision."
+        ]
+      },
+      "pw:api/mcp-sdd-workflow.api.spec.ts (permission half)": {
+        "covered": [
+          "ported in fix round 2 into core-permissions.spec.ts - see the 'permission half: worker boundary + MCP parity' entry above for the exact assertions (identical list_approvals envelope over both transports, 403 at REST, FORBIDDEN/'Operator authority required' over both transports, ask PENDING throughout)"
+        ],
+        "residual": [
+          "all three cases are RED until T18 serves the harness-only worker-token route (see task18Obligations); the file itself is untouched"
+        ]
+      },
+      "pw:api/fault-injection.api.spec.ts": {
+        "covered": [],
+        "residual": [
+          "unchanged by this task and not re-verified here: the deterministic arms are owned by act-execution tests (T10/T13) plus the sandbox lane, and the live opencode path by the T20 live matrix, as this map records. Owner: those tasks."
+        ]
+      },
+      "pw:api/load-stress.api.spec.ts / pw:api/multi-agent-collab.api.spec.ts / pw:api/skill-lifecycle.api.spec.ts / pw:api/branch-governance.api.spec.ts": {
+        "covered": [],
+        "residual": [
+          "retained rows, not modified in this task: their existing assertions and skips are untouched. Owner: their mapped tasks (T19/T20) as recorded above."
+        ]
+      }
+    },
+    "notRevisedRows": {
+      "note": "Fix round 2 revised the four briefed modified-in-place specs (aria-conversation-id-regression, kanban-hitl, sdd-workflow, opencode-adk-e2e) - they moved to perPurposeStatus with their residual lists; none of them is in this register any more. The rows below remain NOT revised: their files were not touched in this round, no assertion was changed and no skip was added or removed. They stay in the map as not-revised and MUST NOT be removed at cutover while they are in this state.",
+      "pw:aria-engine-unification.spec.ts": "not-revised - deferral owner: the T17 remainder (its SSE event-sequence/AgentDrawer cases at :31 still skip without an LLM key; the deterministic Aria scenario registration is recorded in task18Obligations)",
+      "pw:aria-timeout-cancel.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: cancel semantics move to the run coordinator, and the stalled/closed stream must come from the wired peer)",
+      "pw:housekeeping-cleanup.spec.ts": "not-revised - deferral owner: the T17 remainder (the counts asserted there change once retention also purges run_execution_bindings and retirement artifacts per the T13/T14 rulings; needs the wired runtime)",
+      "pw:observability-live.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: Track B's run.progress replay needs the mock peer fed by the wired coordinator; the skip at :176 is untouched)",
+      "pw:workflow-data-flow-e2e.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: the chain's runs must be served deterministically)",
+      "pw:workflow-state-machine-e2e.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: RUNNING/FAILED step expectations must come from the wired coordinator, not a provider failure; the unconditional test.skip at :154 is untouched)",
+      "pw:workflow-ui-interaction-e2e.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: status badges reflect coordinator-reported run state)",
+      "disabled:template-api.spec.ts:146": "not-revised - the permanently disabled role-dropdown case still has no deterministic re-enable; deferral owner: the T17 remainder",
+      "disabled:workflow-state-machine-e2e.spec.ts:154": "not-revised - the unconditional in-case skip still has no deterministic expectation; deferral owner: the T17 remainder"
+    },
+    "removalDecisions": {
+      "pw:langchain-adk-e2e.spec.ts": "RETAINED at Task 17. The map permits removal only once the replacement spec runs against the harness; its replacement (core-execution-modes.spec.ts) is written and executed here but cannot pass while the peer scenario control route and the production coordinator wiring are pending Task 18. Removal is recorded for the cutover commit, together with the map's mapping.",
+      "pw:settings-navigation.spec.ts": "RETAINED at Task 17 (same cutover gate). All six cases are already disabled by a file-level test.describe.skip against a deleted surface, so deferring the file loses zero runnable coverage; deletion is recorded for the cutover commit."
+    },
+    "harnessRun": "Extracted T16 distribution (%TEMP%/aria-core-e2e-harness-fix1) booted with ARIA_OPERATOR_BEARER_TOKEN + ARIA_PEER_CONTROL_TOKEN, --e2e.assets/--e2e.work-root/--e2e.sandbox-transport=process on port 8080, CoreE2eSetup --confirm-retire-historical-seeds (receipt noOp=true, built-ins existing=3); CI=true pnpm --dir agent-control-tower/act-dashboard exec playwright test e2e/core-{execution-modes,permissions,workspaces}.spec.ts --workers=1 -> 4 passed / 14 failed (no skips; unchanged by fix round 1). Fix round 1 re-ran the workspaces spec alone to capture the new exact-failure shapes: the invalid-worktree case now fails on a single exact expectation (core-workspaces.spec.ts:66 expect(created.status).toBe(400), received 201), the other three at the setScenario 404. FIX ROUND 2 re-booted the same distribution with a FRESH H2 database (the previous data/ was moved aside), additional env GITHUB_TOKEN=synthetic-e2e-git-handoff and --approvals.timeout-ms=60000, plus the dashboard dev server (VITE_BACKEND_PORT=8080 pnpm dev on 5173) for the browser lane: core-{execution-modes,permissions,workspaces} -> 4 passed / 20 failed with no skips (the same 4 permissions operator arms pass; every new case fails with the exact captured cause recorded in perPurposeStatus); the revised legacy specs: aria-conversation-id-regression 4 passed / 1 failed (SSE 'message' expectation; disproven in fix round 3 - the file-level serial mode skipped the reuse case behind that failure, so this recorded split was not reproducible from the committed file), kanban-hitl 4 passed / 1 failed (optionsJson: null on the task-gate ask), sdd-workflow 0 passed / 2 failed (both chains reach FAILED before WAITING_APPROVAL), opencode-adk-e2e 0 passed / 1 failed (core catalog received ['langchain','opencode']). FIX ROUND 3 re-ran the two browser-lane specs on the same recipe (fresh H2 data/, same env, ports 8080/5173, --workers=1, CI=true with retries=1): aria-conversation-id-regression 3 passed / 2 failed, 0 skipped, 0 flaky (stats: expected 3, unexpected 2, skipped 0) - with the serial mode removed the reuse case EXECUTES and fails deterministically at its first stored-timeline assertion (aria-conversation-id-regression.spec.ts:196: received ['user:remember 1'] vs expected ['user:remember 1', 'assistant:Still working — reasoning models can take a little longer. The result will appear in the Runs dashboard, or use streaming chat for live updates.']; identical on both attempts) - the round-2 'reuse case PASSES' claim is disproven and corrected; kanban-hitl 4 passed / 1 failed - the review case stops EARLIER than the round-2 record: both attempts fail at the dispatch transition's disclosed optimistic-lock 409 (kanban-hitl.spec.ts:163, body 'Card was modified by another move — refresh and retry.'), so the round-2 'optionsJson: null' stop is not currently reached and the strengthened cleanup is not reached either.",
+    "setScenario404Cases": "The harness peer scenario control route is 404 in this build. Twelve cases invoke setScenario and fail on it (mechanical recount in fix round 3): core-execution-modes.spec.ts (4 Step-1 combinations + the cancel control + the pause case = 6), core-workspaces.spec.ts (dirty-source, concurrent Direct, workspace-diff, knowledge promotion = 4), core-permissions.spec.ts (the expiry case + the governed git-push case = 2). The previous record's '11 cases' was wrong (fix round 1, minor 9) and its 'nine' headline was not updated for the round-2 additions (fix round 3, minor 2). opencode-adk-e2e.spec.ts also calls setScenario but its single case stops earlier today on its first assertion (the core catalog, received ['langchain','opencode']). The three worker-credential cases fail at the worker-token route's 404 instead.",
+    "task18Obligations": [
+      "The harness-only operator-authenticated peer scenario control route POST /api/v1/maintenance/core-e2e/scenario (404 today) and the peer-launch wiring: CARRIED TO TASK 18 by review ruling - not a T17 residual, and no production/test route was added in this round.",
+      "Production coordinator + admission wiring: the launch path must refuse an invalid worktree request and a concurrent Direct writer exactly as T6 specifies (RunWorkspaceService 'Worktree workspace requires a git repository: <path>' and 'Workspace conflict: <root> overlaps active lease <leaseId> (run <runId>)', both IllegalArgumentException -> HTTP 400 through GlobalExceptionHandler) - the two core-workspaces cases pin those contracts.",
+      "Agent execution selection persistence (AgentService.createAgent currently drops executionMode/workspaceMode/workspacePath/workspaceBaseRef)",
+      "Native permission asks with the recorded one-use grant option set and the reason/decidedAt persistence the port dropped (see the residual entries above; the kanban-hitl review case now asserts the exact option set and is captured RED on optionsJson: null)",
+      "Core catalog of exactly qoder+opencode and explicit failure for unknown providers (the running build still logs 'Unknown ADK provider qoder - falling back to default opencode'; opencode-adk-e2e is captured RED on received ['langchain','opencode'])",
+      "A task gate ask still precedes admission for a run (the plan's Step-1 snippet depends on it); if T18 orders admission first, the ported run cases that call approveRunApproval must be re-pinned rather than weakened",
+      "FIX ROUND 2 ADDITIONS (each RED today with a captured cause):",
+      "(a) the harness-only operator-authenticated worker-credential route the fixtures call: GET /api/v1/maintenance/core-e2e/worker-token?runId=<id> -> {runId, token} (the exact ACT_ACTOR_TOKEN the run's core process received). Three core-permissions cases (MCP parity + the two worker self-approval arms) fail at its 404 today; it belongs to the T18 peer-launch wiring, next to the scenario route.",
+      "(b) a recorded peer scenario 'git-push' for the governed push case (a git_push tool-call scenario the peers do not have today): the peer must name the branch/remote from the run prompt ('Push branch <branch> to origin.') and the platform must execute the governed git_push tool in the run's worktree; the spec then asserts the disposable bare remote's ref equals its own committed sha.",
+      "(c) the harness's Aria scenario registration (the DeterministicLlmClient has no exact request/response registered for the Aria chat path): the conversation-id spec's SSE message event is captured RED as expect(eventNames).toContain('message') with [thinking, thinking, done, error], and the non-streaming turn cannot complete either - the run dies on the missing OpenSandbox (localhost:8090), the sync window expires with the 'Still working — ...' placeholder (AriaService.java:180-185) and the stored timeline holds only the user entry (captured fix round 3 at aria-conversation-id-regression.spec.ts:196).",
+      "(d) the harness environment for the SDD revision: a synthetic git handoff credential (the TP1 gate reads GitBranchService.isAvailable(); the round-2 harness run supplied GITHUB_TOKEN=synthetic-e2e-git-handoff and instantiation then succeeded) and a short approvals.timeout-ms (the round-2 run used --approvals.timeout-ms=60000) so the resubmit case can observe exactly EXPIRED.",
+      "Until (b) exists the governed-push case fails at the scenario route (404) and after it exists it must still be re-verified end to end; the git_pack risk-tier registry assertions remain unported (see perPurposeStatus pw:git-pack-governance)."
+    ]
+  }
 }

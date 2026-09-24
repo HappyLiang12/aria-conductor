@@ -1,28 +1,74 @@
 import type { APIRequestContext } from '@playwright/test';
 
 /**
- * Phase E shared fixtures.
+ * Phase E shared fixtures (Task 17: governed cores + deterministic harness).
  *
  * ALL seeding goes through the REST API via Playwright's APIRequestContext —
  * never through the UI. API_URL parameterizes the backend for isolated stacks
- * (worktrees / CI compose), matching the existing workflow-lifecycle specs.
+ * (worktrees / the core E2E harness), matching the existing workflow specs.
+ *
+ * Operator authority (Tasks 4/12): `/approvals/{id}/decide`, the credentials
+ * surface and the harness scenario control are operator-only. The backend
+ * accepts the environment-supplied synthetic operator credential
+ * (`ARIA_OPERATOR_BEARER_TOKEN`) directly as a bearer header
+ * (`Authorization: Bearer <credential>`, ActorAuthenticationFilter step 1 --
+ * the header-authenticated operator branch, no CSRF surface). These fixtures
+ * therefore authenticate with that header. The browser client is a different
+ * flow: `src/api/operatorSession.ts` exchanges the credential once for an
+ * HttpOnly session cookie plus `X-CSRF-Token`. Helpers that need operator
+ * authority fail loudly when the credential is absent instead of silently
+ * issuing an unauthenticated call.
  */
 export const BACKEND = `${process.env.API_URL || 'http://localhost:8080'}/api/v1`;
+
+/** The synthetic operator credential; empty when the environment did not supply one. */
+export const OPERATOR_BEARER_TOKEN = (process.env.ARIA_OPERATOR_BEARER_TOKEN ?? '').trim();
+
+/** The operator session header contract: `Authorization: Bearer <credential>`. */
+export function operatorHeaders(): Record<string, string> {
+  if (OPERATOR_BEARER_TOKEN === '') {
+    throw new Error(
+      'ARIA_OPERATOR_BEARER_TOKEN is not set: this call needs operator authority '
+        + '(the environment-supplied synthetic operator credential the core E2E harness requires)',
+    );
+  }
+  return { Authorization: `Bearer ${OPERATOR_BEARER_TOKEN}` };
+}
 
 export interface ApiResult<T = any> {
   status: number;
   data: T;
 }
 
-export async function apiCall(
+export function apiCall(
   request: APIRequestContext,
   method: string,
   path: string,
   body?: object,
 ): Promise<ApiResult> {
+  return apiFetch(request, method, path, body);
+}
+
+/** `apiCall` carrying the operator session headers (operator-only routes). */
+export function operatorApiCall(
+  request: APIRequestContext,
+  method: string,
+  path: string,
+  body?: object,
+): Promise<ApiResult> {
+  return apiFetch(request, method, path, body, operatorHeaders());
+}
+
+async function apiFetch(
+  request: APIRequestContext,
+  method: string,
+  path: string,
+  body?: object,
+  extraHeaders: Record<string, string> = {},
+): Promise<ApiResult> {
   const resp = await request.fetch(`${BACKEND}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     data: body ? JSON.stringify(body) : undefined,
   });
   const data = await resp.json().catch(() => null);
@@ -33,12 +79,41 @@ export function uniqueName(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
 }
 
-/** POST /agents — NATIVE agents are created HEALTHY, so they are immediately runnable. */
-export async function seedAgent(request: APIRequestContext, name?: string) {
+/**
+ * The governed execution selection (Tasks 2/3/15). Fields are sent only when
+ * provided, so every pre-existing caller keeps its exact request body.
+ */
+export interface ExecutionSelectionOpts {
+  executionMode?: 'HOST' | 'SANDBOX';
+  workspaceMode?: 'WORKTREE' | 'DIRECT';
+  workspacePath?: string;
+  workspaceBaseRef?: string;
+}
+
+function executionSelection(opts: ExecutionSelectionOpts) {
+  return {
+    ...(opts.executionMode ? { executionMode: opts.executionMode } : {}),
+    ...(opts.workspaceMode ? { workspaceMode: opts.workspaceMode } : {}),
+    ...(opts.workspacePath ? { workspacePath: opts.workspacePath } : {}),
+    ...(opts.workspaceBaseRef ? { workspaceBaseRef: opts.workspaceBaseRef } : {}),
+  };
+}
+
+/**
+ * POST /agents — NATIVE agents are created HEALTHY, so they are immediately
+ * runnable. Optional explicit core/mode/workspace selection is passed through
+ * to the same fields the Crew create form submits.
+ */
+export async function seedAgent(
+  request: APIRequestContext,
+  name?: string,
+  opts: ExecutionSelectionOpts = {},
+) {
   const { status, data } = await apiCall(request, 'POST', '/agents', {
     name: name ?? uniqueName('e2e-agent'),
     agentType: 'NATIVE',
     description: 'Seeded by Phase E e2e fixtures',
+    ...executionSelection(opts),
   });
   if (status !== 201) {
     throw new Error(`seedAgent failed: HTTP ${status} ${JSON.stringify(data)}`);
@@ -125,7 +200,14 @@ export async function seedKanbanItem(
   return data;
 }
 
-/** POST /runs — without an LLM key the run fails fast; callers assert reachable states only. */
+/**
+ * POST /runs — starts a run for the agent's frozen execution binding. Under the
+ * deterministic harness the run is driven by the recorded peer scenario(s)
+ * selected with {@link setScenario}; a run without a selected scenario fails
+ * loudly instead of reaching an external model. The run starts asynchronously
+ * (AFTER_COMMIT listener), so callers must poll — never assume a terminal state
+ * from this response.
+ */
 export async function seedRun(
   request: APIRequestContext,
   agentId: string,
@@ -203,10 +285,29 @@ export async function pollUntil<T = any>(
 // concurrency / state-machine specs. All seeding goes through the REST API.
 // ─────────────────────────────────────────────────────────────────────
 
-/** POST /agents — ADK agent with an explicit provider (opencode | langchain). */
+export interface SeedAdkAgentOpts extends ExecutionSelectionOpts {
+  name?: string;
+  /**
+   * The governed core. The production catalog is exactly `qoder` | `opencode`;
+   * `langchain` stays in the runtime shape only so the pre-existing caller that
+   * still selects it (api/git-pack-gate.api.spec.ts:233, whose loopback mock is
+   * wired through that provider) keeps type-checking until its ported
+   * replacement lands; it is removed at cutover with that spec (T18).
+   */
+  adkProvider?: 'qoder' | 'opencode' | 'langchain';
+  model?: string;
+  config?: string;
+}
+
+/**
+ * POST /agents — ADK agent bound to an explicit core and, when provided, an
+ * explicit placement/workspace selection. The selection fields are the same
+ * ones the Crew create form submits (`CreateAgentRequest`); the production
+ * admission resolves them at run start (Tasks 3/13).
+ */
 export async function seedAdkAgent(
   request: APIRequestContext,
-  opts: { name?: string; adkProvider?: string; model?: string; config?: string } = {},
+  opts: SeedAdkAgentOpts = {},
 ) {
   const { status, data } = await apiCall(request, 'POST', '/agents', {
     name: opts.name ?? uniqueName('e2e-adk-agent'),
@@ -215,6 +316,7 @@ export async function seedAdkAgent(
     model: opts.model ?? 'deepseek-chat',
     adkProvider: opts.adkProvider ?? 'opencode',
     ...(opts.config ? { config: opts.config } : {}),
+    ...executionSelection(opts),
   });
   if (status !== 201) {
     throw new Error(`seedAdkAgent failed: HTTP ${status} ${JSON.stringify(data)}`);
@@ -223,12 +325,75 @@ export async function seedAdkAgent(
 }
 
 /**
- * Approve the task-level approval gate for a run (default-on since 632d3de):
- * waits for the PENDING approval tied to the run, then decides approved.
- * Throws when the decision is rejected so callers cannot silently pass a
- * broken approvals API.
+ * Harness-only control route that selects the deterministic peer scenario for
+ * an agent's runs (Tasks 7/16). It drives the committed mock peers, never the
+ * database: no run, approval or binding row is written here.
+ *
+ * The core E2E harness serves this route under the `core-e2e` profile only and
+ * requires operator authority (the synthetic operator credential). The recorded
+ * scenario is the exact fixture the peer is launched with; a peer refuses to
+ * start without both its control token and a declared scenario id.
  */
-export async function approveRunApproval(
+export const SCENARIO_CONTROL_PATH = '/maintenance/core-e2e/scenario';
+
+export async function setScenario(request: APIRequestContext, agentId: string, scenario: string) {
+  const { status, data } = await operatorApiCall(request, 'POST', SCENARIO_CONTROL_PATH, {
+    agentId,
+    scenario,
+  });
+  if (status !== 200) {
+    throw new Error(
+      `setScenario failed for agent ${agentId}: HTTP ${status} ${JSON.stringify(data)}`,
+    );
+  }
+  if (data?.agentId !== agentId || data?.scenario !== scenario) {
+    throw new Error(`setScenario recorded a different selection: ${JSON.stringify(data)}`);
+  }
+  return data;
+}
+
+/**
+ * The run-scoped worker credential of a live run, read from the harness-only
+ * operator-authenticated surface (`GET /maintenance/core-e2e/worker-token?runId=…`,
+ * returning `{runId, token}`). The token is inherently unrecoverable elsewhere:
+ * the run lifecycle hands it only to that run's processes (packages/mcp-server
+ * documents it as `ACT_ACTOR_TOKEN`), so an E2E must ask the harness for the
+ * exact value the peer received. Like {@link setScenario} this route drives no
+ * database outcome — it echoes the credential the coordinator already minted.
+ * The route is part of the T18 peer-launch wiring; until it is served the helper
+ * fails loudly instead of fabricating a credential.
+ */
+export const WORKER_TOKEN_CONTROL_PATH = '/maintenance/core-e2e/worker-token';
+
+export async function runWorkerToken(request: APIRequestContext, runId: string) {
+  const { status, data } = await operatorApiCall(
+    request,
+    'GET',
+    `${WORKER_TOKEN_CONTROL_PATH}?runId=${encodeURIComponent(runId)}`,
+  );
+  if (status !== 200 || data?.runId !== runId || typeof data?.token !== 'string' || data.token === '') {
+    throw new Error(
+      `runWorkerToken failed for run ${runId}: HTTP ${status} ${JSON.stringify(data)}`,
+    );
+  }
+  return data.token as string;
+}
+
+/** The offered native permission options of an ask, parsed from its recorded option set. */
+export function permissionOptions(approval: any): Array<{ optionId: string; choice: string }> {
+  if (typeof approval?.optionsJson !== 'string' || approval.optionsJson.trim() === '') {
+    throw new Error(
+      `approval ${approval?.id} carries no offered permission options: ${JSON.stringify(approval)}`,
+    );
+  }
+  return JSON.parse(approval.optionsJson);
+}
+
+/**
+ * The PENDING asks of one run, captured by id. Approvals are operator-visible
+ * reads; the decision itself requires operator authority (next helper).
+ */
+export async function pendingRunApprovals(
   request: APIRequestContext,
   runId: string,
   timeoutMs = 30_000,
@@ -240,15 +405,53 @@ export async function approveRunApproval(
     timeoutMs,
     2_000,
   );
-  const pending = approvals.find((a) => a.status === 'PENDING' && a.runId === runId);
-  const decided = await apiCall(request, 'POST', `/approvals/${pending.id}/decide`, {
-    approved: true,
-    reason: 'API E2E auto-approval (task-level gate)',
+  return approvals.filter((a) => a.status === 'PENDING' && a.runId === runId);
+}
+
+/**
+ * Decide an ask through the operator-only route (Task 12). The response is
+ * verified field by field: a decision that was not processed is a failure, not
+ * a pass. `approved: true` is the one-use native grant (ALLOW_ONCE); `false` is
+ * the offered reject option.
+ */
+export async function decideApproval(
+  request: APIRequestContext,
+  approvalId: string,
+  approved: boolean,
+  reason: string,
+) {
+  const { status, data } = await operatorApiCall(request, 'POST', `/approvals/${approvalId}/decide`, {
+    approved,
+    reason,
   });
-  if (decided.status !== 200) {
-    throw new Error(`approval decide failed: HTTP ${decided.status} ${JSON.stringify(decided.data)}`);
+  if (
+    status !== 200 ||
+    data?.status !== 'processed' ||
+    data?.approvalId !== approvalId ||
+    data?.approved !== approved
+  ) {
+    throw new Error(
+      `approval decide failed for ${approvalId}: HTTP ${status} ${JSON.stringify(data)}`,
+    );
   }
-  return decided;
+  return data;
+}
+
+/**
+ * Approve the run's pending ask as the operator (one-use grant). Throws when
+ * the decision is refused so callers cannot silently pass a broken approvals
+ * API. The ask itself is returned so callers can assert its captured id and
+ * offered options.
+ */
+export async function approveRunApproval(
+  request: APIRequestContext,
+  runId: string,
+  timeoutMs = 30_000,
+) {
+  const pending = await pendingRunApprovals(request, runId, timeoutMs);
+  const ask = pending[0];
+  await decideApproval(request, ask.id, true, 'API E2E operator approval (one-use grant)');
+  return ask;
 }
 
 /** Wait until a run reaches a terminal state and return the run entity. */

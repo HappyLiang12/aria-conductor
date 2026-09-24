@@ -1,0 +1,511 @@
+import { test, expect } from '@playwright/test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  BACKEND,
+  OPERATOR_BEARER_TOKEN,
+  apiCall,
+  decideApproval,
+  operatorApiCall,
+  pendingRunApprovals,
+  permissionOptions,
+  pollUntil,
+  runWorkerToken,
+  seedAdkAgent,
+  seedKanbanItem,
+  seedRun,
+  setScenario,
+  transitionKanban,
+  uniqueName,
+} from './fixtures';
+
+/**
+ * Task 17: the governed permission surface (Task 12) on the deterministic
+ * harness.
+ *
+ * Carries the coverage-map rows whose replacement is this spec:
+ *  - review-decision-zone.spec.ts + approvals-decision-flow.spec.ts
+ *    (decision zone resolves the ask)
+ *  - git-pack-governance.spec.ts (risk-tier gate + approval lifecycle)
+ *  - ops-approval-surface.spec.ts (approving from an operator surface)
+ *  - api/approval-denial.api.spec.ts (denial reason persists, run cancelled)
+ *  - api/git-pack-gate.api.spec.ts (block-then-resume)
+ *  - the permission half of api/mcp-sdd-workflow.api.spec.ts
+ *
+ * Reach path (LLM-free, CI-safe, the same one review-decision-zone.spec.ts
+ * documents): pin a task-capable opencode agent on a kanban card, dispatch it,
+ * and the default-on task gate creates the PENDING ask before any core call.
+ *
+ * The decision is operator-only (Task 12). The worker arm (a run-scoped worker
+ * token refused with 403) and the two MCP transports need a live run's worker
+ * credential, which the harness can only mint once Task 18 wires the
+ * coordinator; this spec asserts the REST owner arms exactly and reports that
+ * remainder instead of weakening them.
+ */
+
+// Every case dispatches its own card and agent and asserts exact captured
+// state; cases are independent so one refusal can never hide another's outcome.
+test.describe.configure({ timeout: 180_000 });
+
+/** The exact optimistic-lock 409 body (GlobalExceptionHandler.handleOptimisticLock). */
+const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refresh and retry.';
+
+/**
+ * True only for the disclosed optimistic-lock race: the pickup's AFTER_COMMIT
+ * listener updates the card concurrently, so the transition response can be the
+ * server's recorded 409 for the raced row. Any other refusal (a 409 from a
+ * refused transition, a 500, ...) is not a race and is never retried.
+ */
+function isOptimisticLockRace(result: { status: number; data: any }): boolean {
+  return result.status === 409 && result.data?.message === OPTIMISTIC_LOCK_409;
+}
+
+/** Dispatch a card for a fresh opencode agent and capture the PENDING ask. */
+async function dispatchAsk(request: Parameters<typeof seedAdkAgent>[0]) {
+  const agent = await seedAdkAgent(request, {
+    name: uniqueName('e2e-perm'),
+    adkProvider: 'opencode',
+    executionMode: 'HOST',
+  });
+  const card = await seedKanbanItem(request, {
+    title: uniqueName('perm-card'),
+    agentTemplateId: agent.name,
+  });
+
+  // The dispatch contract is the captured card state: the two-phase pickup
+  // assigns the agent and creates the run, while a commit listener moves the
+  // card. Only that concurrent update's optimistic-lock 409 is retried; the
+  // accepted transition response is then asserted exactly (status and body),
+  // and the card is read back by id.
+  const first = await transitionKanban(request, card.id, 'IN_PROGRESS');
+  const accepted = isOptimisticLockRace(first)
+    ? await transitionKanban(request, card.id, 'IN_PROGRESS')
+    : first;
+  expect(accepted.status, JSON.stringify(accepted.data)).toBe(200);
+  expect(accepted.data?.status).toBe('IN_PROGRESS');
+  await pollUntil(
+    request,
+    `/kanban/items/${card.id}`,
+    (item: any) => item?.status === 'IN_PROGRESS',
+    30_000,
+    500,
+  );
+
+  const asks = await pendingRunApprovals(request, await pollAskRunId(request, card.id), 60_000);
+  return { agent, card, ask: asks[0] };
+}
+
+/**
+ * The teardown the originals carried (kanban-hitl.spec.ts:174-177,
+ * api/approval-denial.api.spec.ts:76-79, api/approval-request-changes.api.spec.ts:95-99):
+ * cancel the dispatched card so a passing case does not leave an IN_PROGRESS
+ * card behind. Only the same disclosed optimistic-lock 409 is retried; the
+ * accepted response is asserted exactly.
+ */
+async function cancelCard(request: Parameters<typeof seedAdkAgent>[0], cardId: string) {
+  const first = await transitionKanban(request, cardId, 'CANCELLED');
+  const accepted = isOptimisticLockRace(first)
+    ? await transitionKanban(request, cardId, 'CANCELLED')
+    : first;
+  expect(accepted.status, JSON.stringify(accepted.data)).toBe(200);
+  expect(accepted.data?.status).toBe('CANCELLED');
+}
+
+/** The run the dispatch created for the card (the ask is linked to it). */
+async function pollAskRunId(request: Parameters<typeof seedAdkAgent>[0], cardId: string) {
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const { data } = await apiCall(request, 'GET', `/approvals?kanbanItemId=${cardId}`);
+    const pending = (data as any[] | null)?.find((a) => a.status === 'PENDING' && a.runId);
+    if (pending) return pending.runId;
+    if (Date.now() > deadline) throw new Error(`no PENDING ask appeared for card ${cardId}`);
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+}
+
+test('without operator authority the decision is refused and the ask stays PENDING', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+
+  // No identity at all: 401, exact refusal, nothing processed.
+  const anonymous = await apiCall(request, 'POST', `/approvals/${ask.id}/decide`, {
+    approved: true,
+    reason: 'unauthenticated attempt',
+  });
+  expect(anonymous.status).toBe(401);
+  expect(anonymous.data?.error).toBe('Operator session required');
+
+  // An unverifiable bearer credential is no identity either: 401, not 403.
+  const forged = await request.fetch(`${BACKEND}/approvals/${ask.id}/decide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-a-real-credential' },
+    data: JSON.stringify({ approved: true, reason: 'forged attempt' }),
+  });
+  expect(forged.status()).toBe(401);
+
+  const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+  expect(after.status).toBe('PENDING');
+
+  await cancelCard(request, card.id);
+});
+
+test('the ask offers exactly the one-use grant and the reject option', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+  expect(permissionOptions(ask)).toEqual([
+    { optionId: 'proceed_once', choice: 'ALLOW_ONCE' },
+    { optionId: 'cancel', choice: 'DENY' },
+  ]);
+
+  await cancelCard(request, card.id);
+});
+
+test('an operator allow-once grant resolves the ask and the run leaves PAUSED', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+
+  await decideApproval(request, ask.id, true, 'e2e operator one-use grant');
+
+  const { data: decided } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+  expect(decided.status).toBe('APPROVED');
+
+  const { data: run } = await apiCall(request, 'GET', `/runs/${ask.runId}`);
+  expect(run.status).not.toBe('PAUSED');
+
+  await cancelCard(request, card.id);
+});
+
+test('a decided ask refuses a second decision (grant is consumed once)', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+  await decideApproval(request, ask.id, true, 'e2e first decision');
+
+  const again = await operatorApiCall(request, 'POST', `/approvals/${ask.id}/decide`, {
+    approved: true,
+    reason: 'e2e second decision',
+  });
+  expect(again.status).toBe(409);
+  expect(typeof again.data?.error).toBe('string');
+  expect(again.data.error.length).toBeGreaterThan(0);
+
+  await cancelCard(request, card.id);
+});
+
+test('an operator denial is recorded and the linked run is cancelled', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+
+  await decideApproval(request, ask.id, false, 'e2e operator denial with reason');
+
+  const { data: decided } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+  expect(decided.status).toBe('DENIED');
+
+  await expect
+    .poll(
+      async () => {
+        const { data } = await apiCall(request, 'GET', `/runs/${ask.runId}`);
+        return data?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('CANCELLED');
+
+  await cancelCard(request, card.id);
+});
+
+test('an expired ask is EXPIRED and refuses a late grant', async ({ request }) => {
+  // The recorded expiry fixture: the peer closes its permission window after
+  // 300 ms (scenarios.json 'permission-expiry'), so the ask it registers must
+  // expire rather than stay decidable.
+  const agent = await seedAdkAgent(request, {
+    name: uniqueName('e2e-expiry'),
+    adkProvider: 'opencode',
+    executionMode: 'HOST',
+  });
+  await setScenario(request, agent.id, 'permission-expiry');
+  const run = await seedRun(request, agent.id);
+  const asks = await pendingRunApprovals(request, run.id, 60_000);
+  const ask = asks[0];
+
+  await expect
+    .poll(
+      async () => {
+        const { data } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+        return data?.status;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe('EXPIRED');
+
+  const late = await operatorApiCall(request, 'POST', `/approvals/${ask.id}/decide`, {
+    approved: true,
+    reason: 'e2e late grant after expiry',
+  });
+  expect(late.status).toBe(409);
+
+  const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+  expect(after.status).toBe('EXPIRED');
+});
+
+test('the operator credential the fixtures use is the harness credential', async ({ request }) => {
+  // The whole spec depends on operator authority being the environment-supplied
+  // synthetic credential, not a default: prove the wiring is live.
+  expect(OPERATOR_BEARER_TOKEN).not.toBe('');
+  const { status } = await operatorApiCall(request, 'POST', '/maintenance/initialize-builtins');
+  expect(status).toBe(200);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP parity (real HTTP, both Java transports) and the worker boundary
+// ─────────────────────────────────────────────────────────────────────────────
+
+const API_ORIGIN = new URL(BACKEND).origin;
+
+/** Connects the external MCP client to one transport, authenticated as the worker. */
+async function connectMcp(kind: 'streamable' | 'sse', workerToken: string): Promise<Client> {
+  const headers = { Authorization: `Bearer ${workerToken}` };
+  const client = new Client({ name: 'core-e2e-worker', version: '0.1.0' });
+  if (kind === 'streamable') {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${API_ORIGIN}/mcp`), { requestInit: { headers } }),
+    );
+  } else {
+    await client.connect(
+      new SSEClientTransport(new URL(`${API_ORIGIN}/sse`), { requestInit: { headers } }),
+    );
+  }
+  return client;
+}
+
+/** Calls a tool and parses the uniform JSON envelope without asserting ok. */
+async function callEnvelope(client: Client, name: string, args: Record<string, unknown>) {
+  const result = await client.callTool({ name, arguments: args });
+  const text = (result.content as Array<{ type: string; text: string }>)
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('');
+  expect(text, `${name} returned no content`).not.toBe('');
+  return JSON.parse(text) as Record<string, any>;
+}
+
+test('an authenticated worker sees the same MCP answer over both transports', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+  const workerToken = await runWorkerToken(request, ask.runId as string);
+
+  // The same read over the two real HTTP transports: streamable /mcp and the
+  // SSE pair (/sse + /mcp/message). Both envelopes must be the recorded answer
+  // for this run's own ask — parity by exact equality, not by "both non-empty".
+  const streamable = await connectMcp('streamable', workerToken);
+  let streamableEnvelope: Record<string, any>;
+  try {
+    streamableEnvelope = await callEnvelope(streamable, 'list_approvals', { status: 'PENDING' });
+  } finally {
+    await streamable.close();
+  }
+  const sse = await connectMcp('sse', workerToken);
+  let sseEnvelope: Record<string, any>;
+  try {
+    sseEnvelope = await callEnvelope(sse, 'list_approvals', { status: 'PENDING' });
+  } finally {
+    await sse.close();
+  }
+
+  expect(streamableEnvelope.ok).toBe(true);
+  expect(sseEnvelope.ok).toBe(true);
+  expect(streamableEnvelope).toEqual(sseEnvelope);
+  const ids = (streamableEnvelope.data as any[]).map((a) => a.id);
+  expect(ids).toContain(ask.id);
+
+  await cancelCard(request, card.id);
+});
+
+test('a run-scoped worker credential cannot self-approve at REST', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+  const workerToken = await runWorkerToken(request, ask.runId as string);
+
+  // The valid worker credential is a real, verifiable identity — and it is still
+  // the wrong authority for the operator-only route: exactly 403, not 401 (the
+  // credential is valid) and not 200 (the decision must never be processed).
+  const attempt = await request.fetch(`${BACKEND}/approvals/${ask.id}/decide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${workerToken}` },
+    data: JSON.stringify({ approved: true, reason: 'worker self-approval' }),
+  });
+  expect(attempt.status()).toBe(403);
+
+  const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+  expect(after.status).toBe('PENDING');
+
+  await cancelCard(request, card.id);
+});
+
+test('a run-scoped worker credential cannot self-approve over either MCP transport', async ({ request }) => {
+  const { card, ask } = await dispatchAsk(request);
+  const workerToken = await runWorkerToken(request, ask.runId as string);
+
+  const attempts: Array<Record<string, any>> = [];
+  for (const kind of ['streamable', 'sse'] as const) {
+    const client = await connectMcp(kind, workerToken);
+    try {
+      attempts.push(await callEnvelope(client, 'decide_approval', {
+        approvalId: ask.id,
+        approved: true,
+        reason: `worker self-approval over ${kind}`,
+      }));
+    } finally {
+      await client.close();
+    }
+  }
+
+  // Both transports deliver the same governed refusal: the tool envelope is a
+  // refusal (never a transport failure) naming the exact FORBIDDEN code and the
+  // exact operator-authority message.
+  expect(attempts).toEqual([
+    { ok: false, errorType: 'FORBIDDEN', message: 'Operator authority required' },
+    { ok: false, errorType: 'FORBIDDEN', message: 'Operator authority required' },
+  ]);
+
+  const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
+  expect(after.status).toBe('PENDING');
+
+  await cancelCard(request, card.id);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// governed git push: PUSH-tier gate, resume, disposable bare remote
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: 'aria-e2e',
+  GIT_AUTHOR_EMAIL: 'aria-e2e@aria-conductor.local',
+  GIT_COMMITTER_NAME: 'aria-e2e',
+  GIT_COMMITTER_EMAIL: 'aria-e2e@aria-conductor.local',
+};
+
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8', stdio: 'pipe' }).trim();
+}
+
+/** The run's worktree path, discovered from the source repository's worktree list. */
+function runWorktreeOf(sourceRepo: string): string {
+  const entries = git(['worktree', 'list', '--porcelain'], sourceRepo)
+    .split('\n')
+    .filter((line) => line.startsWith('worktree '))
+    .map((line) => line.slice('worktree '.length).trim());
+  const worktrees = entries.filter((p) => p !== sourceRepo);
+  expect(worktrees, `expected a run worktree beside ${sourceRepo}: ${entries.join(', ')}`).toHaveLength(1);
+  return worktrees[0];
+}
+
+test('a run blocks on the git_push PUSH gate and the approved push lands in a disposable bare remote', async ({ request }) => {
+  test.setTimeout(300_000);
+
+  // A disposable bare remote the spec owns, plus a source repository the run's
+  // worktree is created from (the source's `origin` is that bare remote).
+  const bareRoot = mkdtempSync(join(tmpdir(), 'aria-e2e-push-remote-'));
+  git(['init', '--bare', 'remote.git'], bareRoot);
+  const bareRepo = join(bareRoot, 'remote.git');
+
+  const source = mkdtempSync(join(tmpdir(), 'aria-e2e-push-source-'));
+  writeFileSync(join(source, 'tracked.txt'), 'committed\n');
+  git(['init'], source);
+  git(['checkout', '-b', 'main'], source);
+  git(['add', 'tracked.txt'], source);
+  git(['commit', '-m', 'e2e git push baseline'], source);
+  git(['remote', 'add', 'origin', bareRepo], source);
+
+  const branchName = uniqueName('e2e-pack-gate');
+
+  const agent = await seedAdkAgent(request, {
+    name: uniqueName('e2e-git-gate-agent'),
+    adkProvider: 'opencode',
+    executionMode: 'HOST',
+    workspaceMode: 'WORKTREE',
+    workspacePath: source,
+    workspaceBaseRef: 'main',
+  });
+  await setScenario(request, agent.id, 'git-push');
+
+  const run = await seedRun(request, agent.id, `Push branch ${branchName} to origin.`);
+
+  // ── BLOCKED: the PUSH tier routes the tool call through the human gate ────
+  // The task-level gate precedes the tool gate; it is approved as the operator
+  // (one-use grant) while the run waits, then the PUSH ask must appear.
+  let ask: any = null;
+  const gateDeadline = Date.now() + 120_000;
+  while (ask == null && Date.now() < gateDeadline) {
+    const pending = await pendingRunApprovals(request, run.id, 15_000).catch(() => []);
+    const push = (pending as any[]).find(
+      (a) => a.approvalType === 'TOOL_CALL' && String(a.reason).includes('git_push'),
+    );
+    if (push) {
+      ask = push;
+      break;
+    }
+    const taskGate = (pending as any[]).find((a) => a.approvalType !== 'TOOL_CALL');
+    if (taskGate) {
+      await decideApproval(request, taskGate.id, true, 'e2e task gate before the git push gate');
+    } else {
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
+  expect(ask, `no git_push TOOL_CALL ask appeared for run ${run.id}`).toBeTruthy();
+  expect(ask.toolCallId, 'the PUSH gate must be linked to a tool call').toMatch(/^[0-9a-f-]{36}$/);
+  expect(ask.reason).toContain('git_push');
+  expect(ask.approvalType).toBe('TOOL_CALL');
+
+  const blockedCalls = await apiCall(request, 'GET', `/runs/${run.id}/tool-calls`);
+  expect(blockedCalls.status).toBe(200);
+  const gitPushCall = (blockedCalls.data as any[]).find((tc) => tc.toolName === 'git_push');
+  expect(gitPushCall, 'the blocked tool call must be git_push').toBeTruthy();
+  expect(gitPushCall.status).toBe('PENDING');
+  expect(gitPushCall.result).toBeNull();
+
+  await expect
+    .poll(
+      async () => {
+        const { data } = await apiCall(request, 'GET', `/runs/${run.id}`);
+        return data?.status;
+      },
+      { timeout: 30_000, intervals: [1_000, 2_000] },
+    )
+    .toBe('PAUSED');
+
+  // ── Prepare the exact commit the approved push must land ──────────────────
+  // The run owns a worktree of the source repository; the spec discovers it from
+  // the source's worktree list, writes the exact bytes and records the sha.
+  const worktree = runWorktreeOf(source);
+  writeFileSync(join(worktree, 'e2e-push.txt'), 'pushed by the governed gate\n');
+  git(['add', 'e2e-push.txt'], worktree);
+  git(['commit', '-m', 'e2e git push commit'], worktree);
+  const pushedSha = git(['rev-parse', 'HEAD'], worktree);
+  expect(pushedSha).toMatch(/^[0-9a-f]{40}$/);
+
+  // ── RESUMED: approve and watch the governed push execute ──────────────────
+  await decideApproval(request, ask.id, true, 'e2e git push gate approval');
+
+  const settled = await pollUntil<any[]>(
+    request,
+    `/runs/${run.id}/tool-calls`,
+    (calls) => Array.isArray(calls) && calls.some((tc) => tc.toolName === 'git_push' && tc.status === 'COMPLETED'),
+    120_000,
+    2_000,
+  );
+  const settledCall = settled.find((tc) => tc.toolName === 'git_push')!;
+  expect(settledCall.status, `git_push result: ${settledCall.result}`).toBe('COMPLETED');
+
+  const done = await pollUntil<any>(
+    request,
+    `/runs/${run.id}`,
+    (r) => ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'].includes(r?.status),
+    120_000,
+    2_000,
+  );
+  expect(done.status, JSON.stringify(done).slice(0, 300)).toBe('COMPLETED');
+
+  // The push really happened against the disposable remote: the branch exists
+  // and points at exactly the commit the spec created in the run's worktree.
+  const remoteSha = git(['--git-dir', bareRepo, 'rev-parse', `refs/heads/${branchName}`], bareRoot);
+  expect(remoteSha).toBe(pushedSha);
+});

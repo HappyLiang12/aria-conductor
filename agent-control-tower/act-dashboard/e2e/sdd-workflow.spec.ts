@@ -1,112 +1,143 @@
 import { test, expect } from '@playwright/test';
+import { apiCall, pollUntil } from './fixtures';
 
 /**
- * Phase 1 E2E contract anchor (RED) for the Spec-Driven Development workflow
+ * Phase 1 E2E contract anchor for the Spec-Driven Development workflow
  * (docs/superpowers/specs/2026-08-12-spec-driven-development-workflow-design.md).
  *
- * Drives the loop over the REST API and asserts the reachable approvals surface
- * renders. The /approvals page and its SPEC_REVIEW card are gone: approvals live
- * in the Kanban Review column on '/'. Written FIRST — it must fail until the
- * backend + frontend wiring lands (later tasks):
- *   - POST /api/v1/knowledge/{id}/instantiate-workflow            (planned, Task 3)
- *   - GET /api/v1/approvals gains approvalType/content/knowledgeItemId (planned)
- *   - POST /api/v1/workflows/{id}/resubmit-approval               (planned)
- *   - Kanban Review column on '/' as the approvals surface        (planned, Task 10)
+ * Revised in Task 17 for the governed cores and the deterministic harness:
+ *  - the TP1 credential-gated skip is REMOVED: the harness supplies the git
+ *    handoff deterministically (synthetic handoff credential in the harness
+ *    environment + mock diff/push peers), so instantiation must succeed and the
+ *    refusal path is no longer an accepted outcome;
+ *  - the "no ADK runtime" skips are REMOVED: the BA step runs against the
+ *    deterministic core harness, so the chain must reach WAITING_APPROVAL and
+ *    resume after the approval without an external runtime;
+ *  - the resumed chain is pinned to exactly COMPLETED (the golden deterministic
+ *    outcome SddGoldenChainRegressionTest defines) instead of accepting
+ *    RUNNING/COMPLETED/FAILED;
+ *  - the expired-approval case seeds its own WAITING_APPROVAL chain and waits
+ *    for the SPEC_REVIEW ask to reach exactly EXPIRED (the harness runs a short
+ *    `approvals.timeout-ms`), then asserts the resubmitted ask exactly.
  *
- * Verified-real endpoints used unchanged: GET /api/v1/knowledge?type=WORKFLOW&status=APPROVED,
- * GET /api/v1/workflows, GET /api/v1/workflows/{id}, POST /api/v1/approvals/{id}/decide.
+ * Endpoints used: GET /api/v1/knowledge?type=WORKFLOW&status=APPROVED,
+ * GET/POST /api/v1/workflows, POST /api/v1/knowledge/{id}/instantiate-workflow,
+ * POST /api/v1/approvals/{id}/decide, POST /api/v1/workflows/{id}/resubmit-approval.
  * V40 seed provides the APPROVED 'development-workflow' template.
  *
- * Prerequisites: backend running (h2 profile, V40+), frontend dev server up.
- * API_URL/BASE_URL are parameterised like the other e2e specs (worktrees/CI).
+ * Prerequisites: the deterministic core harness (recipe in
+ * .superpowers/sdd/2026-09-22-agent-core-execution-modes/task-17-report.md) plus
+ * the dashboard dev server for the Review-column assertion.
  */
 
-test.describe.configure({ mode: 'serial', timeout: 600_000 }); // 10 min — drives real BA→Dev→QA runs
+// A serial suite would hide the second case's evidence behind the first
+// failure (the round-1 review removed the same construct from the permissions
+// spec), and both cases seed their own chain, so they run independently.
+test.describe.configure({ timeout: 600_000 }); // 10 min — drives real BA→Dev→QA steps
 
-const API_URL = process.env.API_URL || 'http://127.0.0.1:8080';
+const SPEC_REVIEW = 'SPEC_REVIEW';
 
-/**
- * Polls {fn} until it returns a non-null value or the deadline elapses.
- * Mirrors the pollUntil pattern from e2e/fixtures.ts, local to this spec.
- */
-async function pollUntil<T>(
-  fn: () => Promise<T | null>,
-  timeoutMs: number,
-  intervalMs = 2_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let last: T | null = null;
-  while (Date.now() < deadline) {
-    const value = await fn();
-    if (value != null) return value;
-    last = value;
-    await new Promise((r) => setTimeout(r, intervalMs));
+/** Ensures the BA/DEV/QA role agents exist (the template resolves steps by agent_role). */
+async function ensureRoleAgents(request: Parameters<typeof apiCall>[0]) {
+  const existing = await apiCall(request, 'GET', '/agents');
+  expect(existing.status).toBe(200);
+  const roles = new Set((existing.data ?? []).map((a: any) => a.role));
+  for (const role of ['ba', 'dev', 'qa']) {
+    if (!roles.has(role)) {
+      const created = await apiCall(request, 'POST', '/agents', {
+        name: `sdd-${role}-${Date.now()}`,
+        role,
+        agentType: 'NATIVE',
+      });
+      expect(created.status, `create ${role} agent: ${JSON.stringify(created.data)}`).toBe(201);
+    }
   }
-  throw new Error(`pollUntil timed out after ${timeoutMs}ms (last result: ${JSON.stringify(last)?.slice(0, 300)})`);
+}
+
+/** The APPROVED development-workflow template (V40 seed). */
+async function developmentWorkflowTemplate(request: Parameters<typeof apiCall>[0]) {
+  const templates = await apiCall(request, 'GET', '/knowledge?type=WORKFLOW&status=APPROVED');
+  expect(templates.status).toBe(200);
+  const tpl = (templates.data as any[]).find((k) => k.name === 'development-workflow');
+  expect(tpl, 'V40 seed development-workflow must exist').toBeTruthy();
+  return tpl;
+}
+
+/** Instantiates the template and returns the created chain (must succeed). */
+async function instantiateDevelopmentWorkflow(request: Parameters<typeof apiCall>[0]) {
+  const tpl = await developmentWorkflowTemplate(request);
+  const inst = await apiCall(request, 'POST', `/knowledge/${tpl.id}/instantiate-workflow`, {
+    parameters: {
+      issueRef: '#1-test',
+      repoUrl: 'https://github.com/HappyLiang12/aria-conductor.git',
+    },
+  });
+  expect(inst.status, `instantiate -> HTTP ${inst.status}: ${JSON.stringify(inst.data).slice(0, 300)}`).toBe(200);
+  expect(inst.data.id).toMatch(/^[0-9a-f-]{36}$/);
+  return inst.data as { id: string };
+}
+
+/** Polls the chain until it is exactly WAITING_APPROVAL with a PENDING SPEC_REVIEW ask. */
+async function waitingSpecReview(request: Parameters<typeof apiCall>[0], chainId: string, timeoutMs = 180_000) {
+  // A chain that already ended can never open the gate: fail immediately with
+  // the observed status instead of burning the whole poll budget. This is a
+  // fail-fast guard on the way to the exact WAITING_APPROVAL expectation, not
+  // an accepted alternative outcome.
+  const deadline = Date.now() + timeoutMs;
+  let wf: any = null;
+  for (;;) {
+    const { data } = await apiCall(request, 'GET', `/workflows/${chainId}`);
+    wf = data;
+    if (data?.status === 'WAITING_APPROVAL') break;
+    if (['FAILED', 'CANCELLED', 'COMPLETED'].includes(data?.status)) {
+      throw new Error(
+        `chain ${chainId} reached ${data.status} before WAITING_APPROVAL: ${JSON.stringify(data).slice(0, 400)}`,
+      );
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`chain ${chainId} never reached WAITING_APPROVAL (last status: ${data?.status})`);
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  const chainRunIds = new Set<string>((wf.steps ?? []).map((s: any) => s.runId).filter(Boolean));
+  expect(chainRunIds.size).toBeGreaterThan(0);
+  const approvals = await pollUntil<any[]>(
+    request,
+    '/approvals',
+    (list) =>
+      Array.isArray(list) &&
+      list.some((a) => a.approvalType === SPEC_REVIEW && a.status === 'PENDING' && chainRunIds.has(a.runId)),
+    timeoutMs,
+    2_000,
+  );
+  const approval = approvals.find(
+    (a) => a.approvalType === SPEC_REVIEW && a.status === 'PENDING' && chainRunIds.has(a.runId),
+  )!;
+  return approval;
 }
 
 test('development-workflow: spec approval then PASS verdict completes the chain', async ({ page, request }) => {
   // 0. Ensure the BA/DEV/QA role agents exist (template resolves steps by agent_role).
-  const existing = await (await request.get(`${API_URL}/api/v1/agents`)).json();
-  const roles = new Set((existing ?? []).map((a: any) => a.role));
-  for (const role of ['ba', 'dev', 'qa']) {
-    if (!roles.has(role)) {
-      const created = await request.post(`${API_URL}/api/v1/agents`, {
-        data: { name: `sdd-${role}-${Date.now()}`, role, agentType: 'NATIVE' },
-      });
-      expect(created.ok(), `create ${role} agent`).toBeTruthy();
-    }
-  }
+  await ensureRoleAgents(request);
 
-  // 1. Instantiate the seeded development-workflow template (V40 seed, APPROVED WORKFLOW item).
-  const templates = await request.get(`${API_URL}/api/v1/knowledge?type=WORKFLOW&status=APPROVED`);
-  expect(templates.ok()).toBeTruthy();
-  const tpl = (await templates.json()).find((k: any) => k.name === 'development-workflow');
-  expect(tpl).toBeTruthy();
+  // 1. Instantiate the seeded development-workflow template. The TP1 credential
+  //    gate must be satisfied by the harness handoff credential: instantiation
+  //    is no longer allowed to refuse with the GITHUB_TOKEN guidance.
+  const chain = await instantiateDevelopmentWorkflow(request);
+  expect(chain.id).toMatch(/^[0-9a-f-]{36}$/);
 
-  // R8-F1: the template declares {repoUrl} (V45 prompts) and instantiation fails fast
-  // when neither the caller nor the system config (opencode.repo-url) provides it.
-  // TP1: instantiating a {repoUrl} template also fails fast when no GitHub credential
-  // resolves (WorkflowTemplateService's pre-flight gate, HTTP 400 + GITHUB_TOKEN guidance).
-  // CI has no credential - fresh H2 DB, data/ is gitignored, nothing seeds pack_credentials -
-  // so that refusal is the expected CI outcome, not a defect: skip instead of asserting.
-  // The predicate demands the status AND the message, so a regression that refused every
-  // instantiation with credential-shaped guidance fails loudly here instead of skipping.
-  // TODO(TP4): this gate is temporary - TP4 replaces the refusal with a review-gate
-  // decision. Remove this skip together with the gate so the SDD path regains live coverage.
-  const inst = await request.post(`${API_URL}/api/v1/knowledge/${tpl.id}/instantiate-workflow`, {
-    data: { parameters: { issueRef: '#1-test', repoUrl: 'https://github.com/HappyLiang12/aria-conductor.git' } },
-  });
-  const instBody = await inst.text();
-  if (inst.status() === 400 && instBody.includes('GITHUB_TOKEN')) {
-    test.skip(true, 'no git credential configured in this environment (TP1 credential gate)');
-  }
-  expect(inst.ok(), `instantiate -> HTTP ${inst.status()}: ${instBody.slice(0, 300)}`).toBeTruthy();
-  const chain = await inst.json();
-  expect(chain.id).toBeTruthy();
-
-  // 2. Poll until the chain enters WAITING_APPROVAL with a SPEC_REVIEW approval.
-  //    Contract: SPEC_REVIEW approvals carry markdown content, the knowledge link,
-  //    and a null toolCallId (no tool gate involved).
-  let approval: any = null;
-  try {
-    approval = await pollUntil(async () => {
-      const list = await (await request.get(`${API_URL}/api/v1/approvals`)).json();
-      return list.find((a: any) => a.approvalType === 'SPEC_REVIEW' && a.status === 'PENDING');
-    }, 30_000);
-  } catch (e) {
-    // The BA run needs a real ADK runtime (langchain subprocess / opencode sandbox).
-    // Without one the chain fails before the spec gate - skip rather than flake.
-    const wf = await (await request.get(`${API_URL}/api/v1/workflows/${chain.id}`)).json();
-    test.skip(
-      wf.status === 'FAILED' || wf.status === 'RUNNING',
-      'BA run requires an ADK runtime (langchain/open-sandbox); skipping spec-gate assertions',
-    );
-    throw e;
-  }
+  // 2. The chain must reach WAITING_APPROVAL with a SPEC_REVIEW approval.
+  //    Contract: SPEC_REVIEW approvals carry markdown content, the knowledge
+  //    link (the versioned spec item is named exactly `spec-<chainId>`), and a
+  //    null toolCallId (no tool gate involved).
+  const approval = await waitingSpecReview(request, chain.id);
   expect(approval.content).toContain('#');
-  expect(approval.knowledgeItemId).toBeTruthy();
+  expect(approval.knowledgeItemId).toMatch(/^[0-9a-f-]{36}$/);
   expect(approval.toolCallId).toBeNull();
+  const specItem = await apiCall(request, 'GET', `/knowledge/${approval.knowledgeItemId}`);
+  expect(specItem.status).toBe(200);
+  expect(specItem.data.name).toBe(`spec-${chain.id}`);
+  expect(specItem.data.status).toBe('PENDING');
 
   // 3. The Review surface renders without crashing on a null toolCallId ask.
   //    The /approvals page is deleted; the SPEC_REVIEW ask itself is not a Review
@@ -117,28 +148,53 @@ test('development-workflow: spec approval then PASS verdict completes the chain'
   await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible({ timeout: 15_000 });
 
   // 4. Approve -> the coordinator writes back to knowledge and resumes the chain.
-  const decide = await request.post(`${API_URL}/api/v1/approvals/${approval.id}/decide`, {
-    data: { approved: true, reason: 'lgtm' },
+  const decide = await apiCall(request, 'POST', `/approvals/${approval.id}/decide`, {
+    approved: true,
+    reason: 'lgtm',
   });
-  expect(decide.ok()).toBeTruthy();
+  expect(decide.status, JSON.stringify(decide.data)).toBe(200);
 
-  // 5. The chain must leave WAITING_APPROVAL (resumed by the coordinator). The Dev/QA runs
-  //    then depend on the LLM/ADK being available; without one the chain lands in FAILED -
-  //    which still proves the approval gate -> coordinator -> resume contract. The full
-  //    PASS/DEFECT/SPEC_GAP routing is covered deterministically by the Java integration
-  //    tests (SddWorkflowIntegrationTest).
-  await pollUntil(async () => {
-    const wf = await (await request.get(`${API_URL}/api/v1/workflows/${chain.id}`)).json();
-    return wf.status !== 'WAITING_APPROVAL' ? wf : null;
-  }, 30_000);
-  const resumed = await (await request.get(`${API_URL}/api/v1/workflows/${chain.id}`)).json();
-  expect(['RUNNING', 'COMPLETED', 'FAILED']).toContain(resumed.status);
+  // 5. The chain must leave WAITING_APPROVAL and reach exactly COMPLETED on the
+  //    deterministic harness (the golden PASS verdict chain). No alternative
+  //    terminal states are accepted.
+  const completed = await pollUntil<any>(
+    request,
+    `/workflows/${chain.id}`,
+    (wf) => wf?.status === 'COMPLETED' || wf?.status === 'FAILED' || wf?.status === 'CANCELLED',
+    300_000,
+    2_000,
+  );
+  expect(completed.status, JSON.stringify(completed).slice(0, 300)).toBe('COMPLETED');
 });
 
 test('development-workflow: resubmit-approval recreates an EXPIRED approval', async ({ request }) => {
-  const list = await request.get(`${API_URL}/api/v1/workflows`);
-  const waiting = (await list.json()).find((w: any) => w.status === 'WAITING_APPROVAL');
-  test.skip(!waiting, 'requires a WAITING_APPROVAL chain (fixture-dependent)');
-  const res = await request.post(`${API_URL}/api/v1/workflows/${waiting.id}/resubmit-approval`);
-  expect(res.ok()).toBeTruthy();
+  // Own deterministic fixture: instantiate a chain, wait for its SPEC_REVIEW ask,
+  // let it expire (the harness runs a short approvals.timeout-ms) and resubmit.
+  const chain = await instantiateDevelopmentWorkflow(request);
+  const expired = await waitingSpecReview(request, chain.id);
+
+  const expiredAsk = await pollUntil<any>(
+    request,
+    `/approvals/${expired.id}`,
+    (a) => a?.status === 'EXPIRED',
+    180_000,
+    2_000,
+  );
+  expect(expiredAsk.status).toBe('EXPIRED');
+  expect(expiredAsk.approvalType).toBe(SPEC_REVIEW);
+
+  const res = await apiCall(request, 'POST', `/workflows/${chain.id}/resubmit-approval`);
+  expect(res.status, JSON.stringify(res.data)).toBe(200);
+  // The replacement ask: a new PENDING SPEC_REVIEW for the same BA run, exactly.
+  expect(res.data.id).not.toBe(expired.id);
+  expect(res.data.id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(res.data.status).toBe('PENDING');
+  expect(res.data.approvalType).toBe(SPEC_REVIEW);
+  expect(res.data.reason).toBe(`Spec resubmitted for review: spec-${chain.id}`);
+  expect(res.data.runId).toBe(expired.runId);
+
+  // The chain stays WAITING_APPROVAL until the replacement is decided.
+  const wf = await apiCall(request, 'GET', `/workflows/${chain.id}`);
+  expect(wf.status).toBe(200);
+  expect(wf.data.status).toBe('WAITING_APPROVAL');
 });

@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test';
 import {
   BACKEND,
+  apiCall,
   pollUntil,
+  permissionOptions,
   seedAdkAgent,
   seedAgent,
   seedKanbanItem,
@@ -10,28 +12,33 @@ import {
 } from './fixtures';
 
 /**
- * Kanban HITL board E2E (redesign Task 16).
+ * Kanban HITL board E2E (redesign Task 16) — revised in Task 17 for the governed
+ * cores and the deterministic harness.
  *
  * Orchestrator contract under test: TODO→IN_PROGRESS is the two-phase pickup
  * dispatch (assign agent + create run), IN_PROGRESS→TODO pauses, CANCELLED
  * cancels (denying any open ask), same status is a no-op. The board lives on
  * the Overview page ('/').
  *
- * Runs start asynchronously and, against an LLM-backed stack, execute for real —
- * so every card is pinned to a freshly seeded agent via agentTemplateId
- * (AgentPickerService matches it against agent roles and names). Without
- * pinning, the picker falls back to the first healthy agent (by name order),
- * whose run can asynchronously move the card mid-test.
- *
- * Card states only are asserted, never run outcomes.
+ * Runs start asynchronously and are served by the deterministic harness — every
+ * card state is pinned to exactly one expected value (the former D8
+ * "IN_PROGRESS or REVIEW" / "TODO or IN_PROGRESS" alternatives are gone), and
+ * the review case asserts the ask's offered one-use grant set (Task 12) rather
+ * than only the ask badge text. Card states only are asserted, never run
+ * outcomes.
  */
+/** The exact optimistic-lock 409 body (GlobalExceptionHandler.handleOptimisticLock). */
+const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refresh and retry.';
+
 test.describe('kanban HITL board', () => {
   let itemId: string;
+  let agentId: string;
 
   test.beforeEach(async ({ request }) => {
     // Dispatch pre-validation requires at least one non-retired, non-unhealthy
     // agent; NATIVE agents are created HEALTHY so this always satisfies it.
     const agent = await seedAgent(request);
+    agentId = agent.id;
     const created = await seedKanbanItem(request, {
       title: `hitl-${uniqueName('card')}`,
       agentTemplateId: agent.name,
@@ -79,39 +86,46 @@ test.describe('kanban HITL board', () => {
     const card = page.locator(`[data-card="${itemId}"]`);
     await expect(card).toBeVisible();
     await dragCardTo(page, itemId, 'lane-IN_PROGRESS');
+
+    // The dispatched card lands in exactly IN_PROGRESS (the two-phase pickup's
+    // captured state); the governed run then pauses on its ask without moving
+    // the card. The former "IN_PROGRESS or REVIEW" tolerance is gone.
     await expect
-      // D8: a mock/instant run completes immediately, so the card may reach
-      // REVIEW. Accept either IN_PROGRESS or REVIEW as a valid dispatch outcome.
       .poll(async () => {
         const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
-        const status = (await r.json()).status;
-        return status === 'IN_PROGRESS' || status === 'REVIEW';
+        return (await r.json()).status;
       }, { timeout: 60_000, intervals: [1_000, 2_000, 5_000] })
-      .toBe(true);
-    // Pickup must link the created run to the card. The run's eventual outcome
-    // is deliberately NOT asserted (LLM-backed stacks complete/fail it async).
+      .toBe('IN_PROGRESS');
+
+    // Pickup must link the run it created to the card: the linked id is resolved
+    // and pinned to this test's captured agent — a link to any other run fails.
     const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
-    expect((await r.json()).linkedRunId).toBeTruthy();
+    const linkedRunId = (await r.json()).linkedRunId as string;
+    expect(linkedRunId).toMatch(/^[0-9a-f-]{36}$/);
+    const linked = await apiCall(request, 'GET', `/runs/${linkedRunId}`);
+    expect(linked.status).toBe(200);
+    expect(linked.data.agentId).toBe(agentId);
   });
 
   test('pause: dragging in-progress card back to todo keeps card TODO', async ({ page, request }) => {
     // Arrange: dispatch via the API (same path the UI drag uses).
     const dispatched = await transitionKanban(request, itemId, 'IN_PROGRESS');
-    expect(dispatched.status).toBe(200);
+    expect(dispatched.status, JSON.stringify(dispatched.data)).toBe(200);
+    expect(dispatched.data?.status).toBe('IN_PROGRESS');
     await page.goto('/');
     const card = page.locator(`[data-card="${itemId}"]`);
     await expect(card).toBeVisible({ timeout: 15_000 });
     await dragCardTo(page, itemId, 'lane-TODO');
+
+    // A pause parks the card in exactly TODO (the coordinated stop detaches the
+    // run link); the former "TODO or IN_PROGRESS" tolerance is gone.
     await expect
-      // D8 moves the card to REVIEW before the pause drag; the REVIEW→TODO
-      // path in requestChanges re-dispatches (→IN_PROGRESS). Accept either TODO
-      // or IN_PROGRESS as a valid post-pause outcome.
       .poll(async () => {
         const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
-        const status = (await r.json()).status;
-        return status === 'TODO' || status === 'IN_PROGRESS';
+        const body = await r.json();
+        return { status: body.status, linkedRunId: body.linkedRunId };
       }, { timeout: 30_000 })
-      .toBe(true);
+      .toEqual({ status: 'TODO', linkedRunId: null });
   });
 
   test('cancel action transitions card', async ({ page, request }) => {
@@ -139,26 +153,35 @@ test.describe('kanban HITL board', () => {
     const agent = await seedAdkAgent(request, {
       name: uniqueName('e2e-oc-hitl'),
       adkProvider: 'opencode',
+      executionMode: 'HOST',
     });
     const askItem = await seedKanbanItem(request, {
       title: `hitl-ask-${uniqueName('card')}`,
       agentTemplateId: agent.name,
     });
     const dispatched = await transitionKanban(request, askItem.id, 'IN_PROGRESS');
-    expect(dispatched.status).toBe(200);
+    expect(dispatched.status, JSON.stringify(dispatched.data)).toBe(200);
+    expect(dispatched.data?.status).toBe('IN_PROGRESS');
 
     // Wait for the engine's (asynchronous) task-level approval gate to surface
-    // a PENDING ask linked to the card.
-    await pollUntil<any[]>(
+    // a PENDING ask linked to the card, and pin its exact offered grant set:
+    // the one-use ALLOW_ONCE option plus the reject option (Task 12).
+    const asks = await pollUntil<any[]>(
       request,
       `/approvals?kanbanItemId=${askItem.id}`,
       (list) => Array.isArray(list) && list.some((a) => a.status === 'PENDING'),
       60_000,
       2_000,
     );
+    const ask = asks.find((a) => a.status === 'PENDING')!;
+    expect(permissionOptions(ask)).toEqual([
+      { optionId: 'proceed_once', choice: 'ALLOW_ONCE' },
+      { optionId: 'cancel', choice: 'DENY' },
+    ]);
 
     const moved = await transitionKanban(request, askItem.id, 'REVIEW');
-    expect(moved.status).toBe(200);
+    expect(moved.status, JSON.stringify(moved.data)).toBe(200);
+    expect(moved.data?.status).toBe('REVIEW');
 
     await page.goto('/');
     const reviewCard = page.locator(`[data-col="REVIEW"] [data-card="${askItem.id}"]`);
@@ -172,8 +195,16 @@ test.describe('kanban HITL board', () => {
     await expect(dzTitle).toContainText('1 asks');
 
     // Cleanup: cancel denies the open ask and cancels the linked run, so the
-    // stack is not left with a run blocked on the approval gate.
-    const cancelled = await transitionKanban(request, askItem.id, 'CANCELLED');
-    expect(cancelled.status).toBe(200);
+    // stack is not left with a run blocked on the approval gate. The accepted
+    // response is asserted exactly (200 + CANCELLED, the exact-ack teardown of
+    // core-permissions.spec.ts:110-117); only the disclosed optimistic-lock 409
+    // for the raced card row is retried, never any other refusal.
+    const first = await transitionKanban(request, askItem.id, 'CANCELLED');
+    const cancelled =
+      first.status === 409 && first.data?.message === OPTIMISTIC_LOCK_409
+        ? await transitionKanban(request, askItem.id, 'CANCELLED')
+        : first;
+    expect(cancelled.status, JSON.stringify(cancelled.data)).toBe(200);
+    expect(cancelled.data?.status).toBe('CANCELLED');
   });
 });

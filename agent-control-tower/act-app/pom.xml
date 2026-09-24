@@ -104,6 +104,16 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Deterministic core E2E harness support. TEST scope only: the harness
+             distribution unpacks the selected support classes explicitly and the
+             production backend-jar stays fixture-free. Never add the reverse
+             dependency (act-test-support must not depend on act-app). -->
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-test-support</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- SpringDoc OpenAPI -->
         <dependency>
             <groupId>org.springdoc</groupId>
@@ -123,7 +133,183 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!--
+              The packaging test of the core E2E distribution only means anything in the
+              core-e2e-harness profile lane, which builds the ZIP and hands it the
+              artifact paths. The default Failsafe lane excludes it; the profile below
+              clears the exclusion, so the test always runs when its distribution
+              exists and never reports a vacuous pass without it. Nothing else about
+              the surefire/failsafe tiering changes.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/CoreE2ePackagingIntegrationTest.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+          Deterministic core E2E harness (Task 16, profile id also declared in the
+          reactor root). Builds `backend-e2e-harness` next to the untouched production
+          `backend-jar`:
+
+            0. wipe the staging trees that the steps below fill (target/e2e-lib,
+               target/e2e-support, packages/qoder-acp-bridge/dist) so output from an
+               earlier build (which `mvn verify` without `clean` would keep, and which
+               for the bridge dist lives outside target/ entirely) can never survive
+               into the ZIP;
+            1. rebuild the Qoder ACP bridge (its dist/ is git-ignored) with the same
+               `tsc -p tsconfig.json` build its `pnpm build` script runs;
+            2. `dependency:copy-dependencies -DincludeScope=runtime` into target/e2e-lib;
+            3. `dependency:unpack` of the selected act-test-support classes into
+               target/e2e-support;
+            4. `assembly:single` of src/assembly/backend-e2e-harness.xml.
+
+          The Failsafe system properties hand the packaging test the two built
+          artifact paths. The surefire/failsafe tiering itself is untouched.
+
+          Usage:
+            mvn -f agent-control-tower/pom.xml -Pcore-e2e-harness install -DskipTests
+            mvn -f agent-control-tower/pom.xml -Pcore-e2e-harness -pl act-app verify \
+                -Dskip.unit.tests=true -Dit.test=CoreE2ePackagingIntegrationTest
+        -->
+        <profile>
+            <id>core-e2e-harness</id>
+            <properties>
+                <!-- act-app lives at <repo>/agent-control-tower/act-app, so two levels up is
+                     the repository root. Used by the assembly descriptor (Maven
+                     interpolation); the antrun build below uses the same relative path
+                     directly, because antrun target XML is not Maven-interpolated. -->
+                <e2e.bridge.dir>${project.basedir}/../../packages/qoder-acp-bridge</e2e.bridge.dir>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>build-qoder-acp-bridge</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <!-- Stale-output guard (fix round 1): wipe each staging tree
+                                             before it is filled in this same phase, so output from
+                                             an earlier `verify` run can never survive into the ZIP.
+                                             The plugin's own up-to-date markers must go too: they
+                                             are keyed on the artifact (not the output directory), so
+                                             `unpack` would otherwise skip a wiped target/e2e-support
+                                             and ship without the selected support classes. Paths are
+                                             relative to this module's base directory, because antrun
+                                             target XML is not Maven-interpolated. -->
+                                        <delete dir="target/dependency-maven-plugin-markers" />
+                                        <delete dir="target/e2e-lib" />
+                                        <delete dir="target/e2e-support" />
+                                        <delete dir="../../packages/qoder-acp-bridge/dist" />
+                                        <!-- Equivalent of `pnpm build` in the bridge package
+                                             (script: tsc -p tsconfig.json), run through node so
+                                             it works on every CI OS without a shell wrapper.
+                                             Path is relative to this module's base directory. -->
+                                        <exec executable="node" dir="../../packages/qoder-acp-bridge" failonerror="true">
+                                            <arg value="node_modules/typescript/bin/tsc" />
+                                            <arg value="-p" />
+                                            <arg value="tsconfig.json" />
+                                        </exec>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <version>3.8.1</version>
+                        <executions>
+                            <execution>
+                                <id>e2e-runtime-dependencies</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>copy-dependencies</goal>
+                                </goals>
+                                <configuration>
+                                    <includeScope>runtime</includeScope>
+                                    <outputDirectory>${project.build.directory}/e2e-lib</outputDirectory>
+                                    <!-- Lombok is an optional compile-scope extra of the reactor
+                                         parent, excluded from the production boot jar; the
+                                         harness lib/ carries the production runtime only. -->
+                                    <excludeArtifactIds>lombok</excludeArtifactIds>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>e2e-selected-test-support</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>unpack</goal>
+                                </goals>
+                                <configuration>
+                                    <artifactItems>
+                                        <artifactItem>
+                                            <groupId>io.aria.conductor</groupId>
+                                            <artifactId>act-test-support</artifactId>
+                                            <version>${project.version}</version>
+                                            <outputDirectory>${project.build.directory}/e2e-support</outputDirectory>
+                                            <!-- Only the framework-free helpers the harness-era
+                                                 tests select; the DB-slice/web-mvc bases and
+                                                 AssertJ-dependent helpers stay out. -->
+                                            <includes>io/aria/conductor/test/MockLlmClient*.class,io/aria/conductor/test/TestDataBuilder*.class</includes>
+                                        </artifactItem>
+                                    </artifactItems>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <version>3.7.1</version>
+                        <executions>
+                            <execution>
+                                <id>backend-e2e-harness</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                                <configuration>
+                                    <descriptors>
+                                        <descriptor>${project.basedir}/${e2e.harness.assembly.descriptor}</descriptor>
+                                    </descriptors>
+                                    <appendAssemblyId>true</appendAssemblyId>
+                                    <finalName>${project.build.finalName}</finalName>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <!-- Clear the default-lane exclusion: in this profile the distribution
+                                 exists and the packaging test is required to run and pass. -->
+                            <excludes combine.self="override" />
+                            <systemPropertyVariables>
+                                <e2e.productionJar>${project.build.directory}/${project.build.finalName}.jar</e2e.productionJar>
+                                <e2e.harnessZip>${project.build.directory}/${project.build.finalName}-backend-e2e-harness.zip</e2e.harnessZip>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
 

@@ -1129,6 +1129,12 @@
       "capturedRuns": "See harnessRun for the exact per-spec outcomes and causes.",
       "stillUnported": "aria-engine-unification, aria-timeout-cancel, housekeeping-cleanup, observability-live, workflow-data-flow, workflow-state-machine, workflow-ui-interaction (notRevisedRows) and the two disabled cases (template-api:146, workflow-state-machine:154) - all with the T17 remainder as deferral owner."
     },
+    "t19FixRound2": {
+      "date": "2026-09-26",
+      "scope": "Task 19 fix round 2 - the two standing blockers of core-execution-modes.spec.ts (the Step-1 four-combination completion cases and the qoder bridge readiness wire). Records the decision the spec header carries.",
+      "fourCombinationApprovalStep": "DECIDED (contract-accurate, never a skip): a core-owned run opens the run-gate ask only when the core raises a permission need (AgentLoopEngine's coordinated branch returns before the legacy task-gate call site), so the read-only 'reported-usage' completion legitimately asks nothing and the old approveRunApproval precondition could never be satisfied. The four cases now settle exactly one of the two documented outcomes through fixtures.settleRunApproval (spec header core-execution-modes.spec.ts): an ask -> every ask approved once through the verified operator decide route -> the terminal assertions; no ask -> the same terminal assertions. Neither branch is a skip: with no ask the run must still reach exactly COMPLETED with finalOutput 'fixture-complete', and both branches assert the same completion evidence: the run's own frozen execution binding read back through the harness read-only operator route GET /api/v1/maintenance/core-e2e/binding?runId= (reader fixtures.runExecutionBinding) must carry exactly runId, agentId, coreId, executionMode, runtimeState 'COMPLETED/BACKEND_SUSPEND' and version 2 (freeze -> RUNNING -> terminal). Permission governance keeps its dedicated ask/deny/expiry cases in core-permissions.spec.ts; no assertion was removed, relaxed or skipped.",
+      "qoderReadinessWire": "FIXED at the wire, not at the readiness gate: the harness launch profile passed the configured bare name ('node') as the bridge's --cli, and the committed bridge refuses a non-absolute executable with E_CONFIG(78) before it binds its endpoint, so every qoder launch died at the 30 s readiness timeout. Reproduced against the shipped bridge with the exact harness argv: {'type':'bridge.error','code':'E_CONFIG','message':'--cli is not an existing absolute executable path: node'} (ProcessBuilder launch parity probe), GREEN with an absolute node: {'type':'bridge.ready',...} then GET /session 200 with the run binding. CoreE2eQoderAdapter now resolves the configured node executable to an absolute existing file (already-absolute paths are validated, bare names resolve through PATH/PATHEXT, anything else refuses the boot loudly) before building the Qoder launch profile - pinned by CoreE2eQoderAdapterTest (resolution cases + the profile-wire case asserting the profile's --cli is the resolved absolute file)."
+    },
     "fixturesChanged": "agent-control-tower/act-dashboard/e2e/fixtures.ts - operator-only routes authenticate with the environment credential as a bearer header (`Authorization: Bearer $ARIA_OPERATOR_BEARER_TOKEN`; ActorAuthenticationFilter step 1 is the header-authenticated operator branch with no CSRF surface). The committed UI client src/api/operatorSession.ts uses a different flow (cookie + X-CSRF-Token) and is not the header contract the fixtures follow; fix round 1 corrected the citation. seedAdkAgent(request, {adkProvider, executionMode, workspaceMode, workspacePath, workspaceBaseRef}); setScenario(request, agentId, scenario) against the harness-only operator-authenticated peer scenario control (POST /api/v1/maintenance/core-e2e/scenario, never a database outcome); approveRunApproval/decideApproval operator-authenticated with exact processed-ack verification; permissionOptions parses the recorded one-use grant set. SeedAdkAgentOpts.adkProvider is now exactly 'qoder' | 'opencode' (Task 18 cutover removed 'langchain' from the shape); the retained caller api/git-pack-gate.api.spec.ts:233 still passes 'langchain' textually - Playwright transpiles without type-checking, and the runtime now fails that value loudly ('Unsupported ADK provider'), which is why the file stays held at the gate (removalGate). The production catalog is exactly qoder|opencode. Fix round 2 added runWorkerToken(request, runId) reading the run-scoped worker credential from the harness-only operator route GET /api/v1/maintenance/core-e2e/worker-token?runId=... (404 today; T18 obligation (a)).",
     "perPurposeStatus": {
       "note": "Rewritten in fix round 1 because the previous record claimed coverage that was not carried and omitted rows. Each entry states what the port carries (covered) and every assertion/purpose it does NOT carry (residual). The port has NO UI half: all three replacement specs drive the REST API only (Playwright APIRequestContext), so every original browser case is a residual unless an entry says otherwise. A row may only be removed at cutover when every purpose below is covered; any residual blocks its removal.",
@@ -1234,7 +1240,7 @@
       },
       "pw:runs-page.spec.ts": {
         "covered": [
-          "the run-start path on the deterministic harness: a core-bound agent's run reaches exactly COMPLETED with the exact fixture output (the four-combination loop and the cancel control in core-execution-modes.spec.ts; RED until T18)"
+          "the run-start path on the deterministic harness: a core-bound agent's run reaches exactly COMPLETED with the exact fixture output (the four-combination loop and the cancel control in core-execution-modes.spec.ts). Fix round 2 (t19FixRound2): the approval step of each combination case is contract-accurate - it settles the ask outcome (approve, then the same terminal assertions) or the documented no-ask outcome (the read-only 'reported-usage' completion asks nothing), and asserts the exact terminal result plus the run's own frozen binding row (coreId, executionMode, runtimeState 'COMPLETED/BACKEND_SUSPEND', version 2) read back through the harness read-only binding route"
         ],
         "residual": [
           "no UI half: the Runs page header/filters, the start-run form's empty-submission validation ('Agent selection is required' / 'Prompt seed is required') and the UI-started run's table row with a status badge are not carried. Owner: the runs-page.spec.ts revision (the browser assertions can be re-pointed only once T18's wired runtime serves the UI lane)."
@@ -1242,7 +1248,7 @@
       },
       "pw:journey-crew-deploy-run.spec.ts": {
         "covered": [
-          "the exchangeable-provider run path (agent -> run -> exact terminal output with the exact final output) on the deterministic harness; RED until T18"
+          "the exchangeable-provider run path (agent -> run -> exact terminal output with the exact final output) on the deterministic harness. Fix round 2 (t19FixRound2): the four-combination cases settle the run gate contract-accurately (an ask -> approved once; no ask -> the documented read-only completion) and assert the exact terminal output plus the frozen binding evidence"
         ],
         "residual": [
           "no UI half: the Crew catalog deploy journey (template card click -> POST /agents/from-template/{template} -> exactly one more roster card) and the Runs-page form start with the submitted agentId assertion are not carried. Owner: the journey-crew-deploy-run.spec.ts revision."
@@ -1250,7 +1256,7 @@
       },
       "pw:journey-agent-run-report.spec.ts": {
         "covered": [
-          "agent -> run -> exact terminal output on the deterministic harness (the four-combination loop); RED until T18"
+          "agent -> run -> exact terminal output on the deterministic harness (the four-combination loop). Fix round 2 (t19FixRound2): each case's run-gate step settles exactly one of the two documented outcomes and asserts the exact completion (COMPLETED + 'fixture-complete') plus the run's frozen binding row"
         ],
         "residual": [
           "the crew-roster card reflection, the runs-table row/status badge, the approvals-surface consistency poll are not carried",
@@ -1283,7 +1289,7 @@
       },
       "pw:langchain-adk-e2e.spec.ts": {
         "covered": [
-          "the exchangeable-provider run path (core selection -> run -> exact terminal output) on the deterministic harness; RED until T18"
+          "the exchangeable-provider run path (core selection -> run -> exact terminal output) on the deterministic harness. Fix round 2 (t19FixRound2): the four core/mode combination cases are the run-path replacement; each settles the run gate contract-accurately (ask -> approved once; documented no-ask read-only completion) and asserts the exact terminal output plus the frozen binding row of that run"
         ],
         "residual": [
           "the file itself is retained untouched (removal deferred to the cutover commit; see removalDecisions). Its Configure-modal LLM-provider setup, Crew agent creation and Runs-page polling are not carried."

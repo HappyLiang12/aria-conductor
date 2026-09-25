@@ -163,6 +163,35 @@
       "expected": ["original bytes unchanged", "no additional file created"]
     },
     {
+      "id": "git-push",
+      "title": "The governed git_push tool call: a PUSH-tier ask, then the approved push lands on the named remote",
+      "prompt": "Push branch e2e-pack-gate-<unique> to origin.",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "request": {
+          "kind": "execute",
+          "toolName": "git_push",
+          "command": "git push origin HEAD:refs/heads/<branch named by the prompt>"
+        },
+        "push": "only after a genuine allow-once decision: git push <remote> HEAD:refs/heads/<branch>, cwd = the admitted run worktree",
+        "stopReason": "end_turn"
+      },
+      "opencode": {
+        "request": {
+          "kind": "execute",
+          "toolName": "git_push",
+          "command": "git push origin HEAD:refs/heads/<branch named by the prompt>"
+        },
+        "decisionGate": "POST /__peer/decision (the message response is held until the decision resolves)",
+        "push": "only after a genuine allow-once decision: git push <remote> HEAD:refs/heads/<branch>, cwd = the admitted run worktree"
+      },
+      "expected": [
+        "the platform registers the native permission request with the recorded execute option set (proceed_once/cancel are the decidable one-use grant and the reject option)",
+        "a denial pushes nothing",
+        "an allow-once decision lands exactly the worktree HEAD on refs/heads/<branch> of the remote the prompt named"
+      ]
+    },
+    {
       "id": "permission-expiry",
       "title": "A pending permission expires and a late decision is refused",
       "prompt": "Create probe-expiry.txt with the fixture text",

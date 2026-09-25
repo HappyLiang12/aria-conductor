@@ -78,6 +78,13 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
             return capabilities;
         }
 
+        /**
+         * The run's frozen binding snapshot, read once at launch. It is the
+         * reference the coordinator's frozen-field assertions compare the row
+         * against, and it is never re-saved: the row's mutable runtime-state
+         * half is written through a fresh read of the row, so no state
+         * transition carries a version this run already consumed.
+         */
         public RunExecutionBinding binding() {
             return binding;
         }

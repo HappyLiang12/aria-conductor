@@ -22,9 +22,11 @@ import {
   bootPeer,
   createLineReader,
   encodeFrame,
+  gitPushTargetFromPrompt,
   grantWriterFixture,
   loadScenarioManifest,
   parsedChunk,
+  pushGitBranch,
   record,
   recordedOptions,
   startBackgroundWriter,
@@ -154,7 +156,7 @@ function toolCallUpdateFor(spec, toolCallId) {
     content: [{ type: 'content', content: { type: 'text', text: spec.command } }],
     kind: 'execute',
     rawInput: { command: spec.command, description: `Create ${spec.target} with exact content` },
-    _meta: { qoder: { toolName: 'Bash' } },
+    _meta: { qoder: { toolName: spec.toolName ?? 'Bash' } },
   };
 }
 
@@ -180,7 +182,9 @@ function permissionToolCallFor(spec, toolCallId) {
 }
 
 function completeToolCall(spec, toolCallId, shape) {
-  const output = `Fixture write completed at: ${spec.target}`;
+  const output = shape?.pushed
+    ? `Fixture push completed: ${shape.pushed}`
+    : `Fixture write completed at: ${spec.target}`;
   const update = {
     sessionUpdate: 'tool_call_update',
     toolCallId,
@@ -247,7 +251,15 @@ async function resolveDecision(frame) {
   const kind = entry.options.find((option) => option.optionId === optionId)?.kind ?? null;
   let decision;
   try {
-    if (entry.spec.scaffold) {
+    if (entry.spec.gitPush) {
+      decision = pushGitBranch({
+        optionId,
+        options: entry.options,
+        workspace: WORKSPACE,
+        branch: entry.spec.gitPush.branch,
+        remote: entry.spec.gitPush.remote,
+      });
+    } else if (entry.spec.scaffold) {
       decision = await grantWriterFixture({
         optionId,
         options: entry.options,
@@ -383,6 +395,26 @@ async function runCancelPending() {
     kind: 'edit',
     target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-cancel-pending.txt')),
     contents: 'gamma-cancel-pending',
+  });
+  finishPrompt('end_turn');
+}
+
+/**
+ * The governed git push: one execute-kind permission request for the recorded
+ * `git_push` tool, with the branch and remote named by the run prompt. The push
+ * itself runs only after a genuine allow-once decision (resolveDecision); a
+ * denial leaves the remote untouched.
+ */
+async function runGitPush() {
+  const target = gitPushTargetFromPrompt(turnPromptText);
+  record('peer.git_push_requested', { branch: target.branch, remote: target.remote });
+  await requestPermission({
+    kind: 'execute',
+    toolName: 'git_push',
+    command: `git push ${target.remote} HEAD:refs/heads/${target.branch}`,
+    gitPush: target,
+    target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'git-push.probe')),
+    contents: `${target.branch}\n`,
   });
   finishPrompt('end_turn');
 }
@@ -606,6 +638,9 @@ async function runPrompt() {
       return;
     case 'cancel-pending':
       await runCancelPending();
+      return;
+    case 'git-push':
+      await runGitPush();
       return;
     case 'background-writer':
     case 'pause-resume':

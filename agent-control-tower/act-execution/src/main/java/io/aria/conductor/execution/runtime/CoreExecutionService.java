@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -31,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -94,6 +96,17 @@ public class CoreExecutionService implements RuntimeActivity {
     private final Duration cleanupWindow;
     private final ScheduledExecutorService deadlines;
     private final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * One monitor per run around the binding row's read-modify-write of the
+     * runtime-state half. It serializes this process's writers of one run (its
+     * attempt, the run deadline, a control request) so a version conflict
+     * surfacing from the store always means a writer <em>outside</em> this
+     * process changed the row instead of an interleaving of this run's own
+     * writes. The monitors are retained like the run-owned records of
+     * {@link RunRuntimeRegistry}; neither outlives the process.
+     */
+    private final Map<UUID, Object> bindingWrites = new ConcurrentHashMap<>();
 
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
@@ -237,10 +250,9 @@ public class CoreExecutionService implements RuntimeActivity {
             abortLaunch(runtime, lease);
             throw e;
         }
-        binding.setRuntimeEnvironmentId(runtime.handle().environmentId());
-        binding.setRuntimeOwnershipIdentity(runtime.handle().ownershipIdentity());
-        binding.setRuntimeEndpoint(runtime.handle().endpoint() == null
-                ? null : runtime.handle().endpoint().toString());
+        // The observed runtime identity is recorded with the run by persistState,
+        // which reads it from the launched handle: the binding instance read here
+        // is the run's frozen snapshot and is never written back itself.
         persistState(runtime, ControlState.RUNNING.name());
         return runtime;
     }
@@ -675,27 +687,89 @@ public class CoreExecutionService implements RuntimeActivity {
     }
 
     /**
-     * Persists the observed runtime state together with the chosen control
+     * Records the observed runtime state together with the chosen control
      * strategy (a reported value passes through exactly; unknown usage stays
      * NULL). The immutable binding row is the run's own record, never the
      * agent's mutable settings.
+     *
+     * <p>The row's mutable half is written by this one path, as a fresh
+     * read-modify-write of the row's current state: the instance the run read at
+     * launch is its frozen snapshot and is never re-saved. Hibernate's merge --
+     * what the repository's {@code save} performs for an entity with an assigned
+     * id -- advances the version of the managed copy it loads, never of the
+     * argument, so re-saving the launch-time instance would carry the version
+     * from before this path's own first write; the second state transition of
+     * every run would then be refused as stale and the run would fail on its own
+     * record ({@code ObjectOptimisticLockingFailureException} on the binding).
+     * The write is serialized per run, so a version conflict from the store means
+     * a writer outside this process changed the row and is reported as the
+     * conflict it is, never swallowed and never retried into a silent overwrite.
+     *
+     * <p>The frozen half is asserted, never rewritten: a frozen field that no
+     * longer carries the value the run was admitted with is a refusal, not a
+     * re-freeze.
      */
     private void persist(RunRuntimeRegistry.RunRuntime runtime, String state, CoreResult result) {
-        RunExecutionBinding binding = runtime.binding();
-        if (binding == null) {
+        RunExecutionBinding frozen = runtime.binding();
+        if (frozen == null) {
             return;
         }
-        if (result != null && result.usage() != null) {
-            UsageSnapshot usage = result.usage();
-            binding.setUsageInputTokens(usage.inputTokens());
-            binding.setUsageOutputTokens(usage.outputTokens());
-            binding.setUsageCredits(usage.credits());
-            binding.setObservedModel(usage.observedModel());
+        synchronized (bindingWrites.computeIfAbsent(runtime.spec().runId(), ignored -> new Object())) {
+            RunExecutionBinding row = bindings.findById(frozen.getRunId())
+                    .orElseThrow(() -> new IllegalStateException("Run " + frozen.getRunId()
+                            + " has no frozen execution binding row to record its runtime state against"));
+            requireFrozenUnchanged(frozen, row);
+            RuntimeHandle handle = runtime.handle();
+            if (handle != null) {
+                row.setRuntimeEnvironmentId(handle.environmentId());
+                row.setRuntimeOwnershipIdentity(handle.ownershipIdentity());
+                row.setRuntimeEndpoint(handle.endpoint() == null ? null : handle.endpoint().toString());
+            }
+            if (result != null && result.usage() != null) {
+                UsageSnapshot usage = result.usage();
+                row.setUsageInputTokens(usage.inputTokens());
+                row.setUsageOutputTokens(usage.outputTokens());
+                row.setUsageCredits(usage.credits());
+                row.setObservedModel(usage.observedModel());
+            }
+            String strategy = runtime.capabilities() == null
+                    ? ControlStrategy.UNVERIFIED.name() : runtime.capabilities().pauseStrategy().name();
+            row.setRuntimeState(state + "/" + strategy);
+            bindings.save(row);
         }
-        String strategy = runtime.capabilities() == null
-                ? ControlStrategy.UNVERIFIED.name() : runtime.capabilities().pauseStrategy().name();
-        binding.setRuntimeState(state + "/" + strategy);
-        bindings.save(binding);
+    }
+
+    /**
+     * The frozen half of the binding row must still be the snapshot the run was
+     * admitted with: the core, mode, agent, settings, credential reference,
+     * configuration revision, deadline and workspace references are never
+     * re-resolved and never rewritten by the run's own state transitions.
+     */
+    private static void requireFrozenUnchanged(RunExecutionBinding frozen, RunExecutionBinding row) {
+        UUID runId = frozen.getRunId();
+        requireFrozenField(runId, "agentId", frozen.getAgentId(), row.getAgentId());
+        requireFrozenField(runId, "coreId", frozen.getCoreId(), row.getCoreId());
+        requireFrozenField(runId, "executionMode", frozen.getExecutionMode(), row.getExecutionMode());
+        requireFrozenField(runId, "settingsJson", frozen.getSettingsJson(), row.getSettingsJson());
+        requireFrozenField(runId, "credentialRef", frozen.getCredentialRef(), row.getCredentialRef());
+        requireFrozenField(runId, "configurationRevision", frozen.getConfigurationRevision(),
+                row.getConfigurationRevision());
+        requireFrozenField(runId, "deadline", frozen.getDeadline(), row.getDeadline());
+        requireFrozenField(runId, "workspaceKind", frozen.getWorkspaceKind(), row.getWorkspaceKind());
+        requireFrozenField(runId, "workspaceLeaseId", frozen.getWorkspaceLeaseId(), row.getWorkspaceLeaseId());
+        requireFrozenField(runId, "workspaceRoot", frozen.getWorkspaceRoot(), row.getWorkspaceRoot());
+        requireFrozenField(runId, "workspaceSourceRoot", frozen.getWorkspaceSourceRoot(),
+                row.getWorkspaceSourceRoot());
+        requireFrozenField(runId, "workspaceBaseCommit", frozen.getWorkspaceBaseCommit(),
+                row.getWorkspaceBaseCommit());
+    }
+
+    private static void requireFrozenField(UUID runId, String field, Object frozen, Object current) {
+        if (!Objects.equals(frozen, current)) {
+            throw new IllegalStateException("Run " + runId + " was frozen with " + field + " " + frozen
+                    + " but its binding row now carries " + current
+                    + "; the frozen half of the binding is never rewritten by the run");
+        }
     }
 
     private static String messageOf(Throwable throwable) {

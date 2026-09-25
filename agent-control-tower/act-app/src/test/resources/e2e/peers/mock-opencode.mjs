@@ -25,8 +25,10 @@ import {
   applyDecision,
   assertInsideWorkspace,
   bootPeer,
+  gitPushTargetFromPrompt,
   grantWriterFixture,
   loadScenarioManifest,
+  pushGitBranch,
   record,
   recordedOptions,
   requirePortFlag,
@@ -134,6 +136,7 @@ function pendingPayload() {
       {
         id: pendingDecision.spec.requestId,
         kind: pendingDecision.spec.kind,
+        toolName: pendingDecision.spec.toolName ?? null,
         path: pendingDecision.spec.target,
         command: pendingDecision.spec.command ?? null,
         contents: pendingDecision.spec.contents,
@@ -141,6 +144,29 @@ function pendingPayload() {
       },
     ],
   };
+}
+
+/**
+ * The governed git push: one execute-kind decision request for the recorded
+ * `git_push` tool, with the branch and remote named by the run prompt. The
+ * message response is held until the decision resolves, so a pending gate
+ * really blocks the run; only an allow-once decision pushes (applyDecisionRequest).
+ */
+async function gitPushFlow(body) {
+  const target = gitPushTargetFromPrompt(requestText(body));
+  record('peer.git_push_requested', { branch: target.branch, remote: target.remote });
+  const decision = await offerDecision({
+    kind: 'execute',
+    toolName: 'git_push',
+    command: `git push ${target.remote} HEAD:refs/heads/${target.branch}`,
+    gitPush: target,
+    target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'git-push.probe')),
+    contents: `${target.branch}\n`,
+  });
+  if (decision.status === 'written') {
+    return assistantMessage({ text: `pushed ${decision.pushed}` });
+  }
+  return assistantMessage({ text: 'git_push was not granted' });
 }
 
 /** Register a pending fixture decision and return its resolution promise. */
@@ -298,7 +324,15 @@ async function applyDecisionRequest(optionId) {
   decisions += 1;
   let decision;
   try {
-    if (entry.spec.scaffold) {
+    if (entry.spec.gitPush) {
+      decision = pushGitBranch({
+        optionId,
+        options: entry.options,
+        workspace: WORKSPACE,
+        branch: entry.spec.gitPush.branch,
+        remote: entry.spec.gitPush.remote,
+      });
+    } else if (entry.spec.scaffold) {
       decision = await grantWriterFixture({
         optionId,
         options: entry.options,
@@ -421,6 +455,14 @@ const server = createServer(async (request, response) => {
         response.write('{"info":{"id":"msg_');
         if (typeof response.flushHeaders === 'function') response.flushHeaders();
         setTimeout(() => response.destroy(), 20);
+        return;
+      }
+      if (SCENARIO === 'git-push') {
+        // The governed push holds the message response until its decision
+        // resolves, so the run really blocks on the PUSH gate.
+        const message = await gitPushFlow(body);
+        messages.push(message);
+        json(response, 200, message);
         return;
       }
       const message = startDecisionFlow(body);

@@ -139,7 +139,21 @@ class CoreE2ePackagingIntegrationTest {
                     "harness/io/aria/conductor/app/e2e/CoreE2eConfiguration$SandboxTransport.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eSetup.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eSetup$SetupRefusal.class",
-                    "harness/io/aria/conductor/app/e2e/DeterministicLlmClient.class");
+                    "harness/io/aria/conductor/app/e2e/DeterministicLlmClient.class",
+                    // Task 19 peer-launch wiring.
+                    "harness/io/aria/conductor/app/e2e/CoreE2eController.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eController$ScenarioSelection.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eScenarios.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eWorkerTokens.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eProcessBackend.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eProcessBackend$State.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter$PeerSession.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eQoderAdapter.class",
+                    // Task 19 fix round 1: the bounded authenticated endpoint
+                    // readiness wait the adapters run before opening a session.
+                    "harness/io/aria/conductor/app/e2e/CoreE2eEndpointReadiness.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eEndpointReadiness$Probe.class");
 
             // Exact pin: the support classes are exactly the explicitly unpacked
             // framework-free helpers -- a stale or broadened unpack shows up here.

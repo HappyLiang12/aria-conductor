@@ -37,8 +37,22 @@ import java.util.Map;
  *       shortcut;</li>
  *   <li>{@code POST /api/v1/maintenance/initialize-builtins} -- the production
  *       create-only built-in setup;</li>
+ *   <li>{@code PUT /api/v1/adk/providers/qoder/credential} -- provisions the
+ *       harness-scoped synthetic Qoder runtime credential through the production
+ *       operator route (Task 19 fix round 1), so a qoder-placed run resolves it
+ *       from the managed store instead of failing admission. The value comes
+ *       from {@value #QODER_CREDENTIAL_ENV} and the step refuses without it; the
+ *       step also refuses a response that reports the credential unusable or
+ *       echoes a value;</li>
  *   <li>print every receipt so the caller records what setup actually did.</li>
  * </ol>
+ *
+ * <p>The harness therefore requires the app to be configured with the
+ * production credential encryption key ({@code
+ * aria.runtime-credentials.encryption-key} / {@code ARIA_RUNTIME_CREDENTIAL_KEY}):
+ * without it the production service refuses to store the credential and this
+ * setup fails with the service's own message. No key or credential value is
+ * generated or defaulted here.</p>
  *
  * <p><b>Target URL resolution, in precedence order:</b> the
  * {@code --base-url=<url>} flag wins when given; with the flag absent the
@@ -61,6 +75,15 @@ public final class CoreE2eSetup {
     /** Environment variable carrying the synthetic operator bearer credential. */
     public static final String OPERATOR_TOKEN_ENV = "ARIA_OPERATOR_BEARER_TOKEN";
 
+    /**
+     * Environment variable carrying the harness-scoped synthetic Qoder runtime
+     * credential value (Task 19 fix round 1). The value is never generated,
+     * defaulted, written into the repository or logged: the setup refuses
+     * without it, and the production credential route stores it encrypted under
+     * the configured {@code ARIA_RUNTIME_CREDENTIAL_KEY}.
+     */
+    public static final String QODER_CREDENTIAL_ENV = "ARIA_E2E_QODER_CREDENTIAL";
+
     /** Explicit confirmation required before historical seeds are retired. */
     public static final String CONFIRM_RETIRE_FLAG = "--confirm-retire-historical-seeds";
 
@@ -70,6 +93,7 @@ public final class CoreE2eSetup {
     static final String PREVIEW_PATH = "/api/v1/maintenance/langchain/preview";
     static final String EXECUTE_PATH = "/api/v1/maintenance/langchain/execute";
     static final String BUILTINS_PATH = "/api/v1/maintenance/initialize-builtins";
+    static final String CREDENTIAL_PATH = "/api/v1/adk/providers/qoder/credential";
 
     static final String BASE_URL_ARG = "--base-url";
     static final String HEALTH_TIMEOUT_ARG = "--health-timeout-seconds";
@@ -130,7 +154,53 @@ public final class CoreE2eSetup {
         System.out.println("core-e2e setup: built-ins created=" + builtins.path("createdAgentIds").size()
                 + " existing=" + builtins.path("existingAgentIds").size());
 
+        provisionQoderCredential(http, baseUrl, operatorToken);
+
         System.out.println("core-e2e setup: OK");
+    }
+
+    /**
+     * Provisions the harness-scoped synthetic Qoder runtime credential through
+     * the production operator route ({@code PUT .../qoder/credential}) and pins
+     * the production service's masked answer: the credential must be stored
+     * ({@code configured=true}) under a usable configured key
+     * ({@code encryptionKeyConfigured=true}), bound to the recorded reference and
+     * environment variable, and answered masked only -- a response echoing any
+     * other value is refused. Every qoder-placed run resolves this stored row
+     * through {@code RuntimeCredentialService.resolve}; nothing here bypasses or
+     * replaces that resolution.
+     */
+    private static void provisionQoderCredential(HttpClient http, String baseUrl, String operatorToken)
+            throws IOException, InterruptedException {
+        String secret = System.getenv(QODER_CREDENTIAL_ENV);
+        if (secret == null || secret.isBlank()) {
+            throw new SetupRefusal("no harness-scoped Qoder runtime credential in the environment ("
+                    + QODER_CREDENTIAL_ENV + " is unset); the qoder-placed harness runs resolve the managed"
+                    + " runtime credential from the production store, and the harness never fabricates or"
+                    + " defaults one");
+        }
+        JsonNode provisioned = sendJson(http, "PUT", baseUrl + CREDENTIAL_PATH,
+                JSON.writeValueAsString(Map.of("secret", secret)), operatorToken, "runtime credential provisioning");
+        boolean pinned = provisioned.path("configured").asBoolean(false)
+                && provisioned.path("encryptionKeyConfigured").asBoolean(false)
+                && "qoder:operator".equals(provisioned.path("credentialRef").asText(""))
+                && "qoder".equals(provisioned.path("coreId").asText(""))
+                && "QODER_PERSONAL_ACCESS_TOKEN".equals(provisioned.path("environmentVariable").asText(""))
+                && "********".equals(provisioned.path("maskedSecret").asText(""));
+        if (!pinned) {
+            throw new SetupRefusal("the production credential service did not confirm the harness credential as"
+                    + " configured with a usable key (qoder:operator / QODER_PERSONAL_ACCESS_TOKEN, masked): "
+                    + provisioned);
+        }
+        if (provisioned.toString().contains(secret)) {
+            throw new SetupRefusal("the production credential service echoed the supplied secret value in its"
+                    + " response; the harness refuses to continue on a leaking credential surface");
+        }
+        System.out.println("core-e2e setup: qoder runtime credential provisioned through the production route"
+                + " (credentialRef=" + provisioned.path("credentialRef").asText("")
+                + " env=" + provisioned.path("environmentVariable").asText("")
+                + " masked=" + provisioned.path("maskedSecret").asText("")
+                + "); the value is supplied by " + QODER_CREDENTIAL_ENV + " and never printed or written to disk");
     }
 
     /** Polls the health endpoint until the exact UP body arrives; never a partial acceptance. */
@@ -166,12 +236,19 @@ public final class CoreE2eSetup {
     /** One operator-authenticated POST; any non-2xx is a loud failure with the observed body. */
     private static JsonNode postJson(HttpClient http, String url, String body, String operatorToken, String step)
             throws IOException, InterruptedException {
+        return sendJson(http, "POST", url, body, operatorToken, step);
+    }
+
+    /** One operator-authenticated JSON request; any non-2xx is a loud failure with the observed body. */
+    private static JsonNode sendJson(HttpClient http, String method, String url, String body,
+            String operatorToken, String step) throws IOException, InterruptedException {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(60))
                 .header("Authorization", "Bearer " + operatorToken)
                 .header("Content-Type", "application/json");
-        request.POST(body == null ? HttpRequest.BodyPublishers.noBody()
-                : HttpRequest.BodyPublishers.ofString(body));
+        HttpRequest.BodyPublisher publisher = body == null ? HttpRequest.BodyPublishers.noBody()
+                : HttpRequest.BodyPublishers.ofString(body);
+        request.method(method, publisher);
         HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() / 100 != 2) {
             throw new SetupRefusal(step + " refused by " + url + ": HTTP " + response.statusCode()

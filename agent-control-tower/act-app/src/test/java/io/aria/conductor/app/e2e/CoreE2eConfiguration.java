@@ -213,6 +213,163 @@ public class CoreE2eConfiguration {
     }
 
     /* ------------------------------------------------------------------ */
+    /* Task 19 peer-launch wiring                                          */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * The harness control surface ({@link CoreE2eController}: the peer-scenario
+     * selection route and the run-worker-credential route the Playwright
+     * fixtures call) is NOT registered here: it is a {@code @RestController} on
+     * the test classpath and carries {@code @Profile("core-e2e")} itself, so the
+     * application component scan registers it in exactly this context. An extra
+     * @Bean method would duplicate the scanned definition under the same name.
+     */
+
+    /**
+     * The harness peer-scenario registry. It validates every selection against
+     * the shipped manifest and requires the peer control token the mock peers
+     * themselves require, so a harness run can never reach a fixture-less peer.
+     */
+    @Bean
+    public CoreE2eScenarios coreE2eScenarios(CoreE2eSettings settings,
+            @Value("${" + CoreE2eScenarios.PEER_CONTROL_TOKEN_ENV + ":}") String peerControlToken) {
+        return new CoreE2eScenarios(settings.scenarioManifest(), peerControlToken);
+    }
+
+    /** The run-scoped worker credential custody: minted once per run, shared by the route and the launch. */
+    @Bean
+    public CoreE2eWorkerTokens coreE2eWorkerTokens(
+            io.aria.conductor.execution.security.ActorTokenService actorTokens) {
+        return new CoreE2eWorkerTokens(actorTokens);
+    }
+
+    /**
+     * The shared run-owned state of the harness process transport, plus the two
+     * backend views (one per placement mode) the registry consumes.
+     */
+    @Bean(destroyMethod = "close")
+    public CoreE2eProcessBackend.State coreE2ePeerProcesses(CoreE2eWorkerTokens workerTokens) {
+        return new CoreE2eProcessBackend.State(
+                io.aria.conductor.execution.runtime.host.OwnedProcessController.forCurrentPlatform(),
+                workerTokens);
+    }
+
+    @Bean
+    public CoreE2eProcessBackend coreE2eHostBackend(CoreE2eProcessBackend.State state) {
+        return new CoreE2eProcessBackend(io.aria.conductor.common.runtime.ExecutionMode.HOST, state);
+    }
+
+    @Bean
+    public CoreE2eProcessBackend coreE2eSandboxBackend(CoreE2eProcessBackend.State state) {
+        return new CoreE2eProcessBackend(io.aria.conductor.common.runtime.ExecutionMode.SANDBOX, state);
+    }
+
+    /** The harness OpenCode core: the committed mock peer behind the production adapter. */
+    @Bean
+    public io.aria.conductor.execution.runtime.CoreAdapter coreE2eOpenCodeAdapter(
+            CoreE2eScenarios scenarios, CoreE2eProcessBackend.State peers, CoreE2eSettings settings,
+            @Value("${e2e.node-executable:node}") String nodeExecutable) {
+        return new CoreE2eOpenCodeAdapter(scenarios, peers, nodeExecutable, settings.opencodePeerScript());
+    }
+
+    /**
+     * The harness Qoder core: the real committed ACP bridge driving the committed
+     * mock CLI behind the production adapter. The configured node executable is
+     * resolved to the absolute existing file the bridge requires for
+     * {@code --cli} ({@link CoreE2eQoderAdapter#resolveAbsoluteCoreExecutable}):
+     * the committed bridge refuses a bare name with {@code E_CONFIG} before it
+     * binds its endpoint, so the resolution -- and a loud refusal when the name
+     * has no absolute answer -- happens here, at boot, never at launch time.
+     */
+    @Bean
+    public io.aria.conductor.execution.runtime.CoreAdapter coreE2eQoderAdapter(
+            CoreE2eScenarios scenarios, CoreE2eProcessBackend.State peers, CoreE2eSettings settings,
+            @Value("${e2e.node-executable:node}") String nodeExecutable) {
+        String coreExecutable = CoreE2eQoderAdapter.resolveAbsoluteCoreExecutable(nodeExecutable);
+        log.info("core-e2e harness: the Qoder bridge core executable '{}' resolved to '{}' (the bridge"
+                + " accepts only an absolute existing --cli)", nodeExecutable, coreExecutable);
+        return new CoreE2eQoderAdapter(scenarios, peers, nodeExecutable, coreExecutable,
+                settings.bridgeEntry(), settings.qoderPeerScript());
+    }
+
+    /**
+     * Registers the built-in agents' default scenario ({@value CoreE2eScenarios#DEFAULT_SCENARIO}).
+     *
+     * <p>Aria's conversation spec drives the chat route and a workflow chain
+     * resolves its steps by agent role, so neither lane can select a scenario
+     * through the control route for the agent the run will actually use: Aria's
+     * runs and the SDD role-agent steps would otherwise fail closed at the
+     * scenario gate. The registered ids are exactly the built-ins the harness
+     * setup ({@code initialize-builtins}) creates with the production default
+     * selection -- Aria and the SDD BA/DEV/QA rows of
+     * {@code V42__seed_sdd_role_agents.sql} -- so a spec-created agent still
+     * carries an explicit selection and an explicit selection always wins.
+     */
+    @Bean
+    public ApplicationRunner coreE2eScenarioDefaults(CoreE2eScenarios scenarios) {
+        return args -> {
+            List<UUID> builtinAgentIds = new ArrayList<>();
+            builtinAgentIds.add(io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID);
+            builtinAgentIds.addAll(io.aria.conductor.execution.maintenance.LegacySetupService.BUILTIN_AGENTS
+                    .stream().map(io.aria.conductor.execution.maintenance.LegacySetupService.BuiltinAgent::id)
+                    .toList());
+            scenarios.registerDefaults(builtinAgentIds);
+            log.info("core-e2e peer scenarios: {} declared in the manifest; the harness default '{}' is"
+                            + " registered for the built-in agents {}", scenarios.knownScenarios().size(),
+                    CoreE2eScenarios.DEFAULT_SCENARIO, builtinAgentIds);
+        };
+    }
+
+    /**
+     * Replaces the production placement backends and core adapters with the
+     * harness ones: the mock peers are launched by the harness process transport
+     * (both modes) and served through the harness adapters. The replacement is
+     * explicit by bean name -- the harness profile must never run the production
+     * sandbox backend (no container runtime) nor a real core binary. The
+     * production {@code gitBranchService} is replaced by its harness twin below.
+     */
+    @Bean
+    public static org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor
+            coreE2eRuntimeOverrides() {
+        return registry -> {
+            for (String bean : List.of("hostExecutionBackend", "sandboxExecutionBackend",
+                    "openCodeCoreAdapter", "qoderCoreAdapter", "gitBranchService")) {
+                if (registry.containsBeanDefinition(bean)) {
+                    registry.removeBeanDefinition(bean);
+                    log.info("core-e2e harness replaced the production bean '{}'", bean);
+                }
+            }
+        };
+    }
+
+    /**
+     * The SDD branch handoff of the harness: the production service resolves the
+     * GitHub credential from the git pack or the host {@code GITHUB_TOKEN}. The
+     * required PR E2E must run without live credentials, so the harness supplies
+     * the synthetic handoff credential the Task 17 recipe used
+     * ({@code synthetic-e2e-git-handoff}) when the environment provides none; a
+     * real environment token always wins. The service is the production class
+     * unchanged -- only its constructor argument differs.
+     */
+    @Bean
+    public io.aria.conductor.execution.git.GitBranchService coreE2eGitBranchService() {
+        String environmentToken = System.getenv("GITHUB_TOKEN");
+        if (environmentToken != null && !environmentToken.isBlank()) {
+            log.info("core-e2e harness: GitBranchService uses the environment GITHUB_TOKEN");
+            return new io.aria.conductor.execution.git.GitBranchService(environmentToken);
+        }
+        log.info("core-e2e harness: GitBranchService uses the synthetic SDD handoff credential"
+                + " (no GITHUB_TOKEN in the environment)");
+        return new io.aria.conductor.execution.git.GitBranchService(SYNTHETIC_GIT_HANDOFF_TOKEN);
+    }
+
+    /**
+     * The synthetic SDD handoff credential of the harness (Task 17 round-2
+     * recipe); it satisfies the TP1 availability gate and is never a real token.
+     */
+    static final String SYNTHETIC_GIT_HANDOFF_TOKEN = "synthetic-e2e-git-handoff";
+
+    /* ------------------------------------------------------------------ */
     /* RuntimeActivity                                                       */
     /* ------------------------------------------------------------------ */
 

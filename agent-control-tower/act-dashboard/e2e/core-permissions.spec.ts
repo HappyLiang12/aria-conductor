@@ -65,13 +65,19 @@ function isOptimisticLockRace(result: { status: number; data: any }): boolean {
   return result.status === 409 && result.data?.message === OPTIMISTIC_LOCK_409;
 }
 
-/** Dispatch a card for a fresh opencode agent and capture the PENDING ask. */
+/**
+ * Dispatch a card for a fresh opencode agent and capture the PENDING ask. The
+ * agent carries the explicit harness selection (opencode + HOST) and a declared
+ * peer fixture, so the run behind the ask is a deterministic run rather than a
+ * run the harness refuses for a missing scenario once the gate is decided.
+ */
 async function dispatchAsk(request: Parameters<typeof seedAdkAgent>[0]) {
   const agent = await seedAdkAgent(request, {
     name: uniqueName('e2e-perm'),
     adkProvider: 'opencode',
     executionMode: 'HOST',
   });
+  await setScenario(request, agent.id, 'reported-usage');
   const card = await seedKanbanItem(request, {
     title: uniqueName('perm-card'),
     agentTemplateId: agent.name,

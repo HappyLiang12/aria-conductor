@@ -50,6 +50,26 @@
                 <include>io/aria/conductor/app/e2e/CoreE2eSetup.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eSetup$SetupRefusal.class</include>
                 <include>io/aria/conductor/app/e2e/DeterministicLlmClient.class</include>
+                <!-- Task 19 peer-launch wiring: the harness control routes, the scenario
+                     registry, the worker-token custody, the process transport and the
+                     two peer-backed core adapters. Pinned individually like the launcher
+                     classes above, so a class whose name merely starts with a pinned one
+                     cannot ride in on a wildcard. -->
+                <include>io/aria/conductor/app/e2e/CoreE2eController.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eController$ScenarioSelection.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eScenarios.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eWorkerTokens.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eProcessBackend.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eProcessBackend$State.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter$PeerSession.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eQoderAdapter.class</include>
+                <!-- Fix round 1: the bounded authenticated endpoint readiness wait
+                     the adapters use before opening a session (the production host
+                     backend's launch-gate mirror). Its Probe interface is a nested
+                     class file like the other carriers above. -->
+                <include>io/aria/conductor/app/e2e/CoreE2eEndpointReadiness.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eEndpointReadiness$Probe.class</include>
             </includes>
         </fileSet>
         <!-- Selected support classes, unpacked explicitly in the profile. -->

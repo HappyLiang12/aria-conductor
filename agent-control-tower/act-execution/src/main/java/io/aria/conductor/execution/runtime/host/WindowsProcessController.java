@@ -80,9 +80,13 @@ import java.util.concurrent.TimeUnit;
  */
 final class WindowsProcessController implements OwnedProcessController {
 
-    /** The verified technique label recorded on every owned process. */
-    static final String TECHNIQUE = "windows-job-object(backstop) + identity-validated descendant-tree "
-            + "enumeration (pid + creation time) + NtSuspendProcess/NtResumeProcess/TerminateProcess";
+    /**
+     * The verified technique label recorded on every owned process. It is part
+     * of the durable ownership identity that the binding column persists, so it
+     * stays a compact token; the full technique is described in the class
+     * javadoc.
+     */
+    static final String TECHNIQUE = "windows-job-object+identity-tree+nt-control";
 
     private static final Duration START_TIMEOUT = Duration.ofSeconds(120);
     private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(120);

@@ -1,16 +1,18 @@
 import { test, expect } from '@playwright/test';
-import { mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   apiCall,
-  approveRunApproval,
   decideApproval,
   pendingRunApprovals,
   pollRunTerminal,
+  runExecutionBinding,
   seedAdkAgent,
   seedRun,
   setScenario,
+  settleRunApproval,
   uniqueName,
 } from './fixtures';
 
@@ -39,6 +41,21 @@ import {
 // scenario's fixture completion is 'pong'); the peers are not extended here
 // because this round's file scope is the dashboard e2e specs plus the coverage
 // map.
+//
+// Fix round 2 — the approval step is contract-accurate, never a skip: a
+// core-owned run opens the run-gate ask only when the core raises a permission
+// need, and the read-only 'reported-usage' completion asks nothing by contract
+// (AgentLoopEngine's coordinated branch returns before the legacy task-gate
+// call site). Each case therefore settles exactly one of the two DOCUMENTED
+// outcomes through settleRunApproval and asserts that outcome's own exact
+// evidence: an ask -> approved once -> the same terminal completion; no ask ->
+// the run reaches the same terminal completion on its own frozen execution
+// binding, read back through the harness's read-only binding route (core, mode,
+// settings-revision and version recorded). Neither outcome is a "skip if
+// absent": a run that opens no ask must still complete exactly, and a run that
+// opens one must have every ask decided before it may complete. Permission
+// governance keeps its dedicated ask/deny/expiry cases in
+// core-permissions.spec.ts.
 for (const { core, mode } of [
   { core: 'qoder', mode: 'HOST' },
   { core: 'qoder', mode: 'SANDBOX' },
@@ -49,20 +66,77 @@ for (const { core, mode } of [
     const agent = await seedAdkAgent(request, { adkProvider: core, executionMode: mode });
     await setScenario(request, agent.id, 'reported-usage');
     const run = await seedRun(request, agent.id);
-    await approveRunApproval(request, run.id);
+
+    // Outcome 1 (an ask) or outcome 2 (no ask), each settled to the terminal
+    // state; the annotation records which one this run took.
+    const gate = await settleRunApproval(request, run.id);
+    test.info().annotations.push({
+      type: 'run-gate-outcome',
+      description:
+        `${core}/${mode}: ` +
+        (gate.approvedAskIds.length === 0
+          ? 'no ask opened (read-only completion)'
+          : `${gate.approvedAskIds.length} ask(s) approved before the completion`),
+    });
+    if (gate.approvedAskIds.length > 0) {
+      // The ask outcome's exact evidence: every captured ask id was decided
+      // exactly once (decideApproval verifies the processed decision field by
+      // field and throws otherwise).
+      expect(new Set(gate.approvedAskIds).size).toBe(gate.approvedAskIds.length);
+    }
+
     const done = await pollRunTerminal(request, run.id);
     expect(done.status).toBe('COMPLETED');
     expect(done.finalOutput).toBe('fixture-complete');
+
+    // The completion was served by this run's own frozen binding: the
+    // coordinated core path refuses to launch against anything else, and the
+    // recorded row must carry exactly the frozen core/mode plus the runtime
+    // state the coordinator observed (freeze -> RUNNING -> terminal = the
+    // two version-advancing writes, hence version 2).
+    const binding = await runExecutionBinding(request, run.id);
+    expect(binding.runId).toBe(run.id);
+    expect(binding.agentId).toBe(agent.id);
+    expect(binding.coreId).toBe(core);
+    expect(binding.executionMode).toBe(mode);
+    expect(binding.runtimeState).toBe('COMPLETED/BACKEND_SUSPEND');
+    expect(binding.version).toBe(2);
   });
 }
 
 // ── agent create/configure: the selection is persisted exactly ──────────────
+
+/** Git with a pinned identity so a commit is reproducible on any machine. */
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: 'aria-e2e',
+  GIT_AUTHOR_EMAIL: 'aria-e2e@aria-conductor.local',
+  GIT_COMMITTER_NAME: 'aria-e2e',
+  GIT_COMMITTER_EMAIL: 'aria-e2e@aria-conductor.local',
+};
+
+function git(args: string[], cwd: string): string {
+  return execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8', stdio: 'pipe' }).trim();
+}
+
+/** A disposable real git repository: admission refuses a WORKTREE selection without one. */
+function disposableGitRepository(): string {
+  const repo = mkdtempSync(join(tmpdir(), 'aria-e2e-settings-repo-'));
+  writeFileSync(join(repo, 'tracked.txt'), 'committed\n');
+  git(['init'], repo);
+  git(['checkout', '-b', 'main'], repo);
+  git(['add', 'tracked.txt'], repo);
+  git(['commit', '-m', 'e2e settings baseline'], repo);
+  return repo;
+}
+
 test('agent create/configure keeps the captured core, mode and workspace selection', async ({ request }) => {
   const agent = await seedAdkAgent(request, {
     name: uniqueName('e2e-core-settings'),
     adkProvider: 'qoder',
     executionMode: 'HOST',
     workspaceMode: 'WORKTREE',
+    workspacePath: disposableGitRepository(),
     workspaceBaseRef: 'main',
   });
 

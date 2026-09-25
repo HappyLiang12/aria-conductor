@@ -448,20 +448,108 @@ export async function approveRunApproval(
   return ask;
 }
 
+/** The terminal states, one place: {@link pollRunTerminal} and the gate settle share them. */
+export const TERMINAL_RUN_STATES = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'] as const;
+
 /** Wait until a run reaches a terminal state and return the run entity. */
 export async function pollRunTerminal(
   request: APIRequestContext,
   runId: string,
   timeoutMs = 120_000,
 ) {
-  const TERMINAL = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
   return pollUntil<any>(
     request,
     `/runs/${runId}`,
-    (run) => TERMINAL.includes(run.status),
+    (run) => (TERMINAL_RUN_STATES as readonly string[]).includes(run.status),
     timeoutMs,
     2_000,
   );
+}
+
+/**
+ * The run-gate contract of a core-owned run, settled without inventing an ask:
+ * the coordinator asks the run gate only when the core raises a permission
+ * need, so a read-only completion legitimately opens no ask while a
+ * permission-driven scenario does. This helper waits for the FIRST of exactly
+ * two documented outcomes:
+ *
+ *  - a PENDING ask for this run exists: every ask is approved once through
+ *    {@link decideApproval} (whose response is verified field by field, so an
+ *    unprocessed decision throws rather than passing) and the wait continues
+ *    until the run is terminal; or
+ *  - the run reaches a terminal state with no undecided ask for it.
+ *
+ * It never treats an absent ask as a pass: the returned outcome names which of
+ * the two happened, and the caller asserts the exact terminal evidence either
+ * way. A wait that ends with neither outcome throws.
+ */
+export async function settleRunApproval(
+  request: APIRequestContext,
+  runId: string,
+  timeoutMs = 120_000,
+): Promise<{ approvedAskIds: string[] }> {
+  const decided = new Set<string>();
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { status, data: run } = await apiCall(request, 'GET', `/runs/${runId}`);
+    if (status !== 200) {
+      throw new Error(`settleRunApproval could not read run ${runId}: HTTP ${status}`);
+    }
+    const { data: approvals } = await apiCall(request, 'GET', '/approvals');
+    const pending = (Array.isArray(approvals) ? approvals : []).filter(
+      (a: any) => a.status === 'PENDING' && a.runId === runId,
+    );
+    const next = pending.find((a: any) => !decided.has(a.id));
+    if (next) {
+      await decideApproval(request, next.id, true, 'API E2E operator approval (one-use grant)');
+      decided.add(next.id);
+      continue;
+    }
+    if ((TERMINAL_RUN_STATES as readonly string[]).includes(run?.status)) {
+      return { approvedAskIds: [...decided] };
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `settleRunApproval timed out for run ${runId} after ${timeoutMs}ms;`
+          + ` last status=${run?.status}, decided asks=${decided.size},`
+          + ` pending asks=${JSON.stringify(pending)}`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+}
+
+/**
+ * The run's frozen execution binding row, read through the harness's
+ * operator-only read-only route (Task 19 fix round 2). The evidence a core-run
+ * spec asserts: the frozen core/mode/settings the run was admitted with, the
+ * observed runtime state the coordinator recorded against that same row, and
+ * the row version.
+ */
+export async function runExecutionBinding(
+  request: APIRequestContext,
+  runId: string,
+): Promise<{
+  runId: string;
+  agentId: string;
+  coreId: string;
+  executionMode: string;
+  settingsJson: string;
+  runtimeState: string | null;
+  usageInputTokens: number | null;
+  usageOutputTokens: number | null;
+  observedModel: string | null;
+  version: number;
+}> {
+  const { status, data } = await operatorApiCall(
+    request,
+    'GET',
+    `/maintenance/core-e2e/binding?runId=${runId}`,
+  );
+  if (status !== 200) {
+    throw new Error(`runExecutionBinding failed for run ${runId}: HTTP ${status} ${JSON.stringify(data)}`);
+  }
+  return data;
 }
 
 /**

@@ -203,10 +203,21 @@ test('knowledge promotion completes a trajectory on the deterministic harness', 
   expect(promoted.status).toBe(201);
   expect(promoted.data.status).toBe('PENDING');
 
+  // A real source repository the governed WORKTREE run is created from: the
+  // admission refuses a WORKTREE selection without a repository path, and this
+  // case needs a creatable agent, so the repository is part of the seed.
+  const source = mkdtempSync(join(tmpdir(), 'aria-e2e-promote-src-'));
+  writeFileSync(join(source, 'tracked.txt'), 'committed\n');
+  git(['init'], source);
+  git(['checkout', '-b', 'main'], source);
+  git(['add', 'tracked.txt'], source);
+  git(['commit', '-m', 'e2e promotion baseline'], source);
+
   const agent = await seedAdkAgent(request, {
     adkProvider: 'qoder',
     executionMode: 'HOST',
     workspaceMode: 'WORKTREE',
+    workspacePath: source,
     workspaceBaseRef: 'main',
   });
   // 'reported-usage' is the committed scenario whose fixture completion is

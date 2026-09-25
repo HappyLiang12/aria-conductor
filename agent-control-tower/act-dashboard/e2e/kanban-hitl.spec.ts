@@ -5,8 +5,8 @@ import {
   pollUntil,
   permissionOptions,
   seedAdkAgent,
-  seedAgent,
   seedKanbanItem,
+  setScenario,
   transitionKanban,
   uniqueName,
 } from './fixtures';
@@ -30,14 +30,30 @@ import {
 /** The exact optimistic-lock 409 body (GlobalExceptionHandler.handleOptimisticLock). */
 const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refresh and retry.';
 
+/**
+ * The deterministic peer fixture of this spec's dispatched runs. The card
+ * states under test are the pickup/pause/cancel contract, which the task-level
+ * gate opens before any core call; the selected fixture nonetheless matters
+ * because the harness refuses a run whose agent has no declared scenario.
+ */
+const SCENARIO = 'reported-usage';
+
 test.describe('kanban HITL board', () => {
   let itemId: string;
   let agentId: string;
 
   test.beforeEach(async ({ request }) => {
     // Dispatch pre-validation requires at least one non-retired, non-unhealthy
-    // agent; NATIVE agents are created HEALTHY so this always satisfies it.
-    const agent = await seedAgent(request);
+    // agent, and the dispatched run must carry an explicit governed selection
+    // with a declared peer fixture: the agent is created on the harness core and
+    // mode (opencode + HOST) and its scenario is selected here, so the run is
+    // driven by a deterministic fixture instead of failing closed.
+    const agent = await seedAdkAgent(request, {
+      name: uniqueName('e2e-oc-hitl'),
+      adkProvider: 'opencode',
+      executionMode: 'HOST',
+    });
+    await setScenario(request, agent.id, SCENARIO);
     agentId = agent.id;
     const created = await seedKanbanItem(request, {
       title: `hitl-${uniqueName('card')}`,
@@ -155,6 +171,7 @@ test.describe('kanban HITL board', () => {
       adkProvider: 'opencode',
       executionMode: 'HOST',
     });
+    await setScenario(request, agent.id, SCENARIO);
     const askItem = await seedKanbanItem(request, {
       title: `hitl-ask-${uniqueName('card')}`,
       agentTemplateId: agent.name,

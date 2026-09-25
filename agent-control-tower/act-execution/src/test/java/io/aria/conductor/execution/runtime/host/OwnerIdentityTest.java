@@ -42,6 +42,27 @@ class OwnerIdentityTest {
     }
 
     @Test
+    void aRecordedIdentityIsBoundedByThePersistedColumn() {
+        // The identity is persisted into run_execution_bindings.runtime_ownership_identity
+        // (VARCHAR(255)); the recorded fields stay compact and an overlong record is
+        // refused here instead of failing the binding insert mid-run (the E2E harness
+        // caught the old verbose technique sentence doing exactly that).
+        UUID runId = UUID.randomUUID();
+        String compact = new OwnedProcess(runId, "nonce-1", 4711L, "4711@1700000000000",
+                "9000@1700000000000", WindowsProcessController.TECHNIQUE, null).ownershipIdentity();
+        assertThat(compact.length()).isLessThanOrEqualTo(OwnedProcess.MAX_IDENTITY_LENGTH);
+        assertThat(WindowsProcessController.TECHNIQUE.length())
+                .as("the technique token is part of the persisted identity and stays compact")
+                .isLessThanOrEqualTo(64);
+
+        String overlong = "technique ".repeat(40);
+        assertThatThrownBy(() -> new OwnedProcess(runId, "nonce-1", 4711L, "4711@1700000000000",
+                "9000@1700000000000", overlong, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("longer than the persisted column");
+    }
+
+    @Test
     void parseRejectsMalformedOrForeignIdentities() {
         String runId = UUID.randomUUID().toString();
         assertThatThrownBy(() -> OwnedProcess.parse("sandbox|" + runId + "|nonce|1@1|2@2|t"))

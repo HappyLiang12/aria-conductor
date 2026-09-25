@@ -70,6 +70,54 @@ export function assertInsideWorkspace(workspace, target) {
   return resolved;
 }
 
+// ------------------------------------------------------------------ git push fixture
+
+/**
+ * The branch/remote the run prompt names, as the recorded push scenario requires
+ * ("Push branch <branch> to origin."). The branch is the exact token after
+ * `branch `; the remote is the token after ` to ` before the trailing period.
+ * Anything else fails closed with the usage exit code instead of pushing to an
+ * invented target.
+ */
+export function gitPushTargetFromPrompt(promptText) {
+  const match = /Push branch (\S+) to ([^\s.]+)/.exec(typeof promptText === 'string' ? promptText : '');
+  if (!match) {
+    throw new PeerFault(EXIT_CODES.usage,
+      'The git-push scenario requires a prompt of the form "Push branch <branch> to <remote>."');
+  }
+  return { branch: match[1], remote: match[2] };
+}
+
+/**
+ * Perform the governed git push fixture: only a genuine allow-once decision
+ * pushes, and the push lands the admitted workspace's current HEAD on
+ * `refs/heads/<branch>` of the named remote (the disposable bare remote the
+ * spec owns; the worktree's `origin` points at it). A denial pushes nothing.
+ */
+export function pushGitBranch({ optionId, options, workspace, branch, remote }) {
+  const selected = options.find((option) => option.optionId === optionId);
+  if (selected?.kind === 'reject_once') return { status: 'denied', writes: 0 };
+  if (selected?.kind !== 'allow_once') throw new Error('Unsupported fixture decision');
+  if (typeof workspace !== 'string' || !isAbsolute(workspace)) {
+    throw new Error('The git push fixture requires the admitted workspace');
+  }
+  if (typeof branch !== 'string' || branch.length === 0 || typeof remote !== 'string' || remote.length === 0) {
+    throw new Error('The git push fixture requires the branch and the remote the prompt named');
+  }
+  const result = spawnSync('git', ['push', remote, `HEAD:refs/heads/${branch}`], {
+    cwd: workspace,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error) {
+    throw new Error(`fixture git push failed to start: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`fixture git push failed (exit ${result.status}): ${result.stderr ?? ''}`);
+  }
+  return { status: 'written', writes: 0, pushed: `refs/heads/${branch}` };
+}
+
 /** Read one fixture file; `sha256` is null when the file does not exist. */
 export async function readFixtureFile(path) {
   try {

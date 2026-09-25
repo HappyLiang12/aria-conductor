@@ -6,10 +6,10 @@
 // results only: they are never native-core acceptance evidence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -18,7 +18,9 @@ import {
   EXIT_CODES,
   applyDecision,
   assertInsideWorkspace,
+  gitPushTargetFromPrompt,
   implementedScenarios,
+  pushGitBranch,
   readFixtureFile,
   resumeProcess,
   snapshotDirectory,
@@ -142,9 +144,12 @@ class PeerProcess {
   }
 
   async waitFor(predicate, { label = 'condition', timeoutMs = 5000 } = {}) {
+    // The predicate may be asynchronous (e.g. polling a peer HTTP route): it is
+    // awaited before the hit test, so an async predicate is polled until it
+    // yields a value instead of its pending Promise being mistaken for a hit.
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const hit = predicate(this);
+      const hit = await predicate(this);
       if (hit !== undefined && hit !== false && hit !== null) return hit;
       if (Date.now() > deadline) {
         throw new Error(
@@ -393,6 +398,7 @@ test('scenarios.json declares every scenario both peers implement', async () => 
       'complete',
       'deny-write',
       'disconnect',
+      'git-push',
       'handshake-failure',
       'invalid-auth',
       'malformed-frame',
@@ -1739,4 +1745,179 @@ test('opencode peer records the exact message request and echoes the received te
     assert.deepEqual(requests[1].body, secondRequest);
     assert.deepEqual(await snapshotDirectory(workspace), [], 'the scenario performs no fixture write');
   });
+});
+
+// ---------------------------------------------------------------- governed git push
+
+const GIT_FIXTURE_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: 'aria-e2e',
+  GIT_AUTHOR_EMAIL: 'aria-e2e@aria-conductor.local',
+  GIT_COMMITTER_NAME: 'aria-e2e',
+  GIT_COMMITTER_EMAIL: 'aria-e2e@aria-conductor.local',
+};
+
+function git(args, cwd) {
+  return execFileSync('git', args, {
+    cwd,
+    env: GIT_FIXTURE_ENV,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }).trim();
+}
+
+/** A disposable bare remote plus the worktree repository whose origin is it. */
+async function freshPushFixture(label) {
+  const root = await mkdtemp(join(tmpdir(), `aria-peer-${label}-`));
+  git(['init', '--bare', 'remote.git'], root);
+  const remote = join(root, 'remote.git');
+  const workspace = join(root, 'worktree');
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, 'tracked.txt'), 'committed\n');
+  git(['init'], workspace);
+  git(['checkout', '-b', 'main'], workspace);
+  git(['add', 'tracked.txt'], workspace);
+  git(['commit', '-m', 'fixture push baseline'], workspace);
+  git(['remote', 'add', 'origin', remote], workspace);
+  return { root, remote, workspace };
+}
+
+function remoteRef(remote, root, branch) {
+  try {
+    return git(['--git-dir', remote, 'rev-parse', `refs/heads/${branch}`], root);
+  } catch {
+    return null;
+  }
+}
+
+/** Launch the opencode peer over an explicitly provided workspace (the push fixture). */
+async function launchOpencodeIn(workspace, scenario) {
+  const port = await freePort();
+  const peer = spawnPeer(OPENCODE, {
+    scenario,
+    workspace,
+    args: ['serve', '--hostname', '127.0.0.1', '--port', String(port)],
+  });
+  peer.base = `http://127.0.0.1:${port}`;
+  const listening = await peer.waitFor((p) => p.stderrRecords().find((entry) => entry.type === 'peer.listening'), {
+    label: 'listening record',
+    timeoutMs: 8000,
+  });
+  assert.equal(listening.scenario, scenario);
+  return peer;
+}
+
+test('the git-push target is named by the prompt and only a genuine grant pushes', async () => {
+  assert.deepEqual(gitPushTargetFromPrompt('Push branch e2e-pack-gate-42 to origin.'), {
+    branch: 'e2e-pack-gate-42',
+    remote: 'origin',
+  });
+  assert.throws(() => gitPushTargetFromPrompt('reply with pong'), /Push branch <branch> to <remote>/);
+
+  const fixture = await freshPushFixture('git-push-unit');
+  try {
+    const head = git(['rev-parse', 'HEAD'], fixture.workspace);
+    const options = executeOptions('git');
+    assert.deepEqual(pushGitBranch({
+      optionId: 'cancel',
+      options,
+      workspace: fixture.workspace,
+      branch: 'e2e-fixture-branch',
+      remote: 'origin',
+    }), { status: 'denied', writes: 0 });
+    assert.equal(remoteRef(fixture.remote, fixture.root, 'e2e-fixture-branch'), null,
+      'a denial must push nothing');
+    assert.deepEqual(pushGitBranch({
+      optionId: 'proceed_once',
+      options,
+      workspace: fixture.workspace,
+      branch: 'e2e-fixture-branch',
+      remote: 'origin',
+    }), { status: 'written', writes: 0, pushed: 'refs/heads/e2e-fixture-branch' });
+    assert.equal(remoteRef(fixture.remote, fixture.root, 'e2e-fixture-branch'), head);
+    assert.throws(() => pushGitBranch({
+      optionId: 'proceed_always_and_save',
+      options,
+      workspace: fixture.workspace,
+      branch: 'e2e-fixture-branch',
+      remote: 'origin',
+    }), /Unsupported fixture decision/, 'allow-always is never a fixture grant');
+  } finally {
+    await removeWorkspace(fixture.root);
+  }
+});
+
+test('qoder peer gates the git push: the ask precedes the push and the grant lands the exact commit', async () => {
+  const fixture = await freshPushFixture('git-push-qoder');
+  const peer = spawnPeer(QODER, { scenario: 'git-push', workspace: fixture.workspace });
+  try {
+    const branch = 'e2e-pack-gate-qoder';
+    const head = git(['rev-parse', 'HEAD'], fixture.workspace);
+    const { sessionId } = await qoderSession(peer, {
+      promptText: `Push branch ${branch} to origin.`,
+    });
+    assert.equal(typeof sessionId, 'string');
+    const request = await nextPermission(peer, 0);
+    assert.equal(request.params.toolCall.kind, 'execute');
+    assert.equal(request.params.toolCall._meta.qoder.toolName, 'git_push');
+    assert.equal(request.params.toolCall.title, `git push origin HEAD:refs/heads/${branch}`);
+    assert.deepEqual(request.params.options, executeOptions('git'));
+    assert.equal(remoteRef(fixture.remote, fixture.root, branch), null,
+      'the remote ref must not exist while the gate is open');
+
+    peer.send(allowOnce(request));
+    const result = await peer.waitFor((p) => p.frames.find((frame) => frame.id === 4 && frame.result), {
+      label: 'prompt result',
+    });
+    assert.equal(result.result.stopReason, 'end_turn');
+    assert.equal(remoteRef(fixture.remote, fixture.root, branch), head,
+      'the granted push must land exactly the workspace HEAD commit');
+  } finally {
+    await peer.stop();
+    await removeWorkspace(fixture.root);
+  }
+});
+
+test('opencode peer holds the message on the git-push gate and pushes exactly the granted commit', async () => {
+  const fixture = await freshPushFixture('git-push-opencode');
+  const peer = await launchOpencodeIn(fixture.workspace, 'git-push');
+  try {
+    const branch = 'e2e-pack-gate-opencode';
+    const head = git(['rev-parse', 'HEAD'], fixture.workspace);
+    const session = await (await fetch(`${peer.base}/session`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ title: RUN_ID }),
+    })).json();
+    const promptText = `Push branch ${branch} to origin.`;
+    const messagePromise = fetch(`${peer.base}/session/${session.id}/message`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ model: 'efficient', parts: [{ type: 'text', text: promptText }] }),
+    });
+
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending git_push decision' });
+    assert.equal(pending.pending[0].toolName, 'git_push');
+    assert.equal(pending.pending[0].command, `git push origin HEAD:refs/heads/${branch}`);
+    assert.deepEqual(pending.pending[0].options, executeOptions('git'));
+    assert.equal(remoteRef(fixture.remote, fixture.root, branch), null,
+      'the remote ref must not exist while the gate is open');
+
+    const decided = await (await fetch(`${peer.base}/__peer/decision`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ optionId: 'proceed_once' }),
+    })).json();
+    assert.deepEqual(decided, { status: 'written', writes: 0, optionId: 'proceed_once' });
+    const message = await (await messagePromise).json();
+    assert.deepEqual(message.parts, [{ type: 'text', text: `pushed refs/heads/${branch}` }]);
+    assert.equal(remoteRef(fixture.remote, fixture.root, branch), head,
+      'the granted push must land exactly the workspace HEAD commit');
+  } finally {
+    await peer.stop();
+    await removeWorkspace(fixture.root);
+  }
 });

@@ -52,7 +52,17 @@ public record OwnedProcess(UUID runId, String ownershipNonce, long rootPid,
                 || ownershipNonce.indexOf(SEPARATOR) >= 0 || rootCreationIdentity.indexOf(SEPARATOR) >= 0) {
             throw new IllegalArgumentException("Ownership identity fields must not contain '" + SEPARATOR + "'");
         }
+        String encoded = String.join(SEPARATOR, IDENTITY_KIND, runId.toString(), ownershipNonce,
+                rootPid + "@" + rootCreationIdentity, supervisorIdentity, technique);
+        if (encoded.length() > MAX_IDENTITY_LENGTH) {
+            throw new IllegalArgumentException("Ownership identity is longer than the persisted column ("
+                    + MAX_IDENTITY_LENGTH + " chars): keep the recorded fields compact, the technique token "
+                    + "above all -- got " + encoded.length() + " chars");
+        }
     }
+
+    /** The width of {@code run_execution_bindings.runtime_ownership_identity}. */
+    public static final int MAX_IDENTITY_LENGTH = 255;
 
     /** The durable identity carried by a {@code RuntimeHandle}. */
     public String ownershipIdentity() {

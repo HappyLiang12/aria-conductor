@@ -146,4 +146,20 @@ class AgentHealthReconcilerTest {
         verify(agentRepository, never()).reconcileHealth(eq(AGENT), any(), any());
         verify(agentRepository).reconcileHealth(eq(second.getId()), eq(HealthStatus.HEALTHY), any());
     }
+
+    @Test
+    void aFirstDeliveryCoreWithoutAProviderBeanIsLeftAsConfigured() {
+        // qoder is a registered production core with no AdkProvider bean: its runtimes
+        // are run-owned, so there is no agent-scoped runtime to judge. The sweep must
+        // not fall into the fail-closed resolve() error path (the per-tick WARN) and
+        // must not stamp a state it cannot observe.
+        Agent qoderAgent = Agent.builder().id(AGENT).name("qoder-worker").agentType(AgentType.NATIVE)
+                .adkProvider("qoder").healthStatus(HealthStatus.HEALTHY).build();
+        when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(qoderAgent));
+
+        reconciler.reconcile();
+
+        verify(registry, never()).resolve(any());
+        verify(agentRepository, never()).reconcileHealth(any(), any(), any());
+    }
 }

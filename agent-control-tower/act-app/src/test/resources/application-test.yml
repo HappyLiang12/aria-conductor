@@ -40,16 +40,8 @@ opencode:
     DEEPSEEK_API_KEY: test-key
 
 adk:
-  default-provider: langchain
-  runtime:
-    langchain:
-      host: 127.0.0.1
-      port-range-start: 9300
-      port-range-end: 9400
-      health-check-interval-ms: 30000
-      shutdown-timeout-ms: 10000
-      max-restart-backoff-ms: 30000
-      pid-dir: ./target/test-adk-pids
+  # Supported production cores are exactly qoder and opencode (no fallback).
+  default-provider: opencode
 
 circuit-breaker:
   max-tokens-per-run: 100000

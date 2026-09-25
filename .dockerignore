@@ -20,5 +20,4 @@ docs
 e2e/screenshots
 agent-control-tower/act-dashboard
 agent-control-tower/opencode-sandbox/README.md
-langchain-adk
 *.md

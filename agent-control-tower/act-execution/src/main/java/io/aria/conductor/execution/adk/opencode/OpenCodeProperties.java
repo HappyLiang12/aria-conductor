@@ -12,8 +12,7 @@ import java.util.Map;
 /**
  * Configuration for the OpenCode agent provider ({@code opencode.*} prefix).
  *
- * <p>Mirrors the {@code LangChainAdkProperties} pattern: a plain
- * {@code @ConfigurationProperties} bean with sensible defaults.
+ * <p>A plain {@code @ConfigurationProperties} bean with sensible defaults.
  */
 @Slf4j
 @Data

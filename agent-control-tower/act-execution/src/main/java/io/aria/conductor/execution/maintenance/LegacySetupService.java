@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.maintenance;
 
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
@@ -101,6 +102,39 @@ public class LegacySetupService {
 
     /** One built-in identity: the V42 seed's id, name and role. */
     public record BuiltinAgent(UUID id, String name, String role) {
+    }
+
+    /**
+     * Creates the Aria default agent with the supported built-in core and
+     * placement ({@value #BUILTIN_CORE} + {@code SANDBOX}) when it is missing,
+     * and leaves an existing row untouched. Create-only, exactly like
+     * {@link #initializeMissingBuiltins}: the boot initializer calls this method
+     * instead of writing its own agent row, so the built-in identity and the
+     * supported core/mode pair have one owner (Task 18 cutover).
+     *
+     * @param configJson the initial config document (may be {@code null})
+     * @return the existing or newly created Aria row
+     */
+    @Transactional
+    public Agent initializeMissingAria(String configJson) {
+        Agent existing = agentRepository.findById(AriaConstants.ARIA_AGENT_ID).orElse(null);
+        if (existing != null) {
+            return existing;
+        }
+        Agent aria = Agent.builder()
+                .id(AriaConstants.ARIA_AGENT_ID)
+                .name("Aria")
+                .agentType(AgentType.NATIVE)
+                .adkProvider(BUILTIN_CORE)
+                .executionMode(BUILTIN_MODE)
+                .config(configJson)
+                .healthStatus(HealthStatus.HEALTHY)
+                .createdAt(clock.instant())
+                .build();
+        Agent saved = agentRepository.save(aria);
+        log.info("Aria default agent created on {}/{} (id={})", BUILTIN_CORE, BUILTIN_MODE,
+                AriaConstants.ARIA_AGENT_ID);
+        return saved;
     }
 
     /**

@@ -10,6 +10,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
@@ -318,8 +319,11 @@ public class WorkflowAutoChainer {
      * <p>The reset goes through the provider registry's mode-neutral
      * {@link io.aria.conductor.execution.adk.AdkProvider#resetRuntime(UUID)}
      * instead of naming one concrete provider, so a Host, Sandbox or future
-     * placement resets its own runtime. Failures are logged loudly but never
-     * crash routing.
+     * placement resets its own runtime. A core without a provider bean (a
+     * first-delivery core such as qoder) has no agent-scoped runtime at all --
+     * runtimes are run-owned -- so its reset is a truthful no-op instead of a
+     * fail-closed resolution error. Failures are logged loudly but never crash
+     * routing.
      */
     private void resetAgentInstance(WorkflowChain chain, int stepIndex) {
         WorkflowStep step = workflowService.stepAt(chain, stepIndex);
@@ -336,12 +340,33 @@ public class WorkflowAutoChainer {
             return;
         }
         try {
-            providerRegistry.resolve(agent).resetRuntime(agentId);
+            AdkProvider provider = providerFor(agent);
+            if (provider == null) {
+                log.info("SDD reschedule: agent {} selects core '{}', which owns its runtimes per run;"
+                        + " no agent-scoped runtime to reset (chain {})", agentId, agent.getAdkProvider(),
+                        chain.getId());
+                return;
+            }
+            provider.resetRuntime(agentId);
             log.info("SDD reschedule: reset the run runtime of agent {} (chain {})", agentId, chain.getId());
         } catch (Exception e) {
             log.warn("SDD reschedule: failed to reset the provider instance for agent {} (chain {}): {}",
                     agentId, chain.getId(), e.getMessage());
         }
+    }
+
+    /**
+     * The provider bean that serves the agent's core, or {@code null} when no
+     * provider-level runtime exists for it (a first-delivery core such as qoder, or
+     * an unknown/removed core). An agent that stores no core keeps the registry's
+     * documented default resolution.
+     */
+    private AdkProvider providerFor(Agent agent) {
+        String coreId = agent.getAdkProvider();
+        if (coreId == null || coreId.isBlank()) {
+            return providerRegistry.resolve(agent);
+        }
+        return providerRegistry.getProvider(coreId);
     }
 
     /**

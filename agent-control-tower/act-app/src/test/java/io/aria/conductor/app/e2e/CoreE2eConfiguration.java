@@ -4,7 +4,6 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.llm.LlmClient;
-import io.aria.conductor.execution.runtime.RuntimeActivity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,15 +38,16 @@ import java.util.UUID;
  *       {@code resilientLlmClient} -- with one {@link DeterministicLlmClient}
  *       instance, so no code path can reach a model provider. A startup check
  *       verifies the replacement actually won and refuses to run otherwise;</li>
- *   <li>a harness-scoped {@link RuntimeActivity} view backed by the run store
- *       (see {@link RunStoreQuiescenceView} for the exact contract and the
- *       disclosed limits of that reading);</li>
  *   <li>the validated harness settings ({@code e2e.assets},
  *       {@code e2e.work-root}, {@code e2e.sandbox-transport}; their read-site
  *       defaults -- notably that an unset {@code e2e.sandbox-transport} means
  *       {@code process} -- are documented on {@link #coreE2eSettings}) plus the
  *       bound mock-peer and bridge paths the later harness tasks launch.</li>
  * </ul>
+ *
+ * <p>The Task 16 store-backed {@code RuntimeActivity} bean is gone: the Task 18
+ * cutover wires the production run coordinator as the process's quiescence view,
+ * so the harness consumes the production bean instead of a second one.
  */
 @Configuration(proxyBeanMethods = false)
 @Profile("core-e2e")
@@ -213,80 +213,15 @@ public class CoreE2eConfiguration {
     }
 
     /* ------------------------------------------------------------------ */
-    /* RuntimeActivity seam (disclosed substitution)                        */
+    /* RuntimeActivity                                                       */
     /* ------------------------------------------------------------------ */
 
-    /**
-     * Harness-scoped quiescence view for preview-first retirement.
-     *
-     * <p>Production has no {@code RuntimeActivity} bean until Task 18 wires the
-     * run coordinator's {@link io.aria.conductor.execution.runtime.RunRuntimeRegistry},
-     * and {@code LegacyRetirementService} fails closed without one. The harness
-     * must run the production preview/execute endpoints during setup, so it
-     * supplies this backing view -- deliberately <em>not</em> a constant that
-     * claims quiescence.
-     *
-     * <p>It reads the run store, the only truthful liveness source in the
-     * harness process:
-     * <ul>
-     *   <li>{@link #activeRuns(UUID)} returns the runs persisted for the agent
-     *       in a non-terminal status ({@code PENDING}, {@code INITIALIZING},
-     *       {@code RUNNING}, {@code PAUSED} -- the same active set the
-     *       retirement service itself applies to persisted rows), so retirement
-     *       refuses while a persisted run is live;</li>
-     *   <li>{@link #writersStopped(UUID)} is true only when the run exists and
-     *       is persisted in a terminal status ({@code COMPLETED}, {@code FAILED},
-     *       {@code CANCELLED}, {@code ABORTED}); an unknown run is never called
-     *       stopped.</li>
-     * </ul>
-     *
-     * <p>Limit, disclosed rather than papered over: this view cannot observe a
-     * runtime this process holds neither of -- and the harness process holds
-     * none (no coordinator is wired before Task 18 and the harness never starts
-     * a core itself). It is therefore never more permissive than the persisted
-     * status reading, and it is replaced wholesale by the production registry
-     * when Task 18 wires it. A run whose writers are genuinely live while its
-     * persisted status is terminal would not be seen by this view; in this
-     * harness no such writer exists.
+    /*
+     * The harness no longer supplies a RuntimeActivity bean (Task 18): the
+     * production cutover wires the run coordinator as the process's quiescence
+     * view, so supplying a second bean here would collide with it. The previous
+     * store-backed view (RunStoreQuiescenceView, T16) was merged into -- and
+     * removed in favour of -- the production coordinator, whose answers come
+     * from observed verified stops rather than persisted statuses alone.
      */
-    static final class RunStoreQuiescenceView implements RuntimeActivity {
-
-        /** Persisted statuses that mean work is still live; mirrors LegacyRetirementService. */
-        static final Set<RunStatus> ACTIVE_STATUSES = Set.of(
-                RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.RUNNING, RunStatus.PAUSED);
-
-        /** Persisted statuses that mean no writer of the run can still be live. */
-        static final Set<RunStatus> TERMINAL_STATUSES = Set.of(
-                RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
-
-        private final RunRepository runRepository;
-
-        RunStoreQuiescenceView(RunRepository runRepository) {
-            this.runRepository = runRepository;
-        }
-
-        @Override
-        public boolean writersStopped(UUID runId) {
-            return runRepository.findById(runId)
-                    .map(Run::getStatus)
-                    .map(TERMINAL_STATUSES::contains)
-                    .orElse(false);
-        }
-
-        @Override
-        public Set<UUID> activeRuns(UUID agentId) {
-            Set<UUID> active = new LinkedHashSet<>();
-            for (Run run : runRepository.findByAgentId(agentId)) {
-                if (ACTIVE_STATUSES.contains(run.getStatus())) {
-                    active.add(run.getId());
-                }
-            }
-            return Set.copyOf(active);
-        }
-    }
-
-    @Bean
-    public RuntimeActivity coreE2eRuntimeActivity(RunRepository runRepository) {
-        return new RunStoreQuiescenceView(runRepository);
-    }
 }

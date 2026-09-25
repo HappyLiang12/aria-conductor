@@ -3,8 +3,8 @@ package io.aria.conductor.execution.adk;
 /**
  * Translates raw ADK/provider error text into actionable, user-facing messages.
  *
- * <p>F6: the chat UI previously displayed verbatim provider exceptions (e.g. the
- * LangChain "Missing credentials … OPENAI_API_KEY …" dump). Known failure classes
+ * <p>F6: the chat UI previously displayed verbatim provider exceptions (e.g. a raw
+ * "Missing credentials … OPENAI_API_KEY …" dump). Known failure classes
  * are mapped to friendly hints here; unknown errors pass through unchanged and the
  * raw detail stays in server logs / the exception cause chain.
  */

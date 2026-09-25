@@ -35,20 +35,46 @@ describe('Agent tools', () => {
     expect((fetchMock.calls[0].body as any).name).toBe('new');
   });
 
-  it('create_agent with adkProvider=langchain → POST with adkProvider in body', async () => {
-    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: { id: UUID, name: 'lc-agent', adkProvider: 'langchain' } } });
+  it('create_agent with adkProvider=opencode → POST with adkProvider in body', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: { id: UUID, name: 'oc-agent', adkProvider: 'opencode' } } });
     ctx = await createTestClient();
-    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'lc-agent', agentType: 'ADK', adkProvider: 'langchain' } });
-    expect(JSON.parse(resultText(r)).adkProvider).toBe('langchain');
-    expect((fetchMock.calls[0].body as any).adkProvider).toBe('langchain');
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'oc-agent', agentType: 'ADK', adkProvider: 'opencode' } });
+    expect(JSON.parse(resultText(r)).adkProvider).toBe('opencode');
+    expect((fetchMock.calls[0].body as any).adkProvider).toBe('opencode');
   });
 
-  it('update_agent with adkProvider → PUT with adkProvider in body', async () => {
-    fetchMock = mockFetch({ [`/api/v1/agents/${UUID}`]: { status: 200, body: { id: UUID, name: 'updated', adkProvider: 'langchain' } } });
+  it('create_agent with adkProvider=qoder → POST with adkProvider in body', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: { id: UUID, name: 'qoder-agent', adkProvider: 'qoder' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'qoder-agent', agentType: 'ADK', adkProvider: 'qoder' } });
+    expect(JSON.parse(resultText(r)).adkProvider).toBe('qoder');
+    expect((fetchMock.calls[0].body as any).adkProvider).toBe('qoder');
+  });
+
+  it('create_agent rejects adkProvider=langchain without hitting the backend', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: {} } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'lc-agent', agentType: 'ADK', adkProvider: 'langchain' } });
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
+  });
+
+  it('update_agent with adkProvider=qoder → PUT with adkProvider in body', async () => {
+    fetchMock = mockFetch({ [`/api/v1/agents/${UUID}`]: { status: 200, body: { id: UUID, name: 'updated', adkProvider: 'qoder' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'update_agent', arguments: { id: UUID, adkProvider: 'qoder' } });
+    expect(JSON.parse(resultText(r)).adkProvider).toBe('qoder');
+    expect((fetchMock.calls[0].body as any).adkProvider).toBe('qoder');
+  });
+
+  it('update_agent rejects adkProvider=langchain without hitting the backend', async () => {
+    fetchMock = mockFetch({ [`/api/v1/agents/${UUID}`]: { status: 200, body: {} } });
     ctx = await createTestClient();
     const r = await ctx.client.callTool({ name: 'update_agent', arguments: { id: UUID, adkProvider: 'langchain' } });
-    expect(JSON.parse(resultText(r)).adkProvider).toBe('langchain');
-    expect((fetchMock.calls[0].body as any).adkProvider).toBe('langchain');
+    expect(r.isError).toBe(true);
+    expect(resultText(r)).toContain('Validation error');
+    expect(fetchMock.calls).toHaveLength(0);
   });
 
   it('update_agent → PUT /api/v1/agents/:id', async () => {

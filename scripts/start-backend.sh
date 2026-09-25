@@ -26,12 +26,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --skip-sandbox means no sandbox is available for the opencode provider to warm:
-# default the provider to langchain unless it was set explicitly (--provider= or
-# the ADK_PROVIDER environment variable); an explicit provider always wins.
+# --skip-sandbox means no container runtime is available: default the provider to the
+# Host-capable core qoder unless it was set explicitly (--provider= or the
+# ADK_PROVIDER environment variable); an explicit provider always wins.
+# Host mode needs no Docker or Podman at all.
 if [ "$SKIP_SANDBOX" = "true" ] && [ -z "$ADK_PROVIDER" ]; then
-    ADK_PROVIDER="langchain"
-    echo "  --skip-sandbox: defaulting ADK provider to langchain (no sandbox to warm)."
+    ADK_PROVIDER="qoder"
+    echo "  --skip-sandbox: defaulting ADK provider to qoder (Host mode needs no container runtime)."
 fi
 ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
 
@@ -80,7 +81,7 @@ if [ "$ADK_PROVIDER" = "opencode" ] && [ "$SKIP_SANDBOX" != "true" ]; then
         exit 1
     fi
     if [ -z "$CONTAINER_RT" ]; then
-        echo "ERROR: Neither docker nor podman is available. The opencode provider requires a container runtime for the OpenSandbox server. Install Docker or podman, or use --skip-sandbox / ADK_PROVIDER=langchain."
+        echo "ERROR: Neither docker nor podman is available. The opencode provider in Sandbox mode requires a container runtime for the OpenSandbox server. Install Docker or podman, or run in Host mode with --skip-sandbox (qoder)."
         exit 1
     fi
 

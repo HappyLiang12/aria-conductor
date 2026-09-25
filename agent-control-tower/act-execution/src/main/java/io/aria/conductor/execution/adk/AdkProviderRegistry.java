@@ -13,9 +13,12 @@ import java.util.stream.Collectors;
  * Registry that routes agent execution to the correct {@link AdkProvider}
  * based on {@link Agent#getAdkProvider()}.
  *
- * <p>All providers registered as Spring beans are auto-injected. The
- * {@link #resolve(Agent)} method falls back to the configured default
- * provider when the agent does not specify one.
+ * <p>All providers registered as Spring beans are auto-injected. The supported
+ * production cores are exactly {@code opencode} and {@code qoder}; there is no
+ * fallback. A configured default that is not one of the registered providers --
+ * and an agent selection that is unknown or removed -- is refused with an
+ * explicit {@code Unsupported ADK provider} failure instead of being silently
+ * substituted.
  */
 @Slf4j
 @Component
@@ -39,19 +42,16 @@ public class AdkProviderRegistry {
         String configuredDefault = systemProperties != null
                 ? systemProperties.getDefaultProvider() : null;
 
-        if (configuredDefault != null && providers.containsKey(configuredDefault)) {
-            this.defaultProvider = configuredDefault;
-        } else {
-            // Use the first provider from the list for deterministic ordering
-            String fallback = providerList.get(0).providerId();
-            if (configuredDefault == null || configuredDefault.isBlank()) {
-                log.warn("No default ADK provider configured; falling back to first available provider '{}'", fallback);
-            } else {
-                log.warn("Configured default ADK provider '{}' not found; falling back to '{}'. Available: {}",
-                        configuredDefault, fallback, providers.keySet());
-            }
-            this.defaultProvider = fallback;
+        if (configuredDefault == null || configuredDefault.isBlank()
+                || !providers.containsKey(configuredDefault)) {
+            // Fail closed: never fall back to another provider. A wrong default
+            // would route runs to a core the operator did not select.
+            throw new IllegalStateException("Unsupported ADK provider: configured default '"
+                    + configuredDefault + "' is not one of the registered providers "
+                    + providers.keySet() + "; the supported cores are exactly the registered ones"
+                    + " and there is no fallback");
         }
+        this.defaultProvider = configuredDefault;
 
         log.info("ADK providers registered: {} (default: {})",
                 providers.keySet(), defaultProvider);
@@ -62,7 +62,7 @@ public class AdkProviderRegistry {
      *
      * @param agent the agent to execute
      * @return the resolved provider (never null)
-     * @throws IllegalStateException if no matching provider exists
+     * @throws IllegalStateException if the selection is unknown or removed
      */
     public AdkProvider resolve(Agent agent) {
         if (providers.isEmpty()) {
@@ -75,9 +75,9 @@ public class AdkProviderRegistry {
 
         AdkProvider provider = providers.get(pid);
         if (provider == null) {
-            log.warn("Unknown ADK provider '{}' for agent {} — falling back to default '{}'",
-                    pid, agent == null ? "null" : agent.getId(), defaultProvider);
-            provider = providers.get(defaultProvider);
+            throw new IllegalStateException("Unsupported ADK provider '" + pid + "' for agent "
+                    + (agent == null ? "null" : agent.getId()) + "; registered providers: "
+                    + providers.keySet() + " (there is no fallback)");
         }
         return provider;
     }

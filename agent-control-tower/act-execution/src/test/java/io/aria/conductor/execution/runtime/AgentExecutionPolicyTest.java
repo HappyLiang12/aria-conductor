@@ -196,6 +196,19 @@ class AgentExecutionPolicyTest {
     }
 
     @Test
+    void catalogPreservesTheRegistrationOrderOfCoreIds() {
+        // coreIds() is served as the provider inventory (and logged at cutover): the
+        // order is the registration order, not the hash order Map.copyOf would give.
+        Map<String, Set<ExecutionMode>> source = new LinkedHashMap<>();
+        source.put("qoder", Set.of(ExecutionMode.HOST));
+        source.put("opencode", Set.of(ExecutionMode.SANDBOX));
+
+        var catalog = new CoreCatalog(source);
+
+        assertThat(catalog.coreIds()).containsExactly("qoder", "opencode");
+    }
+
+    @Test
     void catalogRejectsNullAndBlankCoreIds() {
         assertThatThrownBy(() -> new CoreCatalog(null))
                 .isInstanceOf(NullPointerException.class)

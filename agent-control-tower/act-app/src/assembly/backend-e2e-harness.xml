@@ -46,7 +46,6 @@
                 <include>io/aria/conductor/app/e2e/CoreE2eApplication.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eConfiguration.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eConfiguration$CoreE2eSettings.class</include>
-                <include>io/aria/conductor/app/e2e/CoreE2eConfiguration$RunStoreQuiescenceView.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eConfiguration$SandboxTransport.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eSetup.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eSetup$SetupRefusal.class</include>

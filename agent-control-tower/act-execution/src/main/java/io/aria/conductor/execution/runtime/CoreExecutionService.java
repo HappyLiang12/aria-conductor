@@ -222,7 +222,13 @@ public class CoreExecutionService implements RuntimeActivity {
         runtime.attach(binding, capabilities);
         try {
             PreparedEnvironment environment = backend.prepare(spec, lease);
-            SecretBundle secret = credentials.resolve(spec.credentialRef());
+            // A run without a credential reference launches with an empty bundle
+            // (the OpenCode core carries no platform credential); a reference
+            // that is present but not configured still fails loudly in the
+            // credential service, so a launch never silently drops its secret.
+            SecretBundle secret = spec.credentialRef() == null || spec.credentialRef().isBlank()
+                    ? new SecretBundle(null, java.util.Map.of())
+                    : credentials.resolve(spec.credentialRef());
             LaunchProfile profile = adapter.launchProfile(spec, environment, secret);
             RuntimeHandle handle = backend.launch(environment, profile);
             CoreSession session = adapter.open(handle, spec, secret);

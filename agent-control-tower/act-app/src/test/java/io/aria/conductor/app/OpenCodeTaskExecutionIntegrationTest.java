@@ -11,15 +11,21 @@ import io.aria.conductor.common.model.KnowledgeItem;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.Sensitivity;
 import io.aria.conductor.common.repository.AgentSkillRepository;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
+import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
 import io.aria.conductor.execution.repository.PromptCallRepository;
+import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
+import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.selfimprove.SkillDefinition;
 import io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository;
@@ -30,6 +36,7 @@ import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
@@ -41,21 +48,37 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeast;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Integration coverage for the engine delegation branch with a task-level
- * (OpenCode-style) provider. Mirrors {@link AgentLoopInjectionIntegrationTest}:
- * real Spring context + H2, only {@link AdkProviderRegistry} is mocked so the
- * provider under test is fully controlled.
+ * Integration coverage of the Task 18 cutover dispatch for a core that is also a
+ * registered production core ({@code opencode}): {@link AgentLoopEngine} hands the
+ * run to the run coordinator through {@link CoreRunLauncher} (immutable binding,
+ * then the run-owned attempt) and never to the {@link AdkProvider} double. The
+ * {@link CoreTask} the engine assembles for the core carries the same system
+ * material the legacy task path built (skills, knowledge, the user request via
+ * {@code buildMessages} reuse).
  *
- * <p>REST coverage for {@code GET /api/v1/adk/providers} lives in the standalone
- * {@code AdkProviderControllerTest} (act-execution) — a {@code @MockBean} registry
- * here would shadow the real provider list needed for that assertion.
+ * <p>The legacy expectations this class used to pin -- a provider-driven
+ * {@code executeTask} run completing COMPLETED with the provider's final output and
+ * token audit, or a provider time-out turning the run ABORTED through
+ * {@code abortTask} -- no longer exist in production: a registered production core
+ * is run-owned (AgentLoopEngine.java:775-779), and the provider-double task path
+ * stays below for doubles only. That path keeps its own unit pin
+ * ({@code AgentLoopEngineTaskPathTest}, act-execution, without the cutover wiring).
+ *
+ * <p>The test environment has no sandbox control endpoint
+ * ({@code opencode.sandbox-server-url} points at a closed port), so the coordinated
+ * attempt is refused at sandbox creation and the run terminates {@code FAILED} with
+ * that exact refusal -- the observable cutover contract asserted here, together
+ * with zero provider interactions and zero PromptCall audit rows.
+ *
+ * <p>{@link CoreRunLauncher} is spied (not mocked) so the real freeze+dispatch runs:
+ * the frozen binding row is read back and the {@link CoreTask} actually handed to
+ * the coordinator is captured.
  */
 @SpringBootTest
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -68,8 +91,11 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
     @Autowired KnowledgeItemRepository knowledgeItemRepository;
     @Autowired SkillDefinitionRepository skillDefinitionRepository;
     @Autowired AgentSkillRepository agentSkillRepository;
+    @Autowired RunExecutionBindingRepository runExecutionBindingRepository;
+    @Autowired OpenCodeProperties openCodeProperties;
 
     @MockBean AdkProviderRegistry adkProviderRegistry;
+    @SpyBean CoreRunLauncher coreRunLauncher;
     private AdkProvider taskProvider;
 
     @BeforeEach
@@ -81,7 +107,7 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
     }
 
     @Test
-    void taskProviderRun_completesWithSystemRulePromptAndAudit() {
+    void coordinatorOwnedOpencodeRun_carriesSystemRuleTaskToTheCore_andNeverConsultsTheProvider() {
         // --- seed: task-level (opencode) agent + knowledge + skill ---
         Agent agent = agentRepository.save(Agent.builder()
                 .id(UUID.randomUUID()).name("opencode-agent").description("task agent")
@@ -96,6 +122,7 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
 
         seedKnowledgeAndSkill(agent);
 
+        // The double is armed with a ready success answer; the cutover must never ask it.
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenAnswer(inv -> {
             UUID runId = inv.getArgument(1);
             return new TaskResult(runId, "sess-oc-1", "OpenCode finished the job", 100, 40, false);
@@ -104,39 +131,56 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
         // --- act ---
         agentLoopEngine.startRun(run.getId());
 
-        // --- the delegation branch must call executeTask (never turn-level call) ---
-        await().atMost(Duration.ofSeconds(20))
-                .untilAsserted(() -> verify(taskProvider, atLeast(1))
-                        .executeTask(any(), eq(run.getId()), anyString(), any()));
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(taskProvider).executeTask(any(), eq(run.getId()), promptCaptor.capture(), any());
-        String taskPrompt = promptCaptor.getValue();
-        assertThat(taskPrompt).as("skills must be injected via buildMessages reuse")
-                .contains("## Skills", "When triaging, check logs first");
-        assertThat(taskPrompt).as("knowledge must be injected via buildMessages reuse")
-                .contains("## Knowledge Context", "deploy-proc");
-        assertThat(taskPrompt).as("user request must be merged into the task prompt")
-                .contains("refactor the module");
-
-        verify(taskProvider, never()).call(any(), any(), any());
-
-        // --- run COMPLETED + finalOutput + token audit ---
+        // --- the coordinated attempt reaches its terminal refusal deterministically ---
         await().atMost(Duration.ofSeconds(20))
                 .until(() -> runRepository.findById(run.getId())
-                        .map(r -> r.getStatus() == RunStatus.COMPLETED).orElse(false));
-        Run completed = runRepository.findById(run.getId()).orElseThrow();
-        assertThat(completed.getFinalOutput()).isEqualTo("OpenCode finished the job");
-        assertThat(completed.getTotalTokensUsed()).isEqualTo(140);
-        assertThat(completed.getIterationCount()).isEqualTo(1);
+                        .map(r -> r.getStatus() == RunStatus.FAILED).orElse(false));
 
-        assertThat(promptCallRepository.findByRunId(run.getId())).hasSize(1);
-        assertThat(promptCallRepository.findByRunId(run.getId()).get(0).getInputTokens()).isEqualTo(100);
-        assertThat(promptCallRepository.findByRunId(run.getId()).get(0).getOutputTokens()).isEqualTo(40);
+        // --- the CoreTask handed to the run-owned core is the legacy system material ---
+        ArgumentCaptor<CoreTask> taskCaptor = ArgumentCaptor.forClass(CoreTask.class);
+        verify(coreRunLauncher).execute(
+                argThat(r -> run.getId().equals(r.getId())),
+                argThat(a -> agent.getId().equals(a.getId())),
+                taskCaptor.capture());
+        CoreTask task = taskCaptor.getValue();
+        assertThat(task.systemPrompt()).as("skills must be injected via buildMessages reuse")
+                .contains("## Skills", "When triaging, check logs first");
+        assertThat(task.systemPrompt()).as("knowledge must be injected via buildMessages reuse")
+                .contains("## Knowledge Context", "deploy-proc");
+        assertThat(task.userPrompt()).as("user request must be merged into the task prompt")
+                .isEqualTo("refactor the module");
+
+        // --- the frozen binding captures exactly this run on the production core ---
+        RunExecutionBinding binding = runExecutionBindingRepository.findById(run.getId()).orElseThrow();
+        assertThat(binding.getRunId()).isEqualTo(run.getId());
+        assertThat(binding.getAgentId()).isEqualTo(agent.getId());
+        assertThat(binding.getCoreId()).isEqualTo("opencode");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+        assertThat(binding.getDeadline()).as("every attempt freezes a deadline").isNotNull();
+        assertThat(binding.getDeadline().getNano())
+                .as("the frozen deadline is persisted at TIMESTAMP granularity")
+                .isZero();
+
+        // --- the provider double is never consulted: no task execution, no turn call ---
+        verify(taskProvider, never()).executeTask(any(), any(), anyString(), any());
+        verify(taskProvider, never()).call(any(), any(), any());
+        verify(taskProvider, never()).call(any(), any(), any(), any());
+
+        // --- terminal state: the coordinator's exact sandbox-launch refusal, no audit row, no usage ---
+        Run failed = runRepository.findById(run.getId()).orElseThrow();
+        assertThat(failed.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(failed.getErrorMessage())
+                .startsWith("OpenSandbox sandbox creation failed for image "
+                        + openCodeProperties.getImage() + ": Network connectivity error: Failed to connect to")
+                .endsWith(":18080");
+        assertThat(failed.getFinalOutput()).isNull();
+        assertThat(failed.getTotalTokensUsed()).isZero();
+        assertThat(failed.getIterationCount()).isZero();
+        assertThat(promptCallRepository.findByRunId(run.getId())).isEmpty();
     }
 
     @Test
-    void timeoutException_abortsRunAndCallsProviderAbort() {
+    void providerDoubleTimeoutIsNeverConsulted_andTheCoordinatorRefusalIsTheTerminalError() {
         Agent agent = agentRepository.save(Agent.builder()
                 .id(UUID.randomUUID()).name("opencode-timeout").description("task agent")
                 .agentType(AgentType.NATIVE).role("tester").model("gpt-4o")
@@ -148,6 +192,8 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
                 .promptSeed("do it now").maxIterations(0).totalTokensUsed(0)
                 .iterationCount(0).createdAt(Instant.now()).build());
 
+        // The double would time out if consulted; the run-owned core means it never is, so
+        // neither the double's time-out nor abortTask may shape the terminal state.
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenThrow(
                 new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
                         "task exceeded 30m budget"));
@@ -156,14 +202,28 @@ class OpenCodeTaskExecutionIntegrationTest extends BaseH2IntegrationTest {
 
         await().atMost(Duration.ofSeconds(20))
                 .until(() -> runRepository.findById(run.getId())
-                        .map(r -> r.getStatus() == RunStatus.ABORTED).orElse(false));
+                        .map(r -> r.getStatus() == RunStatus.FAILED).orElse(false));
 
-        Run aborted = runRepository.findById(run.getId()).orElseThrow();
-        assertThat(aborted.getStatus()).isEqualTo(RunStatus.ABORTED);
-        assertThat(aborted.getErrorMessage()).contains("budget");
+        Run failed = runRepository.findById(run.getId()).orElseThrow();
+        assertThat(failed.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(failed.getErrorMessage())
+                .startsWith("OpenSandbox sandbox creation failed for image "
+                        + openCodeProperties.getImage() + ": Network connectivity error: Failed to connect to")
+                .endsWith(":18080")
+                .doesNotContain("task exceeded 30m budget");
 
-        verify(taskProvider).abortTask(run.getId());
+        // The frozen binding captures exactly this run; the provider double is never asked to
+        // execute, to run the turn-level call, or to abort (the coordinator owns termination).
+        RunExecutionBinding binding = runExecutionBindingRepository.findById(run.getId()).orElseThrow();
+        assertThat(binding.getRunId()).isEqualTo(run.getId());
+        assertThat(binding.getAgentId()).isEqualTo(agent.getId());
+        assertThat(binding.getCoreId()).isEqualTo("opencode");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+        verify(taskProvider, never()).executeTask(any(), any(), anyString(), any());
         verify(taskProvider, never()).call(any(), any(), any());
+        verify(taskProvider, never()).call(any(), any(), any(), any());
+        verify(taskProvider, never()).abortTask(run.getId());
+
         // Failure path does not write a PromptCall audit entry (only successful tasks are audited)
         assertThat(promptCallRepository.findByRunId(run.getId())).isEmpty();
     }

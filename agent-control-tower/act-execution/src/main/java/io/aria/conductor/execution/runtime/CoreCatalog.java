@@ -2,6 +2,7 @@ package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -36,10 +37,10 @@ public final class CoreCatalog {
             copy.put(coreId, Set.copyOf(Objects.requireNonNull(modes,
                     "Supported modes are required for core: " + coreId)));
         });
-        this.modesByCore = Map.copyOf(copy);
+        this.modesByCore = Collections.unmodifiableMap(copy);
     }
 
-    /** The registered production core IDs. */
+    /** The registered production core IDs, in registration order. */
     public Set<String> coreIds() {
         return modesByCore.keySet();
     }

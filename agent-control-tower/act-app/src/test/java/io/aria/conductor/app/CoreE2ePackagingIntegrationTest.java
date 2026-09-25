@@ -136,7 +136,6 @@ class CoreE2ePackagingIntegrationTest {
                     "harness/io/aria/conductor/app/e2e/CoreE2eApplication.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eConfiguration.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eConfiguration$CoreE2eSettings.class",
-                    "harness/io/aria/conductor/app/e2e/CoreE2eConfiguration$RunStoreQuiescenceView.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eConfiguration$SandboxTransport.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eSetup.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eSetup$SetupRefusal.class",

@@ -287,14 +287,8 @@ export async function pollUntil<T = any>(
 
 export interface SeedAdkAgentOpts extends ExecutionSelectionOpts {
   name?: string;
-  /**
-   * The governed core. The production catalog is exactly `qoder` | `opencode`;
-   * `langchain` stays in the runtime shape only so the pre-existing caller that
-   * still selects it (api/git-pack-gate.api.spec.ts:233, whose loopback mock is
-   * wired through that provider) keeps type-checking until its ported
-   * replacement lands; it is removed at cutover with that spec (T18).
-   */
-  adkProvider?: 'qoder' | 'opencode' | 'langchain';
+  /** The governed core: the production catalog is exactly `qoder` | `opencode`. */
+  adkProvider?: 'qoder' | 'opencode';
   model?: string;
   config?: string;
 }

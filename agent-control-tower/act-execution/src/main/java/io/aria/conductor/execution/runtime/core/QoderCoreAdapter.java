@@ -141,6 +141,19 @@ public final class QoderCoreAdapter implements CoreAdapter {
     }
 
     /**
+     * The Qoder core declares no service-level prerequisite: its bridge and CLI are
+     * started per run, and readiness is verified at launch (the adapter requires the
+     * reviewed profile and the run's control secret), so there is no long-running
+     * service whose probe could fail. This descriptor is the per-core answer the
+     * health route serves for {@code qoder} -- a truthful state instead of the 404
+     * a provider-only lookup produced.
+     */
+    @Override
+    public boolean serviceHealthy() {
+        return true;
+    }
+
+    /**
      * Builds the bridge launch profile of one run. The argv is explicit and
      * complete: run binding, reviewed invocation, endpoint, and the paths of
      * the two run-owned secret-bearing files the trusted launcher writes. No

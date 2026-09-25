@@ -24,6 +24,7 @@ import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
@@ -99,9 +100,26 @@ class AgentLoopEngineTaskPathTest {
     @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
     @Mock TaskDeadlineProperties taskDeadlineProperties;
-    @Mock org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
+    @Mock(name = "coreExecutionServiceProvider")
+    org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
+    /**
+     * Task 18 cutover: the engine's second provider seam. Unit tests run without
+     * the cutover wiring, so the mock stays unstubbed ({@code getIfAvailable()}
+     * returns null) and must not be confused with the CoreExecutionService
+     * provider mock: both constructor parameters share the same erased type
+     * ({@code ObjectProvider}), which is why the engine below is constructed
+     * explicitly instead of via {@code @InjectMocks}.
+     */
+    @Mock(name = "coreRunLauncherProvider")
+    org.springframework.beans.factory.ObjectProvider<CoreRunLauncher> coreRunLauncherProvider;
 
-    @InjectMocks
+    /**
+     * Constructed explicitly (not {@code @InjectMocks}): the two
+     * {@code ObjectProvider} constructor parameters share one erased type, so
+     * Mockito's constructor injection cannot tell them apart and would wire the
+     * same mock into both seams. The DoD/Kanban services stay null exactly as
+     * they were under {@code @InjectMocks} (no mock candidates).
+     */
     AgentLoopEngine engine;
 
     @Mock
@@ -151,6 +169,15 @@ class AgentLoopEngineTaskPathTest {
         // stub it leniently here; tests that exercise deny/opt-out override this per-test.
         lenient().when(approvalGate.requestApproval(any(), any()))
                 .thenReturn(ApprovalDecision.approve("test-approved"));
+
+        engine = new AgentLoopEngine(
+                runRepository, agentRepository, adkProviderRegistry, sessionStateManager,
+                actionPipeline, circuitBreaker, approvalGate, promptCallRepository,
+                trajectoryRepository, toolCallRepository, eventPublisher, workflowService,
+                workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
+                knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
+                approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
+                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider);
     }
 
     @Test

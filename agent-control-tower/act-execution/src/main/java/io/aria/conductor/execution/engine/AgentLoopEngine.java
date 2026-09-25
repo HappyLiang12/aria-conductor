@@ -22,8 +22,12 @@ import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.CoreResult;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
+import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
+import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
@@ -108,6 +112,13 @@ public class AgentLoopEngine {
      * way.
      */
     private final ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
+    /**
+     * The production cutover launcher (Task 18), when the wiring provides one:
+     * a run on a registered production core is driven end to end through the
+     * run coordinator. Absent in unit tests that exercise the generic turn
+     * loop against provider doubles.
+     */
+    private final ObjectProvider<CoreRunLauncher> coreRunLauncherProvider;
     private final DoDService dodService;
     private final KanbanService kanbanService;
 
@@ -138,7 +149,8 @@ public class AgentLoopEngine {
                            TaskDeadlineProperties taskDeadlineProperties,
                            ObjectProvider<CoreExecutionService> coreExecutionServiceProvider,
                            DoDService dodService,
-                           KanbanService kanbanService) {
+                           KanbanService kanbanService,
+                           ObjectProvider<CoreRunLauncher> coreRunLauncherProvider) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -162,6 +174,7 @@ public class AgentLoopEngine {
         this.approvalRepository = approvalRepository;
         this.taskDeadlineProperties = taskDeadlineProperties;
         this.coreExecutionServiceProvider = coreExecutionServiceProvider;
+        this.coreRunLauncherProvider = coreRunLauncherProvider;
         this.dodService = dodService;
         this.kanbanService = kanbanService;
     }
@@ -334,6 +347,94 @@ public class AgentLoopEngine {
     @Nullable
     private CoreExecutionService runCoordinator() {
         return coreExecutionServiceProvider == null ? null : coreExecutionServiceProvider.getIfAvailable();
+    }
+
+    /** The production core launcher, or null in unit tests without the cutover wiring. */
+    @Nullable
+    private CoreRunLauncher runCoreLauncher() {
+        return coreRunLauncherProvider == null ? null : coreRunLauncherProvider.getIfAvailable();
+    }
+
+    /**
+     * Drives one run on a registered production core through the cutover
+     * launcher: freeze the immutable binding (first attempt) and execute the
+     * run-owned attempt through the coordinator, then keep the engine's own
+     * business transitions (tokens, trajectory, SSE, run status).
+     */
+    private void executeCoreRun(RunContext ctx, CoreRunLauncher launcher, @Nullable SseEmitter emitter) {
+        Agent agent = ctx.getAgent();
+        log.info("Coordinated core run: runId={}, agent={}", ctx.getRunId(), agent.getId());
+        tryEmit(emitter, "thinking", Map.of("status", "processing", "mode", "core",
+                "runId", ctx.getRunId().toString()));
+        try {
+            Run run = runRepository.findById(ctx.getRunId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Run", ctx.getRunId()));
+            CoreResult result = launcher.execute(run, agent, coreTask(ctx));
+            recordUsage(ctx, result);
+            ctx.incrementIteration();
+            String finalOutput = result.finalOutput();
+            if (finalOutput != null && !finalOutput.isBlank()) {
+                ctx.setLastAssistantResponse(finalOutput);
+                recordTaskTrajectory(ctx, finalOutput, tokenCount(result.usage() == null ? null
+                        : result.usage().outputTokens()));
+                tryEmit(emitter, "message", Map.of("content", finalOutput));
+            }
+            tryEmit(emitter, "done", donePayload(ctx, null));
+            completeRun(ctx, result.cancelled() ? RunStatus.CANCELLED : RunStatus.COMPLETED);
+        } catch (Exception e) {
+            log.error("Coordinated core run failed: runId={}", ctx.getRunId(), e);
+            ctx.addError(e.getMessage());
+            String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
+            tryEmit(emitter, "done", donePayload(ctx, errMsg));
+            tryEmit(emitter, "error", Map.of("message", errMsg));
+            completeRun(ctx, RunStatus.FAILED);
+        }
+    }
+
+    private static void recordUsage(RunContext ctx, CoreResult result) {
+        UsageSnapshot usage = result.usage();
+        if (usage == null) {
+            return;
+        }
+        ctx.addTokensUsed(tokenCount(usage.inputTokens()), tokenCount(usage.outputTokens()));
+    }
+
+    private static int tokenCount(Long value) {
+        return value == null ? 0 : value.intValue();
+    }
+
+    /** The accepted conversation as the core task: system material, history, current request. */
+    private CoreTask coreTask(RunContext ctx) {
+        StringBuilder system = new StringBuilder();
+        List<LlmMessage> history = new ArrayList<>();
+        String userPrompt = "";
+        List<LlmMessage> messages = buildMessages(ctx);
+        for (int i = 0; i < messages.size(); i++) {
+            LlmMessage message = messages.get(i);
+            String role = message.role() == null ? "" : message.role();
+            if ("system".equals(role)) {
+                if (message.content() != null && !message.content().isBlank()) {
+                    if (system.length() > 0) {
+                        system.append("\n\n");
+                    }
+                    system.append(message.content());
+                }
+            } else if ("user".equals(role) && i == lastUserIndex(messages)) {
+                userPrompt = message.content() == null ? "" : message.content();
+            } else {
+                history.add(message);
+            }
+        }
+        return new CoreTask(system.toString(), List.copyOf(history), userPrompt);
+    }
+
+    private static int lastUserIndex(List<LlmMessage> messages) {
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if ("user".equals(messages.get(i).role())) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /** Waits (bounded) for a control acknowledgement; a missing one is a refused control, never a success. */
@@ -664,6 +765,20 @@ public class AgentLoopEngine {
         if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
             log.info("Run {} is owned by its run-owned core session; no provider-level execution is started",
                     ctx.getRunId());
+            return;
+        }
+
+        // Production cutover (Task 18): a run whose (stored or defaulted) core is a
+        // registered production core (opencode, qoder) is executed end to end by the
+        // run coordinator through the core launcher (frozen binding -> backend -> core
+        // session -> verified finalization) -- including a run whose remaining
+        // selection admission refuses: executeCoreRun() fails it with the admission
+        // message and the provider path is never entered. Only a core outside the
+        // production catalog falls through to the registry, whose explicit
+        // no-fallback refusal ends the run; it is never executed either.
+        CoreRunLauncher coreLauncher = runCoreLauncher();
+        if (coreLauncher != null && coreLauncher.owns(ctx.getAgent())) {
+            executeCoreRun(ctx, coreLauncher, emitter);
             return;
         }
 

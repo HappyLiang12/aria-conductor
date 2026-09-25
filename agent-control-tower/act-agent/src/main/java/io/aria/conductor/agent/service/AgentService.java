@@ -23,6 +23,8 @@ import io.aria.conductor.common.repository.AgentSkillRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.common.repository.RoleToolTemplateRepository;
 import io.aria.conductor.common.repository.RoleSkillTemplateRepository;
+import io.aria.conductor.common.runtime.AgentExecutionPolicy;
+import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.service.SkillContextProvider;
 import io.aria.conductor.common.model.SkillContext;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
@@ -34,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -52,6 +55,13 @@ public class AgentService {
     private final RoleSkillTemplateRepository roleSkillTemplateRepository;
     private final HarnessProfileService harnessProfileService;
     private final AgentPickupEligibility eligibility;
+    /**
+     * The shared admission policy (Task 18 fix round 1): the write path refuses a
+     * selection admission would refuse instead of persisting it for the run time
+     * to discover. The fields are still stored exactly as supplied -- only the
+     * refusal is added, so admission keeps applying the documented defaults.
+     */
+    private final AgentExecutionPolicy executionPolicy;
 
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
@@ -63,7 +73,8 @@ public class AgentService {
                         RoleToolTemplateRepository roleToolTemplateRepository,
                         RoleSkillTemplateRepository roleSkillTemplateRepository,
                         HarnessProfileService harnessProfileService,
-                        AgentPickupEligibility eligibility) {
+                        AgentPickupEligibility eligibility,
+                        AgentExecutionPolicy executionPolicy) {
         this.agentRepository = agentRepository;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
@@ -75,6 +86,7 @@ public class AgentService {
         this.roleSkillTemplateRepository = roleSkillTemplateRepository;
         this.harnessProfileService = harnessProfileService;
         this.eligibility = eligibility;
+        this.executionPolicy = Objects.requireNonNull(executionPolicy, "executionPolicy");
     }
 
     @Transactional
@@ -88,11 +100,24 @@ public class AgentService {
                 .role(request.getRole())
                 .model(request.getModel())
                 .provider(request.getProvider())
-                .adkProvider(request.getAdkProvider() != null ? request.getAdkProvider() : "langchain")
+                .adkProvider(request.getAdkProvider() != null ? request.getAdkProvider() : "opencode")
+                // Task 18 cutover: the execution selection is persisted as supplied. A
+                // missing selection stays null, so admission applies the documented
+                // defaults (opencode + SANDBOX) and never invents a stored mode.
+                .executionMode(request.getExecutionMode())
+                .workspaceMode(request.getWorkspaceMode())
+                .workspacePath(request.getWorkspacePath())
+                .workspaceBaseRef(request.getWorkspaceBaseRef())
                 .config(serializeConfig(withDefaultHarnessProfile(request.getConfig(), request.getRole())))
                 .healthStatus(HealthStatus.HEALTHY)
                 .pickupEnabled(Boolean.TRUE)
                 .build();
+
+        // Write-time admission (Task 18 fix round 1): a selection the policy refuses
+        // (unknown/removed core, unsupported mode, contradictory workspace fields) is
+        // rejected here with the policy's exact message instead of being persisted for
+        // the run to discover. The stored fields themselves stay exactly as supplied.
+        validateExecutionSelection(agent);
 
         Agent saved = agentRepository.save(agent);
         log.info("Agent created: id={}", saved.getId());
@@ -128,13 +153,44 @@ public class AgentService {
         if (request.getModel() != null) agent.setModel(request.getModel());
         if (request.getProvider() != null) agent.setProvider(request.getProvider());
         if (request.getAdkProvider() != null) agent.setAdkProvider(request.getAdkProvider());
+        if (request.getExecutionMode() != null) agent.setExecutionMode(request.getExecutionMode());
+        if (request.getWorkspaceMode() != null) agent.setWorkspaceMode(request.getWorkspaceMode());
+        if (request.getWorkspacePath() != null) agent.setWorkspacePath(request.getWorkspacePath());
+        if (request.getWorkspaceBaseRef() != null) agent.setWorkspaceBaseRef(request.getWorkspaceBaseRef());
         if (request.getConfig() != null) agent.setConfig(serializeConfig(request.getConfig()));
         if (request.getPickupEnabled() != null) {
             agent.setPickupEnabled(request.getPickupEnabled());
         }
 
+        // Write-time admission for a selection change (Task 18 fix round 1): only when
+        // this request touches the execution selection, so an unrelated edit of a legacy
+        // row (e.g. renaming an agent stored on a removed core) is never blocked by a
+        // selection the row already carried.
+        if (touchesExecutionSelection(request)) {
+            validateExecutionSelection(agent);
+        }
+
         Agent saved = agentRepository.save(agent);
         return toResponse(saved);
+    }
+
+    /**
+     * Runs the shared admission policy over the agent's stored selection; a refusal
+     * propagates as {@link IllegalArgumentException} with the policy's exact message
+     * (the exception handler maps it to 400). The result is discarded on purpose: the
+     * row keeps the supplied values and admission keeps applying its defaults later.
+     */
+    private void validateExecutionSelection(Agent agent) {
+        executionPolicy.normalize(new AgentExecutionSettings(agent.getAdkProvider(),
+                agent.getExecutionMode(), agent.getWorkspaceMode(), agent.getWorkspacePath(),
+                agent.getWorkspaceBaseRef()));
+    }
+
+    /** Whether this update request carries any execution-selection field. */
+    private static boolean touchesExecutionSelection(UpdateAgentRequest request) {
+        return request.getAdkProvider() != null || request.getExecutionMode() != null
+                || request.getWorkspaceMode() != null || request.getWorkspacePath() != null
+                || request.getWorkspaceBaseRef() != null;
     }
 
     @Transactional
@@ -382,6 +438,10 @@ public class AgentService {
                 .model(agent.getModel())
                 .provider(agent.getProvider())
                 .adkProvider(agent.getAdkProvider())
+                .executionMode(agent.getExecutionMode())
+                .workspaceMode(agent.getWorkspaceMode())
+                .workspacePath(agent.getWorkspacePath())
+                .workspaceBaseRef(agent.getWorkspaceBaseRef())
                 .config(agent.getConfig())
                 .healthStatus(agent.getHealthStatus())
                 .createdAt(agent.getCreatedAt())

@@ -14,31 +14,12 @@ Local development is H2-only. The app uses a persistent H2 file database at `dat
 | Maven | 3.9+ | `mvn --version` |
 | Node.js | 20+ | `node --version` |
 | pnpm | 9+ | `pnpm --version` |
-| Python | 3.11+ | `python --version` |
 
-Python is required for the LangChain ADK runtime. Every agent spawns a uvicorn process on a dedicated port (9300–9400). Without Python, the system falls back to calling the LLM API directly — functional but without LangChain features like native memory and streaming.
+No Python runtime is needed: the removed LangChain ADK runtime is gone. A container runtime
+(Docker or Podman) is needed only for SANDBOX-placed runs (the OpenSandbox server); HOST-placed
+runs need none.
 
 On Windows, `JAVA_HOME` often points at an older JDK. This repo needs JDK 21.
-
-### Python venv (LangChain ADK runtime)
-
-The backend spawns a Python uvicorn subprocess per agent for LangChain-based execution. Set up the venv once:
-
-```powershell
-cd ../langchain-adk
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-```
-
-Verify:
-```powershell
-.venv\Scripts\python -c "from server import app; print('OK')"
-```
-
-**Worktree note:** The venv is per-worktree — create it in each worktree you use. Set `PYTHON_PATH` env var if the venv is at a non-default location:
-```powershell
-$env:PYTHON_PATH = "C:\absolute\path\to\.venv\Scripts\python.exe"
-```
 
 **LLM provider:** Configure via environment variables (auto-detected on first startup):
 ```powershell
@@ -82,6 +63,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-backend.ps1 -Start
 
 # reuse the existing jar and skip the build step
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-backend.ps1 -SkipBuild
+
+# Host mode: no container runtime, no OpenSandbox; defaults the provider to the
+# Host-capable core qoder
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-backend.ps1 -SkipSandbox
 ```
 
 `start-backend-isolated.ps1` is now just a thin wrapper over the same H2 startup path.

@@ -4,12 +4,9 @@
 One-click local-dev startup for Aria Conductor.
 
 Defaults to the opencode provider on podman in the local-dev topology (backend and
-frontend on the host, OpenSandbox in a container) - the only topology in which the
-opencode provider works. Use -Mode compose for the legacy full-stack compose stack,
-which is langchain-only.
-
-.PARAMETER Mode
-local (default) or compose.
+frontend on the host, OpenSandbox in a container) - the topology in which the
+opencode provider's Sandbox mode works. The containerized full-stack compose
+stack (which could only reach the removed legacy ADK runtime) is gone.
 
 .PARAMETER DryRun
 Run the environment checks, print the mode block, then exit. No services are started,
@@ -18,7 +15,6 @@ exception is that the environment check may start a stopped podman machine - tha
 the repair this script exists to make, and without it the sandbox socket cannot be read.
 #>
 param(
-    [ValidateSet('local', 'compose')][string]$Mode = 'local',
     [switch]$DryRun,
     [switch]$NonInteractive,
     # Test seam: defaults to the repository root.
@@ -33,10 +29,9 @@ $ErrorActionPreference = "Stop"
 
 $RunDir = Join-Path $ProjectRoot ".run"
 
-$provider = if ($Mode -eq 'local') { 'opencode' } else { 'langchain' }
-$topology = if ($Mode -eq 'local') { 'local-dev (backend + frontend on host)' } else { 'full-stack compose (backend in a container)' }
-# Compose runs three phases (environment, stack bring-up, report); the local-dev flow runs eight.
-$phaseTotal = if ($Mode -eq 'compose') { 3 } else { 8 }
+$provider = 'opencode'
+$topology = 'local-dev (backend + frontend on host)'
+$phaseTotal = 8
 
 function Write-Phase([int]$Number, [int]$Total, [string]$Text) {
     Write-Host ("[{0}/{1}] {2}" -f $Number, $Total, $Text) -ForegroundColor Cyan
@@ -71,7 +66,7 @@ function Write-ModeSummary([string]$Topology, [string]$Provider, [string]$Runtim
 }
 
 # ── Phase 1: environment check ───────────────────────────────────────────────
-Write-Host "Aria Conductor - one-click start ($Mode)" -ForegroundColor Cyan
+Write-Host "Aria Conductor - one-click start" -ForegroundColor Cyan
 Write-Phase 1 $phaseTotal "Checking environment"
 
 Load-DotEnv $ProjectRoot
@@ -121,9 +116,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 }
 
 # ── Phase 2: env guidance ────────────────────────────────────────────────────
-# Only local-dev numbers this as a phase of its own: compose's second phase is the stack
-# bring-up, so there the .env check is part of the environment phase.
-if ($Mode -eq 'local') { Write-Phase 2 $phaseTotal "Checking .env" }
+Write-Phase 2 $phaseTotal "Checking .env"
 # Only the podman path can read a podman socket: Get-SandboxSocketPath shells out to
 # `podman info`, so asking it on the docker fallback would pin a podman socket in .env next
 # to CONTAINER_RUNTIME=docker. Docker's own socket lives at a fixed path.
@@ -163,45 +156,6 @@ if (Test-Path $envPath) {
     if (-not (Test-LlmKeyValid $llmKey)) {
         throw "LLM_API_KEY is missing or still a placeholder in .env. Set a real key and retry."
     }
-}
-
-# ── Compose mode: the runtime owns the whole stack ───────────────────────────
-if ($Mode -eq 'compose') {
-    if ($DryRun) {
-        Write-Host ""
-        Write-Host "-DryRun: environment OK, nothing started (compose mode would run: $runtime compose up -d --build)." -ForegroundColor Yellow
-        exit 0
-    }
-    Write-Phase 2 $phaseTotal "Starting the full-stack compose stack"
-    Push-Location $ProjectRoot
-    try {
-        & $runtime compose up -d --build
-        if ($LASTEXITCODE -ne 0) { throw "compose up failed (exit $LASTEXITCODE)" }
-    } finally {
-        Pop-Location
-    }
-
-    $composeBackendPort = Get-EnvValue 'BACKEND_PORT' '8080'
-    $composeDashboardPort = Get-EnvValue 'FRONTEND_PORT' '3000'
-    Write-Phase 3 $phaseTotal "Reporting"
-    Write-Host ""
-    Write-Host "=========================================================" -ForegroundColor Green
-    Write-Host "  Aria Conductor - COMPOSE STACK STARTING" -ForegroundColor Green
-    Write-Host "=========================================================" -ForegroundColor Green
-    Write-Host "  Topology : $topology"
-    Write-Host "  Provider : $provider"
-    Write-Host "  Runtime  : $runtime ($($runtimeInfo.Mode))"
-    Write-Host "  Dashboard: http://localhost:$composeDashboardPort"
-    Write-Host "  Backend  : http://localhost:$composeBackendPort"
-    Write-Host "---------------------------------------------------------"
-    Write-Host "  NOTE: the opencode provider is NOT usable in this topology - the" -ForegroundColor Yellow
-    Write-Host "  containerized backend cannot reach the OpenSandbox endpoints. This" -ForegroundColor Yellow
-    Write-Host "  stack runs the langchain provider. Run without -Mode for opencode." -ForegroundColor Yellow
-    Write-Host "---------------------------------------------------------"
-    Write-Host "  Logs : $runtime compose logs -f"
-    Write-Host "  Stop : $runtime compose down"
-    Write-Host "=========================================================" -ForegroundColor Green
-    exit 0
 }
 
 # Ports feed both the summary and the port pre-check.

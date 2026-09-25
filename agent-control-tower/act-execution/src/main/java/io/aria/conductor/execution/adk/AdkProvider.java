@@ -13,14 +13,13 @@ import java.util.function.Consumer;
 /**
  * Strategy interface for ADK (Agent Development Kit) providers.
  *
- * <p>Each implementation wraps a specific agent runtime (LangChain ADK subprocess,
- * LangChain Python process, etc.) behind a uniform contract so that
+ * <p>Each implementation wraps a specific agent runtime behind a uniform contract so that
  * {@link io.aria.conductor.execution.engine.AgentLoopEngine} can invoke any
  * provider without knowing the concrete type.
  */
 public interface AdkProvider {
 
-    /** Unique identifier for this provider (e.g. {@code "langchain"}). */
+    /** Unique identifier for this provider (e.g. {@code "opencode"}). */
     String providerId();
 
     /**
@@ -80,8 +79,8 @@ public interface AdkProvider {
      * provider inventory / health API, {@code GET /api/v1/adk/providers/{id}/health}).
      *
      * <p>Unlike {@link #isHealthy(UUID)} (instance-scoped, requires an agentId),
-     * this probes the provider's underlying runtime service (ADK host:port for
-     * langchain, OpenSandbox server reachability for opencode). Defaults to
+     * this probes the provider's underlying runtime service (e.g. OpenSandbox
+     * server reachability for opencode). Defaults to
      * {@code true} for providers without a meaningful service-level probe.
      */
     default boolean isServiceHealthy() {

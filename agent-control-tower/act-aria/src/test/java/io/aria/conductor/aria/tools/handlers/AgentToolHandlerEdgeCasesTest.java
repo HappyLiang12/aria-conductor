@@ -144,7 +144,8 @@ class AgentToolHandlerEdgeCasesTest {
         verify(agentService).createAgent(captor.capture());
         assertThat(captor.getValue().getModel()).isEqualTo("deepseek-chat");
         assertThat(captor.getValue().getProvider()).isEqualTo("deepseek");
-        assertThat(captor.getValue().getAdkProvider()).isEqualTo("langchain");
+        // Task 18 cutover: the tool creates agents on the documented default core, opencode.
+        assertThat(captor.getValue().getAdkProvider()).isEqualTo("opencode");
     }
 
     @Test

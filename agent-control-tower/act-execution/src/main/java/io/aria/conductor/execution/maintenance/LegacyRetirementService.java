@@ -119,7 +119,7 @@ public class LegacyRetirementService {
 
     static final String IN_FLIGHT_MESSAGE = "Retirement operation already in flight";
 
-    /** Fail-closed refusal while no run-quiescence view is deployed (Task 18 wires it). */
+    /** Fail-closed refusal when no run-quiescence view is deployed (the Task 18 cutover wires one). */
     static final String RUNTIME_ACTIVITY_MISSING_MESSAGE = "Retirement refused: the RuntimeActivity"
             + " run-quiescence view is not deployed; quiescence cannot be proven";
 
@@ -140,9 +140,9 @@ public class LegacyRetirementService {
     private final AuditEventBulkRepository auditEventBulkRepository;
     private final WorkflowService workflowService;
     /**
-     * Optional run-quiescence view: absent until Task 18 wires the run
-     * coordinator's registry, so the entry points fail closed while it is not
-     * deployed instead of deleting without proving quiescence.
+     * Optional run-quiescence view: the Task 18 cutover wires the run coordinator as
+     * this view, so the entry points never delete without proving quiescence; a
+     * deployment without one fails closed.
      */
     private final RuntimeActivity runtimeActivity;
     private final ApplicationEventPublisher eventPublisher;
@@ -156,9 +156,9 @@ public class LegacyRetirementService {
     private final AtomicBoolean operationInFlight = new AtomicBoolean();
 
     /**
-     * Production wiring: system clock, the fixed preview TTL and whatever
-     * {@link RuntimeActivity} bean exists (none until Task 18, which is a legal
-     * state the entry points refuse).
+     * Production wiring: system clock, the fixed preview TTL and the deployed
+     * {@link RuntimeActivity} bean (the Task 18 cutover wires the run coordinator as
+     * that view; a context without one is a legal state the entry points refuse).
      */
     @Autowired
     public LegacyRetirementService(AgentRepository agentRepository, RunRepository runRepository,

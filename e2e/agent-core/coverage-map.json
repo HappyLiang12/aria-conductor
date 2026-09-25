@@ -25,12 +25,12 @@
       "cases": 2,
       "representativeCases": [
         "Providers page renders provider table + Per-Agent Backends",
-        "Crew create form renders langchain + opencode options"
+        "Crew create form renders qoder + opencode options"
       ],
-      "purpose": "Providers page surfaces the selectable ADK providers and their per-agent backends.",
+      "purpose": "Providers page surfaces the selectable production cores and their per-agent backends.",
       "runtimeAffected": true,
-      "replacement": "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts",
-      "rationale": "The provider list becomes the core catalog (qoder/opencode) plus execution mode/sandbox selection (T15). The 'langchain + opencode options' assertion is retired with the LangChain provider; the deterministic harness serves the page so the case no longer needs a live ADK.",
+      "replacement": "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts (REST core inventory); both UI cases re-pinned in place at cutover (T18 fix round 1, 2026-09-25)",
+      "rationale": "The provider list is the core catalog (opencode/qoder) plus execution mode/sandbox selection (T15), and the file's own UI half (providers table + Per-Agent Backends, Crew dropdown options) was re-pinned to the surviving cores: the LangChain row/option assertions are RETIRED with the provider, exactly like real-llm-scenarios.spec.ts rl-01 did, and a negative 'langchain is not an option' pin records the retirement. The deterministic harness serves the page so the cases no longer need a live ADK.",
       "status": "port"
     },
     {
@@ -285,8 +285,8 @@
       "runtimeAffected": true,
       "langchainOnly": true,
       "replacement": "core-execution-modes.spec.ts (core/sandbox selection and run verification) + deterministic harness",
-      "rationale": "The LangChain runtime is removed at cutover (T18); its business purpose is the exchangeable-provider run path, which the core-catalog flow now carries. Removal is only permitted once the replacement spec runs against the harness.",
-      "status": "remove-on-cutover"
+      "rationale": "The LangChain runtime is removed at cutover (T18); its business purpose is the exchangeable-provider run path, which the core-catalog flow now carries. Removal is only permitted once the replacement spec runs against the harness. Task 18 deletion REVERTED (2026-09-25): the replacement cannot reach a verdict yet (peer scenario control route absent), so the file is restored unchanged and removal remains gated — see task17PortRecord.removalDecisions / removalGate. Task 18 cutover round re-verified (2026-09-25, same day): the file is present and byte-identical to HEAD (git diff HEAD empty), and its replacements (core-execution-modes.spec.ts and the revised opencode-adk-e2e.spec.ts) stay RED before their run-path assertions because the harness-only wires are absent from the cutover tree (no post /api/v1/maintenance/core-e2e/scenario route anywhere in act-execution/act-app main+test sources; no Aria scenario registration; no SDD harness environment). The removal stays gated.",
+      "status": "restore-on-gate"
     },
     {
       "id": "pw:multi-agent-lifecycle.spec.ts",
@@ -585,8 +585,8 @@
       "purpose": "A run blocks on the git_push PUSH gate and resumes after approval (pushing to the local remote).",
       "runtimeAffected": true,
       "replacement": "core-permissions.spec.ts",
-      "rationale": "The gate becomes a one-use write grant delivered through the permission coordinator (T12); the block-then-resume assertion is retained.",
-      "status": "port"
+      "rationale": "The gate becomes a one-use write grant delivered through the permission coordinator (T12); the block-then-resume assertion is retained. Task 18 (2026-09-25): retained at the cutover, not deleted — the replacing case ('a run blocks on the git_push PUSH gate and the approved push lands in a disposable bare remote') cannot reach a verdict yet: there is no harness scenario control route in the tree and no 'git-push' peer scenario in scenarios.json, so the case stops at setScenario before the gate. The retained file itself is present and byte-identical to HEAD (git diff HEAD empty) but can no longer run to a verdict either: its mechanism is the removed LangChain provider path (the loopback OpenAI mock the run reached through LangChainAdkProvider, deleted with the cutover). See task17PortRecord.removalDecisions / removalGate.",
+      "status": "restore-on-gate"
     },
     {
       "id": "pw:api/knowledge-approval-concurrency.api.spec.ts",
@@ -765,9 +765,9 @@
     {
       "id": "java:act-app/AgentLoopInjectionIntegrationTest.java",
       "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/AgentLoopInjectionIntegrationTest.java",
-      "purpose": "Wiring of the agent loop engine with the resolved provider.",
-      "replacement": "modified in place at cutover (T18): the injected provider becomes the core adapter",
-      "rationale": "Wiring coverage must survive; the design expects the loop to be provider-agnostic after the consolidation.",
+      "purpose": "Run-owned coordination of an injected-core agent: the run on the stored/default production core is owned by the core launcher, the frozen RunExecutionBinding is persisted, and the AdkProvider double is never consulted (zero interactions).",
+      "replacement": "modified in place at cutover (T18) and re-pinned in fix round 1 (2026-09-25): the injected provider is NOT consulted -- the run reaches the coordinator path (frozen binding, sandbox refusal in the harness) while the provider double stays at zero interactions; the provider task path itself is pinned at unit level by act-execution AgentLoopEngineTaskPathTest",
+      "rationale": "Wiring coverage must survive; after the cutover the loop refuses the pre-cutover provider path for a catalog core, so the IT pins the coordinator contract and the unit test keeps the provider-task-path pin.",
       "status": "port"
     },
     {
@@ -781,9 +781,9 @@
     {
       "id": "java:act-app/OpenCodeTaskExecutionIntegrationTest.java",
       "path": "agent-control-tower/act-app/src/test/java/io/aria/conductor/app/OpenCodeTaskExecutionIntegrationTest.java",
-      "purpose": "Task execution through the opencode provider with sandbox lifecycle.",
-      "replacement": "retained; re-pointed at the extracted sandbox backend (T10/T11)",
-      "rationale": "The business purpose (task executes in a sandbox) is unchanged.",
+      "purpose": "Run-owned task execution through the coordinator: the opencode agent's run freezes its binding and reaches the sandbox backend (the refusal is the harness environment's, not a provider call), and the AdkProvider double is never consulted (zero interactions).",
+      "replacement": "modified in place at cutover (T18) and re-pinned in fix round 1 (2026-09-25): the run is owned by the core launcher/coordinator (frozen RunExecutionBinding, exact sandbox refusal, 0 PromptCall rows, 0 provider interactions); the provider-task-path purpose moves to the unit-level carrier act-execution AgentLoopEngineTaskPathTest",
+      "rationale": "The business purpose (a task executes in a sandbox) is now carried by the run-owned coordinator contract; asserting the provider call would re-assert the removed pre-cutover path.",
       "status": "port"
     },
     {
@@ -1129,15 +1129,16 @@
       "capturedRuns": "See harnessRun for the exact per-spec outcomes and causes.",
       "stillUnported": "aria-engine-unification, aria-timeout-cancel, housekeeping-cleanup, observability-live, workflow-data-flow, workflow-state-machine, workflow-ui-interaction (notRevisedRows) and the two disabled cases (template-api:146, workflow-state-machine:154) - all with the T17 remainder as deferral owner."
     },
-    "fixturesChanged": "agent-control-tower/act-dashboard/e2e/fixtures.ts - operator-only routes authenticate with the environment credential as a bearer header (`Authorization: Bearer $ARIA_OPERATOR_BEARER_TOKEN`; ActorAuthenticationFilter step 1 is the header-authenticated operator branch with no CSRF surface). The committed UI client src/api/operatorSession.ts uses a different flow (cookie + X-CSRF-Token) and is not the header contract the fixtures follow; fix round 1 corrected the citation. seedAdkAgent(request, {adkProvider, executionMode, workspaceMode, workspacePath, workspaceBaseRef}); setScenario(request, agentId, scenario) against the harness-only operator-authenticated peer scenario control (POST /api/v1/maintenance/core-e2e/scenario, never a database outcome); approveRunApproval/decideApproval operator-authenticated with exact processed-ack verification; permissionOptions parses the recorded one-use grant set. SeedAdkAgentOpts.adkProvider keeps 'langchain' in the runtime shape only for the pre-existing caller api/git-pack-gate.api.spec.ts:233 until that row is ported (T18 cutover); the production catalog is exactly qoder|opencode. Fix round 2 added runWorkerToken(request, runId) reading the run-scoped worker credential from the harness-only operator route GET /api/v1/maintenance/core-e2e/worker-token?runId=... (404 today; T18 obligation (a)).",
+    "fixturesChanged": "agent-control-tower/act-dashboard/e2e/fixtures.ts - operator-only routes authenticate with the environment credential as a bearer header (`Authorization: Bearer $ARIA_OPERATOR_BEARER_TOKEN`; ActorAuthenticationFilter step 1 is the header-authenticated operator branch with no CSRF surface). The committed UI client src/api/operatorSession.ts uses a different flow (cookie + X-CSRF-Token) and is not the header contract the fixtures follow; fix round 1 corrected the citation. seedAdkAgent(request, {adkProvider, executionMode, workspaceMode, workspacePath, workspaceBaseRef}); setScenario(request, agentId, scenario) against the harness-only operator-authenticated peer scenario control (POST /api/v1/maintenance/core-e2e/scenario, never a database outcome); approveRunApproval/decideApproval operator-authenticated with exact processed-ack verification; permissionOptions parses the recorded one-use grant set. SeedAdkAgentOpts.adkProvider is now exactly 'qoder' | 'opencode' (Task 18 cutover removed 'langchain' from the shape); the retained caller api/git-pack-gate.api.spec.ts:233 still passes 'langchain' textually - Playwright transpiles without type-checking, and the runtime now fails that value loudly ('Unsupported ADK provider'), which is why the file stays held at the gate (removalGate). The production catalog is exactly qoder|opencode. Fix round 2 added runWorkerToken(request, runId) reading the run-scoped worker credential from the harness-only operator route GET /api/v1/maintenance/core-e2e/worker-token?runId=... (404 today; T18 obligation (a)).",
     "perPurposeStatus": {
       "note": "Rewritten in fix round 1 because the previous record claimed coverage that was not carried and omitted rows. Each entry states what the port carries (covered) and every assertion/purpose it does NOT carry (residual). The port has NO UI half: all three replacement specs drive the REST API only (Playwright APIRequestContext), so every original browser case is a residual unless an entry says otherwise. A row may only be removed at cutover when every purpose below is covered; any residual blocks its removal.",
       "pw:adk-providers.spec.ts": {
         "covered": [
-          "the selectable core inventory: GET /adk/providers returns exactly ['opencode','qoder'] with opencode the single default (core-execution-modes.spec.ts 'the provider inventory is exactly the production core catalog'; RED until T18 narrows the catalog and deletes the LangChain row)"
+          "the selectable core inventory: GET /adk/providers returns exactly ['opencode','qoder'] with opencode the single default (core-execution-modes.spec.ts 'the provider inventory is exactly the production core catalog')",
+          "the file's own UI half, re-pinned in place at cutover (T18 fix round 1, 2026-09-25): the Providers-page table renders the OpenCode and Qoder rows with exactly one Default badge among them, the Per-Agent Backends block renders, and the Crew create form's dynamic ADK Provider dropdown offers qoder + opencode and no langchain option"
         ],
         "residual": [
-          "no UI half: the Providers-page provider table, its single Default-badge row and the Per-Agent Backends block are not carried (original case 1); the Crew create form's dynamic ADK Provider dropdown options - today langchain + OpenCode - are not carried (original case 2). Owner: the adk-providers.spec.ts revision, which T18's catalog narrowing unblocks (the langchain option assertion is retired only with the provider)."
+          "the retired halves are the removed LangChain assertions only (a visible 'LangChain ADK' row and a 'langchain' option value), retired with the provider like real-llm-scenarios.spec.ts rl-01; every surviving case now pins the production cores qoder + opencode"
         ]
       },
       "pw:harness-governance.spec.ts": {
@@ -1388,8 +1389,30 @@
       "disabled:workflow-state-machine-e2e.spec.ts:154": "not-revised - the unconditional in-case skip still has no deterministic expectation; deferral owner: the T17 remainder"
     },
     "removalDecisions": {
-      "pw:langchain-adk-e2e.spec.ts": "RETAINED at Task 17. The map permits removal only once the replacement spec runs against the harness; its replacement (core-execution-modes.spec.ts) is written and executed here but cannot pass while the peer scenario control route and the production coordinator wiring are pending Task 18. Removal is recorded for the cutover commit, together with the map's mapping.",
-      "pw:settings-navigation.spec.ts": "RETAINED at Task 17 (same cutover gate). All six cases are already disabled by a file-level test.describe.skip against a deleted surface, so deferring the file loses zero runnable coverage; deletion is recorded for the cutover commit."
+      "pw:langchain-adk-e2e.spec.ts": "RETAINED (re-confirmed in the Task 18 cutover round, 2026-09-25). The map permits removal only once the replacement spec runs against the harness and reaches a verdict. The cutover round deleted the file and then reverted the deletion: replacements are core-execution-modes.spec.ts (the four supported core/mode combinations and the core-inventory case) and the revised opencode-adk-e2e.spec.ts (core catalog, runtime switch, deterministic run), and both stay RED before their run-path assertions because the harness-only wires are absent from the cutover tree (verified 2026-09-25: no POST /api/v1/maintenance/core-e2e/scenario route in act-execution/act-app main+test sources; the fixtures' setScenario therefore 404s; no Aria scenario registration; no SDD harness environment). The file is present and byte-identical to HEAD (git diff HEAD empty). Removal stays gated — see removalGate.",
+      "pw:api/git-pack-gate.api.spec.ts": "RETAINED (Task 18 cutover round, 2026-09-25). The replacing case is core-permissions.spec.ts 'a run blocks on the git_push PUSH gate and the approved push lands in a disposable bare remote' (exact assertions in perPurposeStatus), and it cannot reach a verdict yet: it invokes setScenario against the absent harness route and needs the recorded 'git-push' peer scenario, which scenarios.json does not carry (verified 2026-09-25). The retained file is present and byte-identical to HEAD (git diff HEAD empty); its own mechanism (the removed LangChain provider path) is gone, so it cannot reach a verdict either. Removal stays gated — see removalGate.",
+      "pw:settings-navigation.spec.ts": "RETAINED at Task 17 (same cutover gate). All six cases are already disabled by a file-level test.describe.skip against a deleted surface, so deferring the file loses zero runnable coverage; deletion is recorded for the cutover commit. Task 18 (2026-09-25): the file is still present; nothing waits on it except the same auditable-removal commit — see removalGate."
+    },
+    "removalGate": {
+      "rule": "A spec held for removal is deleted only when every purpose in its perPurposeStatus entry is covered by a runnable replacement that reaches a passing verdict against the harness. Any recorded residual, or a replacement that cannot execute to a verdict, keeps the file in the tree.",
+      "verifiedOn": "2026-09-25 (Task 18 cutover round)",
+      "heldSpecs": {
+        "agent-control-tower/act-dashboard/e2e/langchain-adk-e2e.spec.ts": {
+          "replacements": "core-execution-modes.spec.ts (four core/mode combinations, core inventory, create/configure selection) and the revised opencode-adk-e2e.spec.ts (core catalog, runtime switch, deterministic COMPLETED run)",
+          "state": "present, byte-identical to HEAD (git diff HEAD empty). Both replacements are RED before their first run-path assertion: every combination case calls setScenario, which 404s because no POST /api/v1/maintenance/core-e2e/scenario route exists in the tree (only the client constant fixtures.ts:331 names it); the previously recorded causes 'catalog received [langchain, opencode]' and 'create path drops the selection fields' are RESOLVED server-side by the cutover (GET /adk/providers now serves the CoreCatalog {opencode, qoder} with opencode the configured default; AgentService.createAgent persists adkProvider/executionMode/workspaceMode/workspacePath/workspaceBaseRef).",
+          "releaseCondition": "the harness scenario control route + peer-launch wiring, the Aria scenario registration and the SDD harness environment land, and the replacement cases PASS against the harness"
+        },
+        "agent-control-tower/act-dashboard/e2e/api/git-pack-gate.api.spec.ts": {
+          "replacements": "core-permissions.spec.ts 'a run blocks on the git_push PUSH gate and the approved push lands in a disposable bare remote'",
+          "state": "present, byte-identical to HEAD (git diff HEAD empty); the replacing case is RED at the same absent scenario route and additionally needs the recorded 'git-push' peer scenario (scenarios.json carries reported-usage and pause-resume but no git-push entry, verified 2026-09-25). The retained file's own mechanism (the loopback OpenAI mock reached through the deleted LangChainAdkProvider) no longer exists, so as retained it cannot reach a verdict either.",
+          "releaseCondition": "the scenario route + the 'git-push' peer scenario land and the replacing case PASSES"
+        },
+        "agent-control-tower/act-dashboard/e2e/settings-navigation.spec.ts": {
+          "replacements": "exemption: nothing runnable survives (whole-file test.describe.skip against the deleted /settings surface); the surviving rail/Configure affordances are covered by overview-dashboard.spec.ts and configure-modal-close.spec.ts",
+          "state": "present; no runnable coverage is lost by keeping or deleting it",
+          "releaseCondition": "delete in the same auditable removal commit as the other held files (no wire needs to land)"
+        }
+      }
     },
     "harnessRun": "Extracted T16 distribution (%TEMP%/aria-core-e2e-harness-fix1) booted with ARIA_OPERATOR_BEARER_TOKEN + ARIA_PEER_CONTROL_TOKEN, --e2e.assets/--e2e.work-root/--e2e.sandbox-transport=process on port 8080, CoreE2eSetup --confirm-retire-historical-seeds (receipt noOp=true, built-ins existing=3); CI=true pnpm --dir agent-control-tower/act-dashboard exec playwright test e2e/core-{execution-modes,permissions,workspaces}.spec.ts --workers=1 -> 4 passed / 14 failed (no skips; unchanged by fix round 1). Fix round 1 re-ran the workspaces spec alone to capture the new exact-failure shapes: the invalid-worktree case now fails on a single exact expectation (core-workspaces.spec.ts:66 expect(created.status).toBe(400), received 201), the other three at the setScenario 404. FIX ROUND 2 re-booted the same distribution with a FRESH H2 database (the previous data/ was moved aside), additional env GITHUB_TOKEN=synthetic-e2e-git-handoff and --approvals.timeout-ms=60000, plus the dashboard dev server (VITE_BACKEND_PORT=8080 pnpm dev on 5173) for the browser lane: core-{execution-modes,permissions,workspaces} -> 4 passed / 20 failed with no skips (the same 4 permissions operator arms pass; every new case fails with the exact captured cause recorded in perPurposeStatus); the revised legacy specs: aria-conversation-id-regression 4 passed / 1 failed (SSE 'message' expectation; disproven in fix round 3 - the file-level serial mode skipped the reuse case behind that failure, so this recorded split was not reproducible from the committed file), kanban-hitl 4 passed / 1 failed (optionsJson: null on the task-gate ask), sdd-workflow 0 passed / 2 failed (both chains reach FAILED before WAITING_APPROVAL), opencode-adk-e2e 0 passed / 1 failed (core catalog received ['langchain','opencode']). FIX ROUND 3 re-ran the two browser-lane specs on the same recipe (fresh H2 data/, same env, ports 8080/5173, --workers=1, CI=true with retries=1): aria-conversation-id-regression 3 passed / 2 failed, 0 skipped, 0 flaky (stats: expected 3, unexpected 2, skipped 0) - with the serial mode removed the reuse case EXECUTES and fails deterministically at its first stored-timeline assertion (aria-conversation-id-regression.spec.ts:196: received ['user:remember 1'] vs expected ['user:remember 1', 'assistant:Still working — reasoning models can take a little longer. The result will appear in the Runs dashboard, or use streaming chat for live updates.']; identical on both attempts) - the round-2 'reuse case PASSES' claim is disproven and corrected; kanban-hitl 4 passed / 1 failed - the review case stops EARLIER than the round-2 record: both attempts fail at the dispatch transition's disclosed optimistic-lock 409 (kanban-hitl.spec.ts:163, body 'Card was modified by another move — refresh and retry.'), so the round-2 'optionsJson: null' stop is not currently reached and the strengthened cleanup is not reached either.",
     "setScenario404Cases": "The harness peer scenario control route is 404 in this build. Twelve cases invoke setScenario and fail on it (mechanical recount in fix round 3): core-execution-modes.spec.ts (4 Step-1 combinations + the cancel control + the pause case = 6), core-workspaces.spec.ts (dirty-source, concurrent Direct, workspace-diff, knowledge promotion = 4), core-permissions.spec.ts (the expiry case + the governed git-push case = 2). The previous record's '11 cases' was wrong (fix round 1, minor 9) and its 'nine' headline was not updated for the round-2 additions (fix round 3, minor 2). opencode-adk-e2e.spec.ts also calls setScenario but its single case stops earlier today on its first assertion (the core catalog, received ['langchain','opencode']). The three worker-credential cases fail at the worker-token route's 404 instead.",

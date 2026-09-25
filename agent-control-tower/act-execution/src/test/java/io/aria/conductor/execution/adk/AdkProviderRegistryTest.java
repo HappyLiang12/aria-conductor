@@ -20,6 +20,8 @@ class AdkProviderRegistryTest {
 
     @Mock AdkProvider mockProviderA;
     @Mock AdkProvider mockProviderB;
+    /** The production opencode provider's registry identity, as the existing Mockito style here. */
+    @Mock AdkProvider opencodeProvider;
     @Mock Agent agent;
 
     AdkSystemProperties systemProperties;
@@ -28,6 +30,7 @@ class AdkProviderRegistryTest {
     void setUp() {
         lenient().when(mockProviderA.providerId()).thenReturn("mock-a");
         lenient().when(mockProviderB.providerId()).thenReturn("mock-b");
+        lenient().when(opencodeProvider.providerId()).thenReturn("opencode");
         systemProperties = new AdkSystemProperties();
         systemProperties.setDefaultProvider("mock-a");
     }
@@ -54,19 +57,29 @@ class AdkProviderRegistryTest {
     }
 
     @Test
-    void resolve_fallsBackToDefault_whenUnknownProvider() {
-        when(agent.getAdkProvider()).thenReturn("nonexistent");
-        AdkProviderRegistry registry = new AdkProviderRegistry(List.of(mockProviderA, mockProviderB), systemProperties);
-        assertThat(registry.resolve(agent)).isSameAs(mockProviderA);
+    void anUnknownConfiguredDefaultFailsClosed() {
+        AdkSystemProperties props = new AdkSystemProperties();
+        props.setDefaultProvider("langchain");
+        assertThatThrownBy(() -> new AdkProviderRegistry(List.of(opencodeProvider), props))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unsupported ADK provider");
     }
 
     @Test
-    void constructor_fallsBackToFirstProvider_whenDefaultProviderMissing() {
-        systemProperties.setDefaultProvider("nonexistent");
+    void resolve_throwsOnUnknownProviderSelection_insteadOfFallingBack() {
+        when(agent.getAdkProvider()).thenReturn("nonexistent");
         AdkProviderRegistry registry = new AdkProviderRegistry(List.of(mockProviderA, mockProviderB), systemProperties);
-        assertThat(registry.getProviderIds()).containsExactlyInAnyOrder("mock-a", "mock-b");
-        when(agent.getAdkProvider()).thenReturn(null);
-        assertThat(registry.resolve(agent)).isSameAs(mockProviderA);
+        assertThatThrownBy(() -> registry.resolve(agent))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unsupported ADK provider");
+    }
+
+    @Test
+    void constructor_throws_whenDefaultProviderMissing() {
+        systemProperties.setDefaultProvider("nonexistent");
+        assertThatThrownBy(() -> new AdkProviderRegistry(List.of(mockProviderA, mockProviderB), systemProperties))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unsupported ADK provider");
     }
 
     @Test

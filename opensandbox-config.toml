@@ -29,11 +29,10 @@ network_mode = "bridge"
 # (local-dev topology): sandbox endpoints (execd port mappings) must resolve
 # from the backend process, and on the host loopback they do. `host.docker.internal`
 # does NOT resolve from host processes on Windows (only from inside containers).
-# FULL-STACK COMPOSE TOPOLOGY: the backend is a container, so 127.0.0.1 inside it
-# points at the backend container itself — sandbox endpoints are unreachable and the
-# opencode provider is NOT usable in full-stack compose mode (runs fail with
-# SANDBOX_UNAVAILABLE after the SDK timeout). Use the local-dev topology (backend on
-# the host) or the langchain provider for the full-stack compose deployment.
+# CONTAINERIZED BACKEND: the backend is a container, so 127.0.0.1 inside it
+# points at the backend container itself — sandbox endpoints are unreachable. Use the
+# local-dev topology (backend on the host) for SANDBOX-placed runs, or run agents in
+# HOST mode, which needs no sandbox at all.
 # (server v0.2.2+ implements [docker].host_ip as the second-priority host override
 # after [server].eip; both are set here.)
 host_ip = "127.0.0.1"

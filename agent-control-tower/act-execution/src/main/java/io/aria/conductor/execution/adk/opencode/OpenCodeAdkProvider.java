@@ -46,7 +46,7 @@ import java.util.function.Function;
  * through {@link #executeTask}. The turn-level {@link #call} is unsupported
  * and throws {@link UnsupportedOperationException}.
  *
- * <p>Lifecycle (mirrors the LangChain pattern): each agent gets a sandbox with
+ * <p>Lifecycle: each agent gets a sandbox with
  * {@code opencode serve} bound to {@code OpenCodeProperties#port}; health is
  * probed via {@code GET /global/health}; after
  * {@value #RESTART_AFTER_FAILURES} consecutive failures the sandbox is

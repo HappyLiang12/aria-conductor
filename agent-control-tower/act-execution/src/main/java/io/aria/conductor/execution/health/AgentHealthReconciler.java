@@ -27,8 +27,8 @@ import java.util.Set;
  * <p>It probes through {@link AdkProvider#probeRuntimeHealth} rather than
  * {@code isHealthy(UUID)} — the latter counts failures and tears the sandbox down
  * at the threshold, so a per-tick read would let transient blips kill runtimes.
- * It never creates a sandbox either; bringing a runtime up stays the job of
- * {@code AriaDefaultAgentInitializer.recoverDegradedAria()}.
+ * It never creates a sandbox either; a runtime is brought up by the run that owns
+ * it, not by this reconciler.
  */
 @Slf4j
 @Component
@@ -49,8 +49,8 @@ public class AgentHealthReconciler {
     private final RuntimeActivity runtimeActivity;
 
     /**
-     * Production wiring: no run-quiescence view is deployed yet (Task 18 passes
-     * the run coordinator's registry into the explicit constructor below).
+     * Production wiring: the Task 18 cutover passes the run coordinator -- the
+     * production {@link RuntimeActivity} view -- into the explicit constructor below.
      */
     @Autowired
     public AgentHealthReconciler(AgentRepository agentRepository,
@@ -76,11 +76,37 @@ public class AgentHealthReconciler {
         }
         for (Agent agent : agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)) {
             try {
-                applyProbe(agent, providerRegistry.resolve(agent).probeRuntimeHealth(agent.getId()));
+                AdkProvider provider = providerFor(agent);
+                if (provider == null) {
+                    // A first-delivery core (e.g. qoder) has no provider bean and no
+                    // agent-scoped runtime: its runs are run-owned and judged through the
+                    // coordinator's quiescence view, so there is nothing to probe here and
+                    // the configured stamp is left untouched. A per-tick WARN would be a
+                    // false failure report, not a health fact.
+                    log.debug("Health reconcile: agent {} selects core '{}', which has no"
+                            + " provider-level runtime to probe", agent.getId(), agent.getAdkProvider());
+                    continue;
+                }
+                applyProbe(agent, provider.probeRuntimeHealth(agent.getId()));
             } catch (Exception e) {
                 log.warn("Health reconcile failed for agent {}: {}", agent.getId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * The provider bean that serves the agent's core, or {@code null} when no
+     * provider-level runtime exists for it (a first-delivery core such as qoder, or
+     * an unknown/removed core). An agent that stores no core keeps the registry's
+     * documented default resolution.
+     */
+    @Nullable
+    private AdkProvider providerFor(Agent agent) {
+        String coreId = agent.getAdkProvider();
+        if (coreId == null || coreId.isBlank()) {
+            return providerRegistry.resolve(agent);
+        }
+        return providerRegistry.getProvider(coreId);
     }
 
     private void applyProbe(Agent agent, AdkProvider.RuntimeHealth probed) {

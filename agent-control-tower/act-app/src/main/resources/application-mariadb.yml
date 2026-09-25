@@ -39,16 +39,8 @@ llm:
     max-tokens: 4096
 
 adk:
+  # Supported production cores are exactly qoder and opencode (no fallback).
   default-provider: ${ADK_DEFAULT_PROVIDER:opencode}
-  runtime:
-    langchain:
-      host: ${ADK_HOST:langchain-adk}
-      port-range-start: ${ADK_PORT:9300}
-      port-range-end: ${ADK_PORT:9300}
-      mode: remote
-      shutdown-timeout-ms: 10000
-      llm-base-url: ${LLM_PROVIDER_BASE_URL:https://api.openai.com/v1}
-      llm-default-model: ${LLM_PROVIDER_MODEL:gpt-4o}
 
 circuit-breaker:
   max-tokens-per-run: 100000

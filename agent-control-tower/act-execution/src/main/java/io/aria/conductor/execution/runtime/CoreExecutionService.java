@@ -13,6 +13,7 @@ import io.aria.conductor.execution.approval.PermissionChoice;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionOption;
 import io.aria.conductor.execution.approval.PermissionReply;
+import io.aria.conductor.execution.approval.PermissionReplySink;
 import io.aria.conductor.execution.approval.PermissionTarget;
 import io.aria.conductor.execution.credential.RuntimeCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
@@ -60,11 +61,17 @@ import java.util.function.Consumer;
  * handed to the owning session. Resume reuses the same run-owned handle and
  * session and never replays a write.
  *
+ * <p>The coordinator is also the process's {@link PermissionReplySink}: the
+ * permission coordinator hands every directly decided native reply here, and it
+ * reaches the one session that is waiting for it. A reply for a run this process
+ * does not own has no session to receive it; it is reported and dropped, never
+ * routed to another run.
+ *
  * <p>The coordinator is constructed by the runtime cutover wiring (Task 18); it
  * takes no Spring annotation, so tests and callers use one explicit constructor.
  */
 @Slf4j
-public class CoreExecutionService implements RuntimeActivity {
+public class CoreExecutionService implements RuntimeActivity, PermissionReplySink {
 
     /**
      * The run-deadline enforcement of every live run; daemon so it never blocks
@@ -625,6 +632,31 @@ public class CoreExecutionService implements RuntimeActivity {
                 log.warn("Run {}: delivering the held decision {} failed: {}",
                         runtime.spec().runId(), approvalId, e.getMessage());
             }
+        }
+    }
+
+    /**
+     * {@link PermissionReplySink}: hands one directly decided native reply to
+     * its run's owning session. A run this process does not own (or one whose
+     * session is gone) has no receiver here; the reply is reported and dropped
+     * rather than routed to another run. A delivery failure is logged, never
+     * escalated: the operator's decision is already recorded and the ask stays
+     * settled.
+     */
+    @Override
+    public void deliver(PermissionReply reply) {
+        Objects.requireNonNull(reply, "reply");
+        RunRuntimeRegistry.RunRuntime runtime = runtimes.find(reply.runId()).orElse(null);
+        if (runtime == null || runtime.session() == null) {
+            log.debug("Run {}: the decided reply for request {} has no run-owned session in this process;"
+                    + " it is not delivered here", reply.runId(), reply.requestId());
+            return;
+        }
+        try {
+            runtime.session().decide(reply);
+        } catch (RuntimeException e) {
+            log.warn("Run {}: delivering the decided reply for request {} failed: {}",
+                    reply.runId(), reply.requestId(), e.getMessage());
         }
     }
 

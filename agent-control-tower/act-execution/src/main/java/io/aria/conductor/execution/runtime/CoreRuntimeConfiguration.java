@@ -4,6 +4,7 @@ import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
+import io.aria.conductor.execution.approval.PermissionReplySink;
 import io.aria.conductor.execution.credential.RuntimeCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
@@ -151,6 +152,18 @@ public class CoreRuntimeConfiguration {
      */
     @Bean
     public RuntimeActivity runtimeActivity(CoreExecutionService coreExecutionService) {
+        return coreExecutionService;
+    }
+
+    /**
+     * The permission-reply sink is the coordinator as well: it owns the run-owned
+     * core sessions a decided native reply must reach. The permission coordinator
+     * resolves this bean lazily, so the coordinator's own dependency on the
+     * permission coordinator (to register asks) never becomes a construction
+     * cycle.
+     */
+    @Bean
+    public PermissionReplySink permissionReplySink(CoreExecutionService coreExecutionService) {
         return coreExecutionService;
     }
 

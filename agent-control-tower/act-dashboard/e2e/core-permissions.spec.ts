@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -33,19 +33,32 @@ import {
  *    (decision zone resolves the ask)
  *  - git-pack-governance.spec.ts (risk-tier gate + approval lifecycle)
  *  - ops-approval-surface.spec.ts (approving from an operator surface)
- *  - api/approval-denial.api.spec.ts (denial reason persists, run cancelled)
+ *  - api/approval-denial.api.spec.ts (denial reason persists, no denied effect)
  *  - api/git-pack-gate.api.spec.ts (block-then-resume)
  *  - the permission half of api/mcp-sdd-workflow.api.spec.ts
  *
- * Reach path (LLM-free, CI-safe, the same one review-decision-zone.spec.ts
- * documents): pin a task-capable opencode agent on a kanban card, dispatch it,
- * and the default-on task gate creates the PENDING ask before any core call.
+ * Reach path (LLM-free, CI-safe): pin a task-capable opencode agent on a kanban
+ * card, dispatch it, and the deterministic peer scenario raises the native
+ * permission ask the run is blocked on. The default-on legacy task gate is gone
+ * with the ADK runtime: a core-owned run asks only when its core raises a
+ * permission need, and that ask is the peer's recorded decision (the T7
+ * fixtures), registered by `CoreExecutionService.registerAsk`.
+ *
+ * Fix round 3 (2026-09-26) — the lookup contract, recorded here and in the
+ * coverage map: a NATIVE permission ask is correlated with its RUN
+ * (`PermissionCoordinator.register` writes `acp_permission_requests.run_id` and
+ * an `Approval.runId`, and deliberately sets no `kanbanItemId`), so
+ * `nativeRunAsks` resolves it by runId through `/approvals` +`pendingRunApprovals`.
+ * The card path (`/approvals?kanbanItemId=`) belongs to GATE asks: its only
+ * writer is the gate path's review-card creator (`KanbanReviewAskCreator` sets
+ * `kanbanItemId`), and `cardLinkedAsks` keeps that path explicit so the two
+ * correlation contracts are never conflated. No assertion moved: the ask is
+ * still required to be PENDING, to offer exactly the recorded one-use grant and
+ * reject option, and to be decided exactly once.
  *
  * The decision is operator-only (Task 12). The worker arm (a run-scoped worker
- * token refused with 403) and the two MCP transports need a live run's worker
- * credential, which the harness can only mint once Task 18 wires the
- * coordinator; this spec asserts the REST owner arms exactly and reports that
- * remainder instead of weakening them.
+ * token refused with 403) and the two MCP transports use the live run's worker
+ * credential, minted by the harness route for the run the native ask belongs to.
  */
 
 // Every case dispatches its own card and agent and asserts exact captured
@@ -66,18 +79,25 @@ function isOptimisticLockRace(result: { status: number; data: any }): boolean {
 }
 
 /**
- * Dispatch a card for a fresh opencode agent and capture the PENDING ask. The
- * agent carries the explicit harness selection (opencode + HOST) and a declared
- * peer fixture, so the run behind the ask is a deterministic run rather than a
- * run the harness refuses for a missing scenario once the gate is decided.
+ * Dispatch a card for a fresh opencode agent and capture the PENDING native
+ * ask. The agent carries the explicit harness selection (opencode + HOST) and
+ * the recorded peer fixture `deny-write` — one native edit permission whose
+ * offered options are exactly `proceed_once` (ALLOW_ONCE) and `cancel` (DENY) —
+ * so the run behind the ask is a deterministic run rather than a run the
+ * harness refuses for a missing scenario. The run owns a DIRECT workspace the
+ * spec hands over, so the granted fixture write (and the absence of one after a
+ * denial) is observable in the exact bytes on disk.
  */
 async function dispatchAsk(request: Parameters<typeof seedAdkAgent>[0]) {
+  const workspace = mkdtempSync(join(tmpdir(), 'aria-e2e-perm-ws-'));
   const agent = await seedAdkAgent(request, {
     name: uniqueName('e2e-perm'),
     adkProvider: 'opencode',
     executionMode: 'HOST',
+    workspaceMode: 'DIRECT',
+    workspacePath: workspace,
   });
-  await setScenario(request, agent.id, 'reported-usage');
+  await setScenario(request, agent.id, 'deny-write');
   const card = await seedKanbanItem(request, {
     title: uniqueName('perm-card'),
     agentTemplateId: agent.name,
@@ -102,8 +122,26 @@ async function dispatchAsk(request: Parameters<typeof seedAdkAgent>[0]) {
     500,
   );
 
-  const asks = await pendingRunApprovals(request, await pollAskRunId(request, card.id), 60_000);
-  return { agent, card, ask: asks[0] };
+  // The pickup links the created run to the card before the move (`linkedRunId`),
+  // so the run under test is the card's own linked run — not a guessed row.
+  const linked = await pollUntil<any>(
+    request,
+    `/kanban/items/${card.id}`,
+    (item: any) => typeof item?.linkedRunId === 'string' && item.linkedRunId.length > 0,
+    30_000,
+    500,
+  );
+
+  const asks = await nativeRunAsks(request, linked.linkedRunId, 60_000);
+  const ask = asks[0];
+  // The correlation contract of a native ask: run-linked, never card-linked.
+  expect(ask.runId).toBe(linked.linkedRunId);
+  expect(ask.kanbanItemId ?? null).toBeNull();
+  expect(
+    (await cardLinkedAsks(request, card.id)).some((a: any) => a.id === ask.id),
+    'a native ask is never returned by the card-linked gate-ask path',
+  ).toBe(false);
+  return { agent, card, runId: linked.linkedRunId as string, workspace, ask };
 }
 
 /**
@@ -122,16 +160,47 @@ async function cancelCard(request: Parameters<typeof seedAdkAgent>[0], cardId: s
   expect(accepted.data?.status).toBe('CANCELLED');
 }
 
-/** The run the dispatch created for the card (the ask is linked to it). */
-async function pollAskRunId(request: Parameters<typeof seedAdkAgent>[0], cardId: string) {
-  const deadline = Date.now() + 60_000;
+/**
+ * The run's PENDING native asks, resolved by RUN (`/approvals` filtered by the
+ * correlated ask's runId). A native ask is never card-linked
+ * (`PermissionCoordinator.register` writes no `kanbanItemId`), so the card
+ * lookup can never see it; the review ask a completed card carries is a
+ * different, gate-path ask and is filtered out here by its recorded ask type
+ * and empty option set.
+ */
+async function nativeRunAsks(
+  request: Parameters<typeof seedAdkAgent>[0],
+  runId: string,
+  timeoutMs = 30_000,
+) {
+  const isNativeAsk = (a: any) =>
+    a?.status === 'PENDING'
+    && a?.runId === runId
+    && a?.askType !== 'REVIEW_REQUEST'
+    && typeof a?.optionsJson === 'string'
+    && a.optionsJson.trim() !== '';
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const { data } = await apiCall(request, 'GET', `/approvals?kanbanItemId=${cardId}`);
-    const pending = (data as any[] | null)?.find((a) => a.status === 'PENDING' && a.runId);
-    if (pending) return pending.runId;
-    if (Date.now() > deadline) throw new Error(`no PENDING ask appeared for card ${cardId}`);
+    const approvals = await pendingRunApprovals(request, runId, 15_000).catch(() => []);
+    const native = (approvals as any[]).filter(isNativeAsk);
+    if (native.length > 0) return native;
+    if (Date.now() > deadline) {
+      throw new Error(`no PENDING native permission ask appeared for run ${runId}`);
+    }
     await new Promise((r) => setTimeout(r, 1_000));
   }
+}
+
+/**
+ * The card-linked asks of a kanban card — the GATE-ask path. Only the gate
+ * path's review-card creator writes `kanbanItemId`
+ * (`KanbanReviewAskCreator`), so this lookup is the contract-accurate way to
+ * observe a card's own ask and the wrong one for a native permission ask.
+ */
+async function cardLinkedAsks(request: Parameters<typeof seedAdkAgent>[0], cardId: string) {
+  const { status, data } = await apiCall(request, 'GET', `/approvals?kanbanItemId=${cardId}`);
+  expect(status).toBe(200);
+  return (data as any[] | null) ?? [];
 }
 
 test('without operator authority the decision is refused and the ask stays PENDING', async ({ request }) => {
@@ -170,12 +239,29 @@ test('the ask offers exactly the one-use grant and the reject option', async ({ 
 });
 
 test('an operator allow-once grant resolves the ask and the run leaves PAUSED', async ({ request }) => {
-  const { card, ask } = await dispatchAsk(request);
+  const { card, workspace, ask } = await dispatchAsk(request);
 
   await decideApproval(request, ask.id, true, 'e2e operator one-use grant');
 
   const { data: decided } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
   expect(decided.status).toBe('APPROVED');
+
+  // The granted reply reaches the run's own core session: the peer applies the
+  // gated edit only after the genuine allow-once decision, so the exact fixture
+  // bytes appear in the run's admitted workspace (the harness round trip
+  // `/__peer/pending` -> ask -> `/__peer/decision` is the delivery under test).
+  await expect
+    .poll(
+      () => {
+        try {
+          return readFileSync(join(workspace, 'probe-deny.txt'), 'utf8');
+        } catch {
+          return null;
+        }
+      },
+      { timeout: 30_000, intervals: [500, 1_000] },
+    )
+    .toBe('beta-should-not-exist');
 
   const { data: run } = await apiCall(request, 'GET', `/runs/${ask.runId}`);
   expect(run.status).not.toBe('PAUSED');
@@ -198,23 +284,32 @@ test('a decided ask refuses a second decision (grant is consumed once)', async (
   await cancelCard(request, card.id);
 });
 
-test('an operator denial is recorded and the linked run is cancelled', async ({ request }) => {
-  const { card, ask } = await dispatchAsk(request);
+test('an operator denial is recorded and applies no denied effect', async ({ request }) => {
+  const { card, workspace, ask } = await dispatchAsk(request);
 
   await decideApproval(request, ask.id, false, 'e2e operator denial with reason');
 
   const { data: decided } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
   expect(decided.status).toBe('DENIED');
+  // The recorded verdict is the coordinator's own decision text for the offered
+  // reject option (PermissionCoordinator.decisionReason), with the peer's
+  // recorded request id and tool name.
+  expect(decided.reason).toBe('Operator denied Write (native permission request 0)');
 
-  await expect
-    .poll(
-      async () => {
-        const { data } = await apiCall(request, 'GET', `/runs/${ask.runId}`);
-        return data?.status;
-      },
-      { timeout: 30_000 },
-    )
-    .toBe('CANCELLED');
+  // The native-ask contract after a denial (design V4, peer suite: "denial
+  // produces no side effect"): the gated edit is never applied. The allow-once
+  // grant above writes `probe-deny.txt` with these exact bytes, so the absence
+  // is the denial's own evidence, not a vacuous check.
+  expect(readdirSync(workspace)).not.toContain('probe-deny.txt');
+
+  // Fix round 3 re-pin, recorded in the coverage map: the run's own outcome
+  // after a denied ask is its core's outcome (the deny-write fixture reports the
+  // decision window and completes). The legacy task-gate semantics that
+  // cancelled a run on a denial belonged to the retired ADK task gate; the
+  // coordinated contract settles the ask (DENIED, reason recorded) and answers
+  // the core with the offered reject option.
+  const done = await pollRunTerminal(request, ask.runId);
+  expect(done.status).toBe('COMPLETED');
 
   await cancelCard(request, card.id);
 });

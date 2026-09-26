@@ -178,11 +178,16 @@ class PermissionCoordinatorTest {
     }
 
     private PermissionCoordinator coordinator(Instant now) {
+        return coordinator(now, null);
+    }
+
+    /** A coordinator whose decided native replies are handed to the given sink. */
+    private PermissionCoordinator coordinator(Instant now, PermissionReplySink sink) {
         this.clock = new MutableClock(now);
         this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, 30_000L);
         this.writeGrants = new WriteGrantService(permissionRepository, clock);
         return new PermissionCoordinator(gate, approvalRepository, decisionLocks, permissionRepository,
-                writeGrants, eventPublisher, clock);
+                writeGrants, eventPublisher, () -> sink, clock);
     }
 
     private NativePermission permission(PermissionTarget target) {
@@ -309,6 +314,44 @@ class PermissionCoordinatorTest {
         assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
         assertThat(row.getDecidedAt()).isEqualTo(T0);
         assertThat(row.getDeliveredAt()).isEqualTo(T0);
+    }
+
+    @Test
+    void allowOnceDecisionIsHandedToTheOwningSessionSinkExactlyOnce() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL));
+
+        Optional<PermissionReply> reply = coordinator.decide(
+                approvalId, PermissionChoice.ALLOW_ONCE, ActorPrincipal.operator(null));
+
+        // Recording the decision and handing the reply to the run-owned session
+        // are one act: a decided ask must never leave its core waiting.
+        assertThat(reply).isPresent();
+        assertThat(delivered).containsExactly(reply.get());
+        assertThat(delivered.get(0).runId()).isEqualTo(RUN_ID);
+        assertThat(delivered.get(0).sessionId()).isEqualTo(SESSION_ID);
+        assertThat(delivered.get(0).requestId()).isEqualTo(REQUEST_ID);
+        assertThat(delivered.get(0).optionId()).isEqualTo("proceed_once");
+    }
+
+    @Test
+    void aDecisionHeldByAManualPauseIsNotHandedToTheSinkUntilTheResumeOwnerDeliversIt() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL));
+        coordinator.manualPause(RUN_ID);
+
+        // Recorded, held: nothing is handed to the session yet.
+        assertThat(coordinator.decide(approvalId, PermissionChoice.ALLOW_ONCE, ActorPrincipal.operator(null)))
+                .isEmpty();
+        assertThat(delivered).isEmpty();
+
+        // The resume owner hands the released reply over itself; this coordinator
+        // must not hand the same reply over a second time.
+        coordinator.manualResume(RUN_ID);
+        assertThat(coordinator.deliverPending(approvalId)).isPresent();
+        assertThat(delivered).isEmpty();
     }
 
     @Test

@@ -1,10 +1,15 @@
 package io.aria.conductor.app.e2e;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.approval.PermissionReply;
+import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
+import io.aria.conductor.execution.runtime.CoreEvent;
+import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreSession;
+import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
@@ -15,12 +20,15 @@ import io.aria.conductor.execution.runtime.core.QoderCoreAdapter;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 /**
  * Harness Qoder core adapter (Task 19 peer-launch wiring): the production
@@ -254,10 +262,11 @@ final class CoreE2eQoderAdapter implements CoreAdapter {
     }
 
     /**
-     * Opens the production bridge session. The control secret the bridge reads
-     * from its {@code --control-secret-file} is the one the harness launcher
-     * minted for this run, so it is supplied here under the name the production
-     * adapter requires ({@value QoderCoreAdapter#CONTROL_SECRET_ENVIRONMENT}).
+     * Opens the production bridge session and wraps it in the harness control
+     * wrapper. The control secret the bridge reads from its
+     * {@code --control-secret-file} is the one the harness launcher minted for
+     * this run, so it is supplied here under the name the production adapter
+     * requires ({@value QoderCoreAdapter#CONTROL_SECRET_ENVIRONMENT}).
      */
     @Override
     public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials) {
@@ -277,7 +286,61 @@ final class CoreE2eQoderAdapter implements CoreAdapter {
         CoreE2eEndpointReadiness.awaitQoderBridge(handle.endpoint(), controlSecret, spec.runId());
         Map<String, String> environment = new LinkedHashMap<>(credentials.environment());
         environment.put(QoderCoreAdapter.CONTROL_SECRET_ENVIRONMENT, controlSecret);
-        return delegate.open(handle, spec, new SecretBundle(credentials.reference(), environment));
+        CoreSession nativeSession = delegate.open(handle, spec, new SecretBundle(credentials.reference(), environment));
+        return new SuspendableSession(spec, nativeSession, peers);
+    }
+
+    /**
+     * The harness control wrapper of the qoder session: the bridge protocol has
+     * no pause RPC (it refuses one with {@code E_PAUSE_UNSUPPORTED}, which the
+     * production session passes through as an unverified acknowledgement), and
+     * the harness serves both placements through its own process transport, so
+     * manual pause/resume are the transport's verified process-tree suspensions
+     * of the owned bridge+CLI tree -- the recorded control technique, and the
+     * same surface the harness OpenCode core offers. Every other operation,
+     * including the native permission reply, stays the production session's.
+     */
+    static final class SuspendableSession implements CoreSession {
+
+        private final ExecutionSpec spec;
+        private final CoreSession delegate;
+        private final CoreE2eProcessBackend.State peers;
+
+        SuspendableSession(ExecutionSpec spec, CoreSession delegate, CoreE2eProcessBackend.State peers) {
+            this.spec = Objects.requireNonNull(spec, "spec");
+            this.delegate = Objects.requireNonNull(delegate, "delegate");
+            this.peers = Objects.requireNonNull(peers, "peers");
+        }
+
+        @Override
+        public String sessionId() {
+            return delegate.sessionId();
+        }
+
+        @Override
+        public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events) {
+            return delegate.prompt(task, events);
+        }
+
+        @Override
+        public CompletionStage<Void> decide(PermissionReply reply) {
+            return delegate.decide(reply);
+        }
+
+        @Override
+        public CompletionStage<ControlAck> pause(Instant deadline) {
+            return peers.pausePeer(spec.runId(), deadline);
+        }
+
+        @Override
+        public CompletionStage<ControlAck> resume(Instant deadline) {
+            return peers.resumePeer(spec.runId(), deadline);
+        }
+
+        @Override
+        public CompletionStage<ControlAck> cancel(Instant deadline) {
+            return delegate.cancel(deadline);
+        }
     }
 
     private void requireCore(ExecutionSpec spec) {

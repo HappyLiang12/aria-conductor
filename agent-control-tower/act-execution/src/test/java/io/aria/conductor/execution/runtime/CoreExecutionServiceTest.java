@@ -590,6 +590,27 @@ class CoreExecutionServiceTest {
         assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
     }
 
+    @Test
+    void aDecidedNativeReplyIsHandedToTheRunOwnedSessionAndNowhereElse() {
+        runOwnedInProcess();
+
+        PermissionReply reply = new PermissionReply(RUN, "session-1", "7", "proceed_once");
+        service.deliver(reply);
+
+        // The direct (non-held) decision reaches the one session waiting for it.
+        assertThat(session.decided).containsExactly(reply);
+        verify(permissions, never()).deliverPending(any());
+    }
+
+    @Test
+    void aDecidedReplyForARunThisProcessDoesNotOwnIsDroppedInsteadOfRouted() {
+        // No run-owned runtime in this process: there is no session to hand the
+        // reply to, and it is never routed to another run or fabricated.
+        service.deliver(new PermissionReply(RUN, "session-1", "7", "proceed_once"));
+
+        assertThat(session.decided).isEmpty();
+    }
+
     // ------------------------------------------------------------------ cancel
 
     @Test

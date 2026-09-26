@@ -9,6 +9,8 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -22,6 +24,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Normalized permission correlation, delivery and operator authorization
@@ -35,10 +38,18 @@ import java.util.concurrent.ConcurrentHashMap;
  * recorded while the run is manually paused is HELD and delivered only by
  * {@link #deliverPending(UUID)}, after the explicit resume, under a fresh
  * validity check. A {@code NATIVE_TOOL} decision produces the reply the owning
- * core session answers with; a {@code PLATFORM_MCP} allow-once decision issues
+ * core session answers with and hands it to the {@link PermissionReplySink}
+ * (the run coordinator that owns the session), so recording a decision and
+ * delivering it are one act; a {@code PLATFORM_MCP} allow-once decision issues
  * exactly one {@link WriteGrantService} authorization and produces no native
- * reply. Denials produce neither.
+ * reply. Denials produce no grant.
+ *
+ * <p>The sink is resolved lazily because the run coordinator depends on this
+ * coordinator to register asks: the lazy lookup is the seam that breaks that
+ * construction cycle, and it is only needed at decision time, long after both
+ * singletons exist.
  */
+@Slf4j
 @Service
 public class PermissionCoordinator {
 
@@ -51,6 +62,8 @@ public class PermissionCoordinator {
     private final WriteGrantService writeGrants;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
+    /** The run coordinator that owns the sessions a decided native reply must reach. */
+    private final Supplier<PermissionReplySink> replySinks;
     /** Runs whose manual pause holds decided-but-undelivered replies (spec §5.4). */
     private final Set<UUID> manuallyPausedRuns = ConcurrentHashMap.newKeySet();
     /** Serializes the deciders of this instance before they read the approval. */
@@ -60,21 +73,33 @@ public class PermissionCoordinator {
     public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
                                  ApprovalDecisionLockRepository decisionLocks,
                                  AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
-                                 ApplicationEventPublisher eventPublisher) {
-        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, eventPublisher, Clock.systemUTC());
+                                 ApplicationEventPublisher eventPublisher,
+                                 ObjectProvider<PermissionReplySink> replySinks) {
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, eventPublisher,
+                replySinks::getIfAvailable, Clock.systemUTC());
     }
 
-    /** Test/override seam: every expiry check uses this clock. */
+    /** Test/override seam: every expiry check uses this clock. No sink is bound. */
     public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
                                  ApprovalDecisionLockRepository decisionLocks,
                                  AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
                                  ApplicationEventPublisher eventPublisher, Clock clock) {
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, eventPublisher, () -> null, clock);
+    }
+
+    /** Test/override seam: the clock and the reply sink are both explicit. */
+    public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
+                                 ApprovalDecisionLockRepository decisionLocks,
+                                 AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 ApplicationEventPublisher eventPublisher,
+                                 Supplier<PermissionReplySink> replySinks, Clock clock) {
         this.approvalGate = Objects.requireNonNull(approvalGate, "approvalGate");
         this.approvals = Objects.requireNonNull(approvals, "approvals");
         this.decisionLocks = Objects.requireNonNull(decisionLocks, "decisionLocks");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.writeGrants = Objects.requireNonNull(writeGrants, "writeGrants");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
+        this.replySinks = Objects.requireNonNull(replySinks, "replySinks");
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
@@ -221,7 +246,35 @@ public class PermissionCoordinator {
             permissions.save(row);
             return Optional.empty();
         }
-        return Optional.ofNullable(deliver(row, choice, now));
+        Optional<PermissionReply> reply = Optional.ofNullable(deliver(row, choice, now));
+        // Recording the decision is not delivery: the reply is handed to the run
+        // coordinator, which pushes it to the run-owned session the ask came
+        // from. A run this process does not own has no such session -- the sink
+        // ignores it instead of routing the reply anywhere else.
+        reply.ifPresent(delivered -> handToOwningSession(delivered));
+        return reply;
+    }
+
+    /**
+     * Hands one delivered reply to the run's owning session through the bound
+     * {@link PermissionReplySink}. The sink is resolved at decision time (the
+     * coordinator may not exist yet when this bean is constructed); a refusing
+     * or absent sink leaves the decision recorded, which is what the operator
+     * already observed, and is reported rather than escalated.
+     */
+    private void handToOwningSession(PermissionReply delivered) {
+        PermissionReplySink sink = replySinks.get();
+        if (sink == null) {
+            return;
+        }
+        try {
+            sink.deliver(delivered);
+        } catch (RuntimeException e) {
+            // The decision is recorded; a delivery failure is reported and never
+            // turned into a second decision or a rolled-back grant.
+            log.warn("The decided reply for request {} was recorded but not delivered to its"
+                    + " run-owned session: {}", delivered.requestId(), e.getMessage());
+        }
     }
 
     // ------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   decideApproval,
   pendingRunApprovals,
   pollRunTerminal,
+  pollUntil,
   runExecutionBinding,
   seedAdkAgent,
   seedRun,
@@ -176,49 +177,97 @@ test('cancelling a run is acknowledged and reaches exactly CANCELLED', async ({ 
 });
 
 /**
- * Approves every ask the run opens, in order, until the run reaches exactly
- * RUNNING (the long-running scenario opens a task gate and then its execute
- * permission). Each captured ask id is decided once — a decision that is not
- * processed throws inside {@link decideApproval}.
+ * Approves every ask the run opens, in order, and returns the captured ask ids.
+ * The caller has already observed the run exactly RUNNING: the long-running
+ * scenarios hold their prompt open while the asked-for work runs, and the ask
+ * the run is blocked on must be granted (exactly once — a decision that is not
+ * processed throws inside {@link decideApproval}) before the writer exists.
  */
-async function approveAllAsksUntilRunning(
+async function grantRunAsks(
   request: Parameters<typeof seedAdkAgent>[0],
   runId: string,
   timeoutMs = 90_000,
 ) {
-  const decided = new Set<string>();
+  const decided: string[] = [];
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const { data: run } = await apiCall(request, 'GET', `/runs/${runId}`);
-    if (run?.status === 'RUNNING') return decided.size;
-    if (Date.now() > deadline) {
-      throw new Error(`run ${runId} never reached RUNNING (last status: ${run?.status})`);
-    }
     const pending = await pendingRunApprovals(request, runId, 15_000).catch(() => []);
-    const next = (pending as any[]).find((a) => !decided.has(a.id));
+    const next = (pending as any[]).find((a) => !decided.includes(a.id));
     if (next) {
       await decideApproval(request, next.id, true, 'e2e control: one-use grant');
-      decided.add(next.id);
-    } else {
-      await new Promise((r) => setTimeout(r, 1_000));
+      decided.push(next.id);
+      continue;
     }
+    if (decided.length > 0) return decided;
+    if (Date.now() > deadline) {
+      throw new Error(`run ${runId} opened no decidable ask`);
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
   }
 }
 
-// ── control: truthful pause ack, frozen export, resume, exact cancel ────────
-test('a pause is acknowledged truthfully and freezes the export until resume', async ({ request }) => {
+/** The byte size of the run's writer log (0 while absent). */
+function writerBytes(ticks: string): number {
+  try {
+    return statSync(ticks).size;
+  } catch {
+    return 0;
+  }
+}
+
+// ── control: truthful pause ack, frozen writer bytes, resume, exact cancel ──
+//
+// Fix round 3 (2026-09-26) — the premise of this case, recorded here and in the
+// coverage map: the run must be observably RUNNING (its core's prompt held open)
+// while the owned writer is live, or there is nothing truthful to pause. The
+// committed scenarios that HOLD a prompt are: the opencode `git-push` gate (held
+// until its decision resolves, scenarios.json) and the qoder `pause-resume`
+// prompt (peer suite: "the pause-resume prompt stays open until the session is
+// cancelled"). The opencode `pause-resume` prompt completes by contract — the
+// peer suite pins the immediate `DONE` response and only the writer survives
+// (`peer-actions.test.mjs:1377-1382`) — so an opencode `pause-resume` run is
+// COMPLETED before any pause can be truthful. The case is therefore pinned to
+// the qoder core, whose harness session answers pause/resume with the harness
+// process transport's verified process-tree suspension (the recorded control
+// technique; the bridge protocol has no pause RPC). The writer's bytes are then
+// observed directly in the run's admitted workspace: the `workspace-diff` route
+// reads the engine's legacy per-run scratch directory, not the run-owned
+// admitted workspace, and its own contract stays covered by
+// core-workspaces.spec.ts.
+test('a pause is acknowledged truthfully and freezes the writer until resume', async ({ request }) => {
   const workspace = mkdtempSync(join(tmpdir(), 'aria-e2e-pause-'));
   const agent = await seedAdkAgent(request, {
     name: uniqueName('e2e-pause'),
-    adkProvider: 'opencode',
+    adkProvider: 'qoder',
     executionMode: 'HOST',
     workspaceMode: 'DIRECT',
     workspacePath: workspace,
   });
   await setScenario(request, agent.id, 'pause-resume');
   const run = await seedRun(request, agent.id);
-  const granted = await approveAllAsksUntilRunning(request, run.id);
-  expect(granted).toBeGreaterThan(0);
+
+  // ── the premise: RUNNING while the core's prompt is held open ─────────────
+  const started = await pollUntil<any>(
+    request,
+    `/runs/${run.id}`,
+    (r) => r?.status === 'RUNNING',
+    60_000,
+    500,
+  );
+  expect(started.status).toBe('RUNNING');
+
+  // The held prompt is waiting on exactly the execute permission the writer is
+  // gated on: grant it once and the owned writer starts writing.
+  const grants = await grantRunAsks(request, run.id);
+  expect(grants.length).toBeGreaterThan(0);
+  expect(new Set(grants).size).toBe(grants.length);
+  const stillRunning = await apiCall(request, 'GET', `/runs/${run.id}`);
+  expect(stillRunning.data?.status).toBe('RUNNING');
+
+  const ticks = join(workspace, 'ticks.log');
+  await expect
+    .poll(() => writerBytes(ticks), { timeout: 30_000, intervals: [500, 1_000] })
+    .toBeGreaterThan(0);
 
   // ── pause: the acknowledgement states exactly PAUSED ──────────────────────
   // A PAUSED ack is only truthful when the runtime reached PAUSED: the
@@ -231,29 +280,19 @@ test('a pause is acknowledged truthfully and freezes the export until resume', a
   expect(pausedReadBack.status).toBe(200);
   expect(pausedReadBack.data?.status).toBe('PAUSED');
 
-  // ── no writes after pause: the exported workspace is byte-stable ──────────
-  const export1 = await apiCall(request, 'GET', `/runs/${run.id}/workspace-diff`);
-  expect(export1.status).toBe(200);
-  expect(export1.data.hasWorkspace).toBe(true);
-  expect(export1.data.diff).toContain('ticks.log');
+  // ── no writes after pause: the writer's bytes are frozen ──────────────────
+  const frozen = writerBytes(ticks);
+  expect(frozen).toBeGreaterThan(0);
   await new Promise((r) => setTimeout(r, 3_000));
-  const export2 = await apiCall(request, 'GET', `/runs/${run.id}/workspace-diff`);
-  expect(export2.status).toBe(200);
-  expect(export2.data.diff).toBe(export1.data.diff);
+  expect(writerBytes(ticks)).toBe(frozen);
 
-  // ── resume: the writer continues, so the same export must change ──────────
+  // ── resume: the writer continues, so the same file must grow ──────────────
   const resumed = await apiCall(request, 'POST', `/runs/${run.id}/resume`);
   expect(resumed.status, JSON.stringify(resumed.data)).toBe(200);
   expect(resumed.data?.status).toBe('RUNNING');
   await expect
-    .poll(
-      async () => {
-        const { data } = await apiCall(request, 'GET', `/runs/${run.id}/workspace-diff`);
-        return data?.diff;
-      },
-      { timeout: 60_000, intervals: [1_000, 2_000, 5_000] },
-    )
-    .not.toBe(export1.data.diff);
+    .poll(() => writerBytes(ticks), { timeout: 60_000, intervals: [1_000, 2_000, 5_000] })
+    .toBeGreaterThan(frozen);
 
   // ── cancel: the exact ack and the exact terminal state ────────────────────
   const cancelled = await apiCall(request, 'POST', `/runs/${run.id}/cancel`);

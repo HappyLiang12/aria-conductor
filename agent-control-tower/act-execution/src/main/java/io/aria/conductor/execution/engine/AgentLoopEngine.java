@@ -1743,8 +1743,14 @@ public class AgentLoopEngine {
             }
         }
 
-        // Cancel any pending approvals
+        // Cancel any pending approvals. An ask whose own core window already
+        // closed is expired by that timeout first, so the run ending cannot
+        // rewrite a timed-out permission ask as a cancellation.
         try {
+            CoreExecutionService coordinator = runCoordinator();
+            if (coordinator != null) {
+                coordinator.expirePendingAsksForRun(ctx.getRunId(), Instant.now());
+            }
             approvalGate.cancelAllPendingForRun(ctx.getRunId());
         } catch (Exception e) {
             log.warn("Failed to cancel pending approvals for {}: {}", ctx.getRunId(), e.getMessage());

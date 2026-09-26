@@ -403,6 +403,27 @@ export async function pendingRunApprovals(
 }
 
 /**
+ * The run's asks observed at any status, captured by id. The expiry scenario's
+ * decision window is a fixture-declared 300 ms, so its ask is never reliably
+ * observable while PENDING: this helper is how the run's ask is captured before
+ * its own timeout adjudicates it.
+ */
+export async function runApprovals(
+  request: APIRequestContext,
+  runId: string,
+  timeoutMs = 30_000,
+) {
+  const approvals = await pollUntil<any[]>(
+    request,
+    '/approvals',
+    (list) => Array.isArray(list) && list.some((a) => a.runId === runId),
+    timeoutMs,
+    1_000,
+  );
+  return approvals.filter((a) => a.runId === runId);
+}
+
+/**
  * Decide an ask through the operator-only route (Task 12). The response is
  * verified field by field: a decision that was not processed is a failure, not
  * a pass. `approved: true` is the one-use native grant (ALLOW_ONCE); `false` is

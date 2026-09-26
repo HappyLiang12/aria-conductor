@@ -606,9 +606,20 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                         runtime.spec().runId(), requestId);
                 return;
             }
+            // The ask's expiry never exceeds the window the core declared for its own
+            // decision: a window the core has closed must not leave a decidable ask
+            // behind, and the run's frozen deadline stays the outer bound.
+            Instant expiresAt = runtime.spec().deadline();
+            long declaredWindowMs = payload.path("expiresInMs").asLong(0);
+            if (declaredWindowMs > 0) {
+                Instant declared = clock.instant().plusMillis(declaredWindowMs);
+                if (expiresAt == null || declared.isBefore(expiresAt)) {
+                    expiresAt = declared;
+                }
+            }
             NativePermission ask = new NativePermission(runtime.spec().runId(), event.sessionId(), requestId,
                     payload.path("toolName").asText("unknown"), PermissionTarget.NATIVE_TOOL,
-                    event.payloadJson(), List.copyOf(options), runtime.spec().deadline());
+                    event.payloadJson(), List.copyOf(options), expiresAt);
             UUID approvalId = permissions.register(ask);
             runtime.rememberPermissionAsk(approvalId);
         } catch (RuntimeException e) {
@@ -639,7 +650,8 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * {@link PermissionReplySink}: hands one directly decided native reply to
      * its run's owning session. A run this process does not own (or one whose
      * session is gone) has no receiver here; the reply is reported and dropped
-     * rather than routed to another run. A delivery failure is logged, never
+     * rather than routed to another run. A delivery failure — including a
+     * session that answers the delivery stage with a failure — is logged, never
      * escalated: the operator's decision is already recorded and the ask stays
      * settled.
      */
@@ -653,7 +665,12 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             return;
         }
         try {
-            runtime.session().decide(reply);
+            runtime.session().decide(reply).whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    log.warn("Run {}: delivering the decided reply for request {} failed: {}",
+                            reply.runId(), reply.requestId(), messageOf(failure));
+                }
+            });
         } catch (RuntimeException e) {
             log.warn("Run {}: delivering the decided reply for request {} failed: {}",
                     reply.runId(), reply.requestId(), e.getMessage());
@@ -665,6 +682,16 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         if ("permission.request".equals(event.type())) {
             registerAsk(runtime, event);
         }
+    }
+
+    /**
+     * Expires this run's still-pending native asks whose own decision window has
+     * already passed. The run-end sweep must call this before it cancels the
+     * remainder: an ask whose core window closed is adjudicated by its own
+     * timeout, never rewritten as a consequence of the run ending.
+     */
+    public int expirePendingAsksForRun(UUID runId, Instant asOf) {
+        return permissions.expirePendingForRun(runId, asOf);
     }
 
     /** Subscribes an observer to every core event of the run. */
@@ -698,8 +725,20 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         return deadlines.schedule(() -> {
             try {
                 if (runtimes.find(runId).isPresent() && !runtimes.writersStopped(runId)) {
-                    log.warn("Run {} reached its frozen deadline {}; cancelling the in-flight prompt instead"
-                            + " of leaving it in flight", runId, runtime.spec().deadline());
+                    Instant deadline = runtime.spec().deadline();
+                    log.warn("Run {} reached its frozen deadline {}; its pending native asks expire at their"
+                            + " own window and the in-flight prompt is cancelled", runId, deadline);
+                    // The ask's own expiry is the same frozen deadline (`register`
+                    // freezes `expiresAt = runtime.spec().deadline()`), so the
+                    // deadline settles each still-pending ask by its own timeout
+                    // FIRST -- the ask is a decided rejection, never rewritten as a
+                    // consequence of the stop -- and only then stops the run.
+                    try {
+                        permissions.expirePendingForRun(runId, deadline);
+                    } catch (RuntimeException e) {
+                        log.error("Run {}: expiring the pending native asks at the deadline failed: {}",
+                                runId, e.getMessage());
+                    }
                     cancel(runId);
                 }
             } catch (RuntimeException e) {

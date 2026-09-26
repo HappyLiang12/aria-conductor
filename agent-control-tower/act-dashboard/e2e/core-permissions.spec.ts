@@ -16,6 +16,7 @@ import {
   permissionOptions,
   pollRunTerminal,
   pollUntil,
+  runApprovals,
   runWorkerToken,
   seedAdkAgent,
   seedKanbanItem,
@@ -334,8 +335,15 @@ test('an expired ask is EXPIRED and refuses a late grant', async ({ request }) =
   });
   await setScenario(request, agent.id, 'permission-expiry');
   const run = await seedRun(request, agent.id);
-  const asks = await pendingRunApprovals(request, run.id, 60_000);
+  // The ask is captured at any status: its own 300 ms window may already have
+  // closed by the time the list is read, which is exactly what this case exists
+  // to pin. The offered options still read what the core asked for.
+  const asks = await runApprovals(request, run.id, 60_000);
   const ask = asks[0];
+  expect(permissionOptions(ask)).toEqual([
+    { optionId: 'proceed_once', choice: 'ALLOW_ONCE' },
+    { optionId: 'cancel', choice: 'DENY' },
+  ]);
 
   await expect
     .poll(
@@ -343,7 +351,10 @@ test('an expired ask is EXPIRED and refuses a late grant', async ({ request }) =
         const { data } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
         return data?.status;
       },
-      { timeout: 30_000 },
+      // The scheduled expiry sweep runs once a minute, so a 300 ms decision
+      // window is adjudicated at the next sweep: wait past it rather than
+      // loosening anything about the outcome.
+      { timeout: 120_000 },
     )
     .toBe('EXPIRED');
 
@@ -355,6 +366,9 @@ test('an expired ask is EXPIRED and refuses a late grant', async ({ request }) =
 
   const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
   expect(after.status).toBe('EXPIRED');
+  // The adjudication is the ask's own timeout, never a consequence of the run
+  // ending: an ask whose core window closed reads as expired, not cancelled.
+  expect(after.reason).toBe('Auto-rejected: approval expired');
 });
 
 test('the operator credential the fixtures use is the harness credential', async ({ request }) => {

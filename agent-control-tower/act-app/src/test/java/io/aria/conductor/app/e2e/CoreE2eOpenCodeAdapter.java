@@ -313,6 +313,12 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
                                 "kind", option.path("kind").asText("")));
                     }
                     payload.put("options", options);
+                    long expiresInMs = decision.path("expiresInMs").asLong(0);
+                    if (expiresInMs > 0) {
+                        // The peer declared a decision window: the recorded ask must
+                        // never stay decidable past it.
+                        payload.put("expiresInMs", expiresInMs);
+                    }
                     events.accept(new CoreEvent("permission.request", spec.runId(), sessionId(), requestId,
                             JSON.writeValueAsString(payload)));
                 }

@@ -144,6 +144,10 @@ function pendingPayload() {
         command: pendingDecision.spec.command ?? null,
         contents: pendingDecision.spec.contents,
         options: pendingDecision.options,
+        // The decision window this peer declared for the fixture (null unless the
+        // scenario set one): the harness bounds the recorded ask's expiry by it,
+        // so an ask whose core window is gone is never decidable afterwards.
+        expiresInMs: pendingDecision.spec.expiryMs ?? null,
       },
     ],
   };

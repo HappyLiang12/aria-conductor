@@ -170,6 +170,12 @@ class PermissionCoordinatorTest {
                             .filter(row -> requestId.equals(row.getRequestId()))
                             .findFirst();
                 });
+        lenient().when(permissionRepository.findByRunId(any(UUID.class))).thenAnswer(inv -> {
+            UUID runId = inv.getArgument(0);
+            return permissionStore.values().stream()
+                    .filter(row -> runId.equals(row.getRunId()))
+                    .toList();
+        });
 
         lenient().doAnswer(inv -> {
             requestedEvents.add(inv.getArgument(0));
@@ -568,6 +574,49 @@ class PermissionCoordinatorTest {
         assertThat(waiter.getNow(null).isApproved()).isFalse();
         assertThat(waiter.getNow(null).reason()).isEqualTo("Run cancelled");
         assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+    }
+
+    /**
+     * The run deadline is the ask's own expiry ({@code register} freezes
+     * {@code expiresAt = spec.deadline()}), so the deadline enforcement settles
+     * every still-PENDING ask of the run by its own window: the recorded expiry
+     * reason, settled exactly at the deadline instant, the blocked waiter
+     * released like the sweep. An ask still inside its window, another run's ask
+     * and an already-decided ask are all left exactly as they are.
+     */
+    @Test
+    void theDeadlineExpiresTheRunsPendingAsksAtTheirOwnWindow() {
+        coordinator = coordinator(T0);
+        String arguments = "{\"path\":\"notes.txt\",\"content\":\"hello\"}";
+        UUID due = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "0", TOOL,
+                PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+        UUID insideItsWindow = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "1", TOOL,
+                PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT.plusSeconds(60)));
+        UUID otherRun = coordinator.register(new NativePermission(OTHER_RUN, SESSION_ID, "0", TOOL,
+                PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+        UUID settled = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "2", TOOL,
+                PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+        coordinator.decide(settled, PermissionChoice.DENY, ActorPrincipal.operator(null));
+        CompletableFuture<ApprovalDecision> waiter = new CompletableFuture<>();
+        pendingApprovals(gate).put(due, waiter);
+
+        int settledCount = coordinator.expirePendingForRun(RUN_ID, EXPIRES_AT);
+
+        assertThat(settledCount).isEqualTo(1);
+        assertThat(approvalStore.get(due).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(approvalStore.get(due).getReason()).isEqualTo("Auto-rejected: approval expired");
+        assertThat(approvalStore.get(due).getDecidedAt()).isEqualTo(EXPIRES_AT);
+        assertThat(permissionRow(due).getDeliveryState()).isEqualTo(PermissionDeliveryState.EXPIRED.name());
+        assertThat(waiter).isDone();
+        assertThat(waiter.getNow(null).isApproved()).isFalse();
+        assertThat(waiter.getNow(null).reason()).isEqualTo("Run cancelled");
+        assertThat(approvalStore.get(insideItsWindow).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(permissionRow(insideItsWindow).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(approvalStore.get(otherRun).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(approvalStore.get(settled).getStatus()).isEqualTo(ApprovalStatus.DENIED);
+        assertThat(approvalStore.get(settled).getReason())
+                .isEqualTo("Operator denied write_file (native permission request 2)");
     }
 
     @Test

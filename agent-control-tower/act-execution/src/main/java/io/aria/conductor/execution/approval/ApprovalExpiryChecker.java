@@ -40,7 +40,7 @@ public class ApprovalExpiryChecker {
         for (Approval approval : expired) {
             log.warn("Expiring approval: id={}, runId={}", approval.getId(), approval.getRunId());
             approval.setStatus(ApprovalStatus.EXPIRED);
-            approval.setReason("Auto-rejected: approval expired");
+            approval.setReason(PermissionCoordinator.EXPIRY_REASON);
             approval.setDecidedAt(Instant.now());
             approvalRepository.save(approval);
 

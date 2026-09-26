@@ -55,6 +55,14 @@ public class PermissionCoordinator {
 
     private static final ObjectMapper OPTIONS_MAPPER = new ObjectMapper();
 
+    /**
+     * The recorded reason of an ask settled by its own window. The scheduled
+     * {@link ApprovalExpiryChecker} sweep records the same text, so an ask
+     * expired by the deadline, by a late decision or by the sweep reads
+     * identically.
+     */
+    public static final String EXPIRY_REASON = "Auto-rejected: approval expired";
+
     private final ApprovalGate approvalGate;
     private final ApprovalRepository approvals;
     private final ApprovalDecisionLockRepository decisionLocks;
@@ -287,6 +295,41 @@ public class PermissionCoordinator {
     // ------------------------------------------------------------------
 
     /**
+     * Expires every still-PENDING native ask of one run at its own recorded
+     * window. The run's frozen deadline is also the ask's own expiry
+     * ({@link #register} persists {@code expiresAt = runtime.spec().deadline()}),
+     * so the run-deadline enforcement settles each ask by its own timeout
+     * <em>before</em> it stops the run: the ask is EXPIRED with the expiry
+     * adjudication ({@value #EXPIRY_REASON}), never rewritten as a consequence
+     * of the stop. Only asks whose recorded window is at or before {@code asOf}
+     * are touched — an ask still inside its window and an already-settled ask
+     * are both left exactly as they are — and each settled ask's blocked waiter
+     * is released exactly like the scheduled sweep does.
+     *
+     * @param runId the run whose pending asks the deadline reached
+     * @param asOf  the instant the run deadline fired (the adjudication instant)
+     * @return the number of asks this call settled
+     */
+    @Transactional
+    public int expirePendingForRun(UUID runId, Instant asOf) {
+        Objects.requireNonNull(runId, "runId");
+        Objects.requireNonNull(asOf, "asOf");
+        int settled = 0;
+        for (AcpPermissionRequest row : permissions.findByRunId(runId)) {
+            Approval approval = approvals.findById(row.getApprovalId()).orElse(null);
+            if (approval == null || approval.getStatus() != ApprovalStatus.PENDING) {
+                continue; // a settled ask is never rewritten
+            }
+            if (row.getExpiresAt().isAfter(asOf)) {
+                continue; // still inside its own window
+            }
+            expire(approval, row, asOf);
+            settled++;
+        }
+        return settled;
+    }
+
+    /**
      * Delivers a decision that was held by a manual pause. Re-checks the state
      * inside this transaction: still paused, already delivered, not decided, or
      * expired → nothing is delivered, and an expired delivery is never replayed
@@ -381,7 +424,7 @@ public class PermissionCoordinator {
      */
     private void expire(Approval approval, AcpPermissionRequest row, Instant now) {
         approval.setStatus(ApprovalStatus.EXPIRED);
-        approval.setReason("Auto-rejected: approval expired");
+        approval.setReason(EXPIRY_REASON);
         approval.setDecidedAt(now);
         approvals.save(approval);
         markDeliveryExpired(row);

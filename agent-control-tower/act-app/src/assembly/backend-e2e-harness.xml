@@ -64,6 +64,7 @@
                 <include>io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter$PeerSession.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eQoderAdapter.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eQoderAdapter$SuspendableSession.class</include>
                 <!-- Fix round 1: the bounded authenticated endpoint readiness wait
                      the adapters use before opening a session (the production host
                      backend's launch-gate mirror). Its Probe interface is a nested

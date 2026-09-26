@@ -150,10 +150,32 @@ class CoreE2ePackagingIntegrationTest {
                     "harness/io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter$PeerSession.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eQoderAdapter.class",
+                    "harness/io/aria/conductor/app/e2e/CoreE2eQoderAdapter$SuspendableSession.class",
                     // Task 19 fix round 1: the bounded authenticated endpoint
                     // readiness wait the adapters run before opening a session.
                     "harness/io/aria/conductor/app/e2e/CoreE2eEndpointReadiness.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eEndpointReadiness$Probe.class");
+
+            // The exact pin above is a hand list, so on its own it cannot notice a
+            // class the descriptor forgot: both lists would simply be missing it
+            // (fix round 3 shipped the package without CoreE2eQoderAdapter's new
+            // inner class that way, and the harness died at run time with
+            // NoClassDefFoundError). Every built non-test class of the package must
+            // therefore ship; a new type or inner class is a build failure until the
+            // descriptor pins it.
+            List<String> builtHarnessClasses;
+            try (var harnessClassFiles = Files.list(
+                    Path.of("target", "test-classes", "io", "aria", "conductor", "app", "e2e"))) {
+                builtHarnessClasses = harnessClassFiles.map(path -> path.getFileName().toString())
+                        .filter(name -> name.endsWith(".class") && !name.contains("Test"))
+                        .map(name -> "harness/io/aria/conductor/app/e2e/" + name)
+                        .sorted()
+                        .toList();
+            }
+            assertThat(builtHarnessClasses).isNotEmpty();
+            assertThat(harnessLauncherEntries)
+                    .as("every built non-test harness class ships in the distribution")
+                    .containsAll(builtHarnessClasses);
 
             // Exact pin: the support classes are exactly the explicitly unpacked
             // framework-free helpers -- a stale or broadened unpack shows up here.

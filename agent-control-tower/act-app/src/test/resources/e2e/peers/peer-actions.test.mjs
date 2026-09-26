@@ -1185,9 +1185,14 @@ test('opencode control surface is authenticated and scenario-locked', async () =
 test('opencode peer writes only the allowed bytes and never on denial', async () => {
   await withOpencode('write-twice', async (peer, workspace) => {
     const created = await (await opencodeSession(peer)).json();
-    const accepted = await opencodePrompt(peer, created.id, 'fixture write');
-    assert.equal(accepted.status, 200);
-    const pending = await opencodePending(peer);
+    // The held-message contract: the response arrives only after BOTH decisions
+    // resolve, so the prompt is fired without awaiting it and the first ask is
+    // polled for while the run is genuinely blocked.
+    const messagePromise = opencodePrompt(peer, created.id, 'fixture write');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'first pending write decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].id, 0);
     assert.equal(pending.pending[0].kind, 'edit');
@@ -1231,6 +1236,15 @@ test('opencode peer writes only the allowed bytes and never on denial', async ()
     const state = await opencodeState(peer);
     assert.equal(state.writes, 1);
     assert.equal(state.decisions, 2);
+
+    // Both decisions resolved, so the held message is released with the exact
+    // outcome text of the two verdicts.
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{
+      type: 'text',
+      text: 'fixture writes: probe-allow-once.txt applied; probe-write-twice-2.txt not applied',
+    }]);
   });
 });
 
@@ -1239,11 +1253,13 @@ test('opencode peer denies without writing and applies a decision exactly once',
     const target = join(workspace, 'probe-deny.txt');
     await writeFile(target, 'before\n');
     const created = await (await opencodeSession(peer)).json();
-    const accepted = await opencodePrompt(peer, created.id, 'overwrite the fixture file');
-    assert.equal(accepted.status, 200);
-    assert.deepEqual((await accepted.json()).parts, [{ type: 'text', text: 'fixture decision window reached' }]);
-
-    const pending = await opencodePending(peer);
+    // The held-message contract: the gate is answered only after a decision
+    // resolves, so the ask is observable (and decidable) while the run is held.
+    const messagePromise = opencodePrompt(peer, created.id, 'overwrite the fixture file');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending deny-write decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].id, 0);
     assert.equal(pending.pending[0].kind, 'edit');
@@ -1287,14 +1303,28 @@ test('opencode peer denies without writing and applies a decision exactly once',
       (await snapshotDirectory(workspace)).map((entry) => entry.path),
       ['probe-deny.txt'],
     );
+
+    // The denial resolved the held message: it is released with the exact
+    // outcome text reflecting that the gated write was not applied.
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{
+      type: 'text',
+      text: 'fixture write not applied: the decision denied it',
+    }]);
   });
 });
 
 test('opencode peer expires a pending decision and refuses a late decision', async () => {
   await withOpencode('permission-expiry', async (peer, workspace) => {
     const created = await (await opencodeSession(peer)).json();
-    assert.equal((await opencodePrompt(peer, created.id, 'create the expiry fixture')).status, 200);
-    const pending = await opencodePending(peer);
+    // The expiring ask holds the message until its 300 ms window closes, so the
+    // message is fired without awaiting it and the pending is polled while held.
+    const messagePromise = opencodePrompt(peer, created.id, 'create the expiry fixture');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending expiry decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].id, 0);
     assert.equal(pending.pending[0].kind, 'edit');
@@ -1315,14 +1345,28 @@ test('opencode peer expires a pending decision and refuses a late decision', asy
     assert.equal(state.writes, 0);
     assert.equal(state.decisions, 0);
     assert.deepEqual(await snapshotDirectory(workspace), []);
+
+    // The expired window released the held message: it is answered with the
+    // exact expiry text, and the write was not applied.
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{
+      type: 'text',
+      text: 'fixture write not applied: the permission window expired',
+    }]);
   });
 });
 
 test('opencode peer cancels a pending decision on abort with zero writes', async () => {
   await withOpencode('cancel-pending', async (peer, workspace) => {
     const created = await (await opencodeSession(peer)).json();
-    assert.equal((await opencodePrompt(peer, created.id, 'create the cancel fixture')).status, 200);
-    const pending = await opencodePending(peer);
+    // The held-message contract: abort is what releases the gate, so the
+    // message is fired without awaiting it and the pending is polled while held.
+    const messagePromise = opencodePrompt(peer, created.id, 'create the cancel fixture');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending cancel decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].id, 0);
     assert.equal(pending.pending[0].path, join(workspace, 'probe-cancel-pending.txt'));
@@ -1340,6 +1384,15 @@ test('opencode peer cancels a pending decision on abort with zero writes', async
       pendingRequestIds: [0],
     });
     assert.deepEqual(await opencodePending(peer), { pending: [] });
+
+    // The abort resolved the held gate: the message is released with the exact
+    // cancelled-outcome text and no write was applied.
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{
+      type: 'text',
+      text: 'fixture write not applied: the run was cancelled',
+    }]);
 
     const afterAbort = await opencodeDecision(peer, 'proceed_once');
     assert.equal(afterAbort.status, 409);
@@ -1376,10 +1429,13 @@ test('opencode peer refuses unsupported mode routes and unknown sessions', async
 test('opencode peer tree freezes while suspended and resumes streaming and writing', async () => {
   await withOpencode('pause-resume', async (peer, workspace) => {
     const created = await (await opencodeSession(peer)).json();
-    const accepted = await opencodePrompt(peer, created.id, 'run the fixture writer');
-    assert.equal(accepted.status, 200);
-    assert.deepEqual((await accepted.json()).parts, [{ type: 'text', text: 'DONE' }]);
-    const pending = await opencodePending(peer);
+    // The writer grant gates the turn: the message is HELD until the decision
+    // resolves (the run stays blocked on the ask), then completes with DONE.
+    const messagePromise = opencodePrompt(peer, created.id, 'run the fixture writer');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending writer decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].kind, 'execute');
     assert.deepEqual(pending.pending[0].options, executeOptions('node'));
@@ -1387,6 +1443,9 @@ test('opencode peer tree freezes while suspended and resumes streaming and writi
 
     const allowed = await opencodeDecision(peer, 'proceed_once');
     assert.deepEqual(await allowed.json(), { status: 'written', writes: 1, optionId: 'proceed_once' });
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{ type: 'text', text: 'DONE' }]);
     const state = await opencodeState(peer);
     assert.ok(Number.isInteger(state.writerPid) && state.writerPid > 0);
     const ticks = join(workspace, 'ticks.log');
@@ -1429,8 +1488,13 @@ test('opencode peer tree freezes while suspended and resumes streaming and writi
 test('opencode non-cooperative peer ignores abort until its tree is terminated', async () => {
   await withOpencode('non-cooperative', async (peer, workspace) => {
     const created = await (await opencodeSession(peer)).json();
-    assert.equal((await opencodePrompt(peer, created.id, 'run the fixture writer')).status, 200);
-    const pending = await opencodePending(peer);
+    // The writer grant gates the turn: the message is HELD until the decision
+    // resolves, then completes with the recorded DONE text.
+    const messagePromise = opencodePrompt(peer, created.id, 'run the fixture writer');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending writer decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].kind, 'execute');
     assert.deepEqual(await (await opencodeDecision(peer, 'proceed_once')).json(), {
@@ -1438,6 +1502,9 @@ test('opencode non-cooperative peer ignores abort until its tree is terminated',
       writes: 1,
       optionId: 'proceed_once',
     });
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{ type: 'text', text: 'DONE' }]);
     const state = await opencodeState(peer);
     assert.ok(Number.isInteger(state.writerPid) && state.writerPid > 0, 'the writer must be a real descendant');
     const ticks = join(workspace, 'ticks.log');
@@ -1570,12 +1637,13 @@ test('opencode peer scripts malformed bodies, timeouts and mid-body disconnects'
 test('opencode background writer survives the message response and stops with its tree', async () => {
   await withOpencode('background-writer', async (peer, workspace) => {
     const created = await (await opencodeSession(peer)).json();
-    await fetch(`${peer.base}/session/${created.id}/message`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ parts: [{ type: 'text', text: 'start writer' }] }),
-    });
-    const pending = await (await fetch(`${peer.base}/__peer/pending`, { headers: controlHeaders() })).json();
+    // The writer grant gates the turn: the message is HELD until the decision
+    // resolves, so the ask is observable and the writer starts on the grant.
+    const messagePromise = opencodePrompt(peer, created.id, 'start writer');
+    const pending = await peer.waitFor(async (p) => {
+      const body = await (await fetch(`${p.base}/__peer/pending`, { headers: controlHeaders() })).json();
+      return body.pending.length > 0 ? body : null;
+    }, { label: 'pending writer decision' });
     assert.equal(pending.pending.length, 1);
     assert.equal(pending.pending[0].kind, 'execute');
     assert.equal(pending.pending[0].command, 'node spawn-writer.mjs ticks.log');
@@ -1585,6 +1653,9 @@ test('opencode background writer survives the message response and stops with it
       body: JSON.stringify({ optionId: 'proceed_once' }),
     });
     assert.deepEqual(await allowed.json(), { status: 'written', writes: 1, optionId: 'proceed_once' });
+    const message = await messagePromise;
+    assert.equal(message.status, 200);
+    assert.deepEqual((await message.json()).parts, [{ type: 'text', text: 'DONE' }]);
     const state = await (await fetch(`${peer.base}/__peer/state`, { headers: controlHeaders() })).json();
     assert.ok(Number.isInteger(state.writerPid) && state.writerPid > 0, 'the peer must report the writer pid');
     assert.equal(state.writes, 1);

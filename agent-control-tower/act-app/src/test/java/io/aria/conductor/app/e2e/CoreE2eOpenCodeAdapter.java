@@ -41,6 +41,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -187,6 +188,8 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
 
         private static final Duration POLL_INTERVAL = Duration.ofMillis(250);
         private static final Duration PEER_REQUEST_TIMEOUT = Duration.ofSeconds(10);
+        /** How long the session keeps polling the peer past the run deadline. */
+        private static final Duration POLL_GRACE = Duration.ofSeconds(60);
         private static final ObjectMapper JSON = new ObjectMapper();
         private static final ScheduledExecutorService POLLERS = Executors.newScheduledThreadPool(4, runnable -> {
             Thread thread = new Thread(runnable, "core-e2e-peer-pending");
@@ -204,6 +207,8 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
         private final Set<String> forwardedRequests = ConcurrentHashMap.newKeySet();
+        private volatile Consumer<CoreEvent> eventSink;
+        private volatile ScheduledFuture<?> pendingPoller;
 
         PeerSession(ExecutionSpec spec, CoreSession nativeSession, URI endpoint, String controlToken,
                 CoreE2eProcessBackend.State peers) {
@@ -223,15 +228,49 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
         public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events) {
             Objects.requireNonNull(task, "task");
             Objects.requireNonNull(events, "events");
-            var poller = POLLERS.scheduleWithFixedDelay(() -> pollPending(events), 0,
-                    POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+            eventSink = events;
+            startPendingPoller();
             CompletionStage<CoreResult> stage = nativeSession.prompt(task, events);
             return stage.whenComplete((result, failure) -> {
-                // One last observation before the poller stops: a decision the peer
-                // registered while answering the prompt is never missed.
+                // One last observation at the prompt result; the poller itself keeps
+                // running (see startPendingPoller): a governed write decision is a
+                // gate on the WRITE, not on the prompt, so the peer may offer it just
+                // after the message was answered and the run must still see the ask.
                 pollPending(events);
-                poller.cancel(false);
             });
+        }
+
+        /**
+         * Starts the session-lived pending poller once. Cancelling it at the prompt
+         * result (the earlier shape) lost every decision whose offer landed after
+         * the message was answered -- exactly the fixtures' async write gate -- so a
+         * run completed with no ask and the permission specs had nothing to decide.
+         * The poller stops on its own a bounded grace window past the run deadline,
+         * which also ends it for a session nobody closes explicitly.
+         */
+        private void startPendingPoller() {
+            ScheduledFuture<?> current = pendingPoller;
+            if (current != null && !current.isCancelled() && !current.isDone()) {
+                return;
+            }
+            pendingPoller = POLLERS.scheduleWithFixedDelay(this::pollPendingWhileLive, 0,
+                    POLL_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        private void pollPendingWhileLive() {
+            Consumer<CoreEvent> sink = eventSink;
+            if (sink == null) {
+                return;
+            }
+            Instant deadline = spec.deadline();
+            if (deadline != null && Instant.now().isAfter(deadline.plus(POLL_GRACE))) {
+                ScheduledFuture<?> current = pendingPoller;
+                if (current != null) {
+                    current.cancel(false);
+                }
+                return;
+            }
+            pollPending(sink);
         }
 
         /**

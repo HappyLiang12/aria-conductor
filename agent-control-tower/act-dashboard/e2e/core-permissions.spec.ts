@@ -134,13 +134,22 @@ async function dispatchAsk(request: Parameters<typeof seedAdkAgent>[0]) {
 
   const asks = await nativeRunAsks(request, linked.linkedRunId, 60_000);
   const ask = asks[0];
-  // The correlation contract of a native ask: run-linked, never card-linked.
+  // The correlation contract of a native ask: it is resolved by its RUN (the
+  // ledger row is keyed run+session+request), and the review-card listener of
+  // that run links it to the run's own card so the card's panel can surface the
+  // pending permission. The card's own gate ask (askType REVIEW_REQUEST, no
+  // offered options) is a different row and stays distinguishable by exactly
+  // those two fields.
   expect(ask.runId).toBe(linked.linkedRunId);
-  expect(ask.kanbanItemId ?? null).toBeNull();
-  expect(
-    (await cardLinkedAsks(request, card.id)).some((a: any) => a.id === ask.id),
-    'a native ask is never returned by the card-linked gate-ask path',
-  ).toBe(false);
+  expect(ask.kanbanItemId).toBe(card.id);
+  expect(ask.askType).toBe('APPROVAL');
+  const cardAsks = await cardLinkedAsks(request, card.id);
+  expect(cardAsks.map((a: any) => a.id)).toContain(ask.id);
+  // The card's own gate ask (askType REVIEW_REQUEST, no offered options) is a
+  // different row; it is created when the card reaches review, so at this point
+  // of the flow the native ask is the card's only ask and is identifiable by its
+  // offered options, which the case asserts next.
+  expect(cardAsks.every((a: any) => a.id === ask.id)).toBe(true);
   return { agent, card, runId: linked.linkedRunId as string, workspace, ask };
 }
 
@@ -162,11 +171,10 @@ async function cancelCard(request: Parameters<typeof seedAdkAgent>[0], cardId: s
 
 /**
  * The run's PENDING native asks, resolved by RUN (`/approvals` filtered by the
- * correlated ask's runId). A native ask is never card-linked
- * (`PermissionCoordinator.register` writes no `kanbanItemId`), so the card
- * lookup can never see it; the review ask a completed card carries is a
- * different, gate-path ask and is filtered out here by its recorded ask type
- * and empty option set.
+ * correlated ask's runId). The correlation is the run (the ledger row is keyed
+ * run+session+request) and the offered options are the discriminator against
+ * the card's own gate ask: a native ask carries the core's offered options,
+ * while the gate/review ask (`askType REVIEW_REQUEST`) carries none.
  */
 async function nativeRunAsks(
   request: Parameters<typeof seedAdkAgent>[0],

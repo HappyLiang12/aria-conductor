@@ -14,9 +14,12 @@
 // It never opens a database connection, never writes a run outcome and never
 // contacts an external model. Fixture writes happen only through
 // applyDecision()/grantWriterFixture() after a genuine allow-once decision, and
-// only inside the admitted temporary workspace. Scenario selection happens at
-// launch time behind the harness control token; the /__peer/* control surface
-// requires that token and answers 401 without it.
+// only inside the admitted temporary workspace. A decision-gated scenario HOLDS
+// its message response until the decision resolves and answers with the
+// outcome-reflecting fixture text, so a governed write gate really blocks the
+// core's turn instead of being offered while the run completes. Scenario
+// selection happens at launch time behind the harness control token; the
+// /__peer/* control surface requires that token and answers 401 without it.
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
@@ -169,6 +172,30 @@ async function gitPushFlow(body) {
   return assistantMessage({ text: 'git_push was not granted' });
 }
 
+/**
+ * The outcome-reflecting text of one decision-gated turn. The message response
+ * is held until the decision resolves (the gitPushFlow contract), so the text
+ * states what the decision did to the gated write; a completed run's finalOutput
+ * is then evidence of the branch the peer took.
+ */
+function decisionText(decision) {
+  switch (decision.status) {
+    case 'written':
+      return 'fixture write applied';
+    case 'denied':
+      return 'fixture write not applied: the decision denied it';
+    case 'expired':
+      return 'fixture write not applied: the permission window expired';
+    case 'cancelled':
+      return 'fixture write not applied: the run was cancelled';
+    default:
+      return 'fixture write not applied: the decision was refused';
+  }
+}
+
+/** One `write-twice` verdict: only a genuine allow-once decision lands a write. */
+const writeVerdict = (decision) => (decision.status === 'written' ? 'applied' : 'not applied');
+
 /** Register a pending fixture decision and return its resolution promise. */
 function offerDecision(spec) {
   const requestId = offered;
@@ -190,20 +217,29 @@ function offerDecision(spec) {
 
 // ------------------------------------------------------------------ scenarios
 
+/**
+ * The two decisions of `write-twice`, awaited in order before the message is
+ * answered: each decision is a gate the turn waits on (the gitPushFlow
+ * contract), so a run that has not decided both is genuinely held.
+ */
 async function writeTwiceChain() {
-  await offerDecision({
+  const first = await offerDecision({
     kind: 'edit',
     toolName: 'Write',
     target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-allow-once.txt')),
     contents: 'alpha-allow-once',
   });
   const secondTarget = assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-write-twice-2.txt'));
-  await offerDecision({
+  const second = await offerDecision({
     kind: 'execute',
     toolName: 'Bash',
     target: secondTarget,
     contents: 'gamma-permission-twice',
     command: `printf 'gamma-permission-twice' > "${secondTarget}"`,
+  });
+  return assistantMessage({
+    text: `fixture writes: probe-allow-once.txt ${writeVerdict(first)};`
+      + ` probe-write-twice-2.txt ${writeVerdict(second)}`,
   });
 }
 
@@ -245,11 +281,16 @@ async function streamParts() {
 }
 
 /**
- * Prepare the scenario's background decision flow for one message request and
- * return the immediate assistant message. The decision entry exists before the
- * caller answers the request.
+ * Prepare the scenario's decision flow for one message request and return the
+ * assistant message the turn completes with. A governed write decision is a
+ * gate the core's turn WAITS on (the gitPushFlow contract), so every offer
+ * scenario holds its message until the decision arrives and answers with the
+ * outcome-reflecting fixture text (decisionText); the recorded expiry/cancel
+ * semantics are honoured -- an expiring ask still expires and then releases the
+ * message. The writer scenarios hold the same way and keep the recorded `DONE`
+ * completion for a genuine grant.
  */
-function startDecisionFlow(body) {
+async function startDecisionFlow(body) {
   switch (SCENARIO) {
     case 'reported-usage':
       return assistantMessage({
@@ -271,38 +312,41 @@ function startDecisionFlow(body) {
       });
       return assistantMessage({ text: requestText(body) });
     case 'write-twice':
-      void writeTwiceChain();
-      return assistantMessage({ text: 'fixture write decisions applied' });
+      return writeTwiceChain();
     case 'deny-write':
-      void offerDecision({
-        kind: 'edit',
-        toolName: 'Write',
-        target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-deny.txt')),
-        contents: 'beta-should-not-exist',
+      return assistantMessage({
+        text: decisionText(await offerDecision({
+          kind: 'edit',
+          toolName: 'Write',
+          target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-deny.txt')),
+          contents: 'beta-should-not-exist',
+        })),
       });
-      return assistantMessage({ text: 'fixture decision window reached' });
     case 'permission-expiry':
-      void offerDecision({
-        kind: 'edit',
-        toolName: 'Write',
-        target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-expiry.txt')),
-        contents: 'epsilon-expired',
-        expiryMs: 300,
+      return assistantMessage({
+        text: decisionText(await offerDecision({
+          kind: 'edit',
+          toolName: 'Write',
+          target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-expiry.txt')),
+          contents: 'epsilon-expired',
+          expiryMs: 300,
+        })),
       });
-      return assistantMessage({ text: 'fixture decision window reached' });
     case 'cancel-pending':
-      void offerDecision({
-        kind: 'edit',
-        toolName: 'Write',
-        target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-cancel-pending.txt')),
-        contents: 'gamma-cancel-pending',
+      return assistantMessage({
+        text: decisionText(await offerDecision({
+          kind: 'edit',
+          toolName: 'Write',
+          target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-cancel-pending.txt')),
+          contents: 'gamma-cancel-pending',
+        })),
       });
-      return assistantMessage({ text: 'fixture decision window reached' });
     case 'background-writer':
     case 'pause-resume':
-    case 'non-cooperative':
-      void writerChain();
-      return assistantMessage({ text: 'DONE' });
+    case 'non-cooperative': {
+      const decision = await writerChain();
+      return assistantMessage({ text: decision.status === 'written' ? 'DONE' : decisionText(decision) });
+    }
     default:
       return assistantMessage({ text: 'pong' });
   }
@@ -465,7 +509,9 @@ const server = createServer(async (request, response) => {
         json(response, 200, message);
         return;
       }
-      const message = startDecisionFlow(body);
+      // A decision-gated scenario holds the message response until its decision
+      // resolves (startDecisionFlow), so the run really blocks on the gate.
+      const message = await startDecisionFlow(body);
       messages.push(message);
       json(response, 200, message);
       return;

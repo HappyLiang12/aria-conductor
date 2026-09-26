@@ -679,17 +679,20 @@ class CoreAdapterContractTest {
      * refuses a decision explicitly instead of inventing a route, while the
      * harness write gate the approval coordinator agrees on stays visible on
      * the peer with its exact recorded option ids.
+     *
+     * <p>The gate is a HOLD: the peer withholds the message response until the
+     * decision resolves (fix round 5), so the pending request is observable
+     * while the prompt is in flight and the abort is what releases the turn --
+     * the resulting completion carries the fixture's cancelled outcome.
      */
     @Test
     void openCodePermissionDecisionsAreRefusedAndCancelUsesTheAbortRoute() throws Exception {
         try (OpenCodeRun run = new OpenCodeRun("cancel-pending")) {
-            CoreResult result = run.session()
+            CompletionStage<CoreResult> stage = run.session()
                     .prompt(new CoreTask(null, List.of(), "Create probe-cancel-pending.txt with the fixture text"),
-                            event -> { })
-                    .toCompletableFuture().get(120, TimeUnit.SECONDS);
-            assertThat(result.finalOutput()).isEqualTo("fixture decision window reached");
+                            event -> { });
 
-            JsonNode pending = run.pendingDecisions();
+            JsonNode pending = run.awaitPendingDecision(30_000);
             assertThat(pending.path("pending")).hasSize(1);
             assertThat(pending.path("pending").get(0).path("kind").asText()).isEqualTo("edit");
             assertThat(pending.path("pending").get(0).path("options")).isEqualTo(recordedEditOptions());
@@ -713,6 +716,11 @@ class CoreAdapterContractTest {
             assertThat(Files.exists(run.workspace().resolve("probe-cancel-pending.txt")))
                     .as("cancelling before a decision must not write")
                     .isFalse();
+
+            CoreResult result = stage.toCompletableFuture().get(120, TimeUnit.SECONDS);
+            assertThat(result.finalOutput())
+                    .as("the abort released the held turn with the fixture's cancelled outcome")
+                    .isEqualTo("fixture write not applied: the run was cancelled");
         }
     }
 
@@ -1237,6 +1245,24 @@ class CoreAdapterContractTest {
                     .build(), HttpResponse.BodyHandlers.ofString());
             assertThat(response.statusCode()).isEqualTo(200);
             return JSON.readTree(response.body());
+        }
+
+        /**
+         * The first pending fixture decision, polled while a HELD prompt is in
+         * flight: a decision-gated turn withholds the message response until its
+         * decision resolves, so the ask must be awaited, not assumed.
+         */
+        JsonNode awaitPendingDecision(long timeoutMillis) throws IOException, InterruptedException {
+            Instant limit = Instant.now().plusMillis(timeoutMillis);
+            JsonNode pending = null;
+            while (Instant.now().isBefore(limit)) {
+                pending = pendingDecisions();
+                if (pending.path("pending").size() > 0) {
+                    return pending;
+                }
+                Thread.sleep(50);
+            }
+            throw new AssertionError("no pending fixture decision arrived; last: " + pending);
         }
 
         /** The peer's own state view (harness-authenticated), including its current session id. */

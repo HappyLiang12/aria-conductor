@@ -135,6 +135,11 @@ public class PermissionCoordinator {
                 .runId(request.runId())
                 .status(ApprovalStatus.PENDING)
                 .reason(registrationReason(request))
+                // The offered options belong on the operator-facing row too: the
+                // ledger carries them for correlation, and the granted reply must
+                // name the option the core actually offered, so the decision UI
+                // and the E2E assertions read exactly what the core asked for.
+                .optionsJson(optionsJson(request.options()))
                 .expiresAt(request.expiresAt())
                 .build();
         approvals.save(approval);

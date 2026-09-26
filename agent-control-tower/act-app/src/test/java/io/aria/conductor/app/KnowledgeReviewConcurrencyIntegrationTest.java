@@ -34,8 +34,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * lock is removed (i.e. {@code reviewKnowledge} reverts to {@code findById}),
  * both transactions read PENDING before either commits, both pass the guard and
  * both commit — producing {@code doubleWins > 0} and turning this test RED.
+ *
+ * <p>Renamed from {@code KnowledgeReviewConcurrencyIT} (Task 19): the {@code *IT}
+ * suffix matched neither Surefire's nor Failsafe's includes, so the test never
+ * executed in any lane. The {@code *IntegrationTest} suffix puts it in the
+ * Failsafe integration tier, where it has always belonged.
  */
-class KnowledgeReviewConcurrencyIT extends BaseH2IntegrationTest {
+class KnowledgeReviewConcurrencyIntegrationTest extends BaseH2IntegrationTest {
 
     @Autowired
     private KnowledgeService knowledgeService;

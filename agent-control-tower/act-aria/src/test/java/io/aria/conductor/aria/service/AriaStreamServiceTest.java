@@ -101,26 +101,38 @@ class AriaStreamServiceTest {
     }
 
     @Test
-    void streamChat_contextContainsSystemPromptThenUserMessage() {
-        streamService.streamChat(request("hello there"), emitter);
+    void streamChat_contextCarriesTheSystemPromptAndPriorTurnsOnly() {
+        AriaChatRequest req = AriaChatRequest.builder()
+                .conversationId("conv-9")
+                .message("hello there")
+                .history(List.of(
+                        new AriaChatRequest.ChatMessage("user", "earlier question"),
+                        new AriaChatRequest.ChatMessage("assistant", "earlier answer")))
+                .build();
+
+        streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(2);
+        assertThat(context).hasSize(3);
         assertThat(context.get(0).role()).isEqualTo("system");
         assertThat(context.get(0).content()).isEqualTo("You are Aria.");
         assertThat(context.get(1).role()).isEqualTo("user");
-        assertThat(context.get(1).content()).isEqualTo("hello there");
+        assertThat(context.get(1).content()).isEqualTo("earlier question");
+        assertThat(context.get(2).role()).isEqualTo("assistant");
+        assertThat(context.get(2).content()).isEqualTo("earlier answer");
+        // The current request is the run's prompt seed: the engine persists it and
+        // passes it to the model, so it must not also ride in the prior context.
+        assertThat(context).noneMatch(m -> "hello there".equals(m.content()));
     }
 
     @Test
-    void streamChat_omitsSystemMessageWhenPromptBlank() {
+    void streamChat_omitsSystemMessageAndKeepsNoUserMessageWhenPromptBlank() {
         when(ariaService.buildSystemPrompt()).thenReturn("  ");
 
         streamService.streamChat(request("hi"), emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(1);
-        assertThat(context.get(0).role()).isEqualTo("user");
+        assertThat(context).isEmpty();
     }
 
     @Test
@@ -139,13 +151,13 @@ class AriaStreamServiceTest {
         streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        // system + 2 valid history turns + current message
-        assertThat(context).hasSize(4);
+        // system + the 2 valid history turns (the current message is the run's prompt seed)
+        assertThat(context).hasSize(3);
         assertThat(context.get(1).role()).isEqualTo("user");
         assertThat(context.get(1).content()).isEqualTo("earlier question");
         assertThat(context.get(2).role()).isEqualTo("assistant");
         assertThat(context.get(2).content()).isEqualTo("earlier answer");
-        assertThat(context.get(3).content()).isEqualTo("next question");
+        assertThat(context).noneMatch(m -> "next question".equals(m.content()));
     }
 
     @Test
@@ -220,7 +232,7 @@ class AriaStreamServiceTest {
         streamService.streamChat(request("hello"), emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(2);
+        assertThat(context).hasSize(1);
         assertThat(context.get(0).role()).isEqualTo("system");
         assertThat(context.get(0).content()).isEqualTo("You are Aria.");
     }
@@ -235,7 +247,7 @@ class AriaStreamServiceTest {
         streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(2); // still single system + user
+        assertThat(context).hasSize(1); // still a single system message
         assertThat(context.get(0).role()).isEqualTo("system");
         assertThat(context.get(0).content()).startsWith("You are Aria.");
         assertThat(context.get(0).content()).contains("## Active Skill: workflow");
@@ -252,7 +264,7 @@ class AriaStreamServiceTest {
         streamService.streamChat(req, emitter);
 
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(2);
+        assertThat(context).hasSize(1);
         assertThat(context.get(0).content()).isEqualTo("You are Aria."); // unchanged
     }
 
@@ -267,7 +279,7 @@ class AriaStreamServiceTest {
 
         // Should still work — run saved, engine called, system prompt unchanged
         List<LlmMessage> context = capturedContext();
-        assertThat(context).hasSize(2);
+        assertThat(context).hasSize(1);
         assertThat(context.get(0).content()).isEqualTo("You are Aria.");
         verify(runRepository).save(any(Run.class));
     }

@@ -41,6 +41,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,7 +65,6 @@ class AriaServiceChatTest {
     @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
-    @Mock jakarta.persistence.EntityManager entityManager;
 
     private AriaService ariaService;
     private Agent ariaAgent;
@@ -76,7 +76,7 @@ class AriaServiceChatTest {
         llmProperties.setModel("gpt-4o-mini");
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
                 llmClient, llmProperties, intentClassifier, toolRegistry, toolExecutionEngine,
-                knowledgeService, trajectoryRepository, toolCallRepository, entityManager);
+                knowledgeService, trajectoryRepository, toolCallRepository);
 
         ariaAgent = Agent.builder()
                 .id(AriaConstants.ARIA_AGENT_ID)
@@ -102,8 +102,37 @@ class AriaServiceChatTest {
             r.setId(RUN_ID);
             return r;
         });
-        lenient().when(runRepository.findById(RUN_ID)).thenReturn(Optional.of(completedRun));
-        lenient().when(toolCallRepository.findByRunId(RUN_ID)).thenReturn(List.of());
+        lenient().when(runRepository.findStateById(RUN_ID))
+                .thenAnswer(inv -> Optional.of(committedState()));
+    }
+
+    /** The committed row the projection reads; tests mutate {@code completedRun}. */
+    private RunRepository.RunStateView committedState() {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return completedRun.getStatus();
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return completedRun.getFinalOutput();
+            }
+        };
+    }
+
+    private static RunRepository.RunStateView state(RunStatus status, String finalOutput) {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return status;
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return finalOutput;
+            }
+        };
     }
 
     private AriaChatRequest request(String message) {
@@ -125,31 +154,25 @@ class AriaServiceChatTest {
     }
 
     /**
-     * Pins the mechanism the sync poll depends on: with Open Session In View the
-     * request-scoped persistence context serves the instance this request saved
-     * (PENDING), so every read must refresh it to see the engine's committed
-     * state. The E2E case is the reproduction of the stale read (the harness runs
-     * the real web stack where OSIV is enabled); this lane pins that the guard is
-     * applied to each polled instance, in order, so the loop can observe the
+     * Pins the mechanism the sync poll depends on: the request-scoped persistence
+     * context (Open Session In View) serves the instance this request saved
+     * (PENDING) for the whole window, so {@code findById} would never observe the
+     * engine's committed terminal state, and refreshing that instance outside a
+     * transaction is what the E2E caught as a 500. Every poll therefore reads
+     * through the committed-state projection, in order, so the loop sees the
      * terminal state.
      */
     @Test
-    void chat_pollRefreshesEachRunReadToObserveTheEngineState() {
-        Run pendingRun = Run.builder()
-                .id(RUN_ID)
-                .agentId(AriaConstants.ARIA_AGENT_ID)
-                .status(RunStatus.PENDING)
-                .createdAt(Instant.now())
-                .build();
-        when(runRepository.findById(RUN_ID))
-                .thenReturn(Optional.of(pendingRun), Optional.of(completedRun));
+    void chat_pollReadsTheCommittedStateProjectionForEveryRead() {
+        when(runRepository.findStateById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.PENDING, null)),
+                        Optional.of(state(RunStatus.COMPLETED, "All done")));
 
         AriaChatResponse response = ariaService.chat(request("hello"));
 
         assertThat(response.getMessage()).isEqualTo("All done");
-        org.mockito.InOrder reads = org.mockito.Mockito.inOrder(entityManager);
-        reads.verify(entityManager).refresh(pendingRun);
-        reads.verify(entityManager).refresh(completedRun);
+        verify(runRepository, times(2)).findStateById(RUN_ID);
+        verify(runRepository, never()).findById(RUN_ID);
     }
 
     @Test

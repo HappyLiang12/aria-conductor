@@ -35,6 +35,13 @@ public class RunContext {
     private List<String> cachedSkillNames;
     private String workspaceDir;
     private io.aria.conductor.common.model.HarnessProfile harnessProfile;
+    /**
+     * The conversation turns that precede this run, supplied by the caller for
+     * message assembly only. They are never persisted as this run's trajectory
+     * rows: the run's own rows are its request and its assistant turns, so the
+     * conversation timeline (aggregated across runs) stays free of duplicates.
+     */
+    private List<io.aria.conductor.execution.llm.LlmMessage> priorContext = List.of();
     /** S12: monotonic seq for run.progress events (client-side dedupe). */
     private final java.util.concurrent.atomic.AtomicLong progressSeq =
             new java.util.concurrent.atomic.AtomicLong();
@@ -149,6 +156,11 @@ public class RunContext {
      */
     public io.aria.conductor.common.model.HarnessProfile getHarnessProfile() { return harnessProfile; }
     public void setHarnessProfile(io.aria.conductor.common.model.HarnessProfile harnessProfile) { this.harnessProfile = harnessProfile; }
+
+    public List<io.aria.conductor.execution.llm.LlmMessage> getPriorContext() { return priorContext; }
+    public void setPriorContext(List<io.aria.conductor.execution.llm.LlmMessage> priorContext) {
+        this.priorContext = priorContext == null ? List.of() : List.copyOf(priorContext);
+    }
 
     /**
      * Pause the run — creates a new CompletableFuture that blocks the loop.

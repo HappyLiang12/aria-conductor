@@ -51,7 +51,6 @@ class AriaKnowledgeContextTest {
     @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
-    @Mock jakarta.persistence.EntityManager entityManager;
 
     LlmProperties llmProperties;
     AriaService ariaService;
@@ -74,8 +73,7 @@ class AriaKnowledgeContextTest {
                 toolExecutionEngine,
                 knowledgeService,
                 trajectoryRepository,
-                toolCallRepository,
-                entityManager
+                toolCallRepository
         );
     }
 

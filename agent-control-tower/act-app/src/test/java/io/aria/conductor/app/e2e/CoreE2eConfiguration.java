@@ -358,18 +358,22 @@ public class CoreE2eConfiguration {
      * the synthetic handoff credential the Task 17 recipe used
      * ({@code synthetic-e2e-git-handoff}) when the environment provides none; a
      * real environment token always wins. The service is the production class
-     * unchanged -- only its constructor argument differs.
+     * unchanged -- only its constructor arguments differ: the credential, and the
+     * API base pointed at {@link CoreE2eGitHubMock} so the branch/commit handoff
+     * of a SPEC_REVIEW approval is exercised end to end without reaching
+     * github.com.
      */
     @Bean
-    public io.aria.conductor.execution.git.GitBranchService coreE2eGitBranchService() {
+    public io.aria.conductor.execution.git.GitBranchService coreE2eGitBranchService(CoreE2eGitHubMock gitHubMock) {
         String environmentToken = System.getenv("GITHUB_TOKEN");
         if (environmentToken != null && !environmentToken.isBlank()) {
-            log.info("core-e2e harness: GitBranchService uses the environment GITHUB_TOKEN");
-            return new io.aria.conductor.execution.git.GitBranchService(environmentToken);
+            log.info("core-e2e harness: GitBranchService uses the environment GITHUB_TOKEN against the local git mock");
+            return new io.aria.conductor.execution.git.GitBranchService(environmentToken, gitHubMock.apiBaseUrl());
         }
         log.info("core-e2e harness: GitBranchService uses the synthetic SDD handoff credential"
-                + " (no GITHUB_TOKEN in the environment)");
-        return new io.aria.conductor.execution.git.GitBranchService(SYNTHETIC_GIT_HANDOFF_TOKEN);
+                + " against the local git mock (no GITHUB_TOKEN in the environment)");
+        return new io.aria.conductor.execution.git.GitBranchService(SYNTHETIC_GIT_HANDOFF_TOKEN,
+                gitHubMock.apiBaseUrl());
     }
 
     /**

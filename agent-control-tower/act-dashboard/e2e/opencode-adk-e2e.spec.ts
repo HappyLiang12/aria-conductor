@@ -2,9 +2,9 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   BACKEND,
   apiCall,
-  approveRunApproval,
   pollUntil,
   setScenario,
+  settleRunApproval,
   uniqueName,
 } from './fixtures';
 
@@ -26,7 +26,7 @@ import {
  *    Default row (opencode) and no langchain row; Per-Agent Backends shows the
  *    agent with its core.
  * 4. Start a run from the Runs view against the deterministic harness scenario,
- *    approve the task-level permission ask (operator authority, Task 12) and
+ *    approve the run's governed permission asks (operator authority, Task 12) and
  *    poll until the run reaches exactly COMPLETED with the exact fixture output.
  *    The former FAILED/ABORTED/CANCELLED alternatives and the sandbox-error
  *    branch are gone: without a container runtime the harness runs the
@@ -38,9 +38,16 @@ import {
 
 const RUN_TIMEOUT = 180_000; // 3 min for a run to complete
 const POLL_INTERVAL = 5_000;
-/** The recorded scenario whose fixture completion is exactly 'fixture-complete'. */
-const SCENARIO = 'reported-usage';
-const FINAL_OUTPUT = 'fixture-complete';
+/**
+ * The recorded scenario whose completion is deterministic AND governed: the core
+ * raises two permission gates (edit, then execute), so the run only completes
+ * once the operator decisions are delivered. The former read-only scenario is
+ * not used here: a core that needs no permission legitimately opens no ask, and
+ * this spec's contract includes the operator-approved gate.
+ */
+const SCENARIO = 'write-twice';
+/** The exact completion the peer answers with once both writes were applied. */
+const FINAL_OUTPUT = 'fixture writes: probe-allow-once.txt applied; probe-write-twice-2.txt applied';
 
 /** Navigate to a view by clicking the rail button. */
 async function navigateTo(page: Page, view: string) {
@@ -175,9 +182,12 @@ test('OpenCode core: create agent → runtime switch → run → verify', async 
 
   await page.screenshot({ path: 'e2e/screenshots/oc-07-run-started.png' });
 
-  // ── Step 5: Approve the task-level permission ask (operator authority) ──
+  // ── Step 5: Approve the run's governed asks (operator authority) ──
   // The run is created by the UI; resolve its captured id from the API, then
-  // approve its pending ask through the operator-only /decide route (Task 12).
+  // approve its pending asks through the operator-only /decide route (Task 12).
+  // The core raises exactly two permission gates for this scenario (edit, then
+  // execute); each ask is a separate one-use grant, and the run reaches its
+  // terminal state only after both decisions are delivered.
   const runs = await pollUntil<any[]>(
     request,
     `/runs?agentId=${agentId}`,
@@ -187,8 +197,8 @@ test('OpenCode core: create agent → runtime switch → run → verify', async 
   );
   const runId = (runs[0] as any).id as string;
   expect(runId).toMatch(/^[0-9a-f-]{36}$/);
-  const ask = await approveRunApproval(request, runId, RUN_TIMEOUT);
-  expect(ask.runId).toBe(runId);
+  const settled = await settleRunApproval(request, runId, RUN_TIMEOUT);
+  expect(settled.approvedAskIds).toHaveLength(2);
 
   // ── Step 6: The run must reach exactly COMPLETED with the exact fixture output ──
   const run = await pollUntil<any>(

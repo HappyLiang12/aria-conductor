@@ -31,6 +31,7 @@
       "runtimeAffected": true,
       "replacement": "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts (REST core inventory); both UI cases re-pinned in place at cutover (T18 fix round 1, 2026-09-25)",
       "rationale": "The provider list is the core catalog (opencode/qoder) plus execution mode/sandbox selection (T15), and the file's own UI half (providers table + Per-Agent Backends, Crew dropdown options) was re-pinned to the surviving cores: the LangChain row/option assertions are RETIRED with the provider, exactly like real-llm-scenarios.spec.ts rl-01 did, and a negative 'langchain is not an option' pin records the retirement. The deterministic harness serves the page so the cases no longer need a live ADK.",
+      "harnessRun": "T20 tail (2026-09-27): GREEN 2/2 against the t19i harness after the last selector re-pin — the Crew dialog's core select is '#add-agent-core' (the T15 rename), not the retired '#add-agent-adk-provider'; every assertion is unchanged (Qoder + OpenCode options present, values contain qoder/opencode, no langchain).",
       "status": "port"
     },
     {
@@ -336,6 +337,7 @@
       "runtimeAffected": true,
       "replacement": "modified in place (T17): deterministic harness + mock opencode peer, plus live coverage in e2e/agent-core/live-matrix.*",
       "rationale": "The opencode core survives the cutover but the sandbox lifecycle and session transport change (T10/T11); the DEEPSEEK-gated live case is supplemented by a deterministic case and the operator live matrix.",
+      "harnessRun": "T20 tail (2026-09-27): GREEN 1/1 against the t19i harness. Two re-pins were required by the cutover, both recorded in the spec header: (1) the run path is the governed core, which opens a permission ask only when the CORE asks, so the scenario is 'write-twice' (two gates: edit then execute) instead of the read-only 'reported-usage' whose absent ask the spec used to treat as a task-level approval; (2) the approvals go through settleRunApproval, which decides each ask once through the operator route and verifies each processed ack, and asserts exactly two approved asks. The completion assertion is the exact applied-writes fixture text.",
       "status": "port"
     },
     {
@@ -426,6 +428,7 @@
       "runtimeAffected": true,
       "replacement": "modified in place (T17) against the deterministic harness",
       "rationale": "The chain drives real runs; a git-credential-gated case is skipped today and must become deterministic (mock diff/push peer) to keep the business purpose runnable.",
+      "harnessRun": "T20 tail (2026-09-27): GREEN 2/2 against the t19i harness. The 'mock diff/push peer' obligation is now built: CoreE2eGitHubMock (harness-only, served at /__git, auth-required) implements exactly the five GitHub REST shapes the production GitBranchService uses, and the harness constructs that service UNCHANGED against the mock's base URL — approving a SPEC_REVIEW ask therefore commits the spec through the production coordinator/service/HTTP contract with no credential and no network. Before the mock the decide 500'd with 'GitBranchException: GitHub API error 401: Bad credentials'. The spec's other re-pin: the decide goes through the operator fixture decideApproval (the route requires operator authority; a plain apiCall got 401 'Operator session required').",
       "status": "port"
     },
     {

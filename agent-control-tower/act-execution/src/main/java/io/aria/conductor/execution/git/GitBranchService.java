@@ -43,7 +43,7 @@ public class GitBranchService {
     }
 
     /** Test entry point: allow pointing the API base at a WireMock server. */
-    GitBranchService(String ghToken, String apiBaseUrl) {
+    public GitBranchService(String ghToken, String apiBaseUrl) {
         this.ghToken = ghToken;
         this.apiBaseUrl = (apiBaseUrl == null || apiBaseUrl.isBlank())
                 ? DEFAULT_API_BASE_URL : apiBaseUrl;

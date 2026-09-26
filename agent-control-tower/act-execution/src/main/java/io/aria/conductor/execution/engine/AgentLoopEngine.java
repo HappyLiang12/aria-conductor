@@ -191,7 +191,9 @@ public class AgentLoopEngine {
      * Used by AriaService to restore multi-turn context from prior runs.
      *
      * @param runId          the Run UUID (pre-saved with conversationId set)
-     * @param initialContext prior conversation messages to inject before the prompt
+     * @param initialContext the conversation turns that PRECEDE this run (the current
+     *                       request is the run's own prompt seed); merged into every
+     *                       message assembly, never persisted as this run's rows
      */
     public void startRun(UUID runId, List<LlmMessage> initialContext) {
         startRunInternal(runId, null, initialContext != null ? initialContext : List.of());
@@ -205,8 +207,9 @@ public class AgentLoopEngine {
      * @param runId           the Run UUID (pre-saved with conversationId set)
      * @param emitter         SSE emitter for client streaming; events are silently
      *                        dropped if emitter is null or client disconnects
-     * @param initialContext  frontend-provided history messages (system + user/assistant pairs);
-     *                        used instead of DB trajectory for the first iteration
+     * @param initialContext  the conversation turns that PRECEDE this run (client
+     *                        history, current request excluded); merged into every
+     *                        message assembly, never persisted as this run's rows
      * @param intent          classified intent for SSE done event
      */
     public void startRunStream(UUID runId, SseEmitter emitter, List<LlmMessage> initialContext, String intent) {
@@ -743,29 +746,15 @@ public class AgentLoopEngine {
                     ctx.getRunId(), e.getMessage());
         }
 
-        // Persist initial context as trajectories so buildMessages() always has context.
-        // Streaming path: use frontend-provided history + system prompt from initialContext.
-        // Non-streaming path (empty initialContext): fall back to promptSeed.
-        if (initialContext != null && !initialContext.isEmpty()) {
-            try {
-                int turn = 1;
-                for (LlmMessage msg : initialContext) {
-                    String role = msg.role() != null ? msg.role() : "user";
-                    // Skip system messages — buildMessages() already constructs
-                    // the system prompt from agent config. Persisting a second
-                    // system message would cause duplicate system prompts.
-                    if ("system".equals(role)) continue;
-                    trajectoryRepository.save(SessionTrajectory.builder()
-                            .runId(ctx.getRunId())
-                            .turnNumber(turn++)
-                            .role(role)
-                            .content(msg.content())
-                            .build());
-                }
-            } catch (Exception e) {
-                log.warn("Failed to persist initialContext trajectories: {}", e.getMessage());
-            }
-        } else if (run.getPromptSeed() != null && !run.getPromptSeed().isBlank()) {
+        // Two different stores with two different jobs:
+        // - the caller's prior turns are CONTEXT: held on the run context and merged
+        //   into every message assembly (buildMessages), never written as this run's
+        //   trajectory rows -- the conversation timeline aggregates rows across runs,
+        //   so persisting them here would duplicate every earlier turn;
+        // - this run's own turns are the TIMELINE: its request (the run's prompt seed)
+        //   and its assistant turns are persisted, in that order.
+        ctx.setPriorContext(initialContext);
+        if (run.getPromptSeed() != null && !run.getPromptSeed().isBlank()) {
             try {
                 trajectoryRepository.save(SessionTrajectory.builder()
                         .runId(ctx.getRunId())
@@ -1492,6 +1481,23 @@ public class AgentLoopEngine {
 
         if (!systemPrompt.isEmpty()) {
             messages.add(LlmMessage.system(systemPrompt.toString()));
+        }
+
+        // The caller's prior turns sit between the system prompt and this run's own
+        // rows: the run's request lands from its prompt seed, never from the caller's
+        // context, so a request repeated verbatim across turns is still two messages.
+        for (LlmMessage prior : ctx.getPriorContext()) {
+            if (prior == null || prior.content() == null) continue;
+            String role = prior.role() == null ? "" : prior.role();
+            if ("system".equals(role)) {
+                continue;
+            } else if ("assistant".equals(role)) {
+                messages.add(LlmMessage.assistant(prior.content()));
+            } else if ("tool".equals(role)) {
+                messages.add(LlmMessage.tool(prior.content(), prior.toolCallId()));
+            } else {
+                messages.add(LlmMessage.user(prior.content()));
+            }
         }
 
         // Load trajectory history for context

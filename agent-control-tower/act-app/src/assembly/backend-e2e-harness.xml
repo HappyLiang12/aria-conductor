@@ -57,6 +57,7 @@
                      cannot ride in on a wildcard. -->
                 <include>io/aria/conductor/app/e2e/CoreE2eController.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eController$ScenarioSelection.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eGitHubMock.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eScenarios.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eWorkerTokens.class</include>
                 <include>io/aria/conductor/app/e2e/CoreE2eProcessBackend.class</include>

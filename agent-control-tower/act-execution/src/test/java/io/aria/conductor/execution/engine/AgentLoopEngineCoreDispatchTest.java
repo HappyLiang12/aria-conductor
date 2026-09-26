@@ -12,6 +12,7 @@ import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
@@ -22,6 +23,7 @@ import io.aria.conductor.execution.adk.AdkSystemProperties;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.harness.ToolSteeringGuard;
+import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.PromptCallRepository;
@@ -33,8 +35,10 @@ import io.aria.conductor.execution.runtime.CoreAdapters;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
 import io.aria.conductor.execution.runtime.CoreCatalog;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.CoreSession;
+import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.execution.runtime.DefaultAgentExecutionPolicy;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
@@ -48,6 +52,7 @@ import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -63,11 +68,13 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -257,5 +264,43 @@ class AgentLoopEngineCoreDispatchTest {
         assertThat(run.getErrorMessage()).isEqualTo("Unsupported ADK provider 'langchain' for agent "
                 + agentId + "; registered providers: [opencode] (there is no fallback)");
         assertProviderPathNotTaken();
+    }
+
+    /**
+     * Prior conversation turns are context, not timeline: they reach the model (the
+     * core task carries them as history, ahead of the run's own request), while the
+     * run's persisted rows are exactly its request and its assistant output. The
+     * conversation timeline aggregates rows across runs, so persisting the history
+     * as this run's rows would duplicate every earlier turn.
+     */
+    @Test
+    void priorTurnsReachTheCoreTaskAsHistory_withoutBecomingThisRunsRows() {
+        agent.setAdkProvider("opencode");
+        when(coordinator.execute(any(), any(), any()))
+                .thenReturn(new CoreResult("session-1", "the answer", null, false));
+
+        engine().startRun(runId, List.of(
+                LlmMessage.user("earlier question"),
+                LlmMessage.assistant("earlier answer")));
+
+        await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.COMPLETED);
+
+        ArgumentCaptor<CoreTask> task = ArgumentCaptor.forClass(CoreTask.class);
+        verify(coordinator).execute(any(), any(), task.capture());
+        assertThat(task.getValue().systemPrompt()).contains("You are a tester agent.");
+        assertThat(task.getValue().userPrompt()).isEqualTo("do the work");
+        assertThat(task.getValue().history())
+                .extracting(LlmMessage::role, LlmMessage::content)
+                .containsExactly(
+                        tuple("user", "earlier question"),
+                        tuple("assistant", "earlier answer"));
+
+        ArgumentCaptor<SessionTrajectory> rows = ArgumentCaptor.forClass(SessionTrajectory.class);
+        verify(trajectoryRepository, times(2)).save(rows.capture());
+        assertThat(rows.getAllValues())
+                .extracting(SessionTrajectory::getRole, SessionTrajectory::getContent)
+                .containsExactly(
+                        tuple("user", "do the work"),
+                        tuple("assistant", "the answer"));
     }
 }

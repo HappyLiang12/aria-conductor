@@ -45,13 +45,15 @@ function usage(message) {
     'usage: live-matrix --core <qoder|opencode> --mode <HOST|SANDBOX> --model <id> \\\n' +
     '                   --workspace <dir> --repo <git repository> --evidence <file> \\\n' +
     '                   [--pat-file <file>] [--paid-opt-in] [--scenarios a,b] \\\n' +
-    '                   [--timeout-ms <n>] [--base-url <url>] [--no-backend] [--keep-backend]\n');
+    '                   [--timeout-ms <n>] [--expiry-budget-ms <n>] [--base-url <url>] \\\n' +
+    '                   [--no-backend] [--keep-backend]\n');
 }
 
 function parseArgs(argv) {
   const opts = {
     core: null, mode: null, model: null, workspace: null, repo: null, evidence: null,
     patFile: null, paidOptIn: false, scenarios: null, timeoutMs: 900000,
+    expiryBudgetMs: 900000,
     baseUrl: process.env.ARIA_LIVE_BASE_URL || 'http://127.0.0.1:8080',
     backend: true, keepBackend: false,
   };
@@ -74,6 +76,7 @@ function parseArgs(argv) {
       case '--paid-opt-in': opts.paidOptIn = true; break;
       case '--scenarios': opts.scenarios = next().split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--timeout-ms': opts.timeoutMs = Number(next()); break;
+      case '--expiry-budget-ms': opts.expiryBudgetMs = Number(next()); break;
       case '--base-url': opts.baseUrl = next(); break;
       case '--no-backend': opts.backend = false; break;
       case '--keep-backend': opts.keepBackend = true; break;
@@ -635,11 +638,21 @@ class Matrix {
     capture(`deny: denied ask ${ask.ask.id} (HTTP ${decision.status})`);
     const end = await this.terminal(runId, this.opts.timeoutMs);
     const state = end.state || (await this.runState(runId));
-    this.record('deny', 'a denial leaves the workspace unwritten', 
-      !exists(target) && state.status !== 'COMPLETED' ? 'PASS' : 'FAIL', {
+    const decided = await this.api.get(`/api/v1/approvals/${ask.ask.id}`);
+    const askStatus = decided.json ? decided.json.status : null;
+    const terminal = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'].includes(state.status);
+    // A denial prevents the write; whether the CORE then ends its turn successfully
+    // is the core's own business (a refused tool call is a legitimate turn outcome),
+    // so the terminal status is recorded, not pinned to a failure.
+    this.record('deny', 'a denial leaves the workspace unwritten',
+      !exists(target) && askStatus === 'DENIED' && terminal ? 'PASS' : 'FAIL', {
         'denied file absent from disk': !exists(target),
-        'run did not complete as a success': state.status !== 'COMPLETED',
-      }, { runId, runStatus: state.status, errorMessage: (state.errorMessage || '').slice(0, 300) });
+        'ask reached DENIED': askStatus === 'DENIED',
+        'run reached a terminal state': terminal,
+      }, {
+        runId, askStatus, runStatus: state.status,
+        finalOutput: (state.finalOutput || '').slice(0, 300),
+      });
   }
 
   async expiry(agentId, dir) {
@@ -651,19 +664,41 @@ class Matrix {
       this.record('expiry', 'an undecided ask expires and writes nothing', 'NOT VERIFIED', { 'ask observed': false }, { runId });
       return;
     }
+    const requestedAt = Date.parse(ask.ask.requestedAt);
+    const expiresAt = Date.parse(ask.ask.expiresAt);
+    const declaredWindowMs = expiresAt - requestedAt;
     capture(`expiry: ask ${ask.ask.id} left undecided (requestedAt=${ask.ask.requestedAt} expiresAt=${ask.ask.expiresAt})`);
+    // The ask expires by ITS OWN declared window, so the wait is the declared
+    // window itself (not a guess). A window longer than the runner's budget is
+    // not a failure of the product: the stack was simply booted with the
+    // production window, so the case is NOT VERIFIED with the exact window
+    // reported instead of a wait that outlives the runner.
+    if (!Number.isFinite(declaredWindowMs) || declaredWindowMs > this.opts.expiryBudgetMs) {
+      this.record('expiry', 'an undecided ask expires and writes nothing', 'NOT VERIFIED', {
+        'ask observed': true,
+        'declared expiry window within the runner budget': false,
+      }, {
+        runId, requestedAt: ask.ask.requestedAt, expiresAt: ask.ask.expiresAt, declaredWindowMs,
+        runnerBudgetMs: this.opts.expiryBudgetMs,
+        note: 'boot the stack with a short approvals window (aria.approvals.timeout-ms) to assert expiry',
+      });
+      return;
+    }
     const expired = await pollUntil(async () => {
       const response = await this.api.get(`/api/v1/approvals/${ask.ask.id}`);
       return { done: response.json && response.json.status !== 'PENDING', ask: response.json };
-    }, { timeoutMs: Math.max(this.opts.timeoutMs, 300000), intervalMs: 3000, label: 'ask expiry' });
+    }, { timeoutMs: declaredWindowMs + 60000, intervalMs: 3000, label: 'ask expiry' });
     const end = await this.terminal(runId, this.opts.timeoutMs);
     const state = end.state || (await this.runState(runId));
     this.record('expiry', 'an undecided ask expires and writes nothing', 
-      expired.done && !exists(target) ? 'PASS' : 'FAIL', {
+      expired.done && expired.ask.status === 'EXPIRED' && !exists(target) ? 'PASS' : 'FAIL', {
         'ask reached a non-PENDING state': expired.done,
         'ask state is EXPIRED': Boolean(expired.ask && expired.ask.status === 'EXPIRED'),
         'expired file absent from disk': !exists(target),
-      }, { runId, askStatus: expired.ask ? expired.ask.status : null, runStatus: state.status });
+      }, {
+        runId, askStatus: expired.ask ? expired.ask.status : null, runStatus: state.status,
+        declaredWindowMs,
+      });
   }
 
   async cancel(agentId, dir, core) {

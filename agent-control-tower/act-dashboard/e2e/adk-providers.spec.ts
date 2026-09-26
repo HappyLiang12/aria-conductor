@@ -6,8 +6,10 @@ import { test, expect, type Page } from '@playwright/test';
  * Does NOT depend on DEEPSEEK_API_KEY or LLM configuration:
  * 1. Providers page renders the provider table (the production cores opencode +
  *    qoder) and the Per-Agent Backends block.
- * 2. Crew create form renders the dynamic ADK Provider dropdown with both
- *    'opencode' and 'qoder' options (no submission).
+ * 2. Crew create form renders the dynamic agent-core dropdown with both
+ *    'opencode' and 'qoder' options (no submission). Re-pinned to the current
+ *    control id `#add-agent-core` (the Agent-core rename); the assertions are
+ *    unchanged.
  *
  * Cutover note (Task 18, 2026-09-25): the removed LangChain core is gone from the
  * inventory, so the previous assertions on a visible `LangChain ADK` row and a
@@ -76,12 +78,12 @@ test('ADK providers: Crew create form renders qoder + opencode options', async (
   await page.getByRole('button', { name: '+ Add Agent' }).click();
   await expect(page.locator('.mini-dialog.open')).toBeVisible({ timeout: 5_000 });
 
-  // ADK Provider dropdown is rendered dynamically from the providers API
-  const adkProviderSelect = page.locator('#add-agent-adk-provider');
-  await expect(adkProviderSelect).toBeVisible({ timeout: 10_000 });
+  // Agent core dropdown is rendered dynamically from the providers API
+  const coreSelect = page.locator('#add-agent-core');
+  await expect(coreSelect).toBeVisible({ timeout: 10_000 });
 
-  const optionTexts = await adkProviderSelect.locator('option').allTextContents();
-  const optionValues = await adkProviderSelect
+  const optionTexts = await coreSelect.locator('option').allTextContents();
+  const optionValues = await coreSelect
     .locator('option')
     .evaluateAll((opts) => opts.map((o) => (o as HTMLOptionElement).value));
 

@@ -143,6 +143,9 @@ class CoreE2ePackagingIntegrationTest {
                     // Task 19 peer-launch wiring.
                     "harness/io/aria/conductor/app/e2e/CoreE2eController.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eController$ScenarioSelection.class",
+                    // Task 20: the deterministic GitHub API the SDD branch handoff
+                    // talks to instead of api.github.com.
+                    "harness/io/aria/conductor/app/e2e/CoreE2eGitHubMock.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eScenarios.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eWorkerTokens.class",
                     "harness/io/aria/conductor/app/e2e/CoreE2eProcessBackend.class",

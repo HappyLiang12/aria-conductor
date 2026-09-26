@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { apiCall, pollUntil } from './fixtures';
+import { apiCall, decideApproval, pollUntil } from './fixtures';
 
 /**
  * Phase 1 E2E contract anchor for the Spec-Driven Development workflow
@@ -153,11 +153,9 @@ test('development-workflow: spec approval then PASS verdict completes the chain'
   await expect(page.locator('.col-k[data-col="REVIEW"]')).toBeVisible({ timeout: 15_000 });
 
   // 4. Approve -> the coordinator writes back to knowledge and resumes the chain.
-  const decide = await apiCall(request, 'POST', `/approvals/${approval.id}/decide`, {
-    approved: true,
-    reason: 'lgtm',
-  });
-  expect(decide.status, JSON.stringify(decide.data)).toBe(200);
+  //    Operator-only route: the decision goes through the fixture that carries the
+  //    environment credential and verifies the processed ack field by field.
+  await decideApproval(request, approval.id, true, 'lgtm');
 
   // 5. The chain must leave WAITING_APPROVAL and reach exactly COMPLETED on the
   //    deterministic harness (the golden PASS verdict chain). No alternative

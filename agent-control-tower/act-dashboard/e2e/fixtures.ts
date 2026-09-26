@@ -1,4 +1,4 @@
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
 
 /**
  * Phase E shared fixtures (Task 17: governed cores + deterministic harness).
@@ -33,6 +33,51 @@ export function operatorHeaders(): Record<string, string> {
     );
   }
   return { Authorization: `Bearer ${OPERATOR_BEARER_TOKEN}` };
+}
+
+/** The per-tab operator session record key (src/api/operatorSession.ts). */
+const OPERATOR_SESSION_STORAGE_KEY = 'aria.operator.session';
+
+/**
+ * The UI's operator authority for BROWSER-driven decisions (Tasks 4/15). The API
+ * fixtures above carry the credential as a bearer header; the browser client
+ * instead exchanges it once for an HttpOnly session cookie plus a CSRF token
+ * (`POST /api/v1/operator/session`) and rides the CSRF header on every operator
+ * mutation. A spec that clicks a decision control must therefore establish that
+ * session first: without it the click is refused (401/403) and the ask stays
+ * PENDING — a missing session, never a backend defect.
+ *
+ * The exchange runs at the app's own origin (so the browser holds the cookie),
+ * and the returned record is seeded through an init script so the app's loader
+ * applies the CSRF header on every later navigation.
+ */
+export async function establishOperatorSession(page: Page) {
+  if (OPERATOR_BEARER_TOKEN === '') {
+    throw new Error(
+      'ARIA_OPERATOR_BEARER_TOKEN is not set: a browser decision needs the operator session '
+        + 'the harness exchanges from that credential',
+    );
+  }
+  if (page.url() === 'about:blank') {
+    // The exchange must run at the app's own origin (relative fetch + cookie).
+    await page.goto('/');
+  }
+  const session = await page.evaluate(async (credential) => {
+    const res = await fetch('/api/v1/operator/session', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${credential}` },
+    });
+    if (!res.ok) {
+      throw new Error(`operator session exchange failed: HTTP ${res.status}`);
+    }
+    return (await res.json()) as { csrfToken: string; expiresAt: string };
+  }, OPERATOR_BEARER_TOKEN);
+  await page.addInitScript(
+    ({ key, record }) => sessionStorage.setItem(key, JSON.stringify(record)),
+    { key: OPERATOR_SESSION_STORAGE_KEY, record: session },
+  );
+  await page.reload();
+  return session;
 }
 
 export interface ApiResult<T = any> {
@@ -714,4 +759,35 @@ export function transitionKanban(
   extra: Record<string, unknown> = {},
 ) {
   return apiCall(request, 'POST', `/kanban/items/${id}/transition`, { status, ...extra });
+}
+
+/** The exact optimistic-lock body (GlobalExceptionHandler.handleOptimisticLock). */
+export const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refresh and retry.';
+
+/**
+ * The same move under the documented optimistic-lock contract. The board's own
+ * auto flow (a card with an eligible agent dispatches itself) is a concurrent
+ * writer, so a transition the operator also drives can lose the version race and
+ * be answered 409 with `OPTIMISTIC_LOCK_409` — the conflict the UI reports as
+ * "refresh and retry". This helper does exactly that: re-read the card and
+ * retry, up to three attempts. Any other status, or a 409 with a different
+ * body, is returned untouched so the caller's assertion still sees it.
+ * {@link transitionKanban} stays raw for the callers that ASSERT the conflict.
+ */
+export async function transitionKanbanSettled(
+  request: APIRequestContext,
+  id: string,
+  status: string,
+  extra: Record<string, unknown> = {},
+) {
+  let result = await transitionKanban(request, id, status, extra);
+  for (let attempt = 0; attempt < 5 && result.status === 409; attempt += 1) {
+    if (result.data?.message !== OPTIMISTIC_LOCK_409) break;
+    // The competing writer is a completion/pickup listener (short-lived), so a
+    // short pause lets it finish before the refreshed retry.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await apiCall(request, 'GET', `/kanban/items/${id}`);
+    result = await transitionKanban(request, id, status, extra);
+  }
+  return result;
 }

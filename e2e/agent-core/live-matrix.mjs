@@ -45,7 +45,8 @@ function usage(message) {
     'usage: live-matrix --core <qoder|opencode> --mode <HOST|SANDBOX> --model <id> \\\n' +
     '                   --workspace <dir> --repo <git repository> --evidence <file> \\\n' +
     '                   [--pat-file <file>] [--paid-opt-in] [--scenarios a,b] \\\n' +
-    '                   [--timeout-ms <n>] [--expiry-budget-ms <n>] [--base-url <url>] \\\n' +
+    '                   [--timeout-ms <n>] [--expiry-budget-ms <n>] \\\n' +
+    '                   [--backend-approvals-timeout-ms <n>] [--base-url <url>] \\\n' +
     '                   [--no-backend] [--keep-backend]\n');
 }
 
@@ -53,7 +54,7 @@ function parseArgs(argv) {
   const opts = {
     core: null, mode: null, model: null, workspace: null, repo: null, evidence: null,
     patFile: null, paidOptIn: false, scenarios: null, timeoutMs: 900000,
-    expiryBudgetMs: 900000,
+    expiryBudgetMs: 900000, backendApprovalsTimeoutMs: null,
     baseUrl: process.env.ARIA_LIVE_BASE_URL || 'http://127.0.0.1:8080',
     backend: true, keepBackend: false,
   };
@@ -77,6 +78,7 @@ function parseArgs(argv) {
       case '--scenarios': opts.scenarios = next().split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--timeout-ms': opts.timeoutMs = Number(next()); break;
       case '--expiry-budget-ms': opts.expiryBudgetMs = Number(next()); break;
+      case '--backend-approvals-timeout-ms': opts.backendApprovalsTimeoutMs = Number(next()); break;
       case '--base-url': opts.baseUrl = next(); break;
       case '--no-backend': opts.backend = false; break;
       case '--keep-backend': opts.keepBackend = true; break;
@@ -412,6 +414,16 @@ function startBackend(opts, backendLog) {
     ARIA_RUNTIME_CREDENTIAL_KEY: opts.credentialKey,
     ...pins,
   };
+  if (opts.backendApprovalsTimeoutMs !== null) {
+    // The expiry case asserts an ask reaching EXPIRED, and the ask expires by the
+    // configured window (production default: ~45 min). A system property beats
+    // application.yml, so the operator can boot the live stack with a window the
+    // runner can actually outlive; JAVA_TOOL_OPTIONS is inherited by the JVM the
+    // start script spawns.
+    const existing = process.env.JAVA_TOOL_OPTIONS ? ` ${process.env.JAVA_TOOL_OPTIONS}` : '';
+    env.JAVA_TOOL_OPTIONS = `-Dapprovals.timeout-ms=${opts.backendApprovalsTimeoutMs}${existing}`;
+    pins.JAVA_TOOL_OPTIONS = env.JAVA_TOOL_OPTIONS;
+  }
   opts.backendPins = pins;
   capture(`backend environment pins: ${Object.keys(pins).sort().map((k) => `${k}=${redact(pins[k])}`).join(' | ')}`);
   let child;

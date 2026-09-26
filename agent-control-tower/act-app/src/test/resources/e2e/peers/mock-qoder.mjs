@@ -46,6 +46,9 @@ const WRITER_COMMAND = fixtures.writer.command;
 // envelopes stay the recorded ones; only the values are fixture-defined.
 const COMPLETION_TEXT = {
   'reported-usage': 'fixture-complete',
+  // The SDD QA step's deterministic verdict: WorkflowAutoChainer routes a QA
+  // step on the VERDICT= marker its run's finalOutput carries.
+  'sdd-qa-pass': 'fixture-qa-report\nVERDICT=PASS',
   'unknown-usage': 'fixture-usage-unknown',
 };
 const REPORTED_USAGE_RESULT = {

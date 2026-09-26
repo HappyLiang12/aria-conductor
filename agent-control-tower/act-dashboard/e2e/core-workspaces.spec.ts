@@ -5,14 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   apiCall,
-  approveRunApproval,
   pollRunTerminal,
+  pollUntil,
   promoteKnowledge,
   reviewKnowledge,
   seedAdkAgent,
   seedKnowledgeItem,
   seedRun,
   setScenario,
+  settleRunApproval,
   uniqueName,
 } from './fixtures';
 
@@ -33,11 +34,14 @@ import {
  *
  * Pending wire, reported rather than hidden: Task 18 wires the production
  * admission and coordinator. The refusal expectations are pinned to the exact
- * Task 6 contract (RunWorkspaceService): the launch is refused with HTTP 400
- * carrying the T6 message verbatim (the committed mapping of
- * IllegalArgumentException) — never an outcome list, never a silently
- * downgraded workspace. Before that wiring the launch answers 201, so these
- * cases fail on exactly the pinned refusal contract.
+ * Task 6 contract (RunWorkspaceService): the launch is refused with the T6
+ * message verbatim and never a silently downgraded workspace. Run creation
+ * commits the run row before the run's own admission (the cutover design: the
+ * attempt resolves core/mode/credential and workspace admission and records the
+ * binding), so the refusal is the run's recorded failure -- POST /runs answers
+ * 201 and the run reaches exactly FAILED carrying the T6 message in
+ * errorMessage (Task 18: "a run whose remaining selection admission refuses is
+ * failed with the admission message").
  */
 
 /** A disposable, definitely-not-a-git-repository directory. */
@@ -74,13 +78,16 @@ test('a worktree request over a non-git directory is refused, never downgraded',
     maxIterations: 1,
   });
 
-  // The exact refusal of launch admission (Task 6): RunWorkspaceService's
-  // resolveRepository refuses a non-git worktree source with this message, and
-  // the committed mapping of that IllegalArgumentException is HTTP 400 Bad
-  // Request carrying the message verbatim (GlobalExceptionHandler:50-53). The
-  // invalid source is never silently re-pointed at another directory or mode.
-  expect(created.status, JSON.stringify(created.data)).toBe(400);
-  expect(created.data?.message).toBe(
+  // Run creation commits the run row first; the run's own admission is the
+  // refusing step (Task 6: RunWorkspaceService's resolveRepository refuses a
+  // non-git worktree source with this exact message), and the run reaches
+  // exactly FAILED carrying that message (Task 18's recorded cutover contract:
+  // a refused selection is failed with the admission message). The invalid
+  // source is never silently re-pointed at another directory or mode.
+  expect(created.status, JSON.stringify(created.data)).toBe(201);
+  const refused = await pollRunTerminal(request, created.data.id);
+  expect(refused.status).toBe('FAILED');
+  expect(refused.errorMessage).toBe(
     `Worktree workspace requires a git repository: ${nonGitDirectory}`,
   );
 });
@@ -114,7 +121,7 @@ test('a dirty source repository is preserved byte-for-byte by a worktree run', a
   });
   await setScenario(request, agent.id, 'reported-usage');
   const run = await seedRun(request, agent.id);
-  await approveRunApproval(request, run.id);
+  await settleRunApproval(request, run.id);
   const done = await pollRunTerminal(request, run.id);
 
   // The run really executed in its worktree (the deterministic completion).
@@ -140,22 +147,34 @@ test('two concurrent Direct writers on one directory are exclusive', async ({ re
   await setScenario(request, agent.id, 'pause-resume');
 
   const first = await seedRun(request, agent.id, uniqueName('e2e-direct-a'));
+  // The first writer must hold the lease before the second launch can be
+  // observed as the refused one: admission is the run's own step (the lease is
+  // acquired before RUNNING), so wait for exactly RUNNING first.
+  await pollUntil(
+    request,
+    `/runs/${first.id}`,
+    (run: any) => run?.status === 'RUNNING',
+    60_000,
+    1_000,
+  );
 
   // The second launch is refused by workspace admission, exactly: the conflict
   // (RunWorkspaceService.rejectOverlap) names the canonical root the test
   // selected and the identity of the active lease — the lease's owning run is
-  // the first run's captured id, compared exactly. 400 is the recorded mapping
-  // of the refusal (GlobalExceptionHandler: IllegalArgumentException -> Bad
-  // Request).
+  // the first run's captured id, compared exactly. Creation itself commits the
+  // row first (201), so the refusal is the second run's recorded failure
+  // carrying the exact conflict message in errorMessage.
   const second = await apiCall(request, 'POST', '/runs', {
     agentId: agent.id,
     promptSeed: uniqueName('e2e-direct-b'),
     maxIterations: 1,
   });
-  expect(second.status, JSON.stringify(second.data)).toBe(400);
+  expect(second.status, JSON.stringify(second.data)).toBe(201);
+  const refused = await pollRunTerminal(request, second.data.id);
+  expect(refused.status).toBe('FAILED');
   const conflict = /^Workspace conflict: (.+) overlaps active lease [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} \(run ([0-9a-f-]{36})\)$/
-    .exec(second.data?.message ?? '');
-  expect(conflict, `unexpected refusal: ${JSON.stringify(second.data?.message)}`).not.toBeNull();
+    .exec(refused.errorMessage ?? '');
+  expect(conflict, `unexpected refusal: ${JSON.stringify(refused.errorMessage)}`).not.toBeNull();
   expect(conflict![1]).toBe(shared);
   expect(conflict![2]).toBe(first.id);
 
@@ -183,7 +202,10 @@ test('workspace-diff preview answers for a run without a workspace and for an ow
   });
   await setScenario(request, agent.id, 'write-twice');
   const run = await seedRun(request, agent.id);
-  await approveRunApproval(request, run.id);
+  // write-twice raises two permit gates (edit then execute); settleRunApproval
+  // grants every pending ask of this run until it reaches its terminal state --
+  // a single-grant helper would leave the second gate PENDING forever.
+  await settleRunApproval(request, run.id);
   const done = await pollRunTerminal(request, run.id);
   expect(done.status).toBe('COMPLETED');
 
@@ -226,7 +248,7 @@ test('knowledge promotion completes a trajectory on the deterministic harness', 
   // specs plus the coverage map).
   await setScenario(request, agent.id, 'reported-usage');
   const run = await seedRun(request, agent.id, `Use the promoted guidance: ${promoted.data.name}`);
-  await approveRunApproval(request, run.id);
+  await settleRunApproval(request, run.id);
   const done = await pollRunTerminal(request, run.id);
   expect(done.status).toBe('COMPLETED');
   expect(done.finalOutput).toBe('fixture-complete');

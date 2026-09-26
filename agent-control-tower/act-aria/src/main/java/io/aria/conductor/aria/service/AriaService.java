@@ -20,6 +20,7 @@ import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import io.aria.conductor.common.model.PromptCall;
+import jakarta.persistence.EntityManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -76,6 +77,7 @@ public class AriaService {
     private final KnowledgeService knowledgeService;
     private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
+    private final EntityManager entityManager;
 
     public AriaService(AgentLoopEngine agentLoopEngine,
                        AgentRepository agentRepository,
@@ -87,7 +89,8 @@ public class AriaService {
                        ToolExecutionEngine toolExecutionEngine,
                        KnowledgeService knowledgeService,
                        SessionTrajectoryRepository trajectoryRepository,
-                       ToolCallRepository toolCallRepository) {
+                       ToolCallRepository toolCallRepository,
+                       EntityManager entityManager) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
@@ -99,6 +102,7 @@ public class AriaService {
         this.knowledgeService = knowledgeService;
         this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;
+        this.entityManager = entityManager;
     }
 
     public AriaChatResponse chat(AriaChatRequest request) {
@@ -127,10 +131,14 @@ public class AriaService {
         // Execute via unified engine with prior conversation context
         agentLoopEngine.startRun(run.getId(), priorMessages);
 
-        // Poll for completion (synchronous non-streaming contract)
+        // Poll for completion (synchronous non-streaming contract). Every read must
+        // observe the engine's committed progress: the request-scoped persistence
+        // context (spring.jpa.open-in-view is on by default) serves the very
+        // instance this request saved, so a plain findById would report PENDING for
+        // the whole window and never see the terminal state; readFresh re-reads.
         int polls = 0;
         while (polls < 120) {
-            Run current = runRepository.findById(run.getId()).orElse(null);
+            Run current = readRunFresh(run.getId());
             if (current != null && (current.getStatus() == RunStatus.COMPLETED
                     || current.getStatus() == RunStatus.FAILED
                     || current.getStatus() == RunStatus.CANCELLED)) {
@@ -162,7 +170,7 @@ public class AriaService {
         // Timeout: grace wait for budget exhaustion summary (takes 2-5s for LLM call)
         log.warn("Aria sync chat exceeded the sync window for run {} — grace wait for final output", run.getId());
         try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        Run finalCheck = runRepository.findById(run.getId()).orElse(null);
+        Run finalCheck = readRunFresh(run.getId());
         if (finalCheck != null && (finalCheck.getStatus() == RunStatus.COMPLETED
                 || finalCheck.getStatus() == RunStatus.FAILED)) {
             String output = finalCheck.getFinalOutput();
@@ -187,6 +195,22 @@ public class AriaService {
                 .actionsTaken(buildActionsTaken(run.getId()))
                 .timestamp(Instant.now())
                 .build();
+    }
+
+    /**
+     * Reads the run row so the caller sees the engine's committed state, not the
+     * request-scoped snapshot: with Open Session In View the persistence context
+     * is bound to the HTTP request, so {@code findById} returns the instance this
+     * request already saved (status PENDING) for the whole poll. {@code refresh}
+     * forces the SELECT that overwrites that instance with the committed row.
+     */
+    private Run readRunFresh(UUID runId) {
+        return runRepository.findById(runId)
+                .map(run -> {
+                    entityManager.refresh(run);
+                    return run;
+                })
+                .orElse(null);
     }
 
     String buildSystemPrompt() {

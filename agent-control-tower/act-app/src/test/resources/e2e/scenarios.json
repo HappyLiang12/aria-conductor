@@ -92,6 +92,30 @@
       "expected": ["exact recorded usage values pass through", "the observed model comes from the core's report"]
     },
     {
+      "id": "sdd-qa-pass",
+      "title": "SDD QA step: the deterministic PASS verdict the chain router consumes",
+      "prompt": "QA the dev output and report your verdict",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "frames": ["initialize", "session/new", "session/set_model", "session/prompt", "session/update*", "prompt result end_turn"],
+        "usage": { "inputTokens": 12, "outputTokens": 7, "totalTokens": 19 },
+        "observedModel": "efficient",
+        "finalOutput": "fixture-qa-report\nVERDICT=PASS",
+        "writes": 0
+      },
+      "opencode": {
+        "http": ["POST /session", "POST /session/:id/message"],
+        "tokens": { "input": 12, "output": 7 },
+        "modelID": "efficient",
+        "finalOutput": "fixture-qa-report\nVERDICT=PASS",
+        "writes": 0
+      },
+      "expected": [
+        "the QA run completes with the fixture report text",
+        "the trailing VERDICT=PASS marker is the verdict the SDD router applies"
+      ]
+    },
+    {
       "id": "unknown-usage",
       "title": "The core reports no usage counters and no observed model: unknown stays unknown",
       "prompt": "Reply with the fixture completion",

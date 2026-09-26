@@ -293,7 +293,10 @@ public class CoreE2eConfiguration {
     }
 
     /**
-     * Registers the built-in agents' default scenario ({@value CoreE2eScenarios#DEFAULT_SCENARIO}).
+     * Registers the built-in agents' default scenarios: {@value CoreE2eScenarios#DEFAULT_SCENARIO}
+     * everywhere except the SDD QA built-in, which boots on
+     * {@value CoreE2eScenarios#QA_SCENARIO} (the chain routers the QA step on
+     * the {@code VERDICT=} marker its run's output must carry).
      *
      * <p>Aria's conversation spec drives the chat route and a workflow chain
      * resolves its steps by agent role, so neither lane can select a scenario
@@ -308,15 +311,21 @@ public class CoreE2eConfiguration {
     @Bean
     public ApplicationRunner coreE2eScenarioDefaults(CoreE2eScenarios scenarios) {
         return args -> {
+            scenarios.registerDefault(io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID,
+                    CoreE2eScenarios.DEFAULT_SCENARIO);
             List<UUID> builtinAgentIds = new ArrayList<>();
-            builtinAgentIds.add(io.aria.conductor.common.AriaConstants.ARIA_AGENT_ID);
-            builtinAgentIds.addAll(io.aria.conductor.execution.maintenance.LegacySetupService.BUILTIN_AGENTS
-                    .stream().map(io.aria.conductor.execution.maintenance.LegacySetupService.BuiltinAgent::id)
-                    .toList());
-            scenarios.registerDefaults(builtinAgentIds);
-            log.info("core-e2e peer scenarios: {} declared in the manifest; the harness default '{}' is"
-                            + " registered for the built-in agents {}", scenarios.knownScenarios().size(),
-                    CoreE2eScenarios.DEFAULT_SCENARIO, builtinAgentIds);
+            for (io.aria.conductor.execution.maintenance.LegacySetupService.BuiltinAgent builtin
+                    : io.aria.conductor.execution.maintenance.LegacySetupService.BUILTIN_AGENTS) {
+                scenarios.registerDefault(builtin.id(),
+                        "qa".equals(builtin.role())
+                                ? CoreE2eScenarios.QA_SCENARIO
+                                : CoreE2eScenarios.DEFAULT_SCENARIO);
+                builtinAgentIds.add(builtin.id());
+            }
+            log.info("core-e2e peer scenarios: {} declared in the manifest; the harness defaults ('{}'"
+                            + " + QA '{}') are registered for the built-in agents {}",
+                    scenarios.knownScenarios().size(),
+                    CoreE2eScenarios.DEFAULT_SCENARIO, CoreE2eScenarios.QA_SCENARIO, builtinAgentIds);
         };
     }
 

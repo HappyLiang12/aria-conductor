@@ -55,6 +55,16 @@ public final class CoreE2eScenarios {
      */
     static final String DEFAULT_SCENARIO = "reported-usage";
 
+    /**
+     * The deterministic fixture of the SDD QA built-in: the chain's QA step is
+     * routed on the {@code VERDICT=} marker its run's output carries
+     * ({@code WorkflowAutoChainer.routeOnQaVerdict}), so a QA run booted on the
+     * read-only default would complete the chain with "no verdict submitted".
+     * This fixture's completion is exactly {@code fixture-qa-report\nVERDICT=PASS}
+     * (the recorded QA report convention plus the router's PASS marker).
+     */
+    static final String QA_SCENARIO = "sdd-qa-pass";
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final Set<String> knownScenarios;
@@ -126,8 +136,24 @@ public final class CoreE2eScenarios {
      */
     void registerDefaults(List<UUID> builtinAgentIds) {
         for (UUID agentId : builtinAgentIds) {
-            selections.putIfAbsent(Objects.requireNonNull(agentId, "agentId"), DEFAULT_SCENARIO);
+            registerDefault(agentId, DEFAULT_SCENARIO);
         }
+    }
+
+    /**
+     * Registers one built-in agent's default scenario (same precedence as
+     * {@link #registerDefaults(java.util.List)}: an explicit
+     * {@link #select(UUID, String)} always wins). The scenario must be declared
+     * in the shipped manifest — an invented fixture id is refused here, not at
+     * launch time.
+     */
+    void registerDefault(UUID agentId, String scenario) {
+        Objects.requireNonNull(agentId, "agentId");
+        if (scenario == null || !knownScenarios.contains(scenario)) {
+            throw new IllegalArgumentException("Unknown peer scenario '" + scenario
+                    + "'; the committed manifest declares " + knownScenarios);
+        }
+        selections.putIfAbsent(agentId, scenario);
     }
 
     private static Set<String> readScenarioIds(Path manifest) {

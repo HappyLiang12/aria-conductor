@@ -32,11 +32,16 @@ const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refresh and r
 
 /**
  * The deterministic peer fixture of this spec's dispatched runs. The card
- * states under test are the pickup/pause/cancel contract, which the task-level
- * gate opens before any core call; the selected fixture nonetheless matters
- * because the harness refuses a run whose agent has no declared scenario.
+ * states under test are the pickup/pause/cancel contract, and the run of a
+ * dispatched card must stay in flight (RUNNING, held on its core-raised
+ * permission gate) while those states are asserted: a read-only completion
+ * would let RunKanbanAutoCreator settle the linked card into REVIEW. The
+ * 'deny-write' fixture holds the prompt on exactly that gate -- its native
+ * ask stays PENDING (and is the one the review case pins) until a decision --
+ * so the dispatched card stays IN_PROGRESS. The selection also matters because
+ * the harness refuses a run whose agent has no declared scenario.
  */
-const SCENARIO = 'reported-usage';
+const SCENARIO = 'deny-write';
 
 test.describe('kanban HITL board', () => {
   let itemId: string;
@@ -103,9 +108,12 @@ test.describe('kanban HITL board', () => {
     await expect(card).toBeVisible();
     await dragCardTo(page, itemId, 'lane-IN_PROGRESS');
 
-    // The dispatched card lands in exactly IN_PROGRESS (the two-phase pickup's
-    // captured state); the governed run then pauses on its ask without moving
-    // the card. The former "IN_PROGRESS or REVIEW" tolerance is gone.
+    // A Todo create is a dispatch intent (KanbanAutoDispatchListener picks it
+    // up), and a drag onto the card's own lane is the same-status no-op: both
+    // paths land the card in exactly IN_PROGRESS (the two-phase pickup's
+    // captured state); the governed run then holds on its permission gate
+    // without moving the card. The former "IN_PROGRESS or REVIEW" tolerance is
+    // gone.
     await expect
       .poll(async () => {
         const r = await request.get(`${BACKEND}/kanban/items/${itemId}`);
@@ -149,7 +157,10 @@ test.describe('kanban HITL board', () => {
     const card = page.locator(`[data-card="${itemId}"]`);
     await expect(card).toBeVisible();
     await card.hover();
-    await card.getByTitle('Cancel task').click();
+    // Exact title: an in-flight card holding a pending ask also renders the
+    // quick-deny control whose title "Deny (cancel task)" substring-matches a
+    // non-exact 'Cancel task' lookup.
+    await card.getByTitle('Cancel task', { exact: true }).click();
     // Task 10: the ✕ only opens the confirmation; the transition fires on Confirm.
     await page.getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect
@@ -163,9 +174,10 @@ test.describe('kanban HITL board', () => {
   test('review card shows ask badge and opens decision zone', async ({ page, request }) => {
     // There is no approval seed endpoint, so this drives the REAL ask path:
     // pin a task-capable opencode agent via agentTemplateId (AgentPickerService
-    // matches it against agent names), dispatch the card — the default-on
-    // task-level approval gate creates a PENDING ask which
-    // KanbanReviewCardListener links to the card via linkedRunId.
+    // matches it against agent names) and dispatch the card — the held
+    // 'deny-write' fixture's core-raised native permission request creates the
+    // PENDING ask, which KanbanReviewCardListener links to the card via
+    // linkedRunId.
     const agent = await seedAdkAgent(request, {
       name: uniqueName('e2e-oc-hitl'),
       adkProvider: 'opencode',
@@ -180,9 +192,9 @@ test.describe('kanban HITL board', () => {
     expect(dispatched.status, JSON.stringify(dispatched.data)).toBe(200);
     expect(dispatched.data?.status).toBe('IN_PROGRESS');
 
-    // Wait for the engine's (asynchronous) task-level approval gate to surface
-    // a PENDING ask linked to the card, and pin its exact offered grant set:
-    // the one-use ALLOW_ONCE option plus the reject option (Task 12).
+    // Wait for the run's (asynchronous) core-raised native ask to surface
+    // linked to the card, and pin its exact offered grant set: the one-use
+    // ALLOW_ONCE option plus the reject option (Task 12).
     const asks = await pollUntil<any[]>(
       request,
       `/approvals?kanbanItemId=${askItem.id}`,

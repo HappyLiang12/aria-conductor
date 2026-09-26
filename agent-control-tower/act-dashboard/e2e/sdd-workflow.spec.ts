@@ -127,11 +127,16 @@ test('development-workflow: spec approval then PASS verdict completes the chain'
   expect(chain.id).toMatch(/^[0-9a-f-]{36}$/);
 
   // 2. The chain must reach WAITING_APPROVAL with a SPEC_REVIEW approval.
-  //    Contract: SPEC_REVIEW approvals carry markdown content, the knowledge
+  //    Contract: SPEC_REVIEW approvals carry the spec content, the knowledge
   //    link (the versioned spec item is named exactly `spec-<chainId>`), and a
-  //    null toolCallId (no tool gate involved).
+  //    null toolCallId (no tool gate involved). On the deterministic harness the
+  //    spec content is exactly the BA run's fixture completion: the coordinator
+  //    prefers the BA sandbox's /workspace/spec.md and falls back to the run's
+  //    finalOutput when that read is unavailable (the harness process transport
+  //    has no sandbox command channel), so the recorded content is that exact
+  //    deterministic text -- never a markdown assumption about a fixture.
   const approval = await waitingSpecReview(request, chain.id);
-  expect(approval.content).toContain('#');
+  expect(approval.content).toBe('fixture-complete');
   expect(approval.knowledgeItemId).toMatch(/^[0-9a-f-]{36}$/);
   expect(approval.toolCallId).toBeNull();
   const specItem = await apiCall(request, 'GET', `/knowledge/${approval.knowledgeItemId}`);

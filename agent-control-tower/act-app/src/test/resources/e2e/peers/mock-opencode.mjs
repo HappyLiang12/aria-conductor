@@ -302,6 +302,14 @@ async function startDecisionFlow(body) {
         tokens: { input: 12, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
         modelID: 'efficient',
       });
+    case 'sdd-qa-pass':
+      // The SDD QA step's deterministic verdict: WorkflowAutoChainer routes a QA
+      // step on the VERDICT= marker its run's finalOutput carries.
+      return assistantMessage({
+        text: 'fixture-qa-report\nVERDICT=PASS',
+        tokens: { input: 12, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: 'efficient',
+      });
     case 'unknown-usage':
       return assistantMessage({ text: 'fixture-usage-unknown', tokens: null, modelID: null });
     case 'two-turn-nonce':

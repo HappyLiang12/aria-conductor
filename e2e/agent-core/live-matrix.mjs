@@ -46,7 +46,7 @@ function usage(message) {
     '                   --workspace <dir> --repo <git repository> --evidence <file> \\\n' +
     '                   [--pat-file <file>] [--paid-opt-in] [--scenarios a,b] \\\n' +
     '                   [--timeout-ms <n>] [--expiry-budget-ms <n>] \\\n' +
-    '                   [--backend-approvals-timeout-ms <n>] [--base-url <url>] \\\n' +
+    '                   [--backend-task-deadline-minutes <n>] [--base-url <url>] \\\n' +
     '                   [--no-backend] [--keep-backend]\n');
 }
 
@@ -54,7 +54,7 @@ function parseArgs(argv) {
   const opts = {
     core: null, mode: null, model: null, workspace: null, repo: null, evidence: null,
     patFile: null, paidOptIn: false, scenarios: null, timeoutMs: 900000,
-    expiryBudgetMs: 900000, backendApprovalsTimeoutMs: null,
+    expiryBudgetMs: 900000, backendTaskDeadlineMinutes: null,
     baseUrl: process.env.ARIA_LIVE_BASE_URL || 'http://127.0.0.1:8080',
     backend: true, keepBackend: false,
   };
@@ -78,7 +78,7 @@ function parseArgs(argv) {
       case '--scenarios': opts.scenarios = next().split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--timeout-ms': opts.timeoutMs = Number(next()); break;
       case '--expiry-budget-ms': opts.expiryBudgetMs = Number(next()); break;
-      case '--backend-approvals-timeout-ms': opts.backendApprovalsTimeoutMs = Number(next()); break;
+      case '--backend-task-deadline-minutes': opts.backendTaskDeadlineMinutes = Number(next()); break;
       case '--base-url': opts.baseUrl = next(); break;
       case '--no-backend': opts.backend = false; break;
       case '--keep-backend': opts.keepBackend = true; break;
@@ -384,8 +384,22 @@ function preflight(opts) {
 // ---------------------------------------------------------------------------
 // backend lifecycle
 // ---------------------------------------------------------------------------
+/**
+ * The run-owned workspace root the backend serves (and where a WORKTREE run's
+ * checkout appears). The operator may relocate it — a run whose SOURCE is this
+ * repository itself must, because the production guard refuses a runtime root
+ * inside the source workspace (`RunWorkspaceService.rejectRuntimeRootInsideSource`)
+ * — so the runner resolves it once from the environment, boots the backend with
+ * exactly that value, and asserts against the same path.
+ */
 function backendRuntimeRoot() {
-  return join(REPO_ROOT, 'agent-control-tower', 'act-app', 'data', 'workspaces', 'runs');
+  return process.env.ARIA_WORKSPACES_RUNTIME_ROOT
+    || join(REPO_ROOT, 'agent-control-tower', 'act-app', 'data', 'workspaces', 'runs');
+}
+
+function backendResultRoot() {
+  return process.env.ARIA_WORKSPACES_RESULT_ROOT
+    || join(REPO_ROOT, 'agent-control-tower', 'act-app', 'data', 'workspaces', 'results');
 }
 
 /** Backend environment pins the runner applies, recorded into the evidence row. */
@@ -397,6 +411,12 @@ function backendPins(opts) {
   // script's absolute export / the adapter's resolution) are all configuration
   // defaults now, so the runner pins none of them. Only the operator's installed
   // Qoder CLI is machine-specific and still pinned.
+  //
+  // The workspace roots are the exception: the runner forwards the values it
+  // resolves itself (environment first, the script's defaults otherwise) so the
+  // backend serves exactly the root the runner then asserts against.
+  pins.ARIA_WORKSPACES_RUNTIME_ROOT = backendRuntimeRoot();
+  pins.ARIA_WORKSPACES_RESULT_ROOT = backendResultRoot();
   if (opts.core === 'qoder' && opts.cli) {
     pins.ARIA_CORES_QODER_EXECUTABLE = opts.cli;
   } else if (opts.core !== 'qoder') {
@@ -414,14 +434,17 @@ function startBackend(opts, backendLog) {
     ARIA_RUNTIME_CREDENTIAL_KEY: opts.credentialKey,
     ...pins,
   };
-  if (opts.backendApprovalsTimeoutMs !== null) {
-    // The expiry case asserts an ask reaching EXPIRED, and the ask expires by the
-    // configured window (production default: ~45 min). A system property beats
-    // application.yml, so the operator can boot the live stack with a window the
-    // runner can actually outlive; JAVA_TOOL_OPTIONS is inherited by the JVM the
-    // start script spawns.
+  if (opts.backendTaskDeadlineMinutes !== null) {
+    // The expiry case asserts an ask reaching EXPIRED. A run-owned core session's
+    // ask expires with the RUN's deadline (the approval gate's own window is the
+    // legacy path's bound), and the frozen deadline is read from aria.tasks.* at
+    // run creation; a system property beats application.yml and is inherited by
+    // the JVM the start script spawns. The approval window is aligned to the same
+    // value so both bounds agree.
+    const minutes = opts.backendTaskDeadlineMinutes;
     const existing = process.env.JAVA_TOOL_OPTIONS ? ` ${process.env.JAVA_TOOL_OPTIONS}` : '';
-    env.JAVA_TOOL_OPTIONS = `-Dapprovals.timeout-ms=${opts.backendApprovalsTimeoutMs}${existing}`;
+    env.JAVA_TOOL_OPTIONS =
+      `-Daria.tasks.deadline-minutes=${minutes} -Dapprovals.timeout-ms=${minutes * 60000}${existing}`;
     pins.JAVA_TOOL_OPTIONS = env.JAVA_TOOL_OPTIONS;
   }
   opts.backendPins = pins;
@@ -601,14 +624,17 @@ class Matrix {
     return { runId, status: state.status, bytes, dir, usage };
   }
 
-  async approveOnce(agentId, dir) {
-    const first = join(dir, 'aria-live-once.txt');
+  async approveOnce(agentId) {
     const prompt =
       'Perform two separate file writes, each with its own file-write tool call. ' +
       'First write aria-live-once.txt with the exact content first-pass. ' +
       'Then, in a second tool call, overwrite aria-live-once.txt with the exact content second-pass. ' +
       'Then reply DONE.';
     const runId = await this.dispatch(agentId, prompt, 'approve-once');
+    // A WORKTREE run owns runtimeRoot/worktrees/<runId>: the case reads ITS OWN run's
+    // worktree, never another run's checkout.
+    const dir = join(backendRuntimeRoot(), 'worktrees', runId);
+    const first = join(dir, 'aria-live-once.txt');
     const firstAsk = await this.waitForAsk(runId, this.opts.timeoutMs, 'approve-once first ask');
     if (!firstAsk.done) {
       this.record('approve-once', 'a one-use grant does not cover the second write', 'NOT VERIFIED', {
@@ -637,10 +663,13 @@ class Matrix {
       }, { runId, firstAsk: firstAsk.ask.id, secondAsk: second.ask ? second.ask.id : null, observedBytes: bytes });
   }
 
-  async deny(agentId, dir) {
-    const target = join(dir, 'aria-live-denied.txt');
+  async deny(agentId) {
     const prompt = 'Create the file aria-live-denied.txt with the exact content denied-should-not-exist. Then reply DONE.';
     const runId = await this.dispatch(agentId, prompt, 'deny');
+    // A WORKTREE run owns runtimeRoot/worktrees/<runId>: the case reads ITS OWN run's
+    // worktree, never another run's checkout.
+    const dir = join(backendRuntimeRoot(), 'worktrees', runId);
+    const target = join(dir, 'aria-live-denied.txt');
     const ask = await this.waitForAsk(runId, this.opts.timeoutMs, 'deny ask');
     if (!ask.done) {
       this.record('deny', 'a denial leaves the workspace unwritten', 'NOT VERIFIED', { 'ask observed': false }, { runId });
@@ -667,10 +696,13 @@ class Matrix {
       });
   }
 
-  async expiry(agentId, dir) {
-    const target = join(dir, 'aria-live-expired.txt');
+  async expiry(agentId) {
     const prompt = 'Create the file aria-live-expired.txt with the exact content expired-should-not-exist. Then reply DONE.';
     const runId = await this.dispatch(agentId, prompt, 'expiry');
+    // A WORKTREE run owns runtimeRoot/worktrees/<runId>: the case reads ITS OWN run's
+    // worktree, never another run's checkout.
+    const dir = join(backendRuntimeRoot(), 'worktrees', runId);
+    const target = join(dir, 'aria-live-expired.txt');
     const ask = await this.waitForAsk(runId, this.opts.timeoutMs, 'expiry ask');
     if (!ask.done) {
       this.record('expiry', 'an undecided ask expires and writes nothing', 'NOT VERIFIED', { 'ask observed': false }, { runId });
@@ -713,13 +745,16 @@ class Matrix {
       });
   }
 
-  async cancel(agentId, dir, core) {
-    const ticks = join(dir, 'aria-live-ticks.txt');
+  async cancel(agentId, core) {
     const prompt =
       'Run this exact Bash command, do not modify it: ' +
       'node -e "const fs=require(\'fs\');let i=0;const t=setInterval(()=>{fs.appendFileSync(\'aria-live-ticks.txt\',\'tick \'+(++i)+\'\\n\')},400);setTimeout(()=>{clearInterval(t)},120000)" ' +
       'Then reply DONE.';
     const runId = await this.dispatch(agentId, prompt, 'cancel');
+    // A WORKTREE run owns runtimeRoot/worktrees/<runId>: the case reads ITS OWN run's
+    // worktree, never another run's checkout.
+    const dir = join(backendRuntimeRoot(), 'worktrees', runId);
+    const ticks = join(dir, 'aria-live-ticks.txt');
     await this.waitForAsk(runId, 120000, 'cancel ask');
     const pending = await this.approvals(runId);
     for (const ask of pending) await this.decide(ask.id, true, 'live matrix: allow the writer to start');
@@ -747,13 +782,16 @@ class Matrix {
       }, { runId, runStatus: state.status, bytesAtCancel: beforeCancel, bytesAfter: frozenA, bytesAfterWait: frozenB });
   }
 
-  async pauseResume(agentId, dir) {
-    const ticks = join(dir, 'aria-live-pause.txt');
+  async pauseResume(agentId) {
     const prompt =
       'Run this exact Bash command, do not modify it: ' +
       'node -e "const fs=require(\'fs\');let i=0;const t=setInterval(()=>{fs.appendFileSync(\'aria-live-pause.txt\',\'tick \'+(++i)+\'\\n\')},400);setTimeout(()=>{clearInterval(t)},120000)" ' +
       'Then reply DONE.';
     const runId = await this.dispatch(agentId, prompt, 'pause-resume');
+    // A WORKTREE run owns runtimeRoot/worktrees/<runId>: the case reads ITS OWN run's
+    // worktree, never another run's checkout.
+    const dir = join(backendRuntimeRoot(), 'worktrees', runId);
+    const ticks = join(dir, 'aria-live-pause.txt');
     await this.waitForAsk(runId, 120000, 'pause-resume ask');
     const pending = await this.approvals(runId);
     for (const ask of pending) await this.decide(ask.id, true, 'live matrix: allow the writer to start');
@@ -928,7 +966,7 @@ async function main() {
 
     const wanted = opts.scenarios;
     const enabled = (id) => !wanted || wanted.includes(id);
-    const worktreeDir = () => join(backendRuntimeRoot(), 'worktrees', matrix.records.codingTask.runId);
+
 
     if (enabled('coding-task') || enabled('worktree')) {
       const rec = await matrix.codingTask(worktreeAgent.id, opts.core, opts.mode);
@@ -938,11 +976,11 @@ async function main() {
       capture(`coding-task file: ${redact(probeFile)} bytes=${JSON.stringify(rec.bytes)} sha256=${exists(probeFile) ? sha256File(probeFile) : 'n/a'}`);
       await matrix.worktree(worktreeAgent.id, rec.runId, rec.dir, opts.repoHead);
     }
-    if (enabled('approve-once')) await matrix.approveOnce(worktreeAgent.id, worktreeDir());
-    if (enabled('deny')) await matrix.deny(worktreeAgent.id, worktreeDir());
-    if (enabled('expiry')) await matrix.expiry(worktreeAgent.id, worktreeDir());
-    if (enabled('cancel')) await matrix.cancel(worktreeAgent.id, worktreeDir(), opts.core);
-    if (enabled('pause-resume')) await matrix.pauseResume(worktreeAgent.id, worktreeDir());
+    if (enabled('approve-once')) await matrix.approveOnce(worktreeAgent.id);
+    if (enabled('deny')) await matrix.deny(worktreeAgent.id);
+    if (enabled('expiry')) await matrix.expiry(worktreeAgent.id);
+    if (enabled('cancel')) await matrix.cancel(worktreeAgent.id, opts.core);
+    if (enabled('pause-resume')) await matrix.pauseResume(worktreeAgent.id);
     if (enabled('direct')) await matrix.direct(directAgent.id, opts.workspace);
     if (enabled('no-fallback-sandbox')) {
       const sandboxAgent = await matrix.createAgent({

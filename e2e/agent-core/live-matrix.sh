@@ -3,7 +3,8 @@
 #
 #   bash e2e/agent-core/live-matrix.sh --core qoder --mode HOST --model efficient \
 #     --workspace <dir> --repo <git repository> --evidence <file> [--pat-file <file>] \
-#     [--paid-opt-in] [--scenarios a,b] [--timeout-ms n] [--base-url url] [--no-backend]
+#     [--paid-opt-in] [--scenarios a,b] [--timeout-ms n] [--expiry-budget-ms n] \
+#     [--backend-task-deadline-minutes n] [--base-url url] [--no-backend]
 #
 # Fails closed BEFORE launching anything: every required prerequisite (credential, CLI binary,
 # container image / OpenSandbox server, base repository, toolchain) is checked here and a missing
@@ -33,7 +34,7 @@ while [[ $# -gt 0 ]]; do
         --evidence) EVIDENCE="${2:-}"; shift 2 ;;
         --pat-file) PAT_FILE="${2:-}"; shift 2 ;;
         --paid-opt-in) PAID_OPT_IN="1"; PASSTHRU+=("--paid-opt-in"); shift ;;
-        --scenarios|--timeout-ms|--base-url) PASSTHRU+=("$1" "${2:-}"); shift 2 ;;
+        --scenarios|--timeout-ms|--base-url|--expiry-budget-ms|--backend-task-deadline-minutes) PASSTHRU+=("$1" "${2:-}"); shift 2 ;;
         --no-backend|--keep-backend) PASSTHRU+=("$1"); shift ;;
         -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
         *) echo "live-matrix: unknown argument: $1" >&2; exit 2 ;;

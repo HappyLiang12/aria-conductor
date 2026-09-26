@@ -3,7 +3,7 @@
 #
 #   pwsh -NoProfile -File e2e/agent-core/live-matrix.ps1 --core qoder --mode HOST --model efficient `
 #     --workspace <dir> --repo <git repository> --evidence <file> [--pat-file <file>] `
-#     [--paid-opt-in] [--scenarios a,b] [--timeout-ms n] [--base-url url] [--no-backend]
+#     [--paid-opt-in] [--scenarios a,b] [--timeout-ms n] [--expiry-budget-ms n] \n#     [--backend-task-deadline-minutes n] [--base-url url] [--no-backend]
 #
 # Fails closed BEFORE launching anything: every required prerequisite (credential, CLI binary,
 # container image / OpenSandbox server, base repository, toolchain) is checked here and a missing
@@ -15,7 +15,7 @@
 param(
     [string]$core, [string]$mode, [string]$model, [string]$workspace, [string]$repo,
     [string]$evidence, [string]$patFile, [switch]$paidOptIn,
-    [string]$scenarios, [string]$timeoutMs, [string]$baseUrl,
+    [string]$scenarios, [string]$timeoutMs, [string]$expiryBudgetMs, [string]$backendTaskDeadlineMinutes, [string]$baseUrl,
     [switch]$noBackend, [switch]$keepBackend
 )
 $ErrorActionPreference = "Stop"
@@ -54,6 +54,8 @@ $passthru = @("--model", $model)
 if ($paidOptIn) { $passthru += "--paid-opt-in" }
 if ($scenarios) { $passthru += @("--scenarios", $scenarios) }
 if ($timeoutMs) { $passthru += @("--timeout-ms", $timeoutMs) }
+if ($expiryBudgetMs) { $passthru += @("--expiry-budget-ms", $expiryBudgetMs) }
+if ($backendTaskDeadlineMinutes) { $passthru += @("--backend-task-deadline-minutes", $backendTaskDeadlineMinutes) }
 if ($baseUrl) { $passthru += @("--base-url", $baseUrl) }
 if ($noBackend) { $passthru += "--no-backend" }
 if ($keepBackend) { $passthru += "--keep-backend" }

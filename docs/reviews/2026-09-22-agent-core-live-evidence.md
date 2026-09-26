@@ -50,7 +50,7 @@ No launch happened in any of the four: the refusal is emitted by the prerequisit
 
 | Combination | Status | Evidence |
 |---|---|---|
-| `qoder/HOST` | **FAILED** — real runs dispatched and frozen to `qoder/HOST`, then the host runtime failed to authenticate its control secret; no file written, no approval ask observed | §3 |
+| `qoder/HOST` | **VERIFIED in round 2** (2026-09-27): the behavioural matrix passes against the real CLI — see §7; the row below is the round-1 failure this section documents | §3 (round 1), §7 (round 2) |
 | `qoder/SANDBOX` | **BLOCKED (environment)** | §4 |
 | `opencode/HOST` | **BLOCKED (environment)** | §4 |
 | `opencode/SANDBOX` | **BLOCKED (environment)** | §4 |
@@ -196,3 +196,45 @@ criterion is **NOT VERIFIED**.
 
 The matrix verdict for Task 20 is therefore **not a pass**: `qoder/HOST` failed in the live
 environment, three combinations are environment-blocked, two regression lanes were not evaluated.
+
+## 7. Round 2 (2026-09-27): the qoder/HOST behavioural matrix is VERIFIED
+
+This section supersedes §2's `qoder/HOST` row and §6's third bullet. The same real stack (Qoder CLI
+`1.1.61`, the built ACP bridge, `efficient` pinned, the production start script) was driven again
+after the defects of §3.1/§3.2 were fixed, with two passes because the expiry criterion needs a
+short run deadline while the coding task needs the production one:
+
+| Pass | Scenarios | Evidence | Verdict |
+|---|---|---|---|
+| Headline (production deadline) | `coding-task`, `worktree`, `approve-once`, `deny` | `evidence/2026-09-22-live-matrix/qoder-HOST-t20-headline.txt` (+`.json`, backend log) | **verified** — all four cases PASS |
+| Expiry (3-minute deadline) | `expiry` | `evidence/2026-09-22-live-matrix/qoder-HOST-t20-expiry.txt` (+`.json`) | **verified** — the ask reached exactly `EXPIRED` and the file was never written |
+
+Each PASS is the runner's criterion table, not a summary:
+
+- **coding-task**: `run reached COMPLETED`, `file bytes on disk equal the requested content`
+  (`aria-live-qoder-HOST`, `sha256=b2830b19de8750fc116f9eee849bf7854ed700f8bd9dce13d53be75759637196`),
+  `approval ask observed`, `ask approved once`.
+- **worktree**: the run-owned worktree exists, the file is inside it, the admitted repository has no
+  run file, and its HEAD is unchanged.
+- **approve-once**: a one-use grant is followed by a SECOND approval ask, the run completes, and the
+  final bytes are the second pass — the re-ask semantics proven against the real CLI.
+- **deny**: the denied file is absent, the ask reached `DENIED`, and the run reached a terminal
+  state (a denial leaves the CORE's turn to finish as a refusal; it no longer cancels the run).
+- **expiry**: the undecided ask reached a non-PENDING state, that state is exactly `EXPIRED` at its
+  own declared window, and the file was never written.
+
+Runner findings this round (all fixed in `e2e/agent-core/live-matrix.{mjs,sh,ps1}`):
+
+1. The workspace root must be operator-configurable: a run whose SOURCE is this repository cannot
+   have a runtime root inside it (`RunWorkspaceService.rejectRuntimeRootInsideSource`), so the
+   runner resolves `ARIA_WORKSPACES_RUNTIME_ROOT`/`_RESULT_ROOT` from the environment, boots the
+   backend with exactly those values, and asserts against the same paths.
+2. Each case must read **its own** run's worktree; the earlier runner read the coding task's
+   checkout for the other cases, which made their byte assertions vacuous (and the re-ask
+   assertion fail).
+3. A run-owned session's ask expires with the RUN's deadline (the approval gate's window is the
+   legacy path's bound), so the runner exposes `--backend-task-deadline-minutes` to shorten both.
+
+Operational notes: the Qoder PAT used here is supplied for this exercise only and **must be
+rotated**; and a coordinated run cannot be paused before its session opens (the pause answers a
+truthful 409 conflict, and the operator contract is refresh-and-retry).

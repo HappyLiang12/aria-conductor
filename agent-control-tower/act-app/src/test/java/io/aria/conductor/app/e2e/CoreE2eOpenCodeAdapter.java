@@ -155,6 +155,17 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
         env.put(CoreE2eScenarios.PEER_CONTROL_TOKEN_ENV, scenarios.peerControlToken());
         env.put("ARIA_PEER_SCENARIO", scenario);
         env.put("ARIA_PEER_WORKSPACE", workingDirectory.toString());
+        // The child env replaces the parent's, and the peer shells out (git push
+        // fixtures): without PATH its spawned tools are ENOENT. The production
+        // launch profile passes PATH for the same reason.
+        String path = System.getenv("PATH");
+        if (path != null && !path.isBlank()) {
+            env.put("PATH", path);
+        }
+        String systemRoot = System.getenv("SystemRoot");
+        if (systemRoot != null && !systemRoot.isBlank()) {
+            env.put("SystemRoot", systemRoot);
+        }
         return env;
     }
 
@@ -346,7 +357,8 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
                 if (response.statusCode() != 200) {
                     return CompletableFuture.failedFuture(new IllegalStateException(
                             "The mock OpenCode peer refused the decision for request " + reply.requestId()
-                                    + ": HTTP " + response.statusCode() + " " + response.body()));
+                                    + " (optionId=" + reply.optionId() + "): HTTP " + response.statusCode()
+                                    + " " + response.body()));
                 }
                 return CompletableFuture.completedFuture(null);
             } catch (IOException e) {

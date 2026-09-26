@@ -364,9 +364,14 @@ async function applyDecisionRequest(optionId) {
   const entry = pendingDecision;
   const kind = entry.options.find((option) => option.optionId === optionId)?.kind ?? null;
   if (kind !== 'allow_once' && kind !== 'reject_once') {
-    // An unoffered decision must not consume the pending request.
+    // An unoffered decision must not consume the pending request. The refusal
+    // names what was offered, so a caller-side id mismatch is diagnosable from
+    // the platform's own log.
     record('peer.invalid_decision', { optionId, kind, writes: 0 });
-    return { status: 409, body: { error: 'unsupported fixture decision' } };
+    return {
+      status: 409,
+      body: { error: 'unsupported fixture decision', offered: entry.options.map((o) => o.optionId) },
+    };
   }
   pendingDecision = null;
   decisions += 1;
@@ -394,7 +399,12 @@ async function applyDecisionRequest(optionId) {
   } catch (error) {
     record('peer.invalid_decision', { optionId, kind, writes: 0 });
     entry.resolve({ status: 'refused' });
-    return { status: 409, body: { error: 'unsupported fixture decision' } };
+    // The cause is named so a fixture-side failure (a rejected git command, a
+    // malformed workspace) is diagnosable from the platform's own log.
+    return {
+      status: 409,
+      body: { error: 'unsupported fixture decision', cause: String(error?.message ?? error) },
+    };
   }
   if (decision.status === 'written') {
     writes += decision.writes;

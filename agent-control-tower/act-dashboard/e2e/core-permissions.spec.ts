@@ -5,7 +5,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   BACKEND,
   OPERATOR_BEARER_TOKEN,
@@ -517,7 +517,10 @@ function runWorktreeOf(sourceRepo: string): string {
     .split('\n')
     .filter((line) => line.startsWith('worktree '))
     .map((line) => line.slice('worktree '.length).trim());
-  const worktrees = entries.filter((p) => p !== sourceRepo);
+  // git reports its own separators; compare normalised paths so the source's
+  // own worktree entry is excluded on every platform.
+  const sourceCanonical = resolve(sourceRepo).toLowerCase();
+  const worktrees = entries.filter((p) => resolve(p).toLowerCase() !== sourceCanonical);
   expect(worktrees, `expected a run worktree beside ${sourceRepo}: ${entries.join(', ')}`).toHaveLength(1);
   return worktrees[0];
 }
@@ -593,21 +596,19 @@ test('a run blocks on the git_push PUSH gate and the approved push lands in a di
 
   // The same truthful boundary on the tool-call route: a core-owned run executes
   // its tools inside the core, so the platform records no ToolCall row for the
-  // blocked git_push. The run's blocked state is exactly the PENDING ask above
-  // plus the RUNNING -> PAUSED transition the case asserts next.
+  // blocked git_push. The run's blocked state is exactly that PENDING ask: the
+  // core holds its own turn (the peer withholds the write), so the run stays
+  // RUNNING and the remote has no branch yet -- the gate is what blocks the push.
   const blockedCalls = await apiCall(request, 'GET', `/runs/${run.id}/tool-calls`);
   expect(blockedCalls.status).toBe(200);
   expect((blockedCalls.data as any[]).filter((tc) => tc.toolName === 'git_push')).toHaveLength(0);
 
-  await expect
-    .poll(
-      async () => {
-        const { data } = await apiCall(request, 'GET', `/runs/${run.id}`);
-        return data?.status;
-      },
-      { timeout: 30_000, intervals: [1_000, 2_000] },
-    )
-    .toBe('PAUSED');
+  const held = await apiCall(request, 'GET', `/runs/${run.id}`);
+  expect(held.status).toBe(200);
+  expect(held.data?.status).toBe('RUNNING');
+  const branchesBefore = execFileSync('git', ['--git-dir', bareRepo, 'branch', '--list', branchName],
+      { encoding: 'utf8' }).trim();
+  expect(branchesBefore).toBe('');
 
   // ── Prepare the exact commit the approved push must land ──────────────────
   // The run owns a worktree of the source repository; the spec discovers it from
@@ -619,18 +620,25 @@ test('a run blocks on the git_push PUSH gate and the approved push lands in a di
   const pushedSha = git(['rev-parse', 'HEAD'], worktree);
   expect(pushedSha).toMatch(/^[0-9a-f]{40}$/);
 
-  // ── RESUMED: approve and watch the governed push execute ──────────────────
+  // ── RESUMED: approve and watch the governed push land ─────────────────────
   await decideApproval(request, ask.id, true, 'e2e git push gate approval');
 
-  const settled = await pollUntil<any[]>(
-    request,
-    `/runs/${run.id}/tool-calls`,
-    (calls) => Array.isArray(calls) && calls.some((tc) => tc.toolName === 'git_push' && tc.status === 'COMPLETED'),
-    120_000,
-    2_000,
-  );
-  const settledCall = settled.find((tc) => tc.toolName === 'git_push')!;
-  expect(settledCall.status, `git_push result: ${settledCall.result}`).toBe('COMPLETED');
+  // The tool call happens inside the core, so the platform records no ToolCall
+  // row for it: the push is observed where it lands -- the disposable bare
+  // remote must gain exactly the branch at exactly the commit the spec created
+  // in the run's worktree, and the run must then reach COMPLETED.
+  await expect
+    .poll(
+      () => {
+        try {
+          return git(['--git-dir', bareRepo, 'rev-parse', `refs/heads/${branchName}`], bareRoot);
+        } catch {
+          return null;
+        }
+      },
+      { timeout: 120_000, intervals: [1_000, 2_000] },
+    )
+    .toBe(pushedSha);
 
   const done = await pollUntil<any>(
     request,

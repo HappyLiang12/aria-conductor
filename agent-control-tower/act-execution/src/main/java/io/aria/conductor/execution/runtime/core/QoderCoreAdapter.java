@@ -11,8 +11,12 @@ import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 
+import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,9 +35,11 @@ import java.util.TreeMap;
  * run binding, the reviewed core executable and its recorded arguments, the
  * run-owned child environment, the run's control-secret and credential files
  * (named, never carried as arguments) and the loopback endpoint the backend
- * allocated. The trusted launcher writes those two files from the run's secret
- * material before it starts the profile -- nothing here writes a secret to
- * disk or puts one on a command line.
+ * allocated. The two secret-bearing files are materialized before the bridge is
+ * started: the trusted launcher writes the run-owned credential file from the
+ * resolved bundle (this adapter, at profile construction) and the placement
+ * writes the minted control-secret file the profile declares (it alone holds
+ * that secret). No secret value ever reaches a command line.
  *
  * <p>Capabilities are the reviewed rows of the committed capability matrix
  * ({@code e2e/agent-core/fixtures/capability-matrix.json}), never inferred from
@@ -159,6 +165,19 @@ public final class QoderCoreAdapter implements CoreAdapter {
      * the two run-owned secret-bearing files the trusted launcher writes. No
      * secret value appears in the argv, and the environment is exactly the
      * reviewed profile environment -- the adapter adds nothing to it.
+     *
+     * <p>Everything the bridge is told must exist when it is started (the
+     * committed bridge refuses a {@code --cli} that is not an absolute existing
+     * executable and a {@code --control-secret-file}/{@code --credential-file}
+     * it cannot read): the bridge entry and the core executable are therefore
+     * resolved to absolute existing paths here -- a bare configured name is
+     * resolved against this process's {@code PATH} -- and an unresolvable one is
+     * refused loudly by property name instead of launching a bridge that can only
+     * exit before it binds its endpoint. The run-owned credential file is written
+     * here from the credential bundle (the trusted-launcher side of the
+     * {@code --credential-file} contract); the control-secret file is declared on
+     * the profile and written by the placement, which is the only party that
+     * holds the minted secret.
      */
     @Override
     public LaunchProfile launchProfile(ExecutionSpec spec, PreparedEnvironment environment,
@@ -170,15 +189,19 @@ public final class QoderCoreAdapter implements CoreAdapter {
         requireMatchingEnvironment(spec, environment);
         URI endpoint = requireLoopbackEndpoint(environment);
 
+        String bridgeEntry = requireExistingFile(profile.bridgeEntry(),
+                "aria.cores.qoder.bridge-entry (the built committed bridge entry)");
+        String coreExecutable = resolveExecutable(profile.coreExecutable(),
+                "aria.cores.qoder.executable (the pinned Qoder CLI)");
         Path workingDirectory = Path.of(environment.workingDirectory()).toAbsolutePath().normalize();
         List<String> argv = new ArrayList<>();
         argv.add(profile.nodeExecutable());
-        argv.add(profile.bridgeEntry());
+        argv.add(bridgeEntry);
         add(argv, "--run-id", spec.runId().toString());
         add(argv, "--workspace", workingDirectory.toString());
         add(argv, "--model", profile.model());
         argv.add("--cli");
-        argv.add(profile.coreExecutable());
+        argv.add(coreExecutable);
         for (String argument : profile.coreArguments()) {
             argv.add("--cli-arg");
             argv.add(argument);
@@ -195,8 +218,9 @@ public final class QoderCoreAdapter implements CoreAdapter {
                         + credentialEnvironment.keySet());
             }
             Map.Entry<String, String> credential = credentialEnvironment.entrySet().iterator().next();
+            Path credentialFile = writeCredentialFile(environment, credential.getValue());
             add(argv, "--credential-env", credential.getKey());
-            add(argv, "--credential-file", credentialFile(environment).toString());
+            add(argv, "--credential-file", credentialFile.toString());
         }
         // A bundle that omits every credential variable is tolerated on purpose
         // (no --credential-env/--credential-file pair is emitted): such a child
@@ -204,10 +228,12 @@ public final class QoderCoreAdapter implements CoreAdapter {
         // handshake. Provisioning the run's credential -- or refusing the run
         // before it starts -- is the configuration service's responsibility,
         // carried into the coordinator wiring, not this adapter's.
-        add(argv, "--control-secret-file", controlSecretFile(environment).toString());
+        Path controlSecretFile = controlSecretFile(environment);
+        add(argv, "--control-secret-file", controlSecretFile.toString());
         add(argv, "--host", endpoint.getHost());
         add(argv, "--port", String.valueOf(endpoint.getPort()));
-        return new LaunchProfile(argv, profile.environment(), workingDirectory.toString());
+        return new LaunchProfile(argv, profile.environment(), workingDirectory.toString(),
+                controlSecretFile.toString());
     }
 
     /**
@@ -251,6 +277,109 @@ public final class QoderCoreAdapter implements CoreAdapter {
     public static Path credentialFile(PreparedEnvironment environment) {
         return Path.of(environment.configurationDirectory()).toAbsolutePath().normalize()
                 .resolve(CREDENTIAL_FILE);
+    }
+
+    // ------------------------------------------------------ launch-time existence gates
+
+    /**
+     * The configured file, resolved to an absolute existing path (a relative
+     * configured value is resolved against the process working directory, which is
+     * the repository root of the documented start path). A missing file is refused
+     * loudly by property name: the bridge would only exit before it binds its
+     * endpoint, which at the readiness gate is indistinguishable from a slow one.
+     */
+    static String requireExistingFile(String configured, String property) {
+        Path path = Path.of(configured).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalStateException("The Qoder bridge launch requires an existing file for " + property
+                    + ", but the configured value does not resolve to one: " + configured + " (resolved: "
+                    + path + ")");
+        }
+        return path.toString();
+    }
+
+    /**
+     * The configured core executable, resolved to the absolute existing file the
+     * committed bridge demands for {@code --cli}: an absolute configured path must
+     * exist, and a bare name is resolved against this process's {@code PATH} (the
+     * same resolution the launcher itself applies when it spawns the bridge). With
+     * no absolute answer on disk the launch is refused loudly by property name
+     * instead of handing the bridge a value it must reject.
+     */
+    static String resolveExecutable(String configured, String property) {
+        return resolveExecutable(configured, property, System.getenv("PATH"), System.getenv("PATHEXT"));
+    }
+
+    /**
+     * The resolution itself, with the lookup environment as explicit inputs (test
+     * seam): the configured path when it is an existing absolute file, else the
+     * first {@code PATH} candidate that is one.
+     */
+    static String resolveExecutable(String configured, String property, String pathEnvironment,
+            String pathExtensions) {
+        Path path = Path.of(configured);
+        if (path.isAbsolute()) {
+            if (!Files.isRegularFile(path)) {
+                throw new IllegalStateException("The Qoder bridge launch requires an absolute existing executable"
+                        + " for " + property + ", but the configured " + configured + " does not exist");
+            }
+            return path.normalize().toString();
+        }
+        for (Path candidate : pathCandidates(configured, pathEnvironment, pathExtensions)) {
+            if (Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().normalize().toString();
+            }
+        }
+        throw new IllegalStateException("The Qoder bridge launch requires an absolute existing executable for "
+                + property + ", and the configured name '" + configured + "' does not resolve to one on PATH;"
+                + " configure the absolute path of the pinned Qoder CLI");
+    }
+
+    /** A bare name on every {@code PATH} directory, with the Windows extension set where available. */
+    private static List<Path> pathCandidates(String name, String pathEnvironment, String pathExtensions) {
+        List<Path> candidates = new ArrayList<>();
+        if (pathEnvironment == null || pathEnvironment.isBlank()) {
+            return candidates;
+        }
+        List<String> extensions = new ArrayList<>();
+        if (pathExtensions != null && !pathExtensions.isBlank()) {
+            for (String extension : pathExtensions.split(";")) {
+                String trimmed = extension.trim();
+                if (!trimmed.isEmpty()) {
+                    extensions.add(trimmed.toLowerCase(java.util.Locale.ROOT));
+                }
+            }
+        }
+        for (String directory : pathEnvironment.split(java.io.File.pathSeparator)) {
+            if (directory.isBlank()) {
+                continue;
+            }
+            Path root = Path.of(directory);
+            candidates.add(root.resolve(name));
+            for (String extension : extensions) {
+                candidates.add(root.resolve(name + extension));
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * Writes the run-owned credential file the profile names ({@code mode}-agnostic:
+     * the trusted-launcher side of the bridge contract). The file lives in the
+     * run-owned configuration directory, never in the user workspace, and the value
+     * reaches the core only through the file the bridge reads -- never the argv.
+     */
+    private static Path writeCredentialFile(PreparedEnvironment environment, String credential) {
+        Path target = credentialFile(environment);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, credential + System.lineSeparator(), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to write the run-owned credential file " + target
+                    + "; the bridge would be told to read a file that does not exist", e);
+        }
+        return target;
     }
 
     /** The credential variables of the bundle: everything but the bridge's own control secret. */

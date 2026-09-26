@@ -47,7 +47,7 @@ import static org.awaitility.Awaitility.await;
  * {@code synchronized (decisionMonitor)}; it never executes the database row
  * lock. This class drives two PARALLEL operator decisions (double-click /
  * client retry) at one PLATFORM_MCP ALLOW_ONCE ask per round on the real
- * migrated H2 schema — the same idiom as {@code KnowledgeReviewConcurrencyIT}
+ * migrated H2 schema — the same idiom as {@code KnowledgeReviewConcurrencyIntegrationTest}
  * for the knowledge review — and asserts the exact end state: one winner, one
  * settled refusal, one delivered ask row, one WRITE_GRANT ledger row and
  * exactly one usable use.

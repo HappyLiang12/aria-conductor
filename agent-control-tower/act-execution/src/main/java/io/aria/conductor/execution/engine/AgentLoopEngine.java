@@ -356,6 +356,27 @@ public class AgentLoopEngine {
     }
 
     /**
+     * The legacy provider of the run's selected core, for the provider-level paths
+     * (turn loop, task delegation, budget summary). A catalog core resolves to no
+     * provider bean -- {@link AdkProviderRegistry#resolve(Agent)} consults the
+     * production core catalog -- because its run path is the coordinator through
+     * the core launcher, which the dispatch gates above have already handled. A
+     * catalog core reaching this method therefore means the cutover wiring is not
+     * deployed; the run is refused explicitly instead of failing with a
+     * null-provider error, and no other provider is ever substituted.
+     */
+    private AdkProvider requireLegacyProvider(RunContext ctx) {
+        AdkProvider provider = adkProviderRegistry.resolve(ctx.getAgent());
+        if (provider == null) {
+            String coreId = ctx.getAgent() == null ? null : ctx.getAgent().getAdkProvider();
+            throw new IllegalStateException("Core '" + coreId + "' is served by its run-owned core runtime"
+                    + " (the core launcher/coordinator), which is not available in this wiring;"
+                    + " the legacy provider path must not execute it");
+        }
+        return provider;
+    }
+
+    /**
      * Drives one run on a registered production core through the cutover
      * launcher: freeze the immutable binding (first attempt) and execute the
      * run-owned attempt through the coordinator, then keep the engine's own
@@ -785,7 +806,7 @@ public class AgentLoopEngine {
         // Task-level delegation branch: a task-capable provider (e.g. OpenCode) takes
         // over the whole run via executeTask — the turn-level loop below is never
         // entered. Turn-loop logic remains untouched.
-        AdkProvider resolvedProvider = adkProviderRegistry.resolve(ctx.getAgent());
+        AdkProvider resolvedProvider = requireLegacyProvider(ctx);
         if (resolvedProvider.supportsTaskExecution()) {
             taskExecutionPath(ctx, resolvedProvider, emitter);
             return;
@@ -826,7 +847,7 @@ public class AgentLoopEngine {
                     summaryMessages.add(LlmMessage.system(
                             "You ran out of tool-call budget. List ONLY what was actually done "
                                     + "based on tool results above. Clearly state what could NOT be completed."));
-                    AdkProvider summaryProvider = adkProviderRegistry.resolve(ctx.getAgent());
+                    AdkProvider summaryProvider = requireLegacyProvider(ctx);
                     LlmResponse summaryResponse = summaryProvider.call(
                             ctx.getAgentId(), summaryMessages, List.of()); // no tools
                     ctx.addTokensUsed(summaryResponse.inputTokens(), summaryResponse.outputTokens());
@@ -1194,7 +1215,7 @@ public class AgentLoopEngine {
             List<LlmMessage> messages = buildMessages(ctx);
 
             // Call LLM via the resolved ADK provider
-            AdkProvider adkProvider = adkProviderRegistry.resolve(ctx.getAgent());
+            AdkProvider adkProvider = requireLegacyProvider(ctx);
 
             // Resolve tools for this agent
             List<Map<String, Object>> toolsPayload = List.of();

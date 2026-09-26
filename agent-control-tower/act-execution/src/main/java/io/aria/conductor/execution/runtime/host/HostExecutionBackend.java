@@ -7,6 +7,7 @@ import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
+import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import io.aria.conductor.execution.runtime.WorkspacePaths;
@@ -121,6 +122,11 @@ public class HostExecutionBackend implements ExecutionBackend {
     private final Map<UUID, OwnedProcess> processes = new ConcurrentHashMap<>();
     /** The per-run bridge control secret minted at {@link #prepare}, memory-only. */
     private final Map<UUID, String> controlSecrets = new ConcurrentHashMap<>();
+    /**
+     * The runs whose launched profile named a control-secret file: only those
+     * expose the minted secret to the session opener (their runtime reads it).
+     */
+    private final Map<UUID, String> sessionSecrets = new ConcurrentHashMap<>();
 
     public HostExecutionBackend(OwnedProcessController controller) {
         this(controller, HostExecutionBackend::allocateLoopbackEndpoint);
@@ -189,6 +195,13 @@ public class HostExecutionBackend implements ExecutionBackend {
             throw new IllegalStateException("Run " + environment.runId()
                     + " has no minted control secret; it was not prepared by this backend");
         }
+        // The trusted launcher's side of the bridge contract: before the runtime
+        // is started, every file the profile tells it to read must exist. The
+        // control secret is this placement's, memory-only until now, so it is
+        // written here (never carried in the argv) into the run-owned
+        // configuration directory the profile named.
+        writeControlSecretFile(environment, profile, controlSecret);
+        boolean declaredControlSecret = profile.controlSecretFile() != null;
         OwnedProcess owned = controller.start(environment.runId(), deliverControlSecret(profile, controlSecret));
         if (!controller.owns(owned)) {
             discard(owned);
@@ -206,8 +219,58 @@ public class HostExecutionBackend implements ExecutionBackend {
             throw e;
         }
         processes.put(environment.runId(), owned);
+        if (declaredControlSecret) {
+            sessionSecrets.put(environment.runId(), controlSecret);
+        }
         return new RuntimeHandle(environment.runId(), ExecutionMode.HOST, environment.environmentId(),
                 owned.ownershipIdentity(), environment.endpoint());
+    }
+
+    /**
+     * Writes the run's minted control secret into the run-owned file the launch
+     * profile named, creating its parent if needed. The file must live inside the
+     * run-owned configuration directory of this run's prepared environment: a
+     * profile that names any other location is refused, so a launch can never be
+     * told to write a secret outside the run-owned tree. No secret value appears
+     * in any failure message.
+     */
+    private static void writeControlSecretFile(PreparedEnvironment environment, LaunchProfile profile,
+            String controlSecret) {
+        String declared = profile.controlSecretFile();
+        if (declared == null) {
+            return;
+        }
+        Path configurationDirectory = Path.of(environment.configurationDirectory())
+                .toAbsolutePath().normalize();
+        Path target = Path.of(declared).toAbsolutePath().normalize();
+        if (!target.getParent().equals(configurationDirectory)) {
+            throw new IllegalStateException("The launch profile names a control-secret file outside the run-owned"
+                    + " configuration directory of run " + environment.runId() + ": " + target);
+        }
+        try {
+            Files.writeString(target, controlSecret + System.lineSeparator(),
+                    StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                    java.nio.file.StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to write the run-owned control-secret file " + target
+                    + " of run " + environment.runId() + "; the runtime would be told to read a file that does"
+                    + " not exist", e);
+        }
+    }
+
+    /**
+     * The run's minted control secret, exposed only for a run whose launched
+     * profile named a control-secret file (i.e. its runtime authenticates with
+     * it). The session opener receives it under {@link #CONTROL_SECRET_ENVIRONMENT}.
+     */
+    @Override
+    public SecretBundle sessionSecret(RuntimeHandle handle) {
+        Objects.requireNonNull(handle, "handle");
+        String secret = sessionSecrets.get(handle.runId());
+        return secret == null
+                ? new SecretBundle(null, Map.of())
+                : new SecretBundle(null, Map.of(CONTROL_SECRET_ENVIRONMENT, secret));
     }
 
     @Override
@@ -279,6 +342,7 @@ public class HostExecutionBackend implements ExecutionBackend {
         OwnedProcess owned = processes.remove(handle.runId());
         controller.release(owned != null ? owned : OwnedProcess.parse(handle.ownershipIdentity()));
         controlSecrets.remove(handle.runId());
+        sessionSecrets.remove(handle.runId());
         PreparedEnvironment environment = environments.remove(handle.runId());
         if (environment == null) {
             return owned != null;
@@ -339,7 +403,8 @@ public class HostExecutionBackend implements ExecutionBackend {
     private static LaunchProfile deliverControlSecret(LaunchProfile profile, String controlSecret) {
         Map<String, String> env = new LinkedHashMap<>(profile.env());
         env.put(CONTROL_SECRET_ENVIRONMENT, controlSecret);
-        return new LaunchProfile(profile.argv(), env, profile.workingDirectory());
+        return new LaunchProfile(profile.argv(), env, profile.workingDirectory(),
+                profile.controlSecretFile());
     }
 
     /** A fresh 256-bit secret; the committed bridge insists on at least 16 characters. */

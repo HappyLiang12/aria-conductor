@@ -486,6 +486,20 @@ class CoreAdapterContractTest {
                     "--host", "127.0.0.1",
                     "--port", String.valueOf(run.environment().endpoint().getPort())));
             assertThat(profile.env()).isEqualTo(Map.of());
+            // Fix round 1: the trusted-launcher side of the file contract. The
+            // credential file the argv names is materialized by the launch (the
+            // bridge refuses a file it cannot read), and the control-secret file
+            // is declared on the profile so the placement that mints the secret
+            // writes it. Every path the bridge is told is absolute.
+            assertThat(profile.controlSecretFile())
+                    .isEqualTo(QoderCoreAdapter.controlSecretFile(run.environment()).toString());
+            Path credentialFile = QoderCoreAdapter.credentialFile(run.environment());
+            assertThat(credentialFile).isRegularFile();
+            assertThat(Files.readString(credentialFile, java.nio.charset.StandardCharsets.UTF_8))
+                    .isEqualTo(FIXTURE_CREDENTIAL + System.lineSeparator());
+            assertThat(profile.controlSecretFile()).isNotNull();
+            assertThat(Path.of(profile.controlSecretFile()).isAbsolute()).isTrue();
+            assertThat(Path.of(profile.workingDirectory()).isAbsolute()).isTrue();
             for (String argument : profile.argv()) {
                 assertThat(argument)
                         .as("a secret value must never appear in the launch argv")

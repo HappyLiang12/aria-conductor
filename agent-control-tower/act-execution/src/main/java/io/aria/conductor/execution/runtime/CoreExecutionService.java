@@ -251,7 +251,10 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                     : credentials.resolve(spec.credentialRef());
             LaunchProfile profile = adapter.launchProfile(spec, environment, secret);
             RuntimeHandle handle = backend.launch(environment, profile);
-            CoreSession session = adapter.open(handle, spec, secret);
+            // The placement that minted the run's control secret delivers it to the
+            // session opener as well: a bridge session cannot authenticate without it,
+            // and the credential bundle the adapter received never carried it.
+            CoreSession session = adapter.open(handle, spec, withSessionSecret(secret, backend.sessionSecret(handle)));
             runtime.launch(handle, session);
         } catch (RuntimeException e) {
             abortLaunch(runtime, lease);
@@ -262,6 +265,23 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         // is the run's frozen snapshot and is never written back itself.
         persistState(runtime, ControlState.RUNNING.name());
         return runtime;
+    }
+
+    /**
+     * The bundle handed to the session opener: the run's credential bundle plus the
+     * placement's minted session secret (e.g. the bridge control secret). The
+     * placement's value is authoritative for a name it mints; an absent or empty
+     * session secret leaves the bundle untouched, so a core without one (opencode)
+     * sees exactly the credential bundle it always saw.
+     */
+    private static SecretBundle withSessionSecret(SecretBundle credential, SecretBundle sessionSecret) {
+        if (sessionSecret == null || sessionSecret.environment().isEmpty()) {
+            return credential;
+        }
+        java.util.LinkedHashMap<String, String> environment = new java.util.LinkedHashMap<>(
+                credential.environment());
+        environment.putAll(sessionSecret.environment());
+        return new SecretBundle(credential.reference(), environment);
     }
 
     private void requireFrozenMatch(RunExecutionBinding binding, ExecutionSpec spec, CoreAdapter adapter) {

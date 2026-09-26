@@ -1,0 +1,30 @@
+prerequisite ok: qoder CLI: C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe (1.1.61)
+prerequisite ok: qoder bridge entry: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+prerequisite ok: admitted repository HEAD e84b35f775983c59ebd04926b1fd2ddebce05c11
+
+== backend ==
+backend environment pins: ARIA_CORES_QODER_EXECUTABLE=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe
+$ C:\Program Files\PowerShell\7\pwsh.exe -NoProfile -File scripts/start-backend.ps1 -SkipSandbox (backend cwd C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor)
+health: HTTP 200 {"status":"UP"}
+
+== live matrix qoder/HOST ==
+core=qoder mode=HOST os=win32 x64 cli=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe cliVersion=1.1.61 bridge=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+requested model=efficient (qoder pin efficient); usage evidence is recorded, never asserted as zero cost
+qoder runtime credential stored (HTTP 200); the secret is never printed
+agent created: id=8977cd42-de28-4b06-81be-e82a115c50c2 core=qoder mode=HOST workspaceMode=WORKTREE
+agent created: id=20d0ff8b-910f-4b4f-9a4a-a8c694503e22 core=qoder mode=HOST workspaceMode=DIRECT
+run coding-task: id=ce24164f-34c7-4884-a62c-b29c2f0803d0 status=PENDING
+  [FAIL] coding-task — one real coding task in qoder/HOST
+      FAIL run reached COMPLETED
+      FAIL file bytes on disk equal the requested content
+      FAIL approval ask observed
+      FAIL ask approved once
+coding-task file: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\agent-control-tower\act-app\data\workspaces\runs\worktrees\ce24164f-34c7-4884-a62c-b29c2f0803d0\aria-live-probe.txt bytes=null sha256=n/a
+  [PASS] worktree — WORKTREE runs write in a run-owned worktree and leave the admitted repository untouched
+      PASS run-owned worktree exists
+      FAIL the run wrote its file inside the run worktree
+      PASS the admitted repository has no run file
+      PASS admitted repository HEAD unchanged
+run approve-once: id=82906a8c-9411-4fe4-b95c-33a364bd83fd status=PENDING
+live-matrix error: TypeError: fetch failed
+stopping backend process tree

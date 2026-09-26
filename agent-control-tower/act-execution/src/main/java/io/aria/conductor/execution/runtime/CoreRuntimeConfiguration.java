@@ -193,15 +193,33 @@ public class CoreRuntimeConfiguration {
                 Map.of(), version, model));
     }
 
+    /**
+     * The Qoder core adapter. The reviewed model pin is operator configuration
+     * ({@code aria.cores.qoder.model}, default {@code efficient} -- the model the
+     * Qoder acceptance pins; a paid model must be a deliberate operator choice,
+     * never a shipped default). The bridge entry and the CLI executable are
+     * resolved to absolute existing paths at launch by the adapter (a bare CLI
+     * name is resolved on PATH), because the committed bridge refuses anything
+     * else before it binds its endpoint.
+     */
     @Bean
     public QoderCoreAdapter qoderCoreAdapter(
             @Value("${aria.cores.qoder.node-executable:node}") String nodeExecutable,
             @Value("${aria.cores.qoder.bridge-entry:packages/qoder-acp-bridge/dist/main.js}") String bridgeEntry,
             @Value("${aria.cores.qoder.executable:qoder}") String coreExecutable,
+            // The recorded ACP invocation of the real CLI (Task 1's probe): the
+            // pinned qodercli speaks the newline-delimited JSON-RPC protocol on
+            // stdio only in this mode, so a launch without it never answers
+            // `initialize` and the bridge exits before binding its endpoint.
+            @Value("${aria.cores.qoder.cli-arguments:--acp}") String cliArguments,
             @Value("${aria.cores.qoder.version:1.1.61}") String version,
-            @Value("${aria.cores.qoder.model:gpt-4o}") String model) {
+            @Value("${aria.cores.qoder.model:efficient}") String model) {
+        List<String> coreArguments = java.util.Arrays.stream(cliArguments.split(","))
+                .map(String::trim)
+                .filter(argument -> !argument.isBlank())
+                .toList();
         return new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(nodeExecutable, bridgeEntry,
-                coreExecutable, List.of(), Map.of(), Map.of(), version, model));
+                coreExecutable, coreArguments, Map.of(), Map.of(), version, model));
     }
 
     @Bean

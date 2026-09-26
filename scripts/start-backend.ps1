@@ -23,6 +23,24 @@ if ($SkipSandbox -and -not $PSBoundParameters.ContainsKey('AdkProvider')) {
 }
 $sandboxMode = $AdkProvider -eq "opencode" -and -not $SkipSandbox
 
+# ── Run-owned absolute paths (fix round 1: never cwd-relative) ──
+# A run's worktree, generated configuration and retained results are owned by the
+# backend's run roots, and the qoder bridge entry is a committed artifact of the
+# repository. All three are exported as absolute paths derived from this
+# repository root, so they do not depend on the working directory the Spring Boot
+# process happens to run in (mvn spring-boot:run -pl act-app runs in act-app/).
+# An operator-provided value always wins.
+if (-not $env:ARIA_WORKSPACES_RUNTIME_ROOT) {
+    $env:ARIA_WORKSPACES_RUNTIME_ROOT = Join-Path $BackendDir "act-app/data/workspaces/runs"
+}
+if (-not $env:ARIA_WORKSPACES_RESULT_ROOT) {
+    $env:ARIA_WORKSPACES_RESULT_ROOT = Join-Path $BackendDir "act-app/data/workspaces/results"
+}
+$bridgeEntry = Join-Path $ProjectRoot "packages/qoder-acp-bridge/dist/main.js"
+if (-not $env:ARIA_CORES_QODER_BRIDGE_ENTRY -and (Test-Path -LiteralPath $bridgeEntry -PathType Leaf)) {
+    $env:ARIA_CORES_QODER_BRIDGE_ENTRY = $bridgeEntry
+}
+
 # Prerequisites check
 function Test-Command($cmd, $hint) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {

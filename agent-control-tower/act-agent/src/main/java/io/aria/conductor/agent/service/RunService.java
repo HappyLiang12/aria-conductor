@@ -11,7 +11,9 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.port.RunRuntimeControlPort;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,13 +44,32 @@ public class RunService {
     private final RunRepository runRepository;
     private final AgentService agentService;
     private final ApplicationEventPublisher eventPublisher;
+    /**
+     * The run's runtime-control gate (Task 19, fix round 7), optional and
+     * resolved lazily: when the runtime of a run is owned by the execution
+     * coordinator, the pause/resume is verified through this port before the new
+     * state is persisted, so a PAUSED acknowledgement can never be answered for a
+     * runtime that did not confirm it. A run no deployment owns keeps the plain
+     * recorded transition.
+     */
+    private final ObjectProvider<RunRuntimeControlPort> runtimeControlProvider;
 
+    /** Direct-instantiation (test) constructor: no runtime-control port, the recorded transition stands. */
     public RunService(RunRepository runRepository,
                       AgentService agentService,
                       ApplicationEventPublisher eventPublisher) {
+        this(runRepository, agentService, eventPublisher, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RunService(RunRepository runRepository,
+                      AgentService agentService,
+                      ApplicationEventPublisher eventPublisher,
+                      ObjectProvider<RunRuntimeControlPort> runtimeControlProvider) {
         this.runRepository = runRepository;
         this.agentService = agentService;
         this.eventPublisher = eventPublisher;
+        this.runtimeControlProvider = runtimeControlProvider;
     }
 
     @Transactional
@@ -115,11 +136,28 @@ public class RunService {
         return toResponse(run);
     }
 
+    /**
+     * Pauses a run. When the run's runtime is owned by the execution coordinator,
+     * the pause is verified on the run-owned core session first (the runtime
+     * suspends its writer tree) and the PAUSED state is persisted only after that
+     * verified acknowledgement; a refused pause throws with the exact reason and
+     * leaves the run RUNNING. A run no runtime owns keeps the plain recorded
+     * transition.
+     */
     @Transactional
     public RunResponse pauseRun(UUID id) {
         Run run = findRunOrThrow(id);
         validateTransition(run.getStatus(), RunStatus.PAUSED);
         log.info("Pausing run: id={}", id);
+        RunRuntimeControlPort control = runtimeControlProvider == null
+                ? null : runtimeControlProvider.getIfAvailable();
+        if (control != null && control.owns(run.getAgentId(), id)) {
+            control.pause(id);
+            // The runtime may have finalized while the verified pause was in flight:
+            // the transition is re-checked against the state that actually stands.
+            run = findRunOrThrow(id);
+            validateTransition(run.getStatus(), RunStatus.PAUSED);
+        }
         run.setStatus(RunStatus.PAUSED);
         return toResponse(runRepository.save(run));
     }
@@ -129,10 +167,25 @@ public class RunService {
         return resumeRun(id, null);
     }
 
+    /**
+     * Resumes a run. A run whose runtime is owned by the execution coordinator is
+     * resumed on the same run-owned session first (the verified suspension is
+     * matched and released) and RUNNING is persisted only after that verified
+     * acknowledgement; a refused resume throws with the exact reason and leaves
+     * the run PAUSED.
+     */
     @Transactional
     public RunResponse resumeRun(UUID id, String newInstruction) {
         Run run = findRunOrThrow(id);
         validateTransition(run.getStatus(), RunStatus.RUNNING);
+        RunRuntimeControlPort control = runtimeControlProvider == null
+                ? null : runtimeControlProvider.getIfAvailable();
+        if (control != null && control.owns(run.getAgentId(), id)) {
+            control.resume(id);
+            // The runtime may have finalized while the verified resume was in flight.
+            run = findRunOrThrow(id);
+            validateTransition(run.getStatus(), RunStatus.RUNNING);
+        }
         if (newInstruction != null && !newInstruction.isBlank()) {
             log.info("Updating run instruction on resume: id={}", id);
             run.setPromptSeed(newInstruction);

@@ -29,13 +29,20 @@ class ToolResponsesTest {
     }
 
     @Test
-    void error_withDebug_includesFullStack() throws Exception {
+    void error_withDebug_stillNeverSerializesTheStack() throws Exception {
+        // Fix round 7: the client answer never carries the exception class or a
+        // stack trace (information disclosure on an operator-facing tool
+        // response). debug=true only records the cause server-side, so the
+        // envelope stays exactly ok/errorType/message even with debug on.
         RuntimeException boom = new IllegalStateException("state broke");
         String json = ToolResponses.error("CONFLICT", "state broke", boom, true);
         JsonNode node = mapper.readTree(json);
-        assertThat(node.get("stackTrace").asText())
-                .contains("java.lang.IllegalStateException: state broke")
-                .contains("ToolResponsesTest.error_withDebug_includesFullStack");
+        assertThat(node.get("ok").asBoolean()).isFalse();
+        assertThat(node.get("errorType").asText()).isEqualTo("CONFLICT");
+        assertThat(node.get("message").asText()).isEqualTo("state broke");
+        assertThat(node.has("stackTrace")).isFalse();
+        assertThat(node.size()).isEqualTo(3);
+        assertThat(json).doesNotContain("IllegalStateException");
     }
 
     @Test

@@ -23,7 +23,11 @@ public class McpProperties {
      */
     private String authMode = "none";
 
-    /** When true, MCP tool error results include full stack traces (external-agent debugging). */
+    /**
+     * When true, a failed tool call logs its cause with the full stack server-side.
+     * A tool error response itself is always the uniform
+     * {@code ok/errorType/message} envelope and never carries the stack.
+     */
     private boolean debug = false;
 
     /** Bearer token; only used when auth-mode=token. */

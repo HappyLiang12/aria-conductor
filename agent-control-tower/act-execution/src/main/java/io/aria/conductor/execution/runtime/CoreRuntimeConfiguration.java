@@ -96,6 +96,18 @@ public class CoreRuntimeConfiguration {
         return new RunFinalizer(workspaceService, Clock.systemUTC());
     }
 
+    /**
+     * The run store's runtime-control port (Task 19, fix round 7): the operator
+     * pause/resume routes persist PAUSED/RUNNING only after this port verified the
+     * transition on the run-owned core session, so a pause the core never
+     * confirmed can never be recorded as PAUSED.
+     */
+    @Bean
+    public CoordinatedRunRuntimeControl runRuntimeControlPort(
+            org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coordinator) {
+        return new CoordinatedRunRuntimeControl(coordinator);
+    }
+
     @Bean
     public ExecutionBackend hostExecutionBackend() {
         return HostExecutionBackend.forCurrentPlatform();

@@ -82,13 +82,17 @@ class RunToolsTest {
     }
 
     @Test
-    void runAgent_debugOn_includesStack() {
+    void runAgent_debugOn_stillHasNoStack() {
+        // Fix round 7: debug mode logs the cause server-side; the tool answer is
+        // always the truthful ok/errorType/message envelope.
         mcpProperties.setDebug(true);
         when(runService.createRun(any())).thenThrow(new IllegalArgumentException("Cannot create run for retired agent"));
 
         String json = tools.runAgent(UUID.randomUUID(), "prompt", null);
 
-        assertThat(json).contains("stackTrace").contains("IllegalArgumentException");
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"");
+        assertThat(json).doesNotContain("stackTrace");
+        assertThat(json).doesNotContain("IllegalArgumentException");
     }
 
     @Test

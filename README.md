@@ -314,7 +314,7 @@ The backend exposes an MCP (Model Context Protocol) server at `http://<host>:808
 - **Sandboxed agents**: Aria's opencode sandbox connects automatically (workers do not). Requires a sandbox-reachable host address — auto-resolved, override with `ARIA_MCP_SANDBOX_HOST_ADDRESS`.
 - **External agents**: point any MCP client at `http://<host>:8080/mcp`.
 - **Auth**: `ARIA_MCP_AUTH_MODE=none` (default — endpoint is open, like the REST API; every tool call is audit-logged) or `token` (Bearer required; set `ARIA_MCP_TOKEN`, sandbox token injected automatically).
-- **Debug**: `ARIA_MCP_DEBUG=true` adds full stack traces to tool error responses (default true on the h2 dev profile).
+- **Debug**: `ARIA_MCP_DEBUG=true` logs a tool error's cause with its full stack in the server log (server-side only — a tool error response is always exactly the `ok`/`errorType`/`message` envelope; default true on the h2 dev profile).
 - **Disable**: `ARIA_MCP_ENABLED=false` (the `test` profile disables it by default).
 
 > Exposure note: with the default `none` auth mode, any client that can reach the port has operator-level tool access — the same trust level as the open REST API. Prefer `token` mode for shared networks.

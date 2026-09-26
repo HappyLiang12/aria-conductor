@@ -116,6 +116,7 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
         if (spec.deadline() == null) {
             return CompletableFuture.failedFuture(noDeadlineRefusal());
         }
+        CompletableFuture<CoreResult> promptFuture;
         synchronized (promptLock) {
             if (closed) {
                 return CompletableFuture.failedFuture(new IllegalStateException(
@@ -128,7 +129,8 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
             }
             promptInFlight = true;
             currentPromptId = -1;
-            pending = new CompletableFuture<>();
+            promptFuture = new CompletableFuture<>();
+            pending = promptFuture;
             consumer = events;
             output = new StringBuilder();
         }
@@ -142,11 +144,15 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
             QoderBridgeClient.PromptAck ack = client.prompt(text);
             currentPromptId = ack.promptId();
         } catch (RuntimeException e) {
-            clearPrompt();
+            clearPromptIfCurrent(promptFuture);
             return CompletableFuture.failedFuture(translate(e));
         }
-        scheduleDeadline(pending);
-        return pending;
+        scheduleDeadline(promptFuture);
+        // The captured stage is returned, never the field: a concurrent clear
+        // (a close, or an event handled on the reader thread) may null the field
+        // between the guarded block and here, and a null return would surface as
+        // an NPE in the caller instead of a prompt outcome.
+        return promptFuture;
     }
 
     @Override

@@ -31,6 +31,9 @@ test('inject Send button receives clicks (Aria panel state unchanged)', async ({
 
   const send = page.getByRole('button', { name: 'Send ▶' }).first();
   const compose = page.getByLabel('Inject message');
+  // The chat view hydrates its composer asynchronously; wait for it explicitly so a
+  // cold CI start is a readiness wait, not a fill timeout.
+  await expect(compose).toBeVisible({ timeout: 30_000 });
   await compose.fill('e2e overlap probe');
 
   const fabClosed = page.getByRole('button', { name: 'Open Aria panel' });

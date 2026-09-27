@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { seedAgent, seedRun, uniqueName } from './fixtures';
 
 // F1 regression: the fixed-position Aria FAB (bottom-right) must never cover
 // the Chat page's inject "Send ▶" button, otherwise clicks toggle the Aria
@@ -26,14 +27,29 @@ test('Aria FAB does not occlude the Chat inject Send button', async ({ page }) =
   expect(overlaps, 'FAB must not overlap the Send button').toBe(false);
 });
 
-test('inject Send button receives clicks (Aria panel state unchanged)', async ({ page }) => {
+test('inject Send button receives clicks (Aria panel state unchanged)', async ({ page, request }) => {
+  // The inject composer is DISABLED until a thread is selected, so this case seeds
+  // its own thread (a run surfaces as one) and selects it: on a fresh CI database
+  // the chat page has no thread, and the previous version timed out on a disabled
+  // textarea instead of probing the FAB overlap it exists for.
+  const agent = await seedAgent(request);
+  const marker = uniqueName('e2e-fab-inject');
+  await seedRun(request, agent.id, marker);
+
   await page.goto('/chat');
+  await page.waitForLoadState('networkidle');
+  const thread = page
+    .locator('.chat-list-panel')
+    .getByText(new RegExp(`${agent.name}|${marker}`))
+    .first();
+  await expect(thread).toBeVisible({ timeout: 20_000 });
+  await thread.click();
 
   const send = page.getByRole('button', { name: 'Send ▶' }).first();
   const compose = page.getByLabel('Inject message');
-  // The chat view hydrates its composer asynchronously; wait for it explicitly so a
-  // cold CI start is a readiness wait, not a fill timeout.
-  await expect(compose).toBeVisible({ timeout: 30_000 });
+  // The click that matters is on the button's right edge; the composer must accept
+  // the text first (it enables once the selected thread is active).
+  await expect(compose).toBeEnabled({ timeout: 20_000 });
   await compose.fill('e2e overlap probe');
 
   const fabClosed = page.getByRole('button', { name: 'Open Aria panel' });

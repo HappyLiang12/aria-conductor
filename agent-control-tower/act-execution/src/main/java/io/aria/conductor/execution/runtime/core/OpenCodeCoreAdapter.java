@@ -9,6 +9,7 @@ import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
+import io.aria.conductor.execution.runtime.sandbox.SandboxBind;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 
@@ -185,9 +186,17 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         argv.addAll(profile.entryArguments());
         argv.add("serve");
         argv.add("--port");
-        argv.add(String.valueOf(endpoint.getPort()));
+        // SANDBOX: the endpoint is the server's proxy URL for the in-sandbox port, so
+        // the server listens on the sandbox's own loopback at the inner port the proxy
+        // forwards to (the coordinator dials the proxy URL as the session endpoint).
+        // HOST: the endpoint IS the server's listen address.
+        argv.add(String.valueOf(SandboxBind.isSandboxProxy(environment)
+                ? SandboxBind.innerPort(endpoint)
+                : endpoint.getPort()));
         argv.add("--hostname");
-        argv.add(endpoint.getHost());
+        argv.add(SandboxBind.isSandboxProxy(environment)
+                ? SandboxBind.loopbackHost()
+                : endpoint.getHost());
 
         Map<String, String> serverEnvironment = new LinkedHashMap<>(profile.environment());
         serverEnvironment.put("XDG_CONFIG_HOME", configHome.toString());

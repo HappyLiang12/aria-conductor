@@ -10,6 +10,7 @@ import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.runtime.sandbox.SandboxBind;
 
 import java.io.IOException;
 import java.net.URI;
@@ -237,8 +238,17 @@ public final class QoderCoreAdapter implements CoreAdapter {
         // carried into the coordinator wiring, not this adapter's.
         Path controlSecretFile = controlSecretFile(environment);
         add(argv, "--control-secret-file", controlSecretFile.toString());
-        add(argv, "--host", endpoint.getHost());
-        add(argv, "--port", String.valueOf(endpoint.getPort()));
+        // SANDBOX: the endpoint is the server's proxy URL for the in-sandbox port, so
+        // the bridge listens on the sandbox's own loopback at the inner port the proxy
+        // forwards to (the coordinator dials the proxy URL as the session endpoint).
+        // HOST: the endpoint IS the bridge's listen address.
+        if (SandboxBind.isSandboxProxy(environment)) {
+            add(argv, "--host", SandboxBind.loopbackHost());
+            add(argv, "--port", String.valueOf(SandboxBind.innerPort(endpoint)));
+        } else {
+            add(argv, "--host", endpoint.getHost());
+            add(argv, "--port", String.valueOf(endpoint.getPort()));
+        }
         return new LaunchProfile(argv, profile.environment(), workingDirectory.toString(),
                 controlSecretFile.toString());
     }
@@ -415,18 +425,25 @@ public final class QoderCoreAdapter implements CoreAdapter {
     }
 
     /**
-     * The bridge binds loopback only, and its {@code --host} accepts exactly the
-     * two literals it validates itself. The committed bridge refuses
-     * {@code localhost} ({@code packages/qoder-acp-bridge/src/main.ts}), so a
-     * name like it is refused here as well instead of being passed on to a bridge
-     * process that could only fail its usage check.
+     * The endpoint the run was prepared with must be loopback — a HOST placement's
+     * bridge listen address, or a SANDBOX placement's proxy URL for the in-sandbox
+     * port ({@code http://localhost:<published>/proxy/<port>}, whose host the
+     * server's {@code eip} setting names as {@code localhost}). The bridge's own
+     * {@code --host} accepts exactly its two literals, so a sandbox run binds
+     * {@link SandboxBind#loopbackHost()} at the proxied inner port instead of this
+     * endpoint's host/port (see {@code launchProfile}).
      */
     private static URI requireLoopbackEndpoint(PreparedEnvironment environment) {
         URI endpoint = Objects.requireNonNull(environment.endpoint(),
                 "The Qoder launch requires the prepared protocol endpoint");
         String host = endpoint.getHost();
-        boolean loopback = "127.0.0.1".equals(host) || "::1".equals(host);
-        if (!loopback || endpoint.getPort() < 1) {
+        // A HOST endpoint is the bridge's own listen address, so the bridge's two
+        // literals are the contract; a SANDBOX endpoint is the server's proxy URL,
+        // whose host the server's eip setting names (localhost), and the bridge gets
+        // SandboxBind's literal instead.
+        boolean loopback = "127.0.0.1".equals(host) || "::1".equals(host)
+                || (SandboxBind.isSandboxProxy(environment) && "localhost".equalsIgnoreCase(host));
+        if (!loopback) {
             throw new IllegalStateException("The Qoder bridge endpoint must be a loopback host:port, got: "
                     + endpoint);
         }

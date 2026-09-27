@@ -238,3 +238,44 @@ Runner findings this round (all fixed in `e2e/agent-core/live-matrix.{mjs,sh,ps1
 Operational notes: the Qoder PAT used here is supplied for this exercise only and **must be
 rotated**; and a coordinated run cannot be paused before its session opens (the pause answers a
 truthful 409 conflict, and the operator contract is refresh-and-retry).
+
+## 8. Round 3 (2026-09-27): the sandbox path, exercised for the first time
+
+`qoder/SANDBOX` had never been executed anywhere. This round ran it for real on the
+operator's machine: the podman machine's OpenSandbox server (`podman-compose up -d
+opensandbox-server`, health `{"status":"healthy"}` on 8090), the branch's own image built
+from `agent-control-tower/qoder-sandbox/Dockerfile` with the pinned Linux CLI artifact
+(`QODER_CLI_VERSION=1.1.41`, sha256 `1c2d174b...e3eca7`, the values #90 verified), the
+real Qoder CLI and the real credential.
+
+Every run got further than the last, and each step exposed a real defect, all fixed at
+the source in this branch:
+
+1. `QoderCoreAdapter.requireLoopbackEndpoint` refused the sandbox endpoint outright: a
+   sandbox placement's endpoint is the server's proxy URL
+   (`http://localhost:<published>/proxy/9310`), and the bridge's own `--host` accepts
+   only its two loopback literals. A sandbox core now binds
+   `127.0.0.1:<proxied inner port>` (new `SandboxBind`, `/proxy/<port>` parsed and
+   refused when absent) while the coordinator keeps dialing the proxy URL; HOST keeps
+   the bridge literals, so the existing refusal pin still holds.
+2. The adapters host-absolutized the working directory, so the sandbox path
+   `/workspace` reached the launch manifest as `C:\workspace` and then `\workspace`,
+   which the manifest rightly refuses. A sandbox placement now uses the prepared
+   sandbox path verbatim.
+3. The manifest's `MAX_ARGV_ENTRIES` (16) was smaller than the Qoder bridge entry's
+   legitimate argv, so every sandbox bridge launch was refused before it started. The
+   bound is 64 — still bounded.
+
+After those fixes the run reached the sandbox's filesystem upload, where it stopped on
+an environment boundary rather than a branch defect: the OpenSandbox SDK's call to the
+sandbox's dynamically published execd port fails with `ConnectException` on this
+Windows/podman-machine host (`localhost` resolves to IPv4, the WSL relay serves that
+port on IPv6 only — the same hazard `opensandbox-config.toml` already documents about
+WSL's localhost relay), and forcing the JVM to prefer IPv6 instead breaks the
+IPv4-only server port. Resolving it needs a host networking change (the machine's port
+publishing), not a code change: on Linux — where the CI lane
+(`.github/workflows/sandbox-lifecycle.yml`) runs — the relay is not involved.
+
+`opencode/HOST` remains blocked on a run-owned provider credential, and
+`opencode/SANDBOX` on the same credential; both stay NOT VERIFIED with that named
+prerequisite.

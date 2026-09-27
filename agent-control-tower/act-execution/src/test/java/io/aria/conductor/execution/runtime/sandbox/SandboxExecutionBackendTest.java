@@ -396,6 +396,29 @@ class SandboxExecutionBackendTest {
         assertThat(fixture.sdk.operations).doesNotContain("upload");
     }
 
+    /**
+     * The sandbox is created during prepare, so a launch that fails afterwards must
+     * destroy it: an orphaned container left by a refused manifest (or a failed
+     * upload) was found running on the host by the first real qoder/SANDBOX attempt.
+     */
+    @Test
+    void aLaunchThatFailsAfterPrepareDestroysTheSandbox() throws IOException {
+        Fixture fixture = new Fixture();
+        List<String> oversized = new ArrayList<>();
+        for (int index = 0; index < 65; index++) {
+            oversized.add("argv-" + index);
+        }
+
+        assertThatThrownBy(() -> fixture.prepareAndLaunch(RUN_ID, new LaunchProfile(
+                oversized, Map.of(), SandboxLifecycle.DEFAULT_WORKSPACE_ROOT)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("argv");
+
+        assertThat(fixture.sdk.operations)
+                .as("the created sandbox never survives a failed launch")
+                .contains("create", "kill");
+    }
+
     // ------------------------------------------------------------------ ownership / renewal
 
     @Test

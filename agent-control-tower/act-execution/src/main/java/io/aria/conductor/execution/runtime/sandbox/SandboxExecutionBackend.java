@@ -147,14 +147,24 @@ public class SandboxExecutionBackend implements ExecutionBackend {
             throw new IllegalArgumentException("Environment was not prepared by this backend for run "
                     + environment.runId());
         }
-        SandboxLifecycle.LaunchManifest manifest = new SandboxLifecycle.LaunchManifest(
-                environment.runId(), prepared.profile().port(), workingDirectory(profile),
-                profile.argv(), profile.env());
-        // The manifest can carry the run's core environment, so no host-side copy is
-        // written: the only copy is the run-owned one uploaded into the sandbox
-        // control directory (mode 600), which dies with the sandbox.
-        lifecycle.uploadSnapshot(environment.runId(), prepared.snapshotRoot(), manifest);
-        lifecycle.launch(environment.runId());
+        SandboxLifecycle.LaunchManifest manifest;
+        try {
+            manifest = new SandboxLifecycle.LaunchManifest(
+                    environment.runId(), prepared.profile().port(), workingDirectory(profile),
+                    profile.argv(), profile.env());
+            // The manifest can carry the run's core environment, so no host-side copy is
+            // written: the only copy is the run-owned one uploaded into the sandbox
+            // control directory (mode 600), which dies with the sandbox.
+            lifecycle.uploadSnapshot(environment.runId(), prepared.snapshotRoot(), manifest);
+            lifecycle.launch(environment.runId());
+        } catch (RuntimeException e) {
+            // The sandbox was created during prepare: a failure before the core is
+            // running must not leak it (a refused manifest or a failed upload would
+            // otherwise leave an orphaned container behind).
+            environments.remove(environment.runId());
+            lifecycle.destroy(environment.runId());
+            throw e;
+        }
         return new RuntimeHandle(environment.runId(), ExecutionMode.SANDBOX, environment.environmentId(),
                 ownershipIdentity(environment, prepared), environment.endpoint());
     }

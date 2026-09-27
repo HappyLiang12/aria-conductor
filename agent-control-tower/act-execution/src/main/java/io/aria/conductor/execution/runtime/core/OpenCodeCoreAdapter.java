@@ -179,7 +179,16 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         Path dataHome = createDirectory(configurationRoot.resolve(DATA_HOME_DIRECTORY));
         Path cacheHome = createDirectory(configurationRoot.resolve(CACHE_HOME_DIRECTORY));
         writeGovernedConfiguration(configurationRoot);
-        Path workingDirectory = Path.of(environment.workingDirectory()).toAbsolutePath().normalize();
+        // A sandbox working directory is already absolute IN THE SANDBOX (e.g.
+        // /workspace) and must not be host-absolutized: on Windows that turns it into
+        // C:workspace, which the launch manifest rightly refuses.
+        // A sandbox working directory is a SANDBOX path (e.g. /workspace): it is used
+        // verbatim, never converted through the host filesystem (a Windows Path turns it
+        // into workspace, which the launch manifest refuses). A host working directory
+        // is host-absolutized as before.
+        String workingDirectory = SandboxBind.isSandboxProxy(environment)
+                ? environment.workingDirectory()
+                : Path.of(environment.workingDirectory()).toAbsolutePath().normalize().toString();
 
         List<String> argv = new ArrayList<>();
         argv.add(profile.executable());

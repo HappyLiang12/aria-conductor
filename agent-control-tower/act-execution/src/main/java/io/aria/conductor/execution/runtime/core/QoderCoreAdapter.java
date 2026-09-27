@@ -201,7 +201,16 @@ public final class QoderCoreAdapter implements CoreAdapter {
                 "aria.cores.qoder.bridge-entry (the built committed bridge entry)");
         String coreExecutable = resolveExecutable(profile.coreExecutable(),
                 "aria.cores.qoder.executable (the pinned Qoder CLI)");
-        Path workingDirectory = Path.of(environment.workingDirectory()).toAbsolutePath().normalize();
+        // A sandbox working directory is already absolute IN THE SANDBOX (e.g.
+        // /workspace) and must not be host-absolutized: on Windows that turns it into
+        // C:workspace, which the launch manifest rightly refuses.
+        // A sandbox working directory is a SANDBOX path (e.g. /workspace): it is used
+        // verbatim, never converted through the host filesystem (a Windows Path turns it
+        // into workspace, which the launch manifest refuses). A host working directory
+        // is host-absolutized as before.
+        String workingDirectory = SandboxBind.isSandboxProxy(environment)
+                ? environment.workingDirectory()
+                : Path.of(environment.workingDirectory()).toAbsolutePath().normalize().toString();
         List<String> argv = new ArrayList<>();
         argv.add(profile.nodeExecutable());
         argv.add(bridgeEntry);

@@ -583,7 +583,11 @@ public class SandboxLifecycle implements AutoCloseable {
         private static final Set<String> SHELLS = Set.of(
                 "sh", "bash", "dash", "zsh", "ksh", "csh", "tcsh", "fish",
                 "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe");
-        private static final int MAX_ARGV_ENTRIES = 16;
+        // Bounded, not tight: the Qoder bridge entry legitimately carries the node
+        // launcher, the bridge script, the run/workspace/model selection, the pinned
+        // CLI and its arguments, the credential and control-secret file paths and the
+        // listen host/port, which is more than a bare core invocation.
+        private static final int MAX_ARGV_ENTRIES = 64;
         private static final int MAX_ARGUMENT_LENGTH = 4096;
         private static final int MAX_ENVIRONMENT_ENTRIES = 64;
         private static final int MAX_ENVIRONMENT_VALUE_LENGTH = 8192;

@@ -335,8 +335,16 @@ class McpActorTransportIntegrationTest {
         }
     }
 
+    /**
+     * The operator credential authenticates on the MCP surface. The
+     * mcp-into-opencode design (§7.5) has an external client drive operator actions
+     * there, and the tool policy's OPERATOR_ONLY class is only reachable through this
+     * branch — a surface that knew only worker tokens would make that class
+     * unreachable. What stays shut is the worker→operator direction, pinned by the
+     * cases below: a run-scoped worker token calling an operator tool is FORBIDDEN.
+     */
     @Test
-    void operatorCredential_isRejectedOnTheWorkerSurface() throws Exception {
+    void operatorCredential_authenticatesOnTheMcpSurface() throws Exception {
         assertThat(operatorSessions.isConfigured())
                 .as("operator credential configured for this context").isTrue();
         assertThat(operatorSessions.verifyOperatorCredential("Bearer " + OPERATOR_CREDENTIAL))
@@ -344,10 +352,15 @@ class McpActorTransportIntegrationTest {
                 .isTrue();
 
         assertThat(rawPost("/mcp", OPERATOR_CREDENTIAL, null, INITIALIZE_BODY).getStatusCode().value())
-                .isEqualTo(401);
+                .as("the operator credential opens the streamable transport")
+                .isEqualTo(200);
+        assertThat(rawGetStatus("/sse", OPERATOR_CREDENTIAL))
+                .as("the operator credential opens the SSE transport")
+                .isEqualTo(200);
+        // The message endpoint authenticates the same way: a bogus session id is a
+        // session error, never an authentication refusal.
         assertThat(rawPost("/mcp/message", OPERATOR_CREDENTIAL, "some-session", CALL_BODY).getStatusCode().value())
-                .isEqualTo(401);
-        assertThat(rawGetStatus("/sse", OPERATOR_CREDENTIAL)).isEqualTo(401);
+                .isNotEqualTo(401);
     }
 
     // ------------------------------------------------------------------

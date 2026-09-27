@@ -24,14 +24,32 @@ const RUN_TIMEOUT = Number(process.env.E2E_RUN_TIMEOUT_MS || 180_000);
 test.describe.configure({ mode: 'serial', timeout: Math.max(600_000, GATE_TIMEOUT + RUN_TIMEOUT + 30_000) });
 
 async function connectMcp(): Promise<Client> {
-  // token mode (aria.mcp.auth-mode=token) will need Authorization headers on BOTH transports — see Task 11 filter paths
+  // The MCP endpoint authenticates its callers (aria.mcp.auth-mode): an external
+  // operator client presents the environment operator credential as a bearer on
+  // BOTH transports — without it a tool call is refused as a missing actor.
+  const headers = { Authorization: `Bearer ${operatorBearerToken()}` };
   const client = new Client({ name: 'mcp-e2e', version: '0.1.0' });
   try {
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${API_URL}/mcp`)));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${API_URL}/mcp`), {
+      requestInit: { headers },
+    }));
   } catch {
-    await client.connect(new SSEClientTransport(new URL(`${API_URL}/sse`)));
+    await client.connect(new SSEClientTransport(new URL(`${API_URL}/sse`), {
+      requestInit: { headers },
+    }));
   }
   return client;
+}
+
+/** The synthetic operator credential the harness requires (never a real secret). */
+function operatorBearerToken(): string {
+  const token = (process.env.ARIA_OPERATOR_BEARER_TOKEN ?? '').trim();
+  if (token === '') {
+    throw new Error(
+      'ARIA_OPERATOR_BEARER_TOKEN is not set: the MCP endpoint needs operator authority',
+    );
+  }
+  return token;
 }
 
 type Json = Record<string, any>;
@@ -124,7 +142,11 @@ test('mcp: external client instantiates development-workflow, approves the gate,
       );
       throw e;
     }
-    expect(approval.content).toContain('#');
+    // The deterministic harness's BA completion, exactly: the coordinator prefers the
+    // BA sandbox's /workspace/spec.md and falls back to the run's finalOutput, which
+    // is the fixture completion there. The former "content is markdown" assumption is
+    // retired with the same re-pin sdd-workflow.spec.ts carries.
+    expect(approval.content).toBe('fixture-complete');
     expect(approval.knowledgeItemId).toBeTruthy();
 
     // 4. Approve the gate VIA MCP (operator-level tool action).

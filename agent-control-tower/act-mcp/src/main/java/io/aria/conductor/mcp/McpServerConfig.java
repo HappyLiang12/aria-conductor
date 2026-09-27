@@ -3,6 +3,7 @@ package io.aria.conductor.mcp;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import io.aria.conductor.mcp.tools.McpTool;
 import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
@@ -62,12 +63,15 @@ public class McpServerConfig {
     private final List<McpTool> mcpTools;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<ActorTokenService> actorTokens;
+    private final ObjectProvider<OperatorSessionService> operatorSessions;
 
     public McpServerConfig(List<McpTool> mcpTools, ObjectMapper objectMapper,
-                           ObjectProvider<ActorTokenService> actorTokens) {
+                           ObjectProvider<ActorTokenService> actorTokens,
+                           ObjectProvider<OperatorSessionService> operatorSessions) {
         this.mcpTools = mcpTools;
         this.objectMapper = objectMapper;
         this.actorTokens = actorTokens;
+        this.operatorSessions = operatorSessions;
     }
 
     /**
@@ -163,17 +167,15 @@ public class McpServerConfig {
 
     /**
      * Transport-context extractor for both MCP transports: the actor comes from
-     * the request's authenticated Bearer credential (resolved through the
-     * run-scoped token service), never from the payload. Unauthenticated or
-     * unverifiable requests publish no actor, so {@code McpActorContext.require}
-     * fails rather than guessing.
+     * the request's authenticated Bearer credential — the operator credential or a
+     * run-scoped worker token, never from the payload. The operator branch is what
+     * makes the policy registry's {@code OPERATOR_ONLY} class reachable.
+     * Unauthenticated or unverifiable requests publish no actor, so
+     * {@code McpActorContext.require} fails rather than guessing.
      */
     private McpTransportContext actorTransportContext(ServerRequest request) {
-        ActorTokenService tokens = actorTokens.getIfAvailable();
-        if (tokens == null) {
-            return McpTransportContext.EMPTY;
-        }
-        ActorPrincipal actor = tokens.resolveBearer(request.headers().firstHeader("Authorization")).orElse(null);
+        ActorPrincipal actor = McpActorContext.resolveBearer(request.headers().firstHeader("Authorization"),
+                actorTokens.getIfAvailable(), operatorSessions.getIfAvailable());
         return McpActorContext.transportContext(actor);
     }
 

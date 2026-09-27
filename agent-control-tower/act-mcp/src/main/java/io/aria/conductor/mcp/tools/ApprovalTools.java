@@ -33,6 +33,7 @@ public class ApprovalTools implements McpTool {
     static final String DECIDE_APPROVAL = "decide_approval";
 
     private final ApprovalQueryService approvalQueryService;
+    private final io.aria.conductor.execution.approval.ApprovalGate approvalGate;
     private final PermissionCoordinator permissionCoordinator;
     private final ToolPolicyRegistry toolPolicies;
     private final McpProperties mcpProperties;
@@ -66,8 +67,16 @@ public class ApprovalTools implements McpTool {
             // surface, so this refuses every run-scoped credential.
             toolPolicies.requireAuthority(DECIDE_APPROVAL, actor);
             log.info("MCP approval decision requested: id={}, approved={}, reason={}", approvalId, approved, reason);
-            permissionCoordinator.decide(approvalId,
-                    approved ? PermissionChoice.ALLOW_ONCE : PermissionChoice.DENY, actor);
+            if (permissionCoordinator.isNativePermissionRequest(approvalId)) {
+                permissionCoordinator.decide(approvalId,
+                        approved ? PermissionChoice.ALLOW_ONCE : PermissionChoice.DENY, actor);
+            } else {
+                // A gate approval (workflow, kanban, tool call) keeps its decision
+                // semantics: the same authority the REST route delegates to, so an
+                // external MCP client can drive the whole loop instead of being
+                // refused as "not a native permission request".
+                approvalGate.decideApproval(approvalId, approved, reason);
+            }
             return ToolResponses.ok(java.util.Map.of(
                     "approvalId", approvalId.toString(), "approved", approved, "status", "processed"));
         } catch (SecurityException e) {

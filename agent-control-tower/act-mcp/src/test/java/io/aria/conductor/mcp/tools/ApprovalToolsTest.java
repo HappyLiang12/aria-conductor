@@ -43,6 +43,8 @@ class ApprovalToolsTest {
 
     @Mock ApprovalQueryService approvalQueryService;
     @Mock PermissionCoordinator permissionCoordinator;
+    /** The gate authority the tool falls back to for non-native asks. */
+    @Mock io.aria.conductor.execution.approval.ApprovalGate approvalGate;
     McpProperties mcpProperties;
     ApprovalTools tools;
 
@@ -52,7 +54,8 @@ class ApprovalToolsTest {
     @BeforeEach
     void setUp() {
         mcpProperties = new McpProperties();
-        tools = new ApprovalTools(approvalQueryService, permissionCoordinator, toolPolicies, mcpProperties);
+        tools = new ApprovalTools(approvalQueryService, approvalGate, permissionCoordinator, toolPolicies,
+                mcpProperties);
     }
 
     private ApprovalDetail detail(UUID id, String type, String status) {
@@ -118,6 +121,7 @@ class ApprovalToolsTest {
     @Test
     void operatorDecide_routesAllowOnceToTheCoordinatorWithTheOperatorPrincipal() {
         UUID id = UUID.randomUUID();
+        when(permissionCoordinator.isNativePermissionRequest(id)).thenReturn(true);
         ToolContext context = context(ActorPrincipal.operator(null));
 
         String json = tools.decideApproval(id, true, "lgtm", context);
@@ -136,6 +140,7 @@ class ApprovalToolsTest {
     void operatorDeny_routesDenyToTheCoordinator() {
         UUID id = UUID.randomUUID();
         ActorPrincipal operator = ActorPrincipal.operator(Instant.parse("2026-09-22T20:00:00Z"));
+        when(permissionCoordinator.isNativePermissionRequest(id)).thenReturn(true);
 
         String json = tools.decideApproval(id, false, "too risky", context(operator));
 
@@ -147,6 +152,7 @@ class ApprovalToolsTest {
     void aSettledRequestIsReportedAsAConflict() {
         UUID id = UUID.randomUUID();
         ActorPrincipal operator = ActorPrincipal.operator(null);
+        when(permissionCoordinator.isNativePermissionRequest(id)).thenReturn(true);
         org.mockito.Mockito.doThrow(new IllegalStateException("Approval " + id + " is already APPROVED; a decision on a settled request is refused"))
                 .when(permissionCoordinator).decide(id, PermissionChoice.ALLOW_ONCE, operator);
 
@@ -158,17 +164,19 @@ class ApprovalToolsTest {
     }
 
     @Test
-    void aLegacyApprovalWithoutCorrelationIsReportedAsNotFound() {
+    void aLegacyApprovalIsDecidedThroughTheGate() {
         UUID id = UUID.randomUUID();
         ActorPrincipal operator = ActorPrincipal.operator(null);
-        org.mockito.Mockito.doThrow(new IllegalArgumentException("Approval " + id
-                        + " is not a native permission request; it must be decided through the approval gate"))
-                .when(permissionCoordinator).decide(id, PermissionChoice.DENY, operator);
 
         String json = tools.decideApproval(id, false, "nope", context(operator));
 
-        assertThat(json).contains("\"ok\":false")
-                .contains("\"errorType\":\"NOT_FOUND\"")
-                .contains("is not a native permission request");
+        // A gate approval keeps its decision semantics on the MCP surface too — the
+        // same authority the REST route delegates to — so an external MCP client can
+        // drive a workflow gate instead of being refused as "not a native ask".
+        verify(approvalGate).decideApproval(id, false, "nope");
+        verify(permissionCoordinator, org.mockito.Mockito.never())
+                .decide(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+        assertThat(json).contains("\"ok\":true").contains("\"status\":\"processed\"");
     }
 }

@@ -3,6 +3,7 @@ package io.aria.conductor.mcp;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -71,21 +72,29 @@ public class McpTokenFilter extends OncePerRequestFilter {
 
     private final McpProperties properties;
     private final ActorTokenService actorTokens;
+    private final OperatorSessionService operatorSessions;
     private final ConcurrentHashMap<String, String> sessionActors = new ConcurrentHashMap<>();
 
     /** Legacy static-token filter (unit-test seam; v1 behaviour). */
     public McpTokenFilter(McpProperties properties) {
-        this(properties, null);
+        this(properties, null, null);
+    }
+
+    /** Worker-token seam kept for the tests that wire no operator credential. */
+    public McpTokenFilter(McpProperties properties, ObjectProvider<ActorTokenService> actorTokens) {
+        this(properties, actorTokens, null);
     }
 
     @Autowired
-    public McpTokenFilter(McpProperties properties, ObjectProvider<ActorTokenService> actorTokens) {
+    public McpTokenFilter(McpProperties properties, ObjectProvider<ActorTokenService> actorTokens,
+                          ObjectProvider<OperatorSessionService> operatorSessions) {
         this.properties = properties;
         if (properties.isTokenMode() && (properties.getToken() == null || properties.getToken().isBlank())) {
             throw new IllegalStateException(
                     "aria.mcp.token must be set when aria.mcp.auth-mode=token (refusing a guessable empty bearer)");
         }
         this.actorTokens = actorTokens == null ? null : actorTokens.getIfAvailable();
+        this.operatorSessions = operatorSessions == null ? null : operatorSessions.getIfAvailable();
         if (isActorMode(properties) && this.actorTokens == null) {
             throw new IllegalStateException(
                     "aria.mcp.auth-mode=actor requires an ActorTokenService bean (worker tokens are run-scoped, never static)");
@@ -112,7 +121,8 @@ public class McpTokenFilter extends OncePerRequestFilter {
             return;
         }
 
-        ActorPrincipal actor = actorTokens.resolveBearer(request.getHeader("Authorization")).orElse(null);
+        ActorPrincipal actor = McpActorContext.resolveBearer(request.getHeader("Authorization"),
+                actorTokens, operatorSessions);
         if (actor == null) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             return;

@@ -3,6 +3,8 @@ package io.aria.conductor.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import io.modelcontextprotocol.common.McpTransportContext;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.mcp.McpToolUtils;
@@ -48,6 +50,24 @@ public final class McpActorContext {
         return actor == null
                 ? McpTransportContext.EMPTY
                 : McpTransportContext.create(Map.of(ACTOR_KEY, actor));
+    }
+
+    /**
+     * Resolves the transport actor of a request's Bearer credential: the operator
+     * credential (the same one the REST operator surfaces verify) or a run-scoped
+     * worker token. Both must resolve here — the policy registry's
+     * {@code OPERATOR_ONLY} class is only reachable through the operator branch, so
+     * a resolver that knew only worker tokens would make that class unreachable.
+     * An unverifiable credential yields no actor and the tool boundary refuses the
+     * call; identity is never taken from the payload.
+     */
+    public static ActorPrincipal resolveBearer(String authorizationHeader,
+                                               ActorTokenService actorTokens,
+                                               OperatorSessionService operatorSessions) {
+        if (operatorSessions != null && operatorSessions.verifyOperatorCredential(authorizationHeader)) {
+            return ActorPrincipal.operator(null);
+        }
+        return actorTokens == null ? null : actorTokens.resolveBearer(authorizationHeader).orElse(null);
     }
 
     /**

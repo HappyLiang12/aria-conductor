@@ -1,0 +1,41 @@
+# step: S5 (cancel during pending permission (sandbox survival))
+# command: bash-owned: REST scenario — seed qoder run, wait for the pending ACP ask, POST /api/v1/runs/{id}/cancel, assert run CANCELLED + ask EXPIRED + sandbox survived with no qodercli process
+# cwd: /d/project/aria-conductor
+# git: 6b48899
+# started: 2026-09-18T18:43:22Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
++ podman ps --filter ancestor=aria-conductor/qoder-sandbox:0.1 --format '{{.ID}} {{.Names}} {{.Image}}'   (baseline, before the run)
+  0. baseline sandboxes from image aria-conductor/qoder-sandbox:0.1:
+  1. seed: POST /api/v1/agents {agentType:ADK, adkProvider:qoder, config:{taskApprovalRequired:false}}
+  POST /api/v1/agents request: {"name":"c6b-s5-20260918-184323","agentType":"ADK","role":"dev","model":"efficient","adkProvider":"qoder","config":{"taskApprovalRequired":false}}
+  POST /api/v1/agents -> HTTP 201
+  response: {"id":"5045bcd9-3886-4005-b43e-34982a8e2982","name":"c6b-s5-20260918-184323","description":null,"agentType":"ADK","role":"dev","model":"efficient","provider":null,"adkProvider":"qoder","config":"{\"harnessProfile\":\"weak-model-safe\",\"taskApprovalRequired\":false}","healthStatus":"HEALTHY","createdAt":"2026-09-18T18:43:26.747348200Z","updatedAt":null,"retiredAt":null,"pickupEligible":true,"pickupIneligibleReasons":[],"lastProbedAt":null,"skills":[],"tools":null}
+     agent id: 5045bcd9-3886-4005-b43e-34982a8e2982
+  2. start run: POST /api/v1/runs {agentId:5045bcd9-3886-4005-b43e-34982a8e2982, promptSeed:<write trigger>}
+  POST /api/v1/runs request: {"agentId":"5045bcd9-3886-4005-b43e-34982a8e2982","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s5-20260918-184323.txt whose content is exactly: ready","maxIterations":3}
+  POST /api/v1/runs -> HTTP 201
+  response: {"id":"dc0e3835-ad89-48db-92fc-f389d676c10c","agentId":"5045bcd9-3886-4005-b43e-34982a8e2982","status":"PENDING","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s5-20260918-184323.txt whose content is exactly: ready","maxIterations":3,"totalTokensUsed":0,"iterationCount":0,"errorMessage":null,"finalOutput":null,"createdAt":"2026-09-18T18:43:27.240747200Z","updatedAt":null,"completedAt":null}
+     run id: dc0e3835-ad89-48db-92fc-f389d676c10c
+  3. waiting (<=180s) for a PENDING ACP_PERMISSION ask of run dc0e3835-ad89-48db-92fc-f389d676c10c
+  poll /approvals?status=PENDING (t+0s): no ACP ask for run dc0e3835-ad89-48db-92fc-f389d676c10c yet
+  poll /approvals?status=PENDING (t+6s): no ACP ask for run dc0e3835-ad89-48db-92fc-f389d676c10c yet
+  poll /approvals?status=PENDING (t+11s): no ACP ask for run dc0e3835-ad89-48db-92fc-f389d676c10c yet
+  poll /approvals?status=PENDING (t+17s): no ACP ask for run dc0e3835-ad89-48db-92fc-f389d676c10c yet
+  poll /approvals?status=PENDING (t+22s): no ACP ask for run dc0e3835-ad89-48db-92fc-f389d676c10c yet
+     pending ask id: 65e83a15-6aba-4c52-8bfa-09aa593bdbf4
++ podman ps --filter ancestor=aria-conductor/qoder-sandbox:0.1 --format '{{.ID}} {{.Names}} {{.Image}}'   (now)
+  4. new sandbox container for this run: 50de2815a986
+  5. positive control OK — qodercli waiting inside the sandbox: pid=32 comm=qodercli qodercli --acp --plugin-dir /opt/qoder/plugin 
++ POST http://localhost:8097/api/v1/runs/dc0e3835-ad89-48db-92fc-f389d676c10c/cancel
+  6. cancelling run dc0e3835-ad89-48db-92fc-f389d676c10c (RunController.java:84-86 -> RunService.cancelRun -> CANCELLED)
+     POST /runs/dc0e3835-ad89-48db-92fc-f389d676c10c/cancel -> HTTP 200 body={"id":"dc0e3835-ad89-48db-92fc-f389d676c10c","agentId":"5045bcd9-3886-4005-b43e-34982a8e2982","status":"CANCELLED","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s5-20260918-184323.txt whose content is exactly: ready","maxIterations":3,"totalTokensUsed":0,"i
+  poll GET /runs/dc0e3835-ad89-48db-92fc-f389d676c10c -> CANCELLED (t+0s)
+  7. run terminal state: CANCELLED (errorMessage='')
+  poll GET /approvals/65e83a15-6aba-4c52-8bfa-09aa593bdbf4 -> EXPIRED delivery=CANCELLED (t+1s)
+  8. ask terminal state: status=EXPIRED reason='run ended before decision' deliveryState=CANCELLED decidedAt=2026-09-18T18:44:00.698791Z
+  9. graceful stop proven: no qodercli process in 50de2815a986 after the cancel
+  9. sandbox 50de2815a986 still exists after the cancel — cancel did not kill the sandbox
+  s5-summary: label=c6b-s5-20260918-184323 agent=5045bcd9-3886-4005-b43e-34982a8e2982 run=dc0e3835-ad89-48db-92fc-f389d676c10c ask=65e83a15-6aba-4c52-8bfa-09aa593bdbf4 sandbox=50de2815a986 fallback_kill=no
+
+EXIT=0

@@ -1,0 +1,95 @@
+$ EVIDENCE_DIR=/tmp/c6b-red-dryrun-evd ./e2e/qoder/slice-c/run-all.sh --dry-run
+[c6b] dry-run: plan order: rebuild-image S1 S2 S3 S4 S5 S6 S7 S8 S9 S10 S11 S12 regression-mvn-test regression-mvn-verify regression-vitest regression-build regression-playwright regression-container-runtime leak-scan
+
+[dry-run] qoder slice-c harness plan — nothing is executed
+[dry-run] evidence dir: /tmp/c6b-red-dryrun-evd
+[dry-run] git: c3df90e
+
+[dry-run] preflight  (not in this run's plan)
+          cmd: curl GET http://localhost:8080/actuator/health + GET http://localhost:5173 + GET http://localhost:8090/health + GET/PUT http://localhost:8080/api/v1/adk/providers/qoder/credential (masked; PAT piped via stdin)
+          cwd: /d/project/aria-conductor
+          log: /tmp/c6b-red-dryrun-evd/preflight.run1.log
+[dry-run] rebuild-image  (would run)
+          cmd: podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox
+          cwd: /d/project/aria-conductor
+          log: /tmp/c6b-red-dryrun-evd/rebuild-image.run1.log
+[dry-run] S1  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S1:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S1.run1.log
+[dry-run] S2  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S2:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S2.run1.log
+[dry-run] S3  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S3:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S3.run1.log
+[dry-run] S4  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S4:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S4.run1.log
+[dry-run] S5  (would run)
+          cmd: bash-owned: REST scenario — seed qoder run, wait for the pending ACP ask, POST /api/v1/runs/{id}/cancel, assert run CANCELLED + ask EXPIRED + sandbox survived with no qodercli process
+          cwd: /d/project/aria-conductor
+          log: /tmp/c6b-red-dryrun-evd/S5.run1.log
+[dry-run] S6  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S6:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S6.run1.log
+[dry-run] S7  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S7:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S7.run1.log
+[dry-run] S8  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S8:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S8.run1.log
+[dry-run] S9  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S9:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S9.run1.log
+[dry-run] S10  (would run)
+          cmd: bash-owned: kill the backend recorded in .run/backend.pid mid-ask, restart the stack (stop.ps1 + QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder), assert the startup-sweep interruption state + expired ask without replay
+          cwd: /d/project/aria-conductor
+          log: /tmp/c6b-red-dryrun-evd/S10.run1.log
+[dry-run] S11  (would run)
+          cmd: npx playwright test e2e/qoder-*.spec.ts --grep "S11:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S11.run1.log
+[dry-run] S12  (would run)
+          cmd: npx playwright test e2e/qoder-governance-e2e.spec.ts --grep "S12:"
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/S12.run1.log
+[dry-run] regression-mvn-test  (would run)
+          cmd: mvn clean test -Dspring.profiles.active=h2
+          cwd: /d/project/aria-conductor/agent-control-tower
+          log: /tmp/c6b-red-dryrun-evd/regression-mvn-test.run1.log
+[dry-run] regression-mvn-verify  (would run)
+          cmd: mvn verify
+          cwd: /d/project/aria-conductor/agent-control-tower
+          log: /tmp/c6b-red-dryrun-evd/regression-mvn-verify.run1.log
+[dry-run] regression-vitest  (would run)
+          cmd: pnpm test
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/regression-vitest.run1.log
+[dry-run] regression-build  (would run)
+          cmd: pnpm build
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/regression-build.run1.log
+[dry-run] regression-playwright  (would run)
+          cmd: npx playwright test   (QODER_E2E / QODER_E2E_PAT / QODER_E2E_MODEL removed from the child env)
+          cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+          log: /tmp/c6b-red-dryrun-evd/regression-playwright.run1.log
+[dry-run] regression-container-runtime  (would run)
+          cmd: pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh
+          cwd: /d/project/aria-conductor
+          log: /tmp/c6b-red-dryrun-evd/regression-container-runtime.run1.log
+[dry-run] leak-scan  (would run)
+          cmd: grep -F -c -f <chmod 600 PAT tempfile> over every file in $EVIDENCE_DIR (count-only; tempfile deleted right after)
+          cwd: /d/project/aria-conductor
+          log: /tmp/c6b-red-dryrun-evd/leak-scan.run1.log
+
+[dry-run] preflight: skipped by --dry-run (with a live run: GET http://localhost:8080/actuator/health == UP, GET http://localhost:5173 reachable, GET http://localhost:8090/health reachable, credential configured, live model in {efficient,lite})
+[dry-run] done — no step was executed, no health/credential probe was attempted.
+EXIT=0

@@ -5,6 +5,7 @@ import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { AcpDecidedStrip } from './AcpDecisionOutcomes';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem } from '../types';
@@ -258,6 +259,9 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
             // asks — the rail stays empty instead of flashing the short view.
             <ShortApprovalView item={item} />
           ) : null}
+          {/* C5-fix1: decided ACP outcomes are derived from the card's ask list,
+              so the strip outlives the panel unmount a decide causes. */}
+          <AcpDecidedStrip asks={asksQuery.data ?? []} />
         </div>
       </div>
     </section>

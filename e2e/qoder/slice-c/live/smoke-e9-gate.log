@@ -1,0 +1,38 @@
+# smoke run — restored stack after the S10 restart failure — 2026-09-18T12:46:03Z
+# API_URL=http://localhost:8097 model=efficient git=06caaf0
+== 1. seed agent + run (real qoder, zero-credit model) ==
+   agent=a309ada1-ef16-4e49-a66f-03205f5a6752 run=07a26b1a-0f02-4262-a467-2140c9e96ceb
+== 2. wait (<=180s) for a PENDING ACP_PERMISSION ask of the run ==
+   pending ask=facbcb19-5e59-4c48-831f-fcecc6cd157c after 24s
+   status=PENDING requestedAt=2026-09-18T12:46:27.263702Z expiresAt=2026-09-18T12:48:27.263702Z
+== 3. poll until EXPIRED (<=300s) — proves the restarted backend's short TTL ==
+   t+0s status=PENDING
+   t+5s status=PENDING
+   t+11s status=PENDING
+   t+16s status=PENDING
+   t+22s status=PENDING
+   t+27s status=PENDING
+   t+33s status=PENDING
+   t+38s status=PENDING
+   t+43s status=PENDING
+   t+49s status=PENDING
+   t+54s status=PENDING
+   t+59s status=PENDING
+   t+65s status=PENDING
+   t+70s status=PENDING
+   t+75s status=PENDING
+   t+81s status=PENDING
+   t+86s status=PENDING
+   t+91s status=PENDING
+   t+97s status=PENDING
+   t+102s status=PENDING
+   t+107s status=PENDING
+   t+113s status=PENDING
+   t+118s status=PENDING
+   t+123s status=PENDING
+   t+129s status=PENDING
+   t+134s status=EXPIRED
+   ask EXPIRED after ~134s (TTL + sweep)
+== 4. run outcome (<=180s, recorded not asserted as success) ==
+   run status=COMPLETED finalOutput=The Write tool requires your approval to write to that path. Please approve the tool call so I can create the file.
+SMOKE PASS: sandbox path works and the ask expired inside the short TTL

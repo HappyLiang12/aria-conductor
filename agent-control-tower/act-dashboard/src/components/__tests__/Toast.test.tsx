@@ -56,6 +56,17 @@ describe('Toast', () => {
     expect(screen.queryByText('run.completed')).not.toBeInTheDocument();
   });
 
+  // UX-6: approval expiry used to be completely silent to the operator. The
+  // backend now broadcasts approval.expired, and it must surface as a toast
+  // with an operator-readable label — never the raw event type.
+  it('toasts approval.expired with a human-readable label', () => {
+    setEvent({ type: 'approval.expired', payload: { approvalId: 'a-1' }, timestamp: 't1' });
+    render(inRouter(<Toast />));
+
+    expect(screen.getByText('Approval Expired')).toBeInTheDocument();
+    expect(screen.queryByText('approval.expired')).not.toBeInTheDocument();
+  });
+
   it.each(['run.started', 'kanban.created', 'kanban.transitioned', 'run.iteration'])(
     'does not toast internal lifecycle event %s',
     (type) => {

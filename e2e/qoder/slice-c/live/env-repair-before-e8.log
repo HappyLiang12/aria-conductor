@@ -1,0 +1,22 @@
+=== operator-side stack restoration before E8 (disclosed in the evidence doc) ===
+=== timestamp: 2026-09-18 20:05:27 +0800 ===
+--- pre-restart container inventory (podman ps -a): ---
+95edc8b02fee docker.io/opensandbox/server:latest Exited (0) 19 minutes ago aria-opensandbox
+a9997e18d00a localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-3f6293be-76cb-44f5-9825-34fbad999236
+46bfc4609532 localhost/aria-conductor/qoder-sandbox:0.1 Exited (0) 292 years ago sandbox-15b53a36-04da-4122-84f2-1264a353d3c6
+a10d54cf4c01 localhost/aria-conductor/qoder-sandbox:0.1 Exited (0) 292 years ago sandbox-7953c0a5-c66b-4164-af56-4bb8c677ea11
+cde16736778f localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-0982028f-fb2c-4285-be0b-20028fba27f7
+ce59050bf138 localhost/aria-conductor/qoder-sandbox:0.1 Exited (0) 292 years ago sandbox-0807a868-b2c9-43e0-8e4a-022382b88bb0
+--- machine restart already done by the operator: podman machine stop (exit 0) + start (exit 0) ---
+--- archive-endpoint probe (the E7 failure class; 500 broken pipe before the restart, 200 after): ---
+--- curl present: /usr/bin/curl ---
+HTTP 200
+HTTP 200
+--- stack restart: QODER_MODEL=efficient BACKEND_PORT=8097 SERVER_PORT=8097 VITE_PORT=5273 ARIA_MCP_PORT=8097 OPENSANDBOX_PORT=8090 APPROVALS_TIMEOUT_MS=120000 CONTAINER_RUNTIME=podman PACK_CREDENTIAL_KEY=<inline from pack-key.txt> pwsh -NoProfile -File scripts/start.ps1 -Provider qoder ---
+Stopping Aria Conductor services...
+  stopped backend (PID 25484)
+  stopped frontend (PID 14672)
+  stopped OpenSandbox
+Done.
+stop.ps1 exit=0
+start.ps1 exit=0

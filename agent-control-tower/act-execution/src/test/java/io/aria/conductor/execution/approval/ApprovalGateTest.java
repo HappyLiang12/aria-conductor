@@ -4,6 +4,7 @@ import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
@@ -271,6 +272,29 @@ class ApprovalGateTest {
         // SPEC_REVIEW approvals are governed by the spec-approval flow, not the run lifecycle.
         assertThat(specReview.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(specReview.getReason()).isEqualTo("Spec ready for review");
+        verify(approvalRepository, never()).save(any());
+    }
+
+    /**
+     * R20.5: ACP permission asks are cancelled by the ACP permission coordinator (their companion
+     * row and delivery state must move with them), so the legacy run sweep must skip them.
+     */
+    @Test
+    void cancelAllPendingForRun_leavesAcpPermissionAsksAlive() {
+        RunContext ctx = ctx();
+        Approval acpAsk = TestDataBuilder.anApproval()
+                .withRunId(ctx.getRunId())
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("ACP permission request: mcp__aria__write_file")
+                .build();
+        acpAsk.setSource(ApprovalSource.ACP_PERMISSION);
+        approvalStore.put(acpAsk.getId(), acpAsk);
+        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(acpAsk));
+
+        gate.cancelAllPendingForRun(ctx.getRunId());
+
+        assertThat(acpAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(acpAsk.getReason()).isEqualTo("ACP permission request: mcp__aria__write_file");
         verify(approvalRepository, never()).save(any());
     }
 

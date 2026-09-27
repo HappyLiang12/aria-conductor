@@ -1,0 +1,23 @@
+# step: S4 (spec-owned scenario S4)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S4:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6b48899
+# started: 2026-09-18T17:04:59Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S4] agent=c6061c9f-479b-448c-a5fd-6e56e75626fc run=1a88a0a7-d0a4-4b1d-a22b-d8c5ef761a25 file=/workspace/e2e-s4-1789751103595-5072.txt ttlMs=120000
+[S4] ask=7631f891-d7f4-4310-b049-bb8691aaf1bb status=PENDING expiresAt=2026-09-18T17:07:24.565782Z
+[S4] sandbox container=b47971ac4834
+[S4] ask expired: status=EXPIRED deliveryState=CANCELLED reason="expired before decision" decidedAt=2026-09-18T17:08:00.925402Z
+[S4] late decide: HTTP 409 body={"code":"EXPIRED","error":"ACP permission ask 7631f891-d7f4-4310-b049-bb8691aaf1bb expired before the decision"}
+[S4] file probe after expiry: exists=false content=null note="test -f failed inside a live container (file absent)"
+[S4] run outcome (recorded, not a success claim): status=COMPLETED finalOutput="It looks like the file write was denied by your permission settings. Would you like to approve it so I can create the file?" totalTokensUsed=0
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (3.1m)
+
+  1 passed (3.1m)
+
+EXIT=0

@@ -1,0 +1,11 @@
+$ bash -n e2e/qoder/slice-c/run-all.sh
+  -> rc=0
+$ bash -n e2e/qoder/lib/common.sh
+  -> rc=0
+$ bash -n e2e/qoder/lib/stack.sh
+  -> rc=0
+$ bash -n e2e/qoder/lib/credential.sh
+  -> rc=0
+$ bash -n e2e/qoder/lib/scenarios.sh
+  -> rc=0
+EXIT=0

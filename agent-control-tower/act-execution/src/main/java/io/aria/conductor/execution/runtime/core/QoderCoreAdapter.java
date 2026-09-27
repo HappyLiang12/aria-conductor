@@ -72,6 +72,13 @@ public final class QoderCoreAdapter implements CoreAdapter {
     /** Run-owned file the bridge reads the core credential from. */
     static final String CREDENTIAL_FILE = "credential.secret";
 
+    /**
+     * The newline of every run-owned secret file. A fixed LF, never the platform
+     * separator: the readers are Node processes started on either side of a
+     * placement boundary, so the bytes must not change with the host OS.
+     */
+    public static final String RUN_OWNED_FILE_NEWLINE = "\n";
+
     private static final CoreCapabilities QODER_HOST =
             new CoreCapabilities(ControlStrategy.BACKEND_SUSPEND, true, false, true);
     private static final CoreCapabilities UNVERIFIED =
@@ -373,7 +380,7 @@ public final class QoderCoreAdapter implements CoreAdapter {
         Path target = credentialFile(environment);
         try {
             Files.createDirectories(target.getParent());
-            Files.writeString(target, credential + System.lineSeparator(), StandardCharsets.UTF_8,
+            Files.writeString(target, credential + RUN_OWNED_FILE_NEWLINE, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to write the run-owned credential file " + target

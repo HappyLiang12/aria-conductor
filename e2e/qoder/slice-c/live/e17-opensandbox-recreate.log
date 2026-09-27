@@ -1,0 +1,6 @@
+[4m>>>> Executing external compose provider "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker-compose.exe". Please see podman-compose(1) for how to disable this message. <<<<
+
+[0m Container aria-opensandbox Recreate 
+ Container aria-opensandbox Recreated 
+ Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 

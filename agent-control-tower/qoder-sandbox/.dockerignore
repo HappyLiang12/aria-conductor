@@ -1,0 +1,5 @@
+# Host-built artifacts must never reach the image: the bridge-builder stage compiles
+# the bridge from source (`npm ci && npm run build`), so the build context is kept to
+# the committed sources only. This also keeps the context small on developer machines.
+bridge/node_modules
+bridge/dist

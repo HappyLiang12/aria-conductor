@@ -1,0 +1,49 @@
+=== operator-side stack restoration before E9 (disclosed in the evidence doc) ===
+=== timestamp: 2026-09-18 20:44:08 +0800 ===
+--- pre-restart container inventory (podman ps -a): ---
+95edc8b02fee docker.io/opensandbox/server:latest Exited (0) 12 minutes ago aria-opensandbox
+d92cda3c2596 localhost/aria-conductor/opencode-sandbox:1.1 Up 37 minutes sandbox-051ebd83-f0b7-49fb-a116-80419a675e17
+50716821bbef localhost/aria-conductor/qoder-sandbox:0.1 Up 30 minutes sandbox-dbf85721-1337-4ee8-86e2-0ac60393eb17
+0761fdb6de41 localhost/aria-conductor/qoder-sandbox:0.1 Up 27 minutes sandbox-0932411c-30dc-4ddc-b9a0-72f079c796eb
+25723ee35070 localhost/aria-conductor/opencode-sandbox:1.1 Up 25 minutes sandbox-a6d35f43-fd6c-4c3e-b326-6b874c74fd74
+5833a9edb9bf localhost/aria-conductor/qoder-sandbox:0.1 Up 25 minutes sandbox-cd18841c-2df9-41c7-9136-b0bf923775c4
+--- archive-endpoint probe (the E7 failure class; 500 broken pipe before a machine restart, 200 after): ---
+--- curl present: /usr/bin/curl ---
+HTTP 200
+HTTP 200
+--- stack restart: QODER_MODEL=efficient BACKEND_PORT=8097 SERVER_PORT=8097 VITE_PORT=5273 ARIA_MCP_PORT=8097 OPENSANDBOX_PORT=8090 APPROVALS_TIMEOUT_MS=120000 CONTAINER_RUNTIME=podman PACK_CREDENTIAL_KEY=<inline from pack-key.txt> pwsh -NoProfile -File scripts/start.ps1 -Provider qoder ---
+stop.ps1 exit=0
+Stopping Aria Conductor services...
+  stopped OpenSandbox
+Done.
+start.ps1 exit=0
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+[5/8] Starting services
+      MCP auth token written to D:\project\aria-conductor\.run\mcp-token
+[6/8] Waiting for health
+[7/8] Reporting
+
+=========================================================
+  Aria Conductor - READY
+=========================================================
+  Topology : local-dev (backend + frontend on host)
+  Provider : qoder
+  Image    : aria-conductor/qoder-sandbox:0.1
+  MCP auth : token (token file: D:\project\aria-conductor\.run\mcp-token)
+  Runtime  : podman (explicit)
+  OpenSandbox: http://localhost:8090
+  Database : h2 (file)
+---------------------------------------------------------
+  Dashboard  : http://localhost:5273                    [OK]
+  Backend    : http://localhost:8097                    [OK]
+  OpenSandbox: http://localhost:8090                    [OK]
+  Swagger  : http://localhost:8080/swagger-ui.html
+---------------------------------------------------------
+  Logs : .run\backend.log   .run\frontend.log
+  Stop : pwsh -File scripts\stop.ps1
+=========================================================
+[8/8] Done
+All services healthy.

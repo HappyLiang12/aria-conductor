@@ -1,0 +1,60 @@
+# step: S12 (spec-owned governance scenario S12)
+# command: npx playwright test e2e/qoder-governance-e2e.spec.ts --grep "S12:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 0a18d96
+# started: 2026-09-18T08:02:12Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S12] benign console warnings recorded (not asserted): ["WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established."]
+[S12] console errors=0 failed backend requests=2
+[S12] backend-URL requests matched by the filter: 110
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (8.4s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S12] benign console warnings recorded (not asserted): ["WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established."]
+[S12] console errors=0 failed backend requests=0
+[S12] backend-URL requests matched by the filter: 95
+[S12] cleanup: DELETE card 22626eb5-b713-490b-a532-38bc2a85f7e3 HTTP 204
+  ok 2 [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (retry #1) (6.2s)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+    Error: failed backend requests on the touched routes: ["FAILED GET http://localhost:5273/api/v1/adk/providers/opencode/health (net::ERR_ABORTED)","FAILED GET http://localhost:5273/api/v1/agents (net::ERR_ABORTED)"]
+
+    expect(received).toHaveLength(expected)
+
+    Expected length: 0
+    Received length: 2
+    Received array:  ["FAILED GET http://localhost:5273/api/v1/adk/providers/opencode/health (net::ERR_ABORTED)", "FAILED GET http://localhost:5273/api/v1/agents (net::ERR_ABORTED)"]
+
+      820 |     failedBackendRequests,
+      821 |     `failed backend requests on the touched routes: ${JSON.stringify(failedBackendRequests)}`,
+    > 822 |   ).toHaveLength(0);
+          |     ^
+      823 |
+      824 |   // Teardown: remove the smoke card so the board is not left with residue.
+      825 |   const deleted = await apiCall(request, 'DELETE', `/kanban/items/${card.id}`);
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:822:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 flaky
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:736:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+EXIT=0

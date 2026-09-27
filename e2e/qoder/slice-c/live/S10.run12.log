@@ -1,0 +1,89 @@
+# step: S10 (backend restart interrupts a pending ask (S10))
+# command: bash-owned: kill the backend recorded in .run/backend.pid mid-ask, restart the stack (stop.ps1 + QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder), assert the startup-sweep interruption state + expired ask without replay
+# cwd: /d/project/aria-conductor
+# git: 6b48899
+# started: 2026-09-18T18:44:50Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+  1. seed: POST /api/v1/agents (qoder ADK, taskApprovalRequired=false) + POST /api/v1/runs (write trigger)
+  POST /api/v1/agents request: {"name":"c6b-s10-20260918-184450","agentType":"ADK","role":"dev","model":"efficient","adkProvider":"qoder","config":{"taskApprovalRequired":false}}
+  POST /api/v1/agents -> HTTP 201
+  response: {"id":"db46e3f0-121a-40f1-bc31-729e0d1d302e","name":"c6b-s10-20260918-184450","description":null,"agentType":"ADK","role":"dev","model":"efficient","provider":null,"adkProvider":"qoder","config":"{\"harnessProfile\":\"weak-model-safe\",\"taskApprovalRequired\":false}","healthStatus":"HEALTHY","createdAt":"2026-09-18T18:44:51.068335200Z","updatedAt":null,"retiredAt":null,"pickupEligible":true,"pickupIneligibleReasons":[],"lastProbedAt":null,"skills":[],"tools":null}
+  POST /api/v1/runs request: {"agentId":"db46e3f0-121a-40f1-bc31-729e0d1d302e","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-184450.txt whose content is exactly: ready","maxIterations":3}
+  POST /api/v1/runs -> HTTP 201
+  response: {"id":"f97eda72-e696-47a6-9326-52c6e99501df","agentId":"db46e3f0-121a-40f1-bc31-729e0d1d302e","status":"PENDING","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-184450.txt whose content is exactly: ready","maxIterations":3,"totalTokensUsed":0,"iterationCount":0,"errorMessage":null,"finalOutput":null,"createdAt":"2026-09-18T18:44:52.597875200Z","updatedAt":null,"completedAt":null}
+     agent=db46e3f0-121a-40f1-bc31-729e0d1d302e run=f97eda72-e696-47a6-9326-52c6e99501df
+  2. waiting (<=180s) for a PENDING ACP_PERMISSION ask of run f97eda72-e696-47a6-9326-52c6e99501df
+  poll /approvals?status=PENDING (t+1s): no ACP ask for run f97eda72-e696-47a6-9326-52c6e99501df yet
+  poll /approvals?status=PENDING (t+7s): no ACP ask for run f97eda72-e696-47a6-9326-52c6e99501df yet
+  poll /approvals?status=PENDING (t+13s): no ACP ask for run f97eda72-e696-47a6-9326-52c6e99501df yet
+  poll /approvals?status=PENDING (t+18s): no ACP ask for run f97eda72-e696-47a6-9326-52c6e99501df yet
+     pending ask id: 9649927e-3f4b-46c7-b438-aa6b6a55202a
+  3. before the kill: run=RUNNING ask=PENDING|PENDING|
+  4. killing the backend recorded in .run/backend.pid (taskkill /T /F — the documented stop path semantics)
++ taskkill /PID 24432 /T /F   (the pwsh wrapper recorded in .run/backend.pid and its tree: mvn spring-boot:run + the JVM)
+SUCCESS: The process with PID 2348 (child process of PID 25340) has been terminated.
+SUCCESS: The process with PID 25340 (child process of PID 25976) has been terminated.
+SUCCESS: The process with PID 25976 (child process of PID 19008) has been terminated.
+SUCCESS: The process with PID 19008 (child process of PID 24432) has been terminated.
+SUCCESS: The process with PID 24432 (child process of PID 21528) has been terminated.
+  taskkill exit=0
+  waiting for the backend to go down: HTTP 000
+     backend is down
+  5. stop.ps1 (releases the frontend port) then start.ps1 -Provider qoder with QODER_MODEL=efficient
++ cd /d/project/aria-conductor && pwsh -NoProfile -File scripts/stop.ps1
+Stopping Aria Conductor services...
+  skipped backend (PID 24432 is no longer running)
+  stopped frontend (PID 26312)
+  stopped OpenSandbox
+Done.
+     stop.ps1 exit=0
++ cd /d/project/aria-conductor && QODER_MODEL=efficient timeout 1500 pwsh -NoProfile -File scripts/start.ps1 -Provider qoder   (QODER_E2E_PAT stripped from the child env)
+Aria Conductor - one-click start (local)
+[1/8] Checking environment
+[2/8] Checking .env
+[3/8] Preparing container resources
+[4m>>>> Executing external compose provider "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker-compose.exe". Please see podman-compose(1) for how to disable this message. <<<<
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+[5/8] Starting services
+      MCP auth token written to D:\project\aria-conductor\.run\mcp-token
+[6/8] Waiting for health
+[7/8] Reporting
+
+=========================================================
+  Aria Conductor - READY
+=========================================================
+  Topology : local-dev (backend + frontend on host)
+  Provider : qoder
+  Image    : aria-conductor/qoder-sandbox:0.1
+  MCP auth : token (token file: D:\project\aria-conductor\.run\mcp-token)
+  Runtime  : podman (explicit)
+  OpenSandbox: http://localhost:8090
+  Database : h2 (file)
+---------------------------------------------------------
+  Backend    : http://localhost:8097                    [OK]
+  OpenSandbox: http://localhost:8090                    [OK]
+  Dashboard  : http://localhost:5273                    [OK]
+  Swagger  : http://localhost:8080/swagger-ui.html
+---------------------------------------------------------
+  Logs : .run\backend.log   .run\frontend.log
+  Stop : pwsh -File scripts\stop.ps1
+=========================================================
+[8/8] Done
+All services healthy.
+     start.ps1 exit=0 (124 = the 1500s timeout fired)
+  backend is UP (HTTP 200, status UP)
+     stack restarted
+  poll GET /runs/f97eda72-e696-47a6-9326-52c6e99501df -> RUNNING (t+1s)
+  poll GET /runs/f97eda72-e696-47a6-9326-52c6e99501df -> FAILED (t+6s)
+  6. run after restart: status=FAILED errorMessage='Run orphaned by backend restart'
+  poll GET /approvals/9649927e-3f4b-46c7-b438-aa6b6a55202a -> EXPIRED delivery=CANCELLED (t+1s)
+  7. ask after restart: status=EXPIRED reason='restart-interrupted (no session replay)' deliveryState=CANCELLED decidedAt=2026-09-18T18:46:23.645617Z
+  8. approval rows for run f97eda72-e696-47a6-9326-52c6e99501df (status=EXPIRED list): 1
+  8. stability recheck: 200|EXPIRED|CANCELLED|2026-09-18T18:46:23.645617Z  ->  200|EXPIRED|CANCELLED|2026-09-18T18:46:23.645617Z
+  s10-summary: label=c6b-s10-20260918-184450 agent=db46e3f0-121a-40f1-bc31-729e0d1d302e run=f97eda72-e696-47a6-9326-52c6e99501df ask=9649927e-3f4b-46c7-b438-aa6b6a55202a restarted=yes
+
+EXIT=0

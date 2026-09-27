@@ -496,7 +496,7 @@ class CoreAdapterContractTest {
             Path credentialFile = QoderCoreAdapter.credentialFile(run.environment());
             assertThat(credentialFile).isRegularFile();
             assertThat(Files.readString(credentialFile, java.nio.charset.StandardCharsets.UTF_8))
-                    .isEqualTo(FIXTURE_CREDENTIAL + System.lineSeparator());
+                    .isEqualTo(FIXTURE_CREDENTIAL + QoderCoreAdapter.RUN_OWNED_FILE_NEWLINE);
             assertThat(profile.controlSecretFile()).isNotNull();
             assertThat(Path.of(profile.controlSecretFile()).isAbsolute()).isTrue();
             assertThat(Path.of(profile.workingDirectory()).isAbsolute()).isTrue();

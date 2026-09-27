@@ -77,6 +77,16 @@ public class Approval {
 
     private Instant expiresAt;
 
+    /**
+     * Provenance (V60): legacy tool-call gate vs. ACP permission ask. Defaults to
+     * {@code LEGACY_GATE} so every pre-existing code path keeps its previous behavior; an ACP
+     * ask additionally has a companion {@link AcpPermissionRequest} row keyed by this id.
+     */
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false, length = 32)
+    private ApprovalSource source = ApprovalSource.LEGACY_GATE;
+
     @PrePersist
     protected void onCreate() {
         if (id == null) id = UUID.randomUUID();

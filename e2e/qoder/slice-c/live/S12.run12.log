@@ -1,0 +1,21 @@
+# step: S12 (spec-owned governance scenario S12)
+# command: npx playwright test e2e/qoder-governance-e2e.spec.ts --grep "S12:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 7c8016a
+# started: 2026-09-18T21:19:48Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S12] benign console warnings recorded (not asserted): ["WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established.","WebSocket connection to 'ws://localhost:5273/ws/events' failed: WebSocket is closed before the connection is established."]
+[S12] console errors=0 failed backend requests=0 client-cancelled requests=2
+[S12] client-cancelled requests recorded (not asserted): ["CANCELLED GET http://localhost:5273/api/v1/adk/providers/opencode/health","CANCELLED GET http://localhost:5273/api/v1/adk/providers/qoder/health"]
+[S12] backend-URL requests matched by the filter: 110
+[S12] cleanup: DELETE card f9135ea1-0fe6-4ba5-a63a-3206e1782c25 HTTP 204
+  ok 1 [chromium] › e2e\qoder-governance-e2e.spec.ts:754:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (4.2s)
+
+  1 passed (5.7s)
+
+EXIT=0

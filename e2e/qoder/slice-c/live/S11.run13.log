@@ -1,0 +1,25 @@
+# step: S11 (spec-owned scenario S11)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S11:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 7c8016a
+# started: 2026-09-18T21:19:17Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=8a79ea4c-02e3-4264-9602-8d5729ba1f04 run=3de74111-7c58-4f8d-9dfe-db829dc3dd62 marker=s11-marker-1789766361113-5594
+[S11] write ask=47e72c1e-22a3-4028-914d-a68a633f635e toolName=mcp__aria__store_knowledge status=PENDING deliveryState=PENDING options=["allow_always","allow_once","reject_once"]
+[S11] decide: HTTP 200 body={"approvalId":"47e72c1e-22a3-4028-914d-a68a633f635e","approved":true,"status":"processed","decision":"APPROVED","deliveryState":"DELIVERED"}
+[S11] approved write side effect: 1 knowledge item(s) named 's11-marker-1789766361113-5594' status=PENDING
+[S11] read execution entries (TOOL_RESULT list_knowledge): 1 ["tool_call_update completed"]
+[S11] write execution entries (TOOL_RESULT store_knowledge): 1 ["tool_call_update completed"]
+[S11] GET /runs/3de74111-7c58-4f8d-9dfe-db829dc3dd62/tool-calls: HTTP 200 rows=0
+[S11] NOT VERIFIED (tool_calls half): no ToolCall row is written on the qoder/MCP path (no writer in act-execution/.../adk/qoder; the executing record is the run progress stream asserted above). Design §10 item 6 "server audit records only the allowed execution with run correlation" is therefore evidenced through the progress stream in this spec.
+[S11] run terminal=COMPLETED
+  ok 1 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (27.1s)
+
+  1 passed (28.0s)
+
+EXIT=0

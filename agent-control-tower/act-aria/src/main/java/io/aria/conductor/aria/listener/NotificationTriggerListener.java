@@ -35,6 +35,20 @@ public class NotificationTriggerListener {
                 "APPROVAL", event.getApprovalId().toString());
     }
 
+    /**
+     * UX-6: an expired approval persists an unread notification with resource APPROVAL, so the
+     * bell and the notification feed close the loop the "approval requested" entry opened
+     * instead of staying silent while the ask vanishes from the queue.
+     */
+    @EventListener
+    public void onApprovalExpired(ApprovalExpiredEvent event) {
+        notificationService.create("approval.expired",
+                "Approval expired",
+                "Approval " + event.getApprovalId() + " expired without a decision ("
+                        + (event.getReason() != null ? event.getReason() : "no reason recorded") + ").",
+                "APPROVAL", event.getApprovalId().toString());
+    }
+
     @EventListener
     public void onKnowledgeSubmitted(KnowledgeSubmittedEvent event) {
         notificationService.create("knowledge.submitted",

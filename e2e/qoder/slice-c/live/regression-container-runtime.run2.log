@@ -1,0 +1,44 @@
+# step: regression-container-runtime (regression: container runtime selection (AGENTS.md))
+# command: pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh
+# cwd: /d/project/aria-conductor
+# git: 0a18d96
+# started: 2026-09-18T08:43:55Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+Container-runtime resolution scenarios:
+  PASS: explicit docker + docker available
+  PASS: explicit podman + podman available
+  PASS: explicit docker + CLI missing -> hard error
+  PASS: explicit podman + engine not running -> hard error with podman hint
+  PASS: explicit invalid value -> hard error
+  PASS: auto + docker running -> docker
+  PASS: auto + only podman running -> podman
+  PASS: auto + neither available -> null runtime
+Qoder sandbox image ensure scenarios:
+  PASS: qoder image present -> no build
+  PASS: qoder image absent -> build invoked from the qoder-sandbox context
+  PASS: qoder image present (docker) -> no build
+  PASS: qoder image absent (docker) -> build invoked from the qoder-sandbox context
+Load-DotEnv scenarios:
+  PASS: Load-DotEnv parses KEY=VALUE, skips comments/invalid names, preserves existing env
+  PASS: Load-DotEnv missing .env is a no-op
+  PASS: Load-DotEnv strips CRLF line endings
+
+All scenarios PASSED
+Container-runtime resolution scenarios:
+  PASS: explicit docker + docker available
+  PASS: explicit podman + podman available
+  PASS: explicit docker + CLI missing -> hard error (rc=1)
+  PASS: explicit podman + engine not running -> hard error with podman hint (rc=1)
+  PASS: explicit invalid value -> hard error (rc=1)
+  PASS: auto + docker running -> docker
+  PASS: auto + only podman running -> podman
+  PASS: auto + neither available -> null runtime (rc=0)
+load_dotenv scenarios:
+  PASS: load_dotenv parses KEY=VALUE, preserves existing env
+  PASS: load_dotenv missing .env is a no-op
+  PASS: load_dotenv strips CRLF line endings
+
+All scenarios PASSED
+
+EXIT=0

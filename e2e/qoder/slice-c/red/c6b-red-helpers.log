@@ -1,0 +1,12 @@
+$ source e2e/qoder/lib/{stack,scenarios}.sh  (API_URL=http://localhost:8080) + read-only helper smoke test
+1) GET /approvals?status=PENDING -> HTTP 200  json_len=1
+2) first element source= status=PENDING runId=8ddd2331-2056-4db9-8d0f-db68f91afad3
+3) json_find_pending_acp_ask(bogus run) -> []
+4) json_count_approvals_for_run(first runId) -> 1
+5) GET /runs/<first runId> -> HTTP 200 status=COMPLETED
+6) container runtime present: /c/Program Files/RedHat/Podman/podman ; sandbox_container_lines -> []
+7) container_exists(nonexistent) -> no
+8) qodercli_procs_in_container(nonexistent) -> []
+9) backend health code 200 status=UP
+10) decide-endpoint safety: not called
+EXIT=0

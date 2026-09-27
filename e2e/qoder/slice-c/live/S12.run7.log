@@ -1,0 +1,64 @@
+# step: S12 (spec-owned governance scenario S12)
+# command: npx playwright test e2e/qoder-governance-e2e.spec.ts --grep "S12:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6c70d1a
+# started: 2026-09-18T12:05:47Z
+# evidence: /d/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:754:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (3ms)
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:754:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls (retry #1) (0ms)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:754:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+    Error: apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+    Call log:
+      - → GET http://localhost:8097/api/v1/adk/providers/qoder/credential
+        - user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36
+        - accept: */*
+        - accept-encoding: gzip,deflate,br
+        - Content-Type: application/json
+
+        at apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+        at requestJson (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:175:30)
+        at credentialGet (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:351:10)
+        at assertZeroCreditModel (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:105:22)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:84:9
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+    Call log:
+      - → GET http://localhost:8097/api/v1/adk/providers/qoder/credential
+        - user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36
+        - accept: */*
+        - accept-encoding: gzip,deflate,br
+        - Content-Type: application/json
+
+        at apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+        at requestJson (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:175:30)
+        at credentialGet (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:351:10)
+        at assertZeroCreditModel (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:105:22)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:84:9
+
+    Error: ENOENT: no such file or directory, open 'D:\project\aria-conductor\agent-control-tower\act-dashboard\test-results\.playwright-artifacts-1\fc0484691891fe898d9a2f3c37a483a2.zip'
+
+    Error Context: test-results\qoder-governance-e2e-S12-U-63299-and-no-failed-backend-calls-chromium-retry1\error-context.md
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:754:1 › S12: UI smoke — board, Review surface, Providers and Ops render with zero console errors and no failed backend calls 
+
+EXIT=1

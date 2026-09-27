@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
+  dispatchSeededCard,
   seedAdkAgent,
   seedKanbanItem,
   transitionKanban,
@@ -33,8 +34,8 @@ test.describe('approval denial with reason', () => {
       agentTemplateId: agent.name,
     });
 
-    const dispatched = await transitionKanban(request, card.id, 'IN_PROGRESS');
-    expect(dispatched.status).toBe(200);
+    // Same auto-dispatch race as ops-approval-surface.spec.ts: the contract is the linked run.
+    await dispatchSeededCard(request, card.id);
 
     const asks = await pollUntil<any[]>(
       request,

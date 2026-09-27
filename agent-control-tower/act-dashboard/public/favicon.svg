@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Aria Conductor">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1426" />
+      <stop offset="1" stop-color="#003366" />
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#bg)" />
+  <path
+    d="M16 4C17.2 11.4 20.6 14.8 28 16C20.6 17.2 17.2 20.6 16 28C14.8 20.6 11.4 17.2 4 16C11.4 14.8 14.8 11.4 16 4Z"
+    fill="#4DA6D9"
+  />
+</svg>

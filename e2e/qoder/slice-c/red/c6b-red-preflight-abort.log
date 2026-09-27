@@ -1,0 +1,59 @@
+$ QODER_E2E_PAT=wcp_test_dummy EVIDENCE_DIR=/tmp/c6b-selfcheck-evd ./e2e/qoder/slice-c/run-all.sh --only S5
+[c6b] qoder slice-c harness — c3df90e — model=efficient api=http://localhost:8080 dashboard=http://localhost:5173 sandbox=http://localhost:8090
+[c6b] evidence dir: /tmp/c6b-selfcheck-evd
+[c6b] plan: preflight S5 leak-scan
+[c6b] == step preflight: stack health + qoder credential + live zero-credit model pin
+[c6b]    log: /tmp/c6b-selfcheck-evd/preflight.run1.log
++ GET http://localhost:8080/actuator/health (expect '"status":"UP"')
++ GET http://localhost:5173 (dashboard reachable)
++ GET http://localhost:8090/health (OpenSandbox server reachable)
++ GET http://localhost:8080/api/v1/adk/providers/qoder/credential (masked status)
+[c6b] ERROR: [preflight] credential status answered HTTP 404 (expected 200; a 404 usually means the running backend predates the B8 credential API — restart it with the documented command below)
+[c6b] ERROR: start the stack first (from the repository root): QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder
+[c6b] WARNING: preflight failed (EXIT=1) — continuing; see /tmp/c6b-selfcheck-evd/preflight.run1.log
+[c6b] WARNING: preflight failed — aborting the plan (env/preflight failures are the only mid-plan abort)
+[c6b] == step leak-scan: PAT leak scan over the evidence dir
+[c6b]    log: /tmp/c6b-selfcheck-evd/leak-scan.run1.log
+
+# PAT leak scan (fixed-string, count only; the pattern file is deleted right after)
+# pattern file: /tmp/c6b-pat.BzhFC6 (chmod 600, deleted after the scan)
+# leak-scan: .c6b-work/leakscan.out -> 0
+# leak-scan: .c6b-work/preflight/cred0.json -> 0
+# leak-scan: .c6b-work/preflight/dashboard.html -> 0
+# leak-scan: .c6b-work/preflight/health.json -> 0
+# leak-scan: .c6b-work/preflight/opensandbox.json -> 0
+# leak-scan: leak-scan.run1.log -> 0
+# leak-scan: preflight.run1.log -> 0
+# leak-scan: 7 file(s) scanned, 0 file(s) contain the PAT
+[c6b]    leak-scan: PASS
+
+==================================================================
+  qoder slice-c harness — summary (run 1)
+==================================================================
+  STEP                         LOG                                STATUS
+  preflight                    preflight.run1.log                 FAIL
+  rebuild-image                —                                SKIPPED
+  S1                           —                                SKIPPED
+  S2                           —                                SKIPPED
+  S3                           —                                SKIPPED
+  S4                           —                                SKIPPED
+  S5                           —                                SKIPPED
+  S6                           —                                SKIPPED
+  S7                           —                                SKIPPED
+  S8                           —                                SKIPPED
+  S9                           —                                SKIPPED
+  S10                          —                                SKIPPED
+  S11                          —                                SKIPPED
+  S12                          —                                SKIPPED
+  regression-mvn-test          —                                SKIPPED
+  regression-mvn-verify        —                                SKIPPED
+  regression-vitest            —                                SKIPPED
+  regression-build             —                                SKIPPED
+  regression-playwright        —                                SKIPPED
+  regression-container-runtime —                                SKIPPED
+  leak-scan                    leak-scan.run1.log                 PASS
+  note: PAT leak scan: 0 hits across 7 evidence file(s)
+  summary file: /tmp/c6b-selfcheck-evd/SUMMARY.run1.md
+  OVERALL: FAIL
+==================================================================
+EXIT=1

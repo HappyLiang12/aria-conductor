@@ -8,6 +8,7 @@ import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.runtime.core.QoderCoreAdapter;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import io.aria.conductor.execution.runtime.WorkspacePaths;
@@ -248,7 +249,7 @@ public class HostExecutionBackend implements ExecutionBackend {
                     + " configuration directory of run " + environment.runId() + ": " + target);
         }
         try {
-            Files.writeString(target, controlSecret + System.lineSeparator(),
+            Files.writeString(target, controlSecret + QoderCoreAdapter.RUN_OWNED_FILE_NEWLINE,
                     StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
                     java.nio.file.StandardOpenOption.WRITE);

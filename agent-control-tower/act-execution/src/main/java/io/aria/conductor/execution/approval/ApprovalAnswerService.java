@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.approval;
 
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,12 @@ public class ApprovalAnswerService {
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + id));
         if (approval.getStatus() != ApprovalStatus.PENDING) {
             throw new IllegalArgumentException("Approval already decided: " + approval.getStatus());
+        }
+        // R20.6: free-text answers never resolve an ACP permission ask; that record
+        // mirrors a live ACP request and must be decided through /decide.
+        if (approval.getSource() == ApprovalSource.ACP_PERMISSION) {
+            throw new IllegalArgumentException(
+                    "ACP permission asks are decided via /decide (ACP permission coordinator), not /answer");
         }
         if (approved != null && approval.getAskType() != Approval.AskType.QUESTION) {
             throw new IllegalArgumentException(

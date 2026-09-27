@@ -1,0 +1,263 @@
+# step: regression-vitest (regression: dashboard vitest suite)
+# command: pnpm test
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6b48899
+# started: 2026-09-18T17:48:15Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+> @aria-conductor/dashboard@0.1.0 test D:\project\aria-conductor\agent-control-tower\act-dashboard
+> vitest run
+
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/project/aria-conductor/agent-control-tower/act-dashboard[39m
+
+ [32m✓[39m src/components/__tests__/AgentDrawer.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[33m 1975[2mms[22m[39m
+   [33m[2m✓[22m[39m AgentDrawer backlog replay + stub removal (Task 6)[2m > [22mdrawer_liveFrames_append_afterBacklog [33m306[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ReviewWorkspace.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[33m 3520[2mms[22m[39m
+   [33m[2m✓[22m[39m ReviewWorkspace (in-place expand, spec 10.3)[2m > [22mrenders the markdown spec pane and the decision rail with asks [33m477[2mms[22m[39m
+   [33m[2m✓[22m[39m ReviewWorkspace (in-place expand, spec 10.3)[2m > [22mCollapse returns to the drawer on the same card [33m379[2mms[22m[39m
+   [33m[2m✓[22m[39m ReviewWorkspace (in-place expand, spec 10.3)[2m > [22mEscape while typing in a workspace textarea does not discard the draft [33m499[2mms[22m[39m
+   [33m[2m✓[22m[39m ReviewWorkspace (in-place expand, spec 10.3)[2m > [22mprev navigates back to the preceding REVIEW sibling [33m399[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/TaskDrawer.test.tsx [2m([22m[2m21 tests[22m[2m)[22m[33m 3329[2mms[22m[39m
+   [33m[2m✓[22m[39m TaskDrawer linked run result (D4)[2m > [22mrender_taskDrawer_showsLinkedRunResult [33m414[2mms[22m[39m
+   [33m[2m✓[22m[39m TaskDrawer review decision zone[2m > [22mRequest changes (short view) sends the card back to TODO with the typed feedback [33m619[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/QoderCredentialCard.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[33m 4831[2mms[22m[39m
+   [33m[2m✓[22m[39m QoderCredentialCard credential editor[2m > [22mshows the unconfigured default state, then posts the PAT exactly once and masks it [33m1570[2mms[22m[39m
+   [33m[2m✓[22m[39m QoderCredentialCard credential editor[2m > [22mreplaces a credential through the same single-PUT path [33m1038[2mms[22m[39m
+   [33m[2m✓[22m[39m QoderCredentialCard credential editor[2m > [22msurfaces a failed save once and keeps the typed PAT out of the page [33m695[2mms[22m[39m
+   [33m[2m✓[22m[39m QoderCredentialCard credential editor[2m > [22mrequires confirmation before removing the credential [33m495[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ReviewPanels.acp.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 835[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/KanbanBoard.test.tsx [2m([22m[2m34 tests[22m[2m)[22m[33m 6634[2mms[22m[39m
+   [33m[2m✓[22m[39m KanbanBoard status board + DnD (Task 12)[2m > [22mreview card carries the full quick decision on its face [33m800[2mms[22m[39m
+   [33m[2m✓[22m[39m KanbanBoard new-task modal (Task 13)[2m > [22mCreate in Todo submits with status TODO; agentTemplateId only when selected [33m1346[2mms[22m[39m
+   [33m[2m✓[22m[39m KanbanBoard new-task modal (Task 13)[2m > [22mselecting a template sends agentTemplateId [33m718[2mms[22m[39m
+   [33m[2m✓[22m[39m KanbanBoard new-task modal (Task 13)[2m > [22mBacklog button submits with status BACKLOG [33m372[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/Toast.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[90m 287[2mms[22m[39m
+[90mstderr[2m | src/hooks/__tests__/useWebSocket.test.ts[2m > [22m[2museWebSocket[2m > [22m[2mignores MESSAGE frames with malformed JSON bodies
+[22m[39m[WS] Failed to parse STOMP frame
+
+ [32m✓[39m src/hooks/__tests__/useWebSocket.test.ts [2m([22m[2m13 tests[22m[2m)[22m[90m 58[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/AcpDecidedStrip.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[33m 497[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/KnowledgePage.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[33m 1222[2mms[22m[39m
+   [33m[2m✓[22m[39m KnowledgePage review confirmation (#UI audit)[2m > [22mreview_requiresConfirmation: clicking ✓ opens a dialog and the mutation fires only on confirm [33m527[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ReviewPanels.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 1793[2mms[22m[39m
+   [33m[2m✓[22m[39m DecisionPanel[2m > [22mrenders each pending ask and routes gate asks to /decide endpoints [33m369[2mms[22m[39m
+   [33m[2m✓[22m[39m DecisionPanel[2m > [22mRequest changes sends the card back to TODO with the typed feedback [33m459[2mms[22m[39m
+   [33m[2m✓[22m[39m ShortApprovalView[2m > [22mRequest changes sends feedback and transitions to TODO [33m311[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/CrewPage.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 1484[2mms[22m[39m
+   [33m[2m✓[22m[39m CrewPage bulk retire (H3)[2m > [22mdoes not fire the bulk retire until the operator confirms [33m707[2mms[22m[39m
+   [33m[2m✓[22m[39m CrewPage bulk retire (H3)[2m > [22mclears the retire confirmation even when the retire fails [33m340[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/TemplatesPanel.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 1587[2mms[22m[39m
+   [33m[2m✓[22m[39m TemplatesPanel retire confirmation (Task 10)[2m > [22mretires only after the operator confirms in the shared dialog [33m520[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/MorningBriefing.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[90m 236[2mms[22m[39m
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mkeyboard selection clears the input and the sent message carries the skillId
+[22m[39m[Aria] New conversation: 54652b42-0668-440f-9a43-cd0453cd1fff
+
+ [32m✓[39m src/components/__tests__/DrawerContext.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[90m 129[2mms[22m[39m
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mmouse selection clears the input and the sent message carries the skillId
+[22m[39m[Aria] New conversation: 8f4b4914-493a-4d08-a448-fe9e37edece2
+
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mdoes not include skillId when no skill is pending
+[22m[39m[Aria] New conversation: dadbe3ca-e182-4f64-8a22-c2a9bc1e2810
+
+ [32m✓[39m src/components/__tests__/ConfirmDialog.test.tsx [2m([22m[2m12 tests[22m[2m)[22m[33m 375[2mms[22m[39m
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mEnter with zero slash matches sends the raw text as a normal message
+[22m[39m[Aria] New conversation: 9dcc72b5-6558-41f7-b0af-2a1c92b03b9c
+
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mretry re-sends the original message with the same skillId
+[22m[39m[Aria] New conversation: 05037d8c-7095-4fa8-965e-33e372723b68
+
+ [32m✓[39m src/pages/__tests__/OpsPage.acp.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 460[2mms[22m[39m
+   [33m[2m✓[22m[39m OpsPage — undecidable ACP asks in the pending queue[2m > [22mdisables Allow once with the explanation for a truncated ask, while a decidable ask stays approvable [33m353[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/ProvidersPage.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 385[2mms[22m[39m
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mstarting a new conversation disarms the pending skill
+[22m[39m[Aria] New conversation: 35055f66-1b52-4d72-ace0-6aa6871f837a
+
+[90mstdout[2m | src/components/__tests__/AriaPanel.test.tsx[2m > [22m[2mAriaPanel slash-command skill handling[2m > [22m[2mstarting a new conversation disarms the pending skill
+[22m[39m[Aria] New conversation: 77252c3a-a163-48ea-b993-85e2599029a8
+
+ [32m✓[39m src/components/__tests__/AriaPanel.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 4946[2mms[22m[39m
+   [33m[2m✓[22m[39m AriaPanel slash-command skill handling[2m > [22mkeyboard selection clears the input and the sent message carries the skillId [33m888[2mms[22m[39m
+   [33m[2m✓[22m[39m AriaPanel slash-command skill handling[2m > [22mmouse selection clears the input and the sent message carries the skillId [33m1217[2mms[22m[39m
+   [33m[2m✓[22m[39m AriaPanel slash-command skill handling[2m > [22mdoes not include skillId when no skill is pending [33m486[2mms[22m[39m
+   [33m[2m✓[22m[39m AriaPanel slash-command skill handling[2m > [22mretry re-sends the original message with the same skillId [33m1219[2mms[22m[39m
+   [33m[2m✓[22m[39m AriaPanel slash-command skill handling[2m > [22mstarting a new conversation disarms the pending skill [33m859[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ActivityTimeline.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[90m 233[2mms[22m[39m
+[90mstderr[2m | src/components/__tests__/TopBar.test.tsx[2m > [22m[2mTopBar health signals[2m > [22m[2mdoes not claim the agent roster is Online
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+[90mstderr[2m | src/components/__tests__/TopBar.test.tsx[2m > [22m[2mTopBar health signals[2m > [22m[2mreports the healthy count when a provider probe resolves healthy
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+Error: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+[90mstderr[2m | src/components/__tests__/TopBar.test.tsx[2m > [22m[2mTopBar health signals[2m > [22m[2msettles a failing provider probe without an inherited retry
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+[90mstderr[2m | src/components/__tests__/TopBar.test.tsx[2m > [22m[2mTopBar health signals[2m > [22m[2msettles a failing provider probe without an inherited retry
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+Error: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+ [32m✓[39m src/components/__tests__/TopBar.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 311[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/RunsPage.live.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 11993[2mms[22m[39m
+   [33m[2m✓[22m[39m RunsPage live trajectory (S3)[2m > [22mrefetches trajectory every 5s while the expanded run is RUNNING [33m5630[2mms[22m[39m
+   [33m[2m✓[22m[39m RunsPage live trajectory (S3)[2m > [22mstops refetching once the run reaches a terminal status [33m6067[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ExecutiveSummary.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 405[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/MarkdownViewer.test.tsx [2m([22m[2m11 tests[22m[2m)[22m[90m 296[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/workflowTemplateParams.test.ts [2m([22m[2m16 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ReviewQueue.acp.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 458[2mms[22m[39m
+   [33m[2m✓[22m[39m ReviewQueue — undecidable ACP asks[2m > [22mdisables Allow once with the explanation for a truncated ask, while a decidable ask stays approvable [33m330[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/QuickWins.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 395[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/OverviewPage.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[90m 42[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/WorkflowsPage.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1285[2mms[22m[39m
+   [33m[2m✓[22m[39m WorkflowsPage delete confirmation (Task 10)[2m > [22mdeletes only after the operator confirms in the shared dialog [33m944[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/HousekeepingPanel.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 422[2mms[22m[39m
+[90mstderr[2m | src/pages/__tests__/ChatPage.live.test.tsx[2m > [22m[2mChatPage WS live updates (S4)[2m > [22m[2mrefreshes the active thread trajectory on run.iteration for that run
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+[90mstderr[2m | src/pages/__tests__/ChatPage.live.test.tsx[2m > [22m[2mChatPage WS live updates (S4)[2m > [22m[2mignores iterations of other runs
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+[90mstderr[2m | src/pages/__tests__/ChatPage.live.test.tsx[2m > [22m[2mChatPage WS live updates (S4)[2m > [22m[2mdoes not invalidate the runs list for high-frequency run.progress
+[22m[39mError: AggregateError
+    at Object.dispatchError (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\xhr-utils.js:63:19)
+    at Request.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\xhr\XMLHttpRequest-impl.js:655:18)
+    at Request.emit (node:events:520:35)
+    at ClientRequest.<anonymous> (D:\project\aria-conductor\agent-control-tower\act-dashboard\node_modules\.pnpm\jsdom@25.0.1\node_modules\jsdom\lib\jsdom\living\helpers\http-request.js:127:14)
+    at ClientRequest.emit (node:events:508:28)
+    at emitErrorEvent (node:_http_client:108:11)
+    at Socket.socketErrorListener (node:_http_client:575:5)
+    at Socket.emit (node:events:508:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3) [90mundefined[39m
+[API] No response received: Network Error
+
+ [32m✓[39m src/pages/__tests__/ChatPage.live.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 529[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/CrewPage.qoderSelector.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 620[2mms[22m[39m
+   [33m[2m✓[22m[39m CrewPage ADK provider selector (B9)[2m > [22mcreates an agent on qoder when the operator explicitly selects it [33m348[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/ReportsPage.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1550[2mms[22m[39m
+   [33m[2m✓[22m[39m ReportsPage archive confirmation (Task 10)[2m > [22marchives only after the operator confirms in the shared dialog [33m1006[2mms[22m[39m
+   [33m[2m✓[22m[39m ReportsPage archive confirmation (Task 10)[2m > [22mclears the pending state and reports an archive failure [33m307[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/runs.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 10[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/ScheduledJobsPage.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1765[2mms[22m[39m
+   [33m[2m✓[22m[39m ScheduledJobsPage delete confirmation (Task 10)[2m > [22mdeletes only after the operator confirms in the shared dialog [33m1095[2mms[22m[39m
+   [33m[2m✓[22m[39m ScheduledJobsPage delete confirmation (Task 10)[2m > [22mclears the pending state and reports a deletion failure through the page toast [33m567[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/kanban.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 10[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/approvals.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 10[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/slashCommands.test.ts [2m([22m[2m17 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/client.test.ts [2m([22m[2m6 tests[22m[2m)[22m[90m 22[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/qoderCredential.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/AgentCard.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[90m 264[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/RunTemplateModal.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 1477[2mms[22m[39m
+   [33m[2m✓[22m[39m RunTemplateModal required-parameter validation[2m > [22mblocks submit and lists missing required params while inputs are empty [33m385[2mms[22m[39m
+   [33m[2m✓[22m[39m RunTemplateModal required-parameter validation[2m > [22msubmits when all required params are filled [33m970[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/WorkflowStepper.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[33m 382[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/SlashCommandMenu.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/eventLabels.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 4[2mms[22m[39m
+ [32m✓[39m src/hooks/__tests__/useSlashCommands.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[90m 183[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/ariaNotifications.test.ts [2m([22m[2m6 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/notificationRoutes.test.ts [2m([22m[2m13 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ManageToolsDialog.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[90m 266[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/formatTime.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/wsEvents.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 4[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/ReportContentViewer.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[90m 80[2mms[22m[39m
+ [32m✓[39m src/components/__tests__/StatusBadge.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[90m 199[2mms[22m[39m
+ [32m✓[39m src/api/__tests__/housekeeping.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m src/utils/__tests__/pricing.test.ts [2m([22m[2m6 tests[22m[2m)[22m[90m 4[2mms[22m[39m
+ [32m✓[39m src/pages/__tests__/NotFoundPage.test.tsx [2m([22m[2m1 test[22m[2m)[22m[90m 83[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m56 passed[39m[22m[90m (56)[39m
+[2m      Tests [22m [1m[32m436 passed[39m[22m[90m (436)[39m
+[2m   Start at [22m 01:48:17
+[2m   Duration [22m 59.47s[2m (transform 10.64s, setup 44.70s, collect 27.86s, tests 58.30s, environment 110.28s, prepare 15.86s)[22m
+
+
+EXIT=0

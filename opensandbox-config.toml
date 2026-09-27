@@ -14,7 +14,12 @@ port = 8080
 # server returns the sandbox container's bridge IP, unreachable from the host.
 # Supported by the official opensandbox/server image (v0.2.2+) - works with
 # both Docker and podman (no image patch needed).
-eip = "127.0.0.1"
+# "localhost" (NOT "127.0.0.1"): the sandbox endpoints are host-published
+# dynamic ports dialed by the Java SDK, and on Windows the WSL localhost relay
+# can bind newly published ports on IPv6 loopback only - an IPv4 literal then
+# gets ECONNREFUSED from the very first command. "localhost" resolves to
+# whichever loopback family the relay serves and works on Linux unchanged.
+eip = "localhost"
 
 [log]
 level = "INFO"

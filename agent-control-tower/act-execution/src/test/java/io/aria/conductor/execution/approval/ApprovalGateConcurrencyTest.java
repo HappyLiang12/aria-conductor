@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.approval;
 
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
@@ -15,6 +16,7 @@ import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -35,7 +37,9 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 
 /**
  * Phase F concurrency tests for {@link ApprovalGate}: decide-vs-timeout races,
@@ -138,6 +142,34 @@ class ApprovalGateConcurrencyTest {
             assertThat(expired.getDecidedAt()).isNotNull();
         });
         assertThat(pendingFutures(gate)).isEmpty();
+    }
+
+    // ── 2b. UX-6: the timeout path must tell the operator the ask is gone ──
+
+    /**
+     * UX-6 regression pin: the legacy-gate timeout used to be completely silent — the operator
+     * only learned an approval expired when it vanished from the queue. The timeout path must
+     * publish an {@link ApprovalExpiredEvent} carrying the approval id, the run id and the
+     * reason the path recorded, so the dashboard bell/toast can close the loop.
+     */
+    @Test
+    void undecidedApproval_timeout_publishesApprovalExpiredEventWithReason() throws Exception {
+        ApprovalGate gate = gate(100);
+        UUID runId = UUID.randomUUID();
+        CompletableFuture<ApprovalDecision> waiter = startWaiter(gate, ctx(runId), "drop_table");
+        UUID approvalId = awaitNextApprovalId();
+
+        await().atMost(Duration.ofSeconds(2)).until(waiter::isDone);
+        assertThat(waiter.get(2, TimeUnit.SECONDS).isApproved()).isFalse();
+
+        // The publish happens inside handleTimeout, before requestApproval returns, so the
+        // waiter being done guarantees the event was already published.
+        ArgumentCaptor<ApprovalExpiredEvent> captor = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher, atLeastOnce()).publishEvent(captor.capture());
+        ApprovalExpiredEvent expiredEvent = captor.getValue();
+        assertThat(expiredEvent.getApprovalId()).isEqualTo(approvalId);
+        assertThat(expiredEvent.getRunId()).isEqualTo(runId);
+        assertThat(expiredEvent.getReason()).isEqualTo("Auto-rejected: approval timed out");
     }
 
     // ── 3. decideApproval vs cancelAllPendingForRun race ─────────────────
@@ -292,7 +324,11 @@ class ApprovalGateConcurrencyTest {
     }
 
     private RunContext ctx() {
-        UUID runId = UUID.randomUUID();
+        return ctx(UUID.randomUUID());
+    }
+
+    /** Context with a caller-chosen runId, so tests can assert on it downstream. */
+    private RunContext ctx(UUID runId) {
         UUID agentId = UUID.randomUUID();
         Agent agent = TestDataBuilder.anAgent().withId(agentId).build();
         AgentSession session = TestDataBuilder.anAgentSession().withRunId(runId).withAgentId(agentId).build();

@@ -3,6 +3,7 @@ package io.aria.conductor.execution.kanban;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -17,9 +18,13 @@ import java.util.UUID;
  * Spec 10.2: every run-completed card entering REVIEW carries a REVIEW_REQUEST
  * ask so the Review column always surfaces a structured decision surface. The ask
  * is keyed on the card's linked run, so a blank or unparseable link gets none.
- * Idempotent: skipped when a PENDING ask already exists on the card. In-listener
- * failures are swallowed (a display ask must never break the transition);
- * only DB-constraint failures at flush time reach the caller's transaction.
+ * Idempotent: skipped when a PENDING legacy ask already exists on the card. A
+ * pending ACP permission ask does not suppress the review ask - such an ask is
+ * owned by {@code AcpPermissionCoordinator} and resolved independently (decision
+ * / expiry / run-end sweep), so the Review column must still surface its review
+ * surface. In-listener failures are swallowed (a display ask must never break the
+ * transition); only DB-constraint failures at flush time reach the caller's
+ * transaction.
  */
 @Slf4j
 @Component
@@ -45,8 +50,11 @@ public class KanbanReviewAskCreator {
         }
         try {
             kanbanRepository.findById(event.getItemId()).ifPresent(item -> {
-                if (!approvalRepository.findByStatusAndKanbanItemId(
-                        ApprovalStatus.PENDING, item.getId()).isEmpty()) {
+                boolean hasPendingLegacyAsk = approvalRepository
+                        .findByStatusAndKanbanItemId(ApprovalStatus.PENDING, item.getId())
+                        .stream()
+                        .anyMatch(a -> a.getSource() != ApprovalSource.ACP_PERMISSION);
+                if (hasPendingLegacyAsk) {
                     return;
                 }
                 if (item.getLinkedRunId() == null || item.getLinkedRunId().isBlank()) {

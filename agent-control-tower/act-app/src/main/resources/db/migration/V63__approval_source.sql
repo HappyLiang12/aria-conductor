@@ -1,0 +1,13 @@
+-- V63: approval provenance (renumbered from the merged branch's V60).
+--
+-- This is the `approvals.source` half of the V60 migration that landed on main with the
+-- provider-scoped Qoder work. The ACP companion table half of that migration is NOT carried:
+-- the run-scoped permission ledger here is V62's `acp_permission_request`, whose shape this
+-- branch's architecture owns (the provider-scoped variant never coexisted with it).
+--
+-- Deliberate DDL choices (unchanged from the original):
+-- 1. NOT NULL DEFAULT 'LEGACY_GATE': every row written before this migration, and every legacy
+--    gate path, reads back as LEGACY_GATE; the default is enforced by the database.
+-- 2. TIMESTAMP (not TIMESTAMPTZ): matches the rest of the schema; H2 MODE=MySQL (h2 profile /
+--    CI) and MariaDB both reject TIMESTAMPTZ.
+ALTER TABLE approvals ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT 'LEGACY_GATE';

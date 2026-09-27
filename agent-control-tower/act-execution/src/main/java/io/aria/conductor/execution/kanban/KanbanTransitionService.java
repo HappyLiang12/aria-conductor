@@ -26,8 +26,9 @@ import java.util.UUID;
 /**
  * Orchestrates kanban transitions with their run side effects (spec section 4):
  * Todo entry is a dispatch intent (two-phase pickup), parking a card in TODO or
- * BACKLOG stops the linked run and detaches the card, request-changes
- * re-dispatches with feedback, cancel denies open asks and cancels the run.
+ * BACKLOG stops the linked run and detaches the card, request-changes ends the
+ * previous run and re-dispatches with feedback, cancel denies open asks and
+ * cancels the run.
  *
  * <p>Pickup asks the single eligibility authority before crossing the run
  * creation proxy: an ineligible or unknown agent is a synchronous operator
@@ -203,7 +204,21 @@ public class KanbanTransitionService {
         return kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS, request.getComment());
     }
 
+    /**
+     * Request-changes re-enters Todo with the operator feedback and re-dispatches (spec 4).
+     *
+     * <p>The previous attempt is ended first (F9): the one state that can carry a pending ACP
+     * ask is a live run blocked on that ask, and that same run holds its agent's single-run
+     * slot (the Qoder provider rejects a second concurrent run per agent), so leaving it
+     * alive would orphan the ask — its owner, the run-end sweep in
+     * {@code AcpPermissionCoordinator}, never fires — and would keep the re-dispatched run
+     * from starting. Cancelling (not pausing) is what publishes
+     * {@code RunCompletedEvent(CANCELLED)} and lets the coordinator expire the run's pending
+     * asks with the run-ended reason. A card without a linked run, or whose run already
+     * ended, is unaffected; the stale-ask sweep and the re-dispatch below are unchanged.
+     */
     private KanbanItem requestChanges(KanbanItem item, TransitionRequest request) {
+        cancelLiveLinkedRun(item);
         approvalRepository.markStaleByKanbanItemId(item.getId(), Instant.now());
         kanbanService.transition(item.getId(), KanbanStatus.TODO, request.getComment());
         return pickup(item, request);
@@ -246,13 +261,27 @@ public class KanbanTransitionService {
         // CANCELLED and skips it (terminal cards are never re-transitioned) —
         // harmless by design.
         kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
+        cancelLiveLinkedRun(item);
+        return item;
+    }
+
+    /**
+     * Cancel the linked run when it is still live; a run that already ended is left alone.
+     *
+     * <p>The live set is exactly the statuses a run can still be doing work in, so cancelling
+     * one always ends it without a double-cancel error; a COMPLETED, FAILED, CANCELLED or
+     * ABORTED run has nothing left to stop and is skipped. Cancelling — not pausing — is what
+     * publishes {@code RunCompletedEvent(CANCELLED)}, the signal that expires the run's
+     * pending ACP asks (R23) and frees the provider's single-run slot for that agent. A
+     * missing or corrupt link is history, not a run to operate on.
+     */
+    private void cancelLiveLinkedRun(KanbanItem item) {
         findRun(item).ifPresent(run -> {
             if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
                     || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED) {
                 runService.cancelRun(UUID.fromString(item.getLinkedRunId()));
             }
         });
-        return item;
     }
 
     /**

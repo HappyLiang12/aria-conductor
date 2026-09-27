@@ -1,0 +1,78 @@
+# step: S11 (spec-owned scenario S11)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S11:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 8f5ed4d
+# started: 2026-09-18T11:23:24Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=4302270a-a419-4ae1-9cb1-2e9727bd64ce run=8d35e470-8c3c-46da-b807-727cd668ce37 marker=s11-marker-1789730608062-1536
+[S11] write ask=963dcd9b-1bae-4a4e-a468-ee528992448b toolName=mcp__aria__store_knowledge status=PENDING deliveryState=PENDING options=["allow_always","allow_once","reject_once"]
+[S11] read execution entries (TOOL_RESULT list_knowledge): 0 []
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (20.3s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=1de9e199-c937-4c5a-af7d-2daa76df9d73 run=f5d0358b-9ace-4cab-904d-a11c32732abe marker=s11-marker-1789730629295-4410
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (retry #1) (7.0m)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+    Error: the read must EXECUTE (a TOOL_RESULT progress entry) while producing no ask
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      651 |     readExecuted.length,
+      652 |     'the read must EXECUTE (a TOOL_RESULT progress entry) while producing no ask',
+    > 653 |   ).toBeGreaterThan(0);
+          |     ^
+      654 |
+      655 |   // ── Write half: unexecuted before the decision ─────────────────────────────
+      656 |   const knowledgeBefore = await requestJson<any[]>(request, 'GET', '/knowledge');
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:653:5
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within 420000ms; last list=[{"id":"0c656a61-58f3-4fbc-b43b-7e35132382d0","runId":"6fd64f0a-6000-4bd9-9655-287dc6658b5f","toolCallId":null,"status":"PENDING","reason":null,"requestedAt":"2026-09-18T05:42:42.143261Z","decidedAt":null,"expiresAt":null,"approvalType":"TOOL_CALL","content":"Run 6fd64f0a completed (COMPLETED) - awaiting your review: s8-replay-card-1789710128487-918","contentKind":null,"knowledgeItemId":null,"tool
+
+       at qoder-e2e-lib.ts:283
+
+      281 |     await sleep(2_000);
+      282 |   }
+    > 283 |   throw new Error(
+          |         ^
+      284 |     `waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within ${timeoutMs}ms;`
+      285 |     + ` last list=${JSON.stringify(last)?.slice(0, 400)}`,
+      286 |   );
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:283:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:623:15
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+EXIT=1

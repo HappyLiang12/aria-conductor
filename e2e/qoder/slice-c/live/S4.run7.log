@@ -1,0 +1,25 @@
+# step: S4 (spec-owned scenario S4)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S4:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 06caaf0
+# started: 2026-09-18T14:04:01Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S4] agent=611860d3-37d5-4ef8-b86d-70b1a7003797 run=6e8e081d-dfd1-49d9-8810-568eef77ce5b file=/workspace/e2e-s4-1789740245021-7792.txt ttlMs=120000
+[S4] ask=87a0e938-2ea8-49ea-b118-84044cd18b18 status=PENDING expiresAt=2026-09-18T14:06:29.811388Z
+[S4] sandbox container=e21c29580f21
+[S4] ask expired: status=EXPIRED deliveryState=CANCELLED reason="expired before decision" decidedAt=2026-09-18T14:07:00.234444Z
+[S4] late decide: HTTP 409 body={"error":"ACP permission ask 87a0e938-2ea8-49ea-b118-84044cd18b18 expired before the decision","code":"EXPIRED"}
+[S4] file probe after expiry: exists=false content=null note="test -f failed inside a live container (file absent)"
+[S4] run outcome (recorded, not a success claim): status=COMPLETED finalOutput="It looks like the Write tool needs your permission to create the file. Could you approve the write to `/workspace/e2e-s4-1789740245021-7792.txt`? I'll retry once you've allowed it." totalTokensUsed=0
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (6.0m)
+
+  Slow test file: [chromium] › e2e\qoder-adk-e2e.spec.ts (6.0m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  1 passed (6.0m)
+
+EXIT=0

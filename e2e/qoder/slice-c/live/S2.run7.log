@@ -1,0 +1,26 @@
+# step: S2 (spec-owned scenario S2)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S2:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 7c8016a
+# started: 2026-09-18T20:39:59Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S2] card=e70e79d1-52ae-4fa5-98ae-4370e4585e65 run=e87de387-cfad-478c-a9b5-acfba74d478f file=/workspace/e2e-s2-1789764005126-9136.txt
+[S2] ask1=f86afeba-5a7e-4e5b-af96-4cee909423d5 status=PENDING source=ACP_PERMISSION toolCallId=null expiresAt=2026-09-18T20:42:32.200103Z
+[S2] ask1 options=[{"optionId":"proceed_always","kind":"allow_always","name":"Allow for this session"},{"optionId":"proceed_once","kind":"allow_once","name":"Allow"},{"optionId":"cancel","kind":"reject_once","name":"Reject"}]
+[S2] sandbox container=7ccb0df5a2ca (image ancestor filter)
+[S2] ask1 decided: status=APPROVED deliveryState=DELIVERED decision-recorded reason=null
+[S2] write1 probe: exists=true content="hi" note="cat via container exec"
+[S2] ask2=f23ad642-3177-4472-b1d5-027d94963d94 (new ask after the one-use approval) toolCallId=null
+[S2] asks for run e87de387-cfad-478c-a9b5-acfba74d478f: ["f23ad642-3177-4472-b1d5-027d94963d94:PENDING","78ba4fd8-01de-429d-b0ca-1c017615cf12:PENDING","f86afeba-5a7e-4e5b-af96-4cee909423d5:APPROVED"]
+[S2] file after the second (denied) write: exists=true content="hi" note="cat via container exec"
+[S2] run terminal=COMPLETED finalOutput="I'll write the file twice as requested.\n\nFirst write done. Writing the same file again.\n\nThe second write was denied. The file was successfully created on the first write with content \"hi\" at `
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:217:1 › S2: write attempt asks, allow once executes, second write asks again (49.2s)
+
+  1 passed (51.3s)
+
+EXIT=0

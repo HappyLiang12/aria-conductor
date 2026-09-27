@@ -3,6 +3,7 @@ package io.aria.conductor.dashboard.listener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.event.KanbanItemAssigningEvent;
@@ -96,6 +97,19 @@ public class EventBroadcastListener {
                 "approvalId", event.getApprovalId().toString(),
                 "decision", event.getDecision().name()
         ));
+    }
+
+    /**
+     * UX-6: an expiry that used to be silent reaches the dashboard over WS, so the operator
+     * learns the ask is gone instead of watching it vanish from the queue.
+     */
+    @EventListener
+    public void onApprovalExpired(ApprovalExpiredEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("approvalId", event.getApprovalId().toString());
+        data.put("runId", event.getRunId().toString());
+        data.put("reason", event.getReason() != null ? event.getReason() : "");
+        broadcast("approval.expired", data);
     }
 
     @EventListener

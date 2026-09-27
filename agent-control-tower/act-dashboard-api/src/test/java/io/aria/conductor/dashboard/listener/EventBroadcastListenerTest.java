@@ -3,6 +3,7 @@ package io.aria.conductor.dashboard.listener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.HousekeepingProgressEvent;
@@ -224,6 +225,30 @@ class EventBroadcastListenerTest {
         assertThat(event.type()).isEqualTo("approval.decided");
         assertThat(event.data()).containsEntry("approvalId", approvalId.toString())
                 .containsEntry("decision", "APPROVED");
+    }
+
+    // UX-6: an expiry that used to be silent must reach the dashboard over WS so the
+    // operator learns the ask is gone, exactly like approval.requested / approval.decided.
+    @Test
+    void onApprovalExpired_broadcastsApprovalIdRunIdAndReason() {
+        UUID approvalId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        listener.onApprovalExpired(new ApprovalExpiredEvent(this, approvalId, runId, "expired before decision"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.expired");
+        assertThat(event.data()).containsEntry("approvalId", approvalId.toString())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("reason", "expired before decision");
+    }
+
+    @Test
+    void onApprovalExpired_nullReason_defaultsToEmptyString() {
+        listener.onApprovalExpired(new ApprovalExpiredEvent(this, UUID.randomUUID(), UUID.randomUUID(), null));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.expired");
+        assertThat(event.data()).containsEntry("reason", "");
     }
 
     @Test

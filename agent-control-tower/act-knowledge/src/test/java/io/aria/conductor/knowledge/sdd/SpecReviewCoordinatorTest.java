@@ -279,6 +279,29 @@ class SpecReviewCoordinatorTest {
         verifyNoInteractions(knowledgeService, workflowService);
     }
 
+    /**
+     * R24.7: an ACP permission decision is published as an {@link ApprovalDecidedEvent} too, but
+     * the SDD chain must never advance on it — only SPEC_REVIEW approvals are routed here.
+     */
+    @Test
+    void onApprovalDecided_ignoresAcpPermissionApprovals() {
+        Approval acpApproval = Approval.builder()
+                .id(UUID.randomUUID())
+                .runId(baRunId)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.APPROVAL)
+                .source(ApprovalSource.ACP_PERMISSION)
+                .status(ApprovalStatus.APPROVED)
+                .build();
+        when(approvalRepository.findById(any())).thenReturn(Optional.of(acpApproval));
+
+        coordinator.onApprovalDecided(new ApprovalDecidedEvent(this, acpApproval.getId(), ApprovalStatus.APPROVED));
+
+        verifyNoInteractions(knowledgeService, workflowService, chainRepository, gitBranchService);
+        // The chain waiting on the spec gate is exactly where it was left.
+        assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.WAITING_APPROVAL);
+    }
+
     @Test
     void onApprovalDecided_chainNotWaitingApproval_skipsAdvance() {
         // Approval already APPROVED but the chain was resumed by another approval (double-approval guard).

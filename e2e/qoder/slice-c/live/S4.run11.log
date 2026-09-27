@@ -1,0 +1,80 @@
+# step: S4 (spec-owned scenario S4)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S4:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 7c8016a
+# started: 2026-09-18T22:10:10Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S4] agent=26c3de23-061e-4c3c-a5f7-2d97f3e8c8d0 run=c9b2f1e3-9467-45cf-aaa5-ee871c19f3d5 file=/workspace/e2e-s4-1789769415257-230.txt ttlMs=120000
+[S4] ask=88427535-7590-4fbb-bfd4-2a499ad57772 status=PENDING expiresAt=2026-09-18T22:12:43.925107Z
+[S4] sandbox container=0e3ca438c9ea
+[S4] ask expired: status=EXPIRED deliveryState=CANCELLED reason="run ended before decision" decidedAt=2026-09-18T22:12:52.034734Z
+  x  1 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (2.6m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S4] agent=932f0e6d-824f-49bd-aa19-257a41caa240 run=5dbc3684-b292-4cc4-8071-1bc44f1869df file=/workspace/e2e-s4-1789769574108-9702.txt ttlMs=120000
+[S4] ask=45cc6bd5-7ad6-419e-b64f-0f42b44cda63 status=PENDING expiresAt=2026-09-18T22:15:16.441001Z
+[S4] sandbox container=0994e59c411a
+[S4] ask expired: status=EXPIRED deliveryState=CANCELLED reason="run ended before decision" decidedAt=2026-09-18T22:15:26.027199Z
+  x  2 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (retry #1) (2.5m)
+
+
+  1) [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow 
+
+    Error: expect(received).toMatch(expected)
+
+    Expected pattern: /expired/i
+    Received string:  "run ended before decision"
+
+      410 |     + ` reason=${JSON.stringify(expiredSettled.data?.reason)} decidedAt=${expiredSettled.data?.decidedAt}`,
+      411 |   );
+    > 412 |   expect(String(expiredSettled.data?.reason ?? '')).toMatch(/expired/i);
+          |                                                     ^
+      413 |   expect((await listAsksForRun(request, run.id)).map((a) => a.status)).toContain('EXPIRED');
+      414 |
+      415 |   // A later decide on the same ask must be the typed 409 — never a success, never a stale allow.
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:412:53
+
+    Error Context: test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(received).toMatch(expected)
+
+    Expected pattern: /expired/i
+    Received string:  "run ended before decision"
+
+      410 |     + ` reason=${JSON.stringify(expiredSettled.data?.reason)} decidedAt=${expiredSettled.data?.decidedAt}`,
+      411 |   );
+    > 412 |   expect(String(expiredSettled.data?.reason ?? '')).toMatch(/expired/i);
+          |                                                     ^
+      413 |   expect((await listAsksForRun(request, run.id)).map((a) => a.status)).toContain('EXPIRED');
+      414 |
+      415 |   // A later decide on the same ask must be the typed 409 — never a success, never a stale allow.
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:412:53
+
+    Error Context: test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium-retry1\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow 
+
+EXIT=1

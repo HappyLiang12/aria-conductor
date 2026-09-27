@@ -1,0 +1,92 @@
+# step: S3 (spec-owned scenario S3)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S3:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 0a18d96
+# started: 2026-09-18T07:38:02Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S3] card=a4b0e729-516d-4286-8414-f88b7811b217 run=ee1d2879-b812-43ea-8e65-be2647bed931 file=/workspace/e2e-s3-1789717088493-370.txt
+[S3] ask=28efe440-0750-460e-82a4-ce4276a09d60 status=PENDING source=ACP_PERMISSION
+[S3] sandbox container=bdb1304f0f6a
+  x  1 [chromium] › e2e\qoder-adk-e2e.spec.ts:305:1 › S3: deny produces no side effect and does not cancel the run (33.6s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S3] card=f6bd751a-0663-4fff-a2d3-3066d6ca503e run=32412e58-78d9-4eb6-8489-34350f4acff6 file=/workspace/e2e-s3-1789717126363-3288.txt
+  x  2 [chromium] › e2e\qoder-adk-e2e.spec.ts:305:1 › S3: deny produces no side effect and does not cancel the run (retry #1) (7.1m)
+
+
+  1) [chromium] › e2e\qoder-adk-e2e.spec.ts:305:1 › S3: deny produces no side effect and does not cancel the run 
+
+    Error: expect(locator).toBeEnabled() failed
+
+    Locator: getByRole('region', { name: 'Decision panel' }).getByRole('button', { name: 'Deny', exact: true })
+    Expected: enabled
+    Error: strict mode violation: getByRole('region', { name: 'Decision panel' }).getByRole('button', { name: 'Deny', exact: true }) resolved to 2 elements:
+        1) <button class="btn">Deny</button> aka locator('.ask-actions > button:nth-child(2)').first()
+        2) <button class="btn">Deny</button> aka locator('div:nth-child(3) > .ask-actions > button:nth-child(2)')
+
+    Call log:
+      - Expect "toBeEnabled" with timeout 5000ms
+      - waiting for getByRole('region', { name: 'Decision panel' }).getByRole('button', { name: 'Deny', exact: true })
+
+
+      319 |   await expect(zone.locator('.pill.acp')).toContainText('ACP permission');
+      320 |   const deny = zone.getByRole('button', { name: 'Deny', exact: true });
+    > 321 |   await expect(deny).toBeEnabled();
+          |                      ^
+      322 |   await deny.click();
+      323 |
+      324 |   await expect
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:321:22
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within 420000ms; last list=[{"id":"0c656a61-58f3-4fbc-b43b-7e35132382d0","runId":"6fd64f0a-6000-4bd9-9655-287dc6658b5f","toolCallId":null,"status":"PENDING","reason":null,"requestedAt":"2026-09-18T05:42:42.143261Z","decidedAt":null,"expiresAt":null,"approvalType":"TOOL_CALL","content":"Run 6fd64f0a completed (COMPLETED) - awaiting your review: s8-replay-card-1789710128487-918","contentKind":null,"knowledgeItemId":null,"tool
+
+       at qoder-e2e-lib.ts:283
+
+      281 |     await sleep(2_000);
+      282 |   }
+    > 283 |   throw new Error(
+          |         ^
+      284 |     `waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within ${timeoutMs}ms;`
+      285 |     + ` last list=${JSON.stringify(last)?.slice(0, 400)}`,
+      286 |   );
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:283:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:312:15
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-adk-e2e.spec.ts:305:1 › S3: deny produces no side effect and does not cancel the run 
+
+EXIT=1

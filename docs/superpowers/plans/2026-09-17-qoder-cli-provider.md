@@ -1,8 +1,8 @@
 # Qoder CLI Provider (Slices A-C) Implementation Plan
 
-> Superseded by the [cross-core Host/Sandbox design](../specs/2026-09-22-agent-core-execution-modes-design.md). Do not execute this historical plan. Its sandbox-only lifecycle, retention of LangChain, and prohibition on CI changes conflict with the newly approved scope; a replacement implementation plan requires review of the new specification first.
-
 > **Historical worker guidance:** This plan originally required superpowers:subagent-driven-development or superpowers:executing-plans. Its unchecked steps do not authorize execution under the superseding design.
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `qoder` as a third selectable, governed ADK provider — real Qoder CLI inside OpenSandbox, driven through an in-sandbox ACP bridge, with per-tool HITL for every run, encrypted PAT storage, worker/operator authorization, and a mandatory local real-E2E regression suite pinned to the zero-credit `efficient` model.
 
@@ -52,12 +52,15 @@ These names and shapes are authoritative for all tasks below. If implementation 
 | `GET /sessions/{id}/events?after=N` | — | `text/event-stream`, `data: {"sequence":N,"type":...}`; ring buffer 1000; too-old `after` → `409 {"error":"REPLAY_GAP"}` |
 | `POST /sessions/{id}/permissions/{requestId}` | `{approved, reason?}` | `200 {"outcome":"delivered\|already_resolved\|expired\|unknown"}`; conflicting re-decision → `409 {"error":"ALREADY_RESOLVED"}`; approved with no `allow_once` option → `422 {"error":"UNSUPPORTED_OPTIONS"}` |
 | `POST /sessions/{id}/cancel` | — | `202 {"terminated":true\|false}`; rejects pending requests, then SIGTERM→SIGKILL within 10s grace |
+| `POST /probe` | `{url, headers:[{name,value}], timeoutMs?}` | `200 {"reachable":bool,"status":int\|null,"detail":string\|null}` — one MCP `initialize` POST from inside the sandbox; added by C2 ruling R1 for host-side reachability pre-flight, default timeout 3000 ms |
 
-Event types: `session_started {model}`, `agent_message {text}`, `tool_call {toolCallId, toolName, kind, status}`, `tool_call_update {toolCallId, status}`, `permission_request {requestId, toolCallId, toolName, title, redactedPreview, inputDigest, options[{optionId, kind, name}], expiresAt}`, `mode_changed {currentModeId}`, `usage {credits, inputTokens, outputTokens}`, `completed {stopReason}`, `failed {reason}`.
+Event types: `session_started {model}`, `agent_message {text}`, `tool_call {toolCallId, toolName, kind, status}`, `tool_call_update {toolCallId, status}`, `permission_request {requestId, toolCallId, toolName, title, redactedPreview, inputDigest, rawInput, rawInputTruncated, options[{optionId, kind, name}], expiresAt}`, `mode_changed {currentModeId}`, `usage {credits, inputTokens, outputTokens}`, `completed {stopReason}`, `failed {reason}`.
+
+Amended 2026-09-18 (C2 ruling R1, `.superpowers/sdd/2026-09-17-qoder-cli-provider/task-C2-rulings.md`): `permission_request` additionally carries the tool-call `rawInput` (bounded to 65536 characters, `rawInputTruncated` flags truncation) so the host can recompute the display preview and the authorization digest itself; `redactedPreview`/`inputDigest` remain for backwards compatibility but are never persisted, and a lie in them cannot authorize anything. A truncated (`rawInputTruncated:true`) ask is persisted as undecidable — approval is refused, deny/cancel still work.
 
 ### C0.3 ACP call sequence (bridge internals)
 
-1. spawn `qodercli --acp` (argv exactly `["--acp"]`, env allowlist, cwd `/workspace`, no shell).
+1. spawn `qodercli --acp --plugin-dir /opt/qoder/plugin` (argv exactly `["--acp","--plugin-dir","/opt/qoder/plugin"]`, env allowlist, cwd `/workspace`, no shell). Amended 2026-09-18 after the B4 review: design §7.2 requires the pinned bundle be loaded explicitly and kept non-writable by the CLI; `/opt/qoder/plugin` is the root-owned baked copy in the sandbox image, and A3 verified the `--acp --plugin-dir <dir>` combination (`e2e/qoder/slice-a/03-mcp-auth.md:78`).
 2. `initialize {protocolVersion:1}` → wait matching response.
 3. `session/new {cwd, mcpServers:[{type:"http",name,url,headers:[{name:"Authorization",value:"Bearer …"}]}]}` → wait.
 4. `session/set_model {sessionId, modelId}` → wait.
@@ -86,8 +89,11 @@ public class SandboxLifecycle {
     public String runCommand(String sandboxId, String command)                        // blocking
     public void runBackgroundCommand(String sandboxId, String command, Map<String, String> env)
     public boolean isServerHealthy()
+    public Sandbox sandbox(String sandboxId)                                          // escape hatch: raw SDK handle for provider-specific reads (opencode diagnostics)
 }
 ```
+
+Escape-hatch amendment (recorded during B1): `diagnose` stays in the opencode adapter (its log paths are opencode-specific) but its metrics section needs the raw SDK handle, so `sandbox(String)` is part of C0.5 as delivered; providers should use the lifecycle operations for everything else.
 
 `OpenCodeSandboxManager` keeps its exact public API (`createSandbox` 2-arg/3-arg, `uploadWorkspace`, `getSandboxUrl`, `renewSandbox`, `killSandbox`, `runCommand`, `runServeCommand`, `isServerHealthy`) and delegates; `runServeCommand(sandboxId, port, env)` still builds the opencode serve command and delegates to `runBackgroundCommand`. Its existing tests must pass without edits to their expectations.
 
@@ -314,7 +320,7 @@ Any failed required gate stops the project and is reported with raw evidence; do
 
 - [ ] **Step 1:** Failing vitest: spawn a fake CLI (a committed fixture script that emits scripted NDJSON) and assert the exact sequence in C0.3, including `session/set_model`, permission reply shape, rejection of `allow_always`-only offers, and that an unsupported client-method request from the CLI (e.g. an `fs/read_text_file`-class call) receives an explicit JSON-RPC error, never a fabricated success.
 - [ ] **Step 2:** Run red — `cd agent-control-tower/qoder-sandbox/bridge && npx vitest run`.
-- [ ] **Step 3:** Implement with `node:child_process` + NDJSON codec; env allowlist constants; no shell; argv exactly `["--acp"]`; the env allowlist excludes other providers' LLM credentials (`DEEPSEEK_API_KEY`, `LLM_API_KEY`, DB-managed keys) — a test asserts their absence from the spawned child env.
+- [ ] **Step 3:** Implement with `node:child_process` + NDJSON codec; env allowlist constants; no shell; argv per C0.3 step 1 (`["--acp","--plugin-dir","/opt/qoder/plugin"]` since the 2026-09-18 amendment); the env allowlist excludes other providers' LLM credentials (`DEEPSEEK_API_KEY`, `LLM_API_KEY`, DB-managed keys) — a test asserts their absence from the spawned child env.
 - [ ] **Step 4:** Green. **Coordinator commit** — `feat(qoder): add ACP client to the sandbox bridge`
 
 ### Task B3b: Bridge HTTP/SSE server
@@ -331,13 +337,13 @@ Any failed required gate stops the project and is reported with raw evidence; do
 ### Task B4: Final qoder-sandbox image (CLI + bridge + plugin)
 
 **Files:**
-- Modify: `agent-control-tower/qoder-sandbox/Dockerfile` (copy bridge, build `dist`, non-root user, `EXPOSE 4097`, `CMD ["node","/opt/qoder/bridge/main.js"]`), `agent-control-tower/qoder-sandbox/plugin/*` (from A2 format)
+- Modify: `agent-control-tower/qoder-sandbox/Dockerfile` (copy bridge, build `dist`, non-root user, `EXPOSE 4097`, `CMD ["node","/opt/qoder/bridge/dist/main.js"]` — corrected 2026-09-18: `tsconfig.json` emits `outDir dist`, so the brief's `main.js` path does not exist in the runtime stage), `agent-control-tower/qoder-sandbox/plugin/*` (from A2 format). The baked bundle is loaded per run via the C0.3 spawn argv (`--plugin-dir /opt/qoder/plugin`, amended 2026-09-18).
 - Modify: `scripts/lib/container-runtime.ps1` (add `Ensure-QoderSandboxImage`, mirroring `Ensure-OpencodeSandboxImage`), `act-app/src/main/resources/application.yml` (qoder image tag)
 
 **Interfaces:** Consumes A1 pin + B3b build; produces the runtime image for B6/B10.
 
-- [ ] **Step 1:** Build image; `docker run --rm` smoke: bridge `/health` responds and refuses requests without the bearer.
-- [ ] **Step 2:** Extend the container-runtime scenario test (`e2e/container-runtime-e2e.sh/.ps1`) with the qoder image case.
+- [ ] **Step 1:** Build image; `docker run --rm` smoke: bridge `/health` responds (unauthenticated per C0.2 — corrected 2026-09-18: the brief's literal "refuses without the bearer" applies to protected routes) and a protected route (`POST /sessions`) refuses requests without the bearer (anonymous and wrong-bearer 401; correct bearer passes the gate and fails validation with 400).
+- [ ] **Step 2:** Extend the container-runtime scenario test (`e2e/container-runtime-e2e.ps1`; corrected 2026-09-18: the bash lib has no image-ensure surface, verified in the B4 review) with the qoder image case.
 - [ ] **Step 3:** Record evidence; **coordinator commit** — `build(qoder): ship CLI, bridge and plugin bundle in the sandbox image`
 
 ### Task B5: `QoderBridgeClient` (Java)
@@ -411,9 +417,9 @@ Any failed required gate stops the project and is reported with raw evidence; do
 - Modify: `scripts/start.ps1`, `scripts/start-backend.sh` (`--provider qoder`), `README.md` mode note
 - Test: existing startup script tests (`e2e/startup-e2e.ps1`, `e2e/container-runtime-e2e.*`) extended
 
-**Interfaces:** `-Provider qoder` selects image + provider; never changes the default. Startup refuses qoder mode when the platform MCP is unauthenticated (`aria.mcp.auth-mode: none`), because sandboxes could then reach operator APIs; a documented override exists only for throwaway probes (design Section 6.2).
+**Interfaces:** `-Provider qoder` selects image + provider; never changes the default. qoder mode pins `ARIA_MCP_AUTH_MODE=token` with a locally generated token file so sandboxes cannot reach unauthenticated operator APIs; an explicit override to `none` is refused (design Section 6.2).
 
-- [ ] **Step 1:** Extend script tests red (dry-run assertions), including the refusal case: qoder mode with `auth-mode: none` exits with an explicit error unless the probe override is set.
+- [ ] **Step 1:** Extend script tests red (dry-run assertions), including the refusal case: qoder mode with an explicit `auth-mode: none` override exits with an explicit error, while the default qoder mode pins token auth automatically.
 - [ ] **Step 2:** Implement; run the startup e2e script (stub-only, no live sandbox).
 - [ ] **Step 3: Coordinator commit** — `feat(startup): add explicit qoder local mode`
 
@@ -457,13 +463,30 @@ Any failed required gate stops the project and is reported with raw evidence; do
 
 **Files:**
 - Create: `execution/approval/{AcpPermissionCoordinator.java,AcpPermissionRequestRepository.java}` (repository may live in act-common per repo convention)
-- Modify: `QoderAdkProvider` (wire coordinator callbacks; publish `ApprovalRequestedEvent` with source), `execution/approval/ApprovalExpiryChecker.java` (ACP rows route through the coordinator expiry path instead of only unblocking a gate future)
+- Modify: `QoderAdkProvider` (wire coordinator callbacks; publish `ApprovalRequestedEvent` with source; pass `mcpServers` — platform MCP URL plus the run-scoped token issued by C4 — into `session/new` at run start, replacing B6's empty list in slice C), `execution/approval/ApprovalExpiryChecker.java` (ACP rows route through the coordinator expiry path instead of only unblocking a gate future)
 - Test: unit tests with a fake bridge event source; integration test (H2) creating/deduping/expiring; restart-recovery test
 
 **Interfaces:** Consumes bridge `permission_request` events; validates run/session identity; host-side sanitization recomputes previews/digests before persistence (sandbox input is untrusted; unknown option kinds or malformed events are rejected, never coerced into an allow); creates `Approval(source=ACP_PERMISSION)` + companion atomically; dedupe by unique correlation; changed payload for same correlation → rejected + governance error; expiry = `min(approvals.timeout-ms, run deadline)`, enforced on reads/decisions and by the existing 60s `@Scheduled` checker, whose ACP branch delivers the reject/cancel through the same idempotent `deliverDecision(approvalId, …)` primitive C3 uses. On startup, pending ACP asks whose session cannot be resumed are expired with a restart-interruption reason and no replay (design Section 5.3).
 
 - [ ] **Step 1:** Failing tests: duplicate event → one ask; changed digest → rejected; malformed/unknown-option event → rejected, not coerced into an allow; secret-looking strings are redacted in stored display content; expired-before-decision → EXPIRED and reject delivered to the bridge (short expiry, fake clock); run deadline earlier than approval timeout wins; restart recovery expires pending ACP asks without replay.
 - [ ] **Step 2:** Red → implement → green. **Step 3: Coordinator commit** — `feat(approval): create host-side approvals from ACP permission events`
+
+Amended 2026-09-18 (binding rulings in `.superpowers/sdd/2026-09-17-qoder-cli-provider/task-C2-rulings.md`,
+controller): the bridge forwards bounded `rawInput` and `POST /probe` (C0.2 amendment A1, R1); the host
+recomputes preview and digest itself and never persists sandbox-provided display text (R2, R3); the
+authorization digest is the frozen `WriteGrantService.effectiveArgsDigest` — top-level nulls dropped —
+shared with the enforcement side (R4, landed by `C4-fix1`); `requestDigest` holds that digest, oversize
+asks are persisted undecidable (R4); `Approval.toolCallId` stays null for ACP rows and the event gains a
+`source` field (R5, R6); malformed asks are cancelled, never coerced (R7); expiry is
+`min(approvals.timeout-ms, run deadline)` with the idempotent `deliverDecision`/`expire`/`grantBindingForDecision`
+primitives C3 consumes (R8; the binding reader was renamed from `digestForDecision` by the R81 fix); restart
+recovery and the checker's ACP branch per R9/R10; provider wiring
+issues the run-scoped worker credential (`RunScopedCredentialService.issue`, expiry = run deadline,
+capped at `MAX_TTL` 30 min — a longer run loses MCP access; documented residual), probes
+`sandboxHostResolver` candidates through the bridge, passes `mcpServers=[McpServer("aria", url,
+[Authorization: Bearer <worker token>])]` (never anonymous on failure) and revokes credential + grants in
+the run's `finally` (R11); bridge gates are `npx vitest run` + `npm run build`, the image rebuild is C6's
+(R13); module homes and gates per R14. Out of scope: decision dispatch/grants (C3), UI (C5).
 
 ### Task C3: Decision dispatch (legacy vs ACP) and delivery
 
@@ -499,7 +522,7 @@ Any failed required gate stops the project and is reported with raw evidence; do
 **Interfaces:** Implements the C0.8 matrix S1-S12. Guard: reads `QODER_E2E_MODEL` (default `efficient`); fails if not in `{efficient, lite}` unless `QODER_E2E_ALLOW_PAID=1`. Skip reason when PAT absent must name the credential and the design section.
 
 - [ ] **Step 1:** Write specs red (they will fail until the stack is up).
-- [ ] **Step 2:** Bring up the real stack (`pwsh -NoProfile -File scripts/start.ps1 -Provider qoder`) and run S1-S12; each scenario records raw output (command + observed result) into the evidence file. Reuse the harness patterns from `e2e/kanban-pickup-e2e.ps1` for S9.
+- [ ] **Step 2:** Precondition: rebuild the sandbox image first — `podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox` (C2 ruling R13: `Ensure-QoderSandboxImage` never rebuilds an existing image and the bridge `dist/` is not committed, so the rawInput/probe changes only reach the sandbox through a fresh build). Then load the PAT into the runtime credential store via the B8 API (read from the local file; never echoed). Bring up the real stack (`pwsh -NoProfile -File scripts/start.ps1 -Provider qoder`, which pins token auth) and run S1-S12; each scenario records raw output (command + observed result) into the evidence file. Reuse the harness patterns from `e2e/kanban-pickup-e2e.ps1` for S9.
 - [ ] **Step 3:** Run the regression set: `mvn clean test -Dspring.profiles.active=h2`, `mvn verify`, `pnpm test`, `pnpm build`, existing Playwright suites, `e2e/container-runtime-e2e.*`.
 - [ ] **Step 4:** Any NOT VERIFIED criterion is reported as such — never upgraded to PASS.
 - [ ] **Step 5: Coordinator commit** — `test(qoder): add mandatory local E2E regression suite for the governed provider`

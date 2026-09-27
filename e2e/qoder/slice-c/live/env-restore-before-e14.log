@@ -1,0 +1,47 @@
+=== operator-side stack restoration before E11 (disclosed in the evidence doc) ===
+=== timestamp: 2026-09-19 04:30:49 +0800 ===
+--- git revision the stack will be built from: 6436d71 ---
+--- pre-restart container inventory (podman ps -a): ---
+95edc8b02fee docker.io/opensandbox/server:latest Up 2 hours aria-opensandbox
+--- archive-endpoint probe (the E7/E9 failure class; 500 broken pipe when the WSL VM is wedged): ---
+--- curl present: /usr/bin/curl ---
+HTTP 200
+HTTP 200
+--- stack restart under the R62 env (PACK_CREDENTIAL_KEY inline, never echoed) ---
+stop.ps1 exit=0
+Stopping Aria Conductor services...
+  stopped backend (PID 13012)
+  stopped frontend (PID 17424)
+  stopped OpenSandbox
+Done.
+start.ps1 exit=0
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+[5/8] Starting services
+      MCP auth token written to D:\project\aria-conductor\.run\mcp-token
+[6/8] Waiting for health
+[7/8] Reporting
+
+=========================================================
+  Aria Conductor - READY
+=========================================================
+  Topology : local-dev (backend + frontend on host)
+  Provider : qoder
+  Image    : aria-conductor/qoder-sandbox:0.1
+  MCP auth : token (token file: D:\project\aria-conductor\.run\mcp-token)
+  Runtime  : podman (explicit)
+  OpenSandbox: http://localhost:8090
+  Database : h2 (file)
+---------------------------------------------------------
+  Backend    : http://localhost:8097                    [OK]
+  Dashboard  : http://localhost:5273                    [OK]
+  OpenSandbox: http://localhost:8090                    [OK]
+  Swagger  : http://localhost:8080/swagger-ui.html
+---------------------------------------------------------
+  Logs : .run\backend.log   .run\frontend.log
+  Stop : pwsh -File scripts\stop.ps1
+=========================================================
+[8/8] Done
+All services healthy.

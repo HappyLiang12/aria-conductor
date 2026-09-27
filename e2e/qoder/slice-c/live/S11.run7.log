@@ -1,0 +1,49 @@
+# step: S11 (spec-owned scenario S11)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S11:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6c70d1a
+# started: 2026-09-18T12:00:48Z
+# evidence: /d/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=c063cf01-0332-4821-bc22-1aa20e555187 run=df04d830-e000-4fe4-8c45-965d82e9d979 marker=s11-marker-1789732851940-5916
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (4.9m)
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (retry #1) (0ms)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+    Error: apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+    Call log:
+      - → GET http://localhost:8097/api/v1/approvals?status=PENDING
+        - user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36
+        - accept: */*
+        - accept-encoding: gzip,deflate,br
+        - Content-Type: application/json
+
+        at apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+        at requestJson (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:175:30)
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:275:36)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:623:15
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: worker process exited unexpectedly (code=3221225794, signal=null)
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+EXIT=1

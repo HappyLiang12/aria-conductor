@@ -1,0 +1,68 @@
+# step: rebuild-image (rebuild the pinned qoder sandbox image (plan Step 2 / C2 R13))
+# command: podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox
+# cwd: /d/project/aria-conductor
+# git: 7c8016a
+# started: 2026-09-18T20:39:00Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+[1/2] STEP 1/7: FROM node:22-slim AS bridge-builder
+[1/2] STEP 2/7: WORKDIR /build/bridge
+--> Using cache f1ff5523c680a580adfd9aa54e9695f1f6cd993bcc5f1453dbaf4048ee47d40a
+--> f1ff5523c680
+[1/2] STEP 3/7: COPY bridge/package.json bridge/package-lock.json ./
+--> Using cache 6ad39ec8bbac7201741c563c4f5193e347b39aa1f36987512221a736d18544f1
+--> 6ad39ec8bbac
+[1/2] STEP 4/7: RUN npm ci
+--> Using cache a857ad442d2b830d1ab50a36f0017ae5e2431a6a3407d3a55befc9db5d437ca9
+--> a857ad442d2b
+[1/2] STEP 5/7: COPY bridge/tsconfig.json ./
+--> Using cache e68706711513c34ff257c9c1f6a1f41e3c9ec32cacb84d3c7ef5d46af0c885b9
+--> e68706711513
+[1/2] STEP 6/7: COPY bridge/src ./src
+--> 491a5127827c
+[1/2] STEP 7/7: RUN npm run build
+
+> @aria-conductor/qoder-bridge@0.1.0 build
+> tsc
+
+--> c919ece10634
+[2/2] STEP 1/16: FROM node:22-slim
+[2/2] STEP 2/16: ARG QODERCLI_VERSION=1.1.41
+--> Using cache 2e6c3424d1fa4a9c3a54948d200378ba20640d0a99924e84ec35896071452db5
+--> 2e6c3424d1fa
+[2/2] STEP 3/16: ARG QODERCLI_LINUX_X64_SHA256=1c2d174b098eb472a9ac19a80b89a664fdcb7d37dca09e64f44243faa4e3eca7
+--> Using cache 9774af19e9a8cd6ab9b10eaf2dec81e7fb4cc39463485138139bf53f70230dd8
+--> 9774af19e9a8
+[2/2] STEP 4/16: ARG QODERCLI_LINUX_X64_URL=https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/releases/${QODERCLI_VERSION}/qodercli-linux-x64.tar.gz
+--> Using cache c83b53d319ac0d355a3ac708565df91c4916cdee9b79fe3406828db3eda0b843
+--> c83b53d319ac
+[2/2] STEP 5/16: RUN apt-get update     && apt-get install -y --no-install-recommends curl ca-certificates     && rm -rf /var/lib/apt/lists/*     && curl -fsSL --retry 2 --connect-timeout 30 --max-time 300 "$QODERCLI_LINUX_X64_URL" -o /tmp/qodercli.tar.gz     && echo "$QODERCLI_LINUX_X64_SHA256  /tmp/qodercli.tar.gz" | sha256sum -c -     && mkdir -p /tmp/qodercli-extract     && tar -xzf /tmp/qodercli.tar.gz -C /tmp/qodercli-extract     && install -m 0755 /tmp/qodercli-extract/qodercli /usr/local/bin/qodercli     && rm -rf /tmp/qodercli-extract /tmp/qodercli.tar.gz     && HOME=/tmp/qodercli-smoke qodercli --version     && rm -rf /tmp/qodercli-smoke /tmp/qodercli-natives-*     && test "$(stat -c '%a %u:%g' /tmp)" = "1777 0:0"
+--> Using cache 84da30e7ca46be3bb9f4f24821a30ef89fc4a88ba88459845a9596c0232fc095
+--> 84da30e7ca46
+[2/2] STEP 6/16: COPY --from=bridge-builder /build/bridge/dist /opt/qoder/bridge/dist
+--> 53fb457b3bfe
+[2/2] STEP 7/16: COPY bridge/package.json /opt/qoder/bridge/package.json
+--> 9907da7c23be
+[2/2] STEP 8/16: COPY plugin /opt/qoder/plugin
+--> fc4ccdb0d707
+[2/2] STEP 9/16: RUN find /opt/qoder -type d -exec chmod 0755 {} +     && find /opt/qoder -type f -exec chmod 0644 {} +
+--> a257093c4f68
+[2/2] STEP 10/16: ENV HOME=/home/node
+--> 03a8f8e05bde
+[2/2] STEP 11/16: RUN install -d -o node -g node /home/node/.qoder     && printf '{\n  "general": {\n    "enableAutoUpdate": false\n  }\n}\n' > /home/node/.qoder/settings.json     && chown node:node /home/node/.qoder/settings.json
+--> 641e20782015
+[2/2] STEP 12/16: RUN install -d -o node -g node /workspace
+--> 0ca8db24f4d9
+[2/2] STEP 13/16: USER node
+--> 7bb0b55bb2f5
+[2/2] STEP 14/16: WORKDIR /workspace
+--> 8e9427b664de
+[2/2] STEP 15/16: EXPOSE 4097
+--> f973d0bf7b57
+[2/2] STEP 16/16: CMD ["node", "/opt/qoder/bridge/dist/main.js"]
+[2/2] COMMIT aria-conductor/qoder-sandbox:0.1
+--> a1ca64f6ef21
+Successfully tagged localhost/aria-conductor/qoder-sandbox:0.1
+a1ca64f6ef21706ada10aa8dfc37ac5b8fbd1510fcd284cdf8efd76797398065
+
+EXIT=0

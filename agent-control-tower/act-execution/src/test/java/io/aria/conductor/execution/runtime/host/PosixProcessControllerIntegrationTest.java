@@ -64,21 +64,23 @@ class PosixProcessControllerIntegrationTest {
                 setInterval(() => appendFileSync(process.argv[3], "tick\\n"), 10);
                 """);
         Path spawner = workspace.resolve("spawner.mjs");
-        // The root spawns a new detached writer every few milliseconds and never
-        // stops until it is killed: some of those spawns are guaranteed to land
-        // after the enumeration of the round whose sweep kills the root.
+        // The root spawns a new detached writer every 20 ms for 15 s and then keeps
+        // running idle: some spawns are guaranteed to land after the enumeration of
+        // the round whose sweep kills the root, while the finite burst lets the sweep
+        // converge on a loaded CI runner (an unbounded 2 ms spawner outran the
+        // enumeration there and the test timed out instead of proving anything).
         Files.writeString(spawner, """
                 import { spawn } from 'node:child_process';
-                import { appendFileSync } from 'node:fs';
                 const registry = process.argv[2];
                 const ticks = process.argv[3];
                 const writer = process.argv[4];
                 let index = 0;
-                setInterval(() => {
+                const burst = setInterval(() => {
+                  if (index >= 750) { clearInterval(burst); return; }
                   const name = ticks + "/" + process.pid + "-" + index + ".log";
                   spawn(process.execPath, [writer, registry, name], { stdio: 'ignore', detached: true });
                   index += 1;
-                }, 2);
+                }, 20);
                 setInterval(() => {}, 1000);
                 """);
 

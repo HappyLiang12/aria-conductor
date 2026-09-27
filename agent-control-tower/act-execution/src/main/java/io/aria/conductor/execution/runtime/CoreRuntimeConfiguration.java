@@ -121,7 +121,10 @@ public class CoreRuntimeConfiguration {
     @Bean
     public SandboxExecutionBackend sandboxExecutionBackend(OpenCodeProperties openCodeProperties,
             @Value("${aria.cores.qoder.sandbox-image:aria-conductor/qoder-sandbox:1.0}") String qoderImage,
-            @Value("${aria.cores.qoder.sandbox-port:4096}") int qoderPort) {
+            // The qoder image's in-sandbox ACP bridge port (agent-control-tower/qoder-sandbox/Dockerfile
+            // EXPOSE 9310): the endpoint the backend dials is resolved from this value, so a default
+            // that did not match the image would make every qoder/SANDBOX run probe a closed port.
+            @Value("${aria.cores.qoder.sandbox-port:9310}") int qoderPort) {
         SandboxExecutionBackend.SandboxImages images = coreId -> switch (coreId) {
             case "opencode" -> new SandboxExecutionBackend.SandboxProfile(
                     openCodeProperties.getImage(), openCodeProperties.getPort());

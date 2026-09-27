@@ -765,6 +765,25 @@ export function transitionKanban(
 export const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refresh and retry.';
 
 /**
+ * Dispatch a seeded card and answer with the card as the board persisted it.
+ * TODO → IN_PROGRESS is the redesign's two-phase pickup (assign agent + create
+ * run); a card the board's own auto flow already dispatched is a same-status
+ * no-op, so the moved card carries the linked run either way. Callers then poll
+ * that run's ask or terminal state — never the card's status alone.
+ */
+export async function dispatchSeededCard(request: APIRequestContext, cardId: string) {
+  const moved = await transitionKanbanSettled(request, cardId, 'IN_PROGRESS');
+  if (moved.status !== 200) {
+    throw new Error(`dispatch of card ${cardId} failed: HTTP ${moved.status} ${JSON.stringify(moved.data)}`);
+  }
+  const read = await apiCall(request, 'GET', `/kanban/items/${cardId}`);
+  if (read.status !== 200) {
+    throw new Error(`card ${cardId} could not be read back: HTTP ${read.status}`);
+  }
+  return read.data as { id: string; status: string; linkedRunId?: string | null };
+}
+
+/**
  * The same move under the documented optimistic-lock contract. The board's own
  * auto flow (a card with an eligible agent dispatches itself) is a concurrent
  * writer, so a transition the operator also drives can lose the version race and

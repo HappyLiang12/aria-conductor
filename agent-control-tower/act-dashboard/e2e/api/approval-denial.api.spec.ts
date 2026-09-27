@@ -3,6 +3,7 @@ import {
   apiCall,
   dispatchSeededCard,
   seedAdkAgent,
+  setScenario,
   seedKanbanItem,
   transitionKanban,
   pollUntil,
@@ -29,6 +30,9 @@ test.describe('approval denial with reason', () => {
       name: uniqueName('e2e-oc-deny'),
       adkProvider: 'opencode',
     });
+    // The dispatched run holds on the core's own gate ('deny-write' offers one edit
+    // ask), so the ask this spec decides is deterministic instead of absent.
+    await setScenario(request, agent.id, 'deny-write');
     const card = await seedKanbanItem(request, {
       title: `deny-${uniqueName('card')}`,
       agentTemplateId: agent.name,

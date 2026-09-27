@@ -157,6 +157,19 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: packages/qoder-acp-bridge/pnpm-lock.yaml
+      - name: Build the Qoder ACP bridge (git-ignored dist/)
+        # The core adapter contract ITs launch the real bridge against the mock peer
+        # CLI: the entry is a committed path whose dist/ is git-ignored, so the lane
+        # that runs them must build it (the harness `build` job does the same).
+        run: cd packages/qoder-acp-bridge && pnpm install --frozen-lockfile && pnpm build
       - name: Install reactor (skip tests)
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Run integration tier only

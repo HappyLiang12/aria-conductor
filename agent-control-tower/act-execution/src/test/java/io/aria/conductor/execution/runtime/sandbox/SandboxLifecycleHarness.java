@@ -16,7 +16,10 @@ import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 
 import java.io.BufferedReader;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -65,11 +68,23 @@ public final class SandboxLifecycleHarness {
     private static final Map<UUID, PreparedEnvironment> ENVIRONMENTS = new ConcurrentHashMap<>();
     private static final AtomicInteger RENEWALS = new AtomicInteger();
 
+    /**
+     * The stdout channel carries the JSON-lines protocol and NOTHING else. The lane
+     * classpath ships a logging backend (logback, whose default configuration appends
+     * to {@code System.out}, and the sandbox SDK logs through it), and the Node driver
+     * reads one JSON answer per stdout line: one log line in that stream desynchronises
+     * every later command. So the records go to this captured stream while
+     * {@code System.out} is pointed at stderr, where the driver forwards it as
+     * {@code [harness] ...}.
+     */
+    private static PrintStream protocol = System.out;
+
     private static SandboxExecutionBackend backend;
     private static SandboxLifecycle lifecycle;
     private static SandboxLifecycle.OpenSandboxSdk sandboxSdk;
 
     public static void main(String[] args) throws Exception {
+        System.setOut(new PrintStream(new FileOutputStream(FileDescriptor.err), true, StandardCharsets.UTF_8));
         String serverUrl = System.getenv("ARIA_OPEN_SANDBOX_URL");
         if (serverUrl == null || serverUrl.isBlank()) {
             fail("ARIA_OPEN_SANDBOX_URL is required: this lane runs against a real OpenSandbox server");
@@ -84,14 +99,20 @@ public final class SandboxLifecycleHarness {
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(System.in, StandardCharsets.UTF_8));
-                PrintWriter writer = new PrintWriter(System.out, true, StandardCharsets.UTF_8)) {
+                PrintWriter writer = new PrintWriter(protocol, true, StandardCharsets.UTF_8)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.isBlank()) {
                     continue;
                 }
-                writer.println(dispatch(MAPPER.readValue(line, new TypeReference<Map<String, Object>>() {
-                })));
+                Map<String, Object> request = MAPPER.readValue(line, new TypeReference<Map<String, Object>>() {
+                });
+                writer.println(dispatch(request));
+                // `quit` ends the driver loop so the JVM terminates on its own; the
+                // driver's teardown then never depends on a signal arriving.
+                if ("quit".equals(String.valueOf(request.get("command")))) {
+                    return;
+                }
             }
         }
     }
@@ -251,7 +272,7 @@ public final class SandboxLifecycleHarness {
     }
 
     private static void fail(String message) {
-        System.out.println(failure(message));
+        protocol.println(failure(message));
     }
 
     /** Counts renewal calls so the E2E can assert automatic renewal actually ran. */

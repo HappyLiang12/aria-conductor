@@ -179,11 +179,7 @@ class Harness {
         if (at < 0) break;
         const line = this.buffer.slice(0, at).trim();
         this.buffer = this.buffer.slice(at + 1);
-        if (line.length > 0) {
-          const waiter = this.pending.shift();
-          if (waiter === undefined) throw new Error(`Unmatched harness output: ${line}`);
-          this.settle(waiter, JSON.parse(line));
-        }
+        if (line.length > 0) this.accept(line);
       }
     });
     child.stderr.setEncoding('utf8');
@@ -196,6 +192,34 @@ class Harness {
     // A write racing the death would otherwise surface as an unhandled stream
     // error; the exit listener above already reports the death.
     child.stdin.on('error', () => {});
+  }
+
+  /**
+   * One line of harness stdout. Every command is answered by exactly one single-line
+   * JSON object, and the harness keeps its stdout exclusive (its loggers and the
+   * sandbox SDK write to stderr). A line that is not such an answer is foreign output:
+   * it is forwarded verbatim and never consumed as an answer — consuming one is how
+   * this lane first failed, with a log line parsed as the answer to `prepare`. An
+   * ANSWER no command is waiting for is a protocol desynchronisation, and it fails
+   * the lane by name instead of throwing from a stream handler.
+   */
+  accept(line) {
+    let result = null;
+    try {
+      result = JSON.parse(line);
+    } catch {
+      result = null;
+    }
+    if (result === null || typeof result !== 'object' || typeof result.ok !== 'boolean') {
+      process.stderr.write(`[harness stdout] ${line}\n`);
+      return;
+    }
+    const waiter = this.pending.shift();
+    if (waiter === undefined) {
+      this.abortAll(`The harness answered with no command waiting for it: ${line}`);
+      return;
+    }
+    this.settle(waiter, result);
   }
 
   send(command, { timeoutMs = HARNESS_COMMAND_TIMEOUT_MS } = {}) {
@@ -270,6 +294,20 @@ async function startLane() {
   return state;
 }
 
+/**
+ * The lane's own deadline. A healthy run takes a few minutes; this can only fire while
+ * something is genuinely stuck — which is how the first CI run of this lane ended, with
+ * the step's `timeout` killing a silent process 18 minutes in. It names the failure and
+ * exits, and it is unref'd, so a lane that finished cleanly never trips it.
+ */
+const LANE_DEADLINE_MS = 15 * 60 * 1000;
+const laneDeadline = setTimeout(() => {
+  process.stderr.write(
+    `[sandbox-lane] the lane exceeded its ${LANE_DEADLINE_MS / 60000}-minute deadline; failing\n`);
+  process.exit(1);
+}, LANE_DEADLINE_MS);
+laneDeadline.unref();
+
 let lanePromise;
 function lane() {
   if (lanePromise === undefined) lanePromise = startLane();
@@ -305,6 +343,10 @@ async function peerFetch(endpoint, path, { token, method = 'GET', body } = {}) {
 async function writerLog(state, runId) {
   const result = await state.harness.send({ command: 'exec', runId, shell: `cat ${WRITER_LOG}` });
   return result.output;
+}
+
+function delay(ms) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
 async function waitFor(predicate, { timeoutMs = 20000, description = 'condition' } = {}) {
@@ -536,8 +578,18 @@ after(async () => {
   if (lanePromise === undefined) return;
   const state = await lanePromise.catch(() => null);
   if (state === null) return;
-  await state.harness.send({ command: 'quit' }).catch(() => null);
-  state.harness.child.kill();
+  const child = state.harness.child;
+  const exited = child.exitCode !== null || child.signalCode !== null
+    ? Promise.resolve()
+    : new Promise((resolvePromise) => child.once('exit', resolvePromise));
+  const exitedWithin = (ms) => Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
+  // Bounded teardown, whatever the lane's outcome: an orderly quit, then stdin EOF,
+  // then SIGTERM and SIGKILL each with a grace period. A wedged JVM must never be
+  // what keeps this process — and the CI step — alive.
+  await state.harness.send({ command: 'quit' }, { timeoutMs: 10000 }).catch(() => null);
+  child.stdin.end();
+  if (!(await exitedWithin(5000))) child.kill();
+  if (!(await exitedWithin(5000))) child.kill('SIGKILL');
   // The engine store is left intact on purpose: the E2E reports state, it never
   // sweeps someone else's sandboxes. Only the host-side temp tree is removed.
   rmSync(state.root, { recursive: true, force: true });

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
+import { listApprovals } from '../api/approvals';
+import { isOperatorRejection } from '../api/operatorSession';
 import { cancelRun } from '../api/runs';
 import type { AriaMessage } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
@@ -24,6 +26,12 @@ interface PanelMessage extends AriaMessage {
   id: string;
   /** Optional UI-only error tag so we can render a retry affordance per-bubble. */
   error?: boolean;
+  /**
+   * UI-only: the run may still be alive in the background (the client gave up on
+   * a slow stream or a governed tool ask is waiting), so a blind resend of the
+   * prompt must not be offered next to the message.
+   */
+  noRetry?: boolean;
 }
 
 function loadOpenState(): boolean {
@@ -225,6 +233,69 @@ export function AriaPanel() {
   const togglePanel = useCallback(() => setOpen((v) => !v), []);
   const closePanel = useCallback(() => setOpen(false), []);
 
+  /**
+   * Replaces the old "the request may have timed out. Please try again." text
+   * after the client gave up or the stream died before `done`. The run may be
+   * alive and waiting on a governed tool approval (the platform MCP is wired
+   * into the Aria run, mutating tools stay per-call approved), so the panel asks
+   * the review queue once and reports what it actually knows: a pending-ask
+   * count, "no approval pending", or — when the operator-only queue refuses the
+   * read (401/403) or the probe fails — that it could not verify. Never a retry
+   * prompt: resending would pile a second prompt onto a possibly live run.
+   */
+  const reportRunUncertain = useCallback(
+    async (eventConversationId: string, origin: 'timeout' | 'stream-error', errorDetail?: string) => {
+      if (errorDetail) console.warn('[Aria] stream ended before done:', errorDetail);
+
+      let pendingCount: number | null = null; // null until the queue actually answers
+      let checkRefused = false;
+      try {
+        pendingCount = (await listApprovals('PENDING')).length;
+      } catch (err) {
+        // 401/403 = the operator-only route refused this tab (no operator
+        // session); anything else is a real failure. Either way the run state
+        // stays unknown and is reported as such, never as a failure.
+        checkRefused = isOperatorRejection(err);
+        console.warn(`[Aria] pending-approval check ${checkRefused ? 'refused' : 'failed'}:`, err);
+      }
+
+      const paragraphs: string[] = [];
+      if (pendingCount !== null && pendingCount > 0) {
+        paragraphs.push(
+          `Aria may be waiting for your approval — ${pendingCount} pending ask${pendingCount === 1 ? '' : 's'} in the Review Queue. ` +
+            'The request continues in the background; approve or deny there to resume it.',
+        );
+      } else if (pendingCount === 0) {
+        paragraphs.push(
+          'Aria has not answered and no approval is pending — the run may still be alive in the background; check the Runs page.',
+        );
+      } else {
+        paragraphs.push(
+          'Aria may be waiting for your approval — open the Review Queue to check; the request continues in the background.',
+        );
+        if (checkRefused) {
+          paragraphs.push('The pending-approval check was refused (operator-only), so this tab could not verify the queue itself.');
+        }
+      }
+      paragraphs.push(`Conversation ID: \`${eventConversationId}\` (include this when reporting issues)`);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `⚠ ${paragraphs.join('\n\n')}`,
+          timestamp: new Date().toISOString(),
+          error: true,
+          // A client timeout never proves the run died, and a pending ask proves
+          // it is alive and waiting — neither may be answered with a resend.
+          noRetry: origin === 'timeout' || (pendingCount !== null && pendingCount > 0),
+        },
+      ]);
+    },
+    [],
+  );
+
   const sendStreamed = useCallback(
     (rawText: string, skillIdOverride?: string | undefined) => {
       const text = rawText.trim();
@@ -292,40 +363,23 @@ export function AriaPanel() {
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             setBusy(false);
             setActiveTool(null);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: `⚠ ${msg || 'Streaming failed. Please try again.'}\n\nConversation ID: \`${conversationId}\` (include this when reporting issues)`,
-                timestamp: new Date().toISOString(),
-                error: true,
-              },
-            ]);
+            void reportRunUncertain(conversationId, 'stream-error', msg);
           },
         },
         ctrl.signal,
         { isCancelled: () => cancelledRef.current, skillId },
       );
 
-      // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort and show error.
+      // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort the stream
+      // but report the run as unverified (it may be waiting on an approval).
       timeoutRef.current = setTimeout(() => {
         ctrl.abort();
         setBusy(false);
         setActiveTool(null);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: '⚠ Aria is taking longer than expected. The request may have timed out. Please try again.\n\nConversation ID: `' + conversationId + '` (include this when reporting issues)',
-            timestamp: new Date().toISOString(),
-            error: true,
-          },
-        ]);
+        void reportRunUncertain(conversationId, 'timeout');
       }, CLIENT_TIMEOUT_MS);
     },
-    [busy, messages, conversationId, pendingSkillId],
+    [busy, messages, conversationId, pendingSkillId, reportRunUncertain],
   );
 
   const handleSend = useCallback(() => {
@@ -415,8 +469,10 @@ export function AriaPanel() {
     }
   };
 
-  const lastIsError = useMemo(
-    () => messages.length > 0 && !!messages[messages.length - 1].error,
+  // Only the trailing bubble may offer a retry; a run-uncertain bubble (noRetry)
+  // must never re-expose a retry control.
+  const lastIsRetryable = useMemo(
+    () => messages.length > 0 && !!messages[messages.length - 1].error && !messages[messages.length - 1].noRetry,
     [messages],
   );
 
@@ -529,7 +585,7 @@ export function AriaPanel() {
                   <div className="ai-msg-meta">
                     {msg.role === 'user' ? 'You' : 'Aria'} ·{' '}
                     {formatTimestamp(msg.timestamp)}
-                    {msg.error && lastIsError && (
+                    {msg.error && lastIsRetryable && idx === messages.length - 1 && (
                       <button
                         type="button"
                         className="ai-retry"

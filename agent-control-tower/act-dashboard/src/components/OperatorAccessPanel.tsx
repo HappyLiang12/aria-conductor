@@ -91,8 +91,10 @@ export function OperatorAccessPanel() {
     } finally {
       setSession({ established: false, expiresAt: null, expired: false });
       setBusy(false);
-      // The session is gone locally, so operator-only reads must stop showing
-      // their authorized results; refetching lands them back in the refused state.
+      // The local record is gone, so operator-only reads are re-evaluated against
+      // the server as it now stands: a revoked session refetches into the refused
+      // state, while a revoke that failed against a still-live cookie may still be
+      // authorized — that is the server's state, not a cached claim.
       queryClient.invalidateQueries();
     }
   };

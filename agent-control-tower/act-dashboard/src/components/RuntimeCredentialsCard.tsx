@@ -37,7 +37,9 @@ function testUnavailableReason(metadata: QoderCredentialMetadata): string | null
   if (!metadata.configured) {
     return 'The bounded credential test needs a stored credential — save one first.';
   }
-  if (!metadata.testSupported) {
+  // `=== false`, not falsy: a backend older than this frontend omits the field,
+  // and a missing capability must not read as "no probe wired".
+  if (metadata.testSupported === false) {
     return 'No credential probe is wired in this build: the bounded test needs the run-owned core '
       + 'bridge, so the dashboard cannot make that call.';
   }
@@ -147,9 +149,10 @@ export function RuntimeCredentialsCard() {
       )}
 
       {/* A refused read must not keep painting the previously authorized
-          metadata next to the refusal: the mask and timestamp describe a read
-          this surface no longer has the authority to make. */}
-      {metadata && !metadataQuery.isError && (
+          metadata next to the refusal: the mask and timestamp describe a read this
+          surface no longer has the authority to make. Any other failure keeps the
+          last known state and the controls — the error block above still shows it. */}
+      {metadata && !isOperatorRejection(metadataQuery.error) && (
         <>
           <div className="rf-meta" style={{ marginBottom: 10 }}>
             {metadata.configured ? (

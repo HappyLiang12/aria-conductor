@@ -242,6 +242,33 @@ describe('RuntimeCredentialsCard', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('keeps the retained metadata and controls when a background refetch fails', async () => {
+    // Only a refusal hides the last known state: any other failure (503, network)
+    // must leave the mask and the controls usable instead of emptying the card,
+    // because nothing refetches it back on its own.
+    mockedGet
+      .mockResolvedValueOnce(CONFIGURED)
+      .mockRejectedValueOnce({ response: { status: 503, data: {} } });
+    mockedPut.mockResolvedValue(CONFIGURED);
+    ui();
+    await screen.findByText('••••••••');
+
+    await userEvent.type(screen.getByLabelText('Runtime credential'), 'replacement-value');
+    await userEvent.click(screen.getByRole('button', { name: 'Save credential' }));
+
+    expect(
+      await screen.findByText('Failed to load the Qoder runtime credential.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('••••••••')).toBeInTheDocument();
+    expect(screen.getByLabelText('Runtime credential')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove credential' })).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Operator-only surface — establish the operator session in the Operator access panel first.',
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it('removes the credential only after the operator confirms', async () => {
     mockedGet.mockResolvedValueOnce(CONFIGURED).mockResolvedValueOnce(UNCONFIGURED);
     mockedDelete.mockResolvedValue(undefined);

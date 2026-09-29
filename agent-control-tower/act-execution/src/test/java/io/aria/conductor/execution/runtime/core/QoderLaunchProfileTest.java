@@ -111,10 +111,10 @@ class QoderLaunchProfileTest {
                 .as("the placement writes the minted control secret into exactly this file")
                 .isEqualTo(controlSecretFile.toString());
         assertThat(credentialFile).as("every file the bridge is told must exist at launch time").isRegularFile();
-        // The run-owned newline is deliberately platform-independent (NDJSON framing for the
-        // bridge), so the expectation is the production constant, not the host separator.
-        assertThat(Files.readString(credentialFile))
-                .isEqualTo(CREDENTIAL_VALUE + QoderCoreAdapter.RUN_OWNED_FILE_NEWLINE);
+        // The framing byte is the protocol: the bridge reads newline-delimited JSON, so the
+        // credential file must end in "\n" on every platform -- pinned literally here (the
+        // production constant is what the writer uses; this is what it must be).
+        assertThat(Files.readString(credentialFile)).isEqualTo(CREDENTIAL_VALUE + "\n");
         for (Path path : List.of(credentialFile, controlSecretFile)) {
             assertThat(path.getParent()).isEqualTo(fixture.configuration());
         }

@@ -29,6 +29,7 @@
 // (docker|podman), SANDBOX_TEST_IMAGE, ARIA_OPEN_SANDBOX_API_KEY (optional).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
@@ -340,9 +341,20 @@ async function peerFetch(endpoint, path, { token, method = 'GET', body } = {}) {
   return fetch(endpointUrl(endpoint, path), { method, headers, body });
 }
 
+/**
+ * One line of in-sandbox command output. The exec read-back is line-oriented (the SDK
+ * reads a command's output as a line sequence), so a single-line result is the only
+ * shape that survives the channel verbatim — multi-line output arrives with its line
+ * breaks glued away, and a trailing newline never arrives at all. Claims about exact
+ * bytes therefore go through a digest, never through transported text.
+ */
+async function execLine(state, runId, shell) {
+  const result = await state.harness.send({ command: 'exec', runId, shell });
+  return result.output.trim();
+}
+
 async function writerLog(state, runId) {
-  const result = await state.harness.send({ command: 'exec', runId, shell: `cat ${WRITER_LOG}` });
-  return result.output;
+  return execLine(state, runId, `cat ${WRITER_LOG}`);
 }
 
 function delay(ms) {
@@ -362,10 +374,14 @@ async function waitFor(predicate, { timeoutMs = 20000, description = 'condition'
 /** Drives the peer's genuine allow-once decision flow so its writer really starts. */
 async function startPeerWriter(endpoint) {
   const session = await peerFetch(endpoint, '/session', { method: 'POST' }).then((r) => r.json());
-  await peerFetch(endpoint, `/session/${session.id}/message`, {
+  // The gated message response is HELD until its fixture decision resolves — that hold
+  // IS the gate — so awaiting it before the decision deadlocked this lane for undici's
+  // full 300 s headers timeout. Fire it, drive the decision, then await the release.
+  const message = peerFetch(endpoint, `/session/${session.id}/message`, {
     method: 'POST',
     body: JSON.stringify({ model: 'efficient' }),
   });
+  message.catch(() => {}); // reported at the await below, never as an unhandled rejection
   const pending = await waitFor(async () => {
     const payload = await peerFetch(endpoint, '/__peer/pending', { token: PEER_TOKEN }).then((r) => r.json());
     return payload.pending.length > 0 ? payload.pending[0] : null;
@@ -378,6 +394,8 @@ async function startPeerWriter(endpoint) {
     body: JSON.stringify({ optionId }),
   });
   assert.equal(decision.status, 200);
+  // The grant is what releases the held message (and, with it, the writer child).
+  assert.equal((await message).status, 200, 'the granted decision must release the held message');
   return waitFor(async () => {
     const stateReply = await peerFetch(endpoint, '/__peer/state', { token: PEER_TOKEN }).then((r) => r.json());
     return stateReply.writerPid ? stateReply : null;
@@ -423,10 +441,16 @@ test('run A: the peer starts from the uploaded manifest and its endpoint require
   assert.equal(authorized.status, 200);
   assert.equal((await authorized.json()).scenario, 'background-writer');
 
-  const uploaded = await state.harness.send({
-    command: 'exec', runId: run.runId, shell: 'cat /workspace/notes.md',
-  });
-  assert.equal(uploaded.output, 'sandbox snapshot bytes\n', 'the uploaded snapshot must be in the sandbox');
+  // The snapshot's bytes must be in the sandbox exactly as written, so the claim is
+  // measured inside the container (digest and byte count) instead of through the
+  // line-oriented exec read-back: both numbers are exact, and a mismatch names which
+  // one moved.
+  const localSnapshot = readFileSync(join(run.snapshot, 'notes.md'));
+  const localSha256 = createHash('sha256').update(localSnapshot).digest('hex');
+  const digest = await execLine(state, run.runId, 'sha256sum /workspace/notes.md | cut -d" " -f1');
+  const bytes = await execLine(state, run.runId, 'wc -c < /workspace/notes.md');
+  assert.equal(`${digest} ${bytes}`, `${localSha256} ${localSnapshot.length}`,
+    'the uploaded snapshot must carry the exact bytes the lane wrote');
 });
 
 test('run A: the background writer writes and the pause is verified', async () => {
@@ -501,9 +525,10 @@ test('run A: the export is stable and the sandbox is destroyed only after it, st
   assert.equal(first.complete, true);
   assert.equal(second.complete, true);
   assert.equal(second.manifestSha256, first.manifestSha256, 'two exports of a stopped run must be identical');
-  const exported = readFileSync(join(firstDestination, 'ticks.log'), 'utf8');
-  const inContainer = await writerLog(state, run.runId);
-  assert.equal(exported, inContainer, 'the exported bytes must be the container bytes, not a report');
+  const exported = readFileSync(join(firstDestination, 'ticks.log'));
+  const inContainer = await execLine(state, run.runId, `sha256sum ${WRITER_LOG} | cut -d" " -f1`);
+  assert.equal(inContainer, createHash('sha256').update(exported).digest('hex'),
+    'the exported bytes must be the container bytes, not a report');
 
   const refused = await state.harness.sendExpectingRefusal({
     command: 'export', runId: run.runId, destination: join(state.root, 'A/export-3'), proof: 'false',

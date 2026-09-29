@@ -8,6 +8,7 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -44,6 +45,20 @@ import java.util.function.Supplier;
  * exactly one {@link WriteGrantService} authorization and produces no native
  * reply. Denials produce no grant.
  *
+ * <p>An ask whose tool is on the configured read-only allowlist (operator
+ * decision 2026-09-29; {@link PlatformMcpAutoApproval}) and whose shape is
+ * platform-owned settles at registration through that same delivery path —
+ * APPROVED with the policy as its reason, no operator ask and no card. The
+ * platform-owned shapes are the platform's own {@code PLATFORM_MCP} delivery
+ * (one one-use grant, no native reply) and the live shape a core reports for a
+ * platform MCP call: a {@code NATIVE_TOOL} ask carrying the platform-MCP prefix
+ * ({@code mcp__aria-conductor__<tool>}), answered with the reply naming the
+ * single offered allow-once option so its core session proceeds instead of
+ * waiting. A native ask without that prefix — the core's own tools, e.g. the
+ * CLI's {@code WebSearch} — never matches. It is a platform-side policy for the
+ * Aria assistant's own platform asks only; the offered options are never
+ * changed and no session-wide grant (allow-always) is ever produced.
+ *
  * <p>The sink is resolved lazily because the run coordinator depends on this
  * coordinator to register asks: the lazy lookup is the seam that breaks that
  * construction cycle, and it is only needed at decision time, long after both
@@ -63,11 +78,21 @@ public class PermissionCoordinator {
      */
     public static final String EXPIRY_REASON = "Auto-rejected: approval expired";
 
+    /**
+     * The recorded reason of a platform MCP ask settled by the configured
+     * read-only auto-approval policy (operator decision 2026-09-29). It names
+     * the policy, so the decision stays attributable and auditable without an
+     * operator acting.
+     */
+    public static final String AUTO_APPROVE_REASON =
+            "auto-approved: read-only platform tool (aria.mcp.auto-approve-read-tools)";
+
     private final ApprovalGate approvalGate;
     private final ApprovalRepository approvals;
     private final ApprovalDecisionLockRepository decisionLocks;
     private final AcpPermissionRequestRepository permissions;
     private final WriteGrantService writeGrants;
+    private final PlatformMcpAutoApproval platformMcpAutoApproval;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
     /** The run coordinator that owns the sessions a decided native reply must reach. */
@@ -81,24 +106,28 @@ public class PermissionCoordinator {
     public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
                                  ApprovalDecisionLockRepository decisionLocks,
                                  AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher,
                                  ObjectProvider<PermissionReplySink> replySinks) {
-        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, eventPublisher,
-                replySinks::getIfAvailable, Clock.systemUTC());
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
+                eventPublisher, replySinks::getIfAvailable, Clock.systemUTC());
     }
 
     /** Test/override seam: every expiry check uses this clock. No sink is bound. */
     public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
                                  ApprovalDecisionLockRepository decisionLocks,
                                  AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher, Clock clock) {
-        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, eventPublisher, () -> null, clock);
+        this(approvalGate, approvals, decisionLocks, permissions, writeGrants, platformMcpAutoApproval,
+                eventPublisher, () -> null, clock);
     }
 
     /** Test/override seam: the clock and the reply sink are both explicit. */
     public PermissionCoordinator(ApprovalGate approvalGate, ApprovalRepository approvals,
                                  ApprovalDecisionLockRepository decisionLocks,
                                  AcpPermissionRequestRepository permissions, WriteGrantService writeGrants,
+                                 PlatformMcpAutoApproval platformMcpAutoApproval,
                                  ApplicationEventPublisher eventPublisher,
                                  Supplier<PermissionReplySink> replySinks, Clock clock) {
         this.approvalGate = Objects.requireNonNull(approvalGate, "approvalGate");
@@ -106,6 +135,7 @@ public class PermissionCoordinator {
         this.decisionLocks = Objects.requireNonNull(decisionLocks, "decisionLocks");
         this.permissions = Objects.requireNonNull(permissions, "permissions");
         this.writeGrants = Objects.requireNonNull(writeGrants, "writeGrants");
+        this.platformMcpAutoApproval = Objects.requireNonNull(platformMcpAutoApproval, "platformMcpAutoApproval");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
         this.replySinks = Objects.requireNonNull(replySinks, "replySinks");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -122,6 +152,17 @@ public class PermissionCoordinator {
      * <p>A re-registration of the identical correlation is idempotent and
      * returns the existing approval; a changed payload for the same correlation
      * is rejected rather than coerced.
+     *
+     * <p>An ask whose tool is on the configured read-only allowlist (operator
+     * decision 2026-09-29) and whose shape is platform-owned settles here: the
+     * approval is recorded APPROVED with the policy as its reason and delivered
+     * through the same path a manual {@code ALLOW_ONCE} decision uses — a
+     * one-use grant for a {@code PLATFORM_MCP} ask, the reply the owning core
+     * session answers with for a native ask carrying the platform-MCP prefix —
+     * no operator ask is surfaced and nothing waits. An ask whose own window has
+     * already closed is never approved past it (spec §5.3) and keeps the
+     * operator-facing flow, as does a covered native ask that offers no single
+     * allow-once option to answer with.
      */
     @Transactional
     public UUID register(NativePermission request) {
@@ -139,10 +180,12 @@ public class PermissionCoordinator {
         }
 
         Instant now = clock.instant();
+        boolean autoApproved = request.expiresAt().isAfter(now) && autoApprovalCovers(request);
         Approval approval = Approval.builder()
                 .runId(request.runId())
-                .status(ApprovalStatus.PENDING)
-                .reason(registrationReason(request))
+                .status(autoApproved ? ApprovalStatus.APPROVED : ApprovalStatus.PENDING)
+                .reason(autoApproved ? AUTO_APPROVE_REASON : registrationReason(request))
+                .decidedAt(autoApproved ? now : null)
                 // The offered options belong on the operator-facing row too: the
                 // ledger carries them for correlation, and the granted reply must
                 // name the option the core actually offered, so the decision UI
@@ -169,6 +212,23 @@ public class PermissionCoordinator {
                 .createdAt(now)
                 .build();
         permissions.save(row);
+
+        if (autoApproved) {
+            // Same delivery path as a manual ALLOW_ONCE decision: a native ask
+            // is answered with the reply naming the single allow-once option the
+            // core offered, a PLATFORM_MCP delivery issues its one-use grant
+            // (and yields no native reply); a manually paused run has the
+            // decision held. The policy, named by the reason, decided — no
+            // operator ask may surface and nothing may wait.
+            row.setSelectedOptionId(request.target() == PermissionTarget.NATIVE_TOOL
+                    ? singleAllowOnceOptionId(request.options()).orElse(null)
+                    : null);
+            row.setDecidedAt(now);
+            deliverAndHand(row, PermissionChoice.ALLOW_ONCE, now);
+            log.info("Run {}: platform MCP tool {} auto-approved by the configured read-only policy ({})",
+                    request.runId(), request.toolName(), AUTO_APPROVE_REASON);
+            return approval.getId();
+        }
 
         // Only now — the correlation exists — may the ask surface to the operator.
         eventPublisher.publishEvent(new ApprovalRequestedEvent(this, approval.getId(), request.runId(), null));
@@ -253,19 +313,79 @@ public class PermissionCoordinator {
 
         row.setSelectedOptionId(optionId);
         row.setDecidedAt(now);
+        return deliverAndHand(row, choice, now);
+    }
+
+    /**
+     * Records the decision's delivery — a one-use grant for a {@code PLATFORM_MCP}
+     * ask, the native reply for a {@code NATIVE_TOOL} ask (held while the run is
+     * manually paused) — and hands a delivered reply to the run's owning core
+     * session. Recording the decision is not delivery: the reply is handed to
+     * the run coordinator, which pushes it to the run-owned session the ask came
+     * from. A run this process does not own has no such session -- the sink
+     * ignores it instead of routing the reply anywhere else.
+     */
+    private Optional<PermissionReply> deliverAndHand(AcpPermissionRequest row, PermissionChoice choice,
+                                                     Instant now) {
+        Optional<PermissionReply> reply = deliverDecision(row, choice, now);
+        reply.ifPresent(this::handToOwningSession);
+        return reply;
+    }
+
+    /**
+     * True when the configured read-only policy settles {@code request}: its
+     * tool is on the list and its shape is platform-owned. The platform-owned
+     * shapes are the platform's own {@code PLATFORM_MCP} delivery and the live
+     * shape a core reports for a platform MCP call — a {@code NATIVE_TOOL} ask
+     * carrying the platform-MCP prefix ({@code mcp__aria-conductor__<tool>}) and
+     * offering the single allow-once option its reply will name (the manual
+     * ALLOW_ONCE decision's own fail-closed selection).
+     *
+     * <p>A native ask without that prefix is the core's own tool (e.g. the
+     * CLI's {@code WebSearch}) and is never covered: it keeps the per-call
+     * operator approval (spec §6.3), like a covered native ask that offers no
+     * single allow-once option at all.
+     */
+    private boolean autoApprovalCovers(NativePermission request) {
+        if (!platformMcpAutoApproval.allows(request.toolName())) {
+            return false;
+        }
+        if (request.target() == PermissionTarget.PLATFORM_MCP) {
+            return true;
+        }
+        return request.target() == PermissionTarget.NATIVE_TOOL
+                && PlatformMcpAutoApproval.carriesPlatformMcpPrefix(request.toolName())
+                && singleAllowOnceOptionId(request.options()).isPresent();
+    }
+
+    /**
+     * The option id a native ask's reply must name when exactly one allow-once
+     * option was offered; empty when none or several were offered, because the
+     * policy never guesses what the core did not offer (the manual ALLOW_ONCE
+     * decision's own fail-closed selection).
+     */
+    private static Optional<String> singleAllowOnceOptionId(List<PermissionOption> options) {
+        List<PermissionOption> matches = options.stream()
+                .filter(option -> option.choice() == PermissionChoice.ALLOW_ONCE)
+                .toList();
+        return matches.size() == 1 ? Optional.of(matches.get(0).optionId()) : Optional.empty();
+    }
+
+    /**
+     * The delivery step a manual decision and the policy auto-approval share. A
+     * decided ask of a manually paused run is HELD (never delivered while the
+     * pause holds); otherwise the decision is delivered through {@link #deliver}
+     * for this choice.
+     */
+    private Optional<PermissionReply> deliverDecision(AcpPermissionRequest row, PermissionChoice choice,
+                                                      Instant now) {
         if (manuallyPausedRuns.contains(row.getRunId())) {
             // Recorded, held: resume does not approve, it only re-opens delivery.
             row.setDeliveryState(PermissionDeliveryState.HELD_MANUAL_PAUSE.name());
             permissions.save(row);
             return Optional.empty();
         }
-        Optional<PermissionReply> reply = Optional.ofNullable(deliver(row, choice, now));
-        // Recording the decision is not delivery: the reply is handed to the run
-        // coordinator, which pushes it to the run-owned session the ask came
-        // from. A run this process does not own has no such session -- the sink
-        // ignores it instead of routing the reply anywhere else.
-        reply.ifPresent(delivered -> handToOwningSession(delivered));
-        return reply;
+        return Optional.ofNullable(deliver(row, choice, now));
     }
 
     /**

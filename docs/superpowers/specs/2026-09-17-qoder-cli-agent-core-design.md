@@ -235,6 +235,29 @@ No `allow_always` option, no first-option fallback, and no generic Approve-all f
 An unavailable allow-once option is a protocol incompatibility, not permission to choose a
 persistent grant. Unexpected mode escalation stops the run and is surfaced as a governance error.
 
+> **Amendment (2026-09-29, operator decision): configured read-only platform-tool auto-approval.**
+> The `allow_always` prohibition above stands unchanged: CLI session grants remain forbidden and
+> are never mapped (`allow_always` options are dropped from the normalized option set), and the
+> offered options stay `allow_once` / `reject_once` only. Separately, the platform may
+> auto-approve its own read-only MCP tools for the Aria assistant's coordinated runs from an
+> explicit, configured allowlist (`aria.mcp.auto-approve-read-tools`, defaulting to the reviewed
+> read-only tools). The live shape of such an ask is a native permission request: the core
+> reports the platform MCP call as `NATIVE_TOOL` with the tool name under the platform's own
+> namespace (`mcp__aria-conductor__<tool>`), and the platform auto-answers it through the same
+> delivery path a manual `ALLOW_ONCE` decision uses, so the owning core session receives the
+> `allow_once` reply and the run proceeds. A `PLATFORM_MCP`-target ask of an allowlisted tool
+> remains a second, equivalent trigger. The policy covers the assistant's own platform asks
+> only: a native ask whose raw name does not carry the platform-MCP prefix (the core's own
+> tools, e.g. `WebSearch`) is never covered, every other run keeps the per-call operator
+> approval, and a mutating, operator-only or unclassified tool must never be added to the
+> allowlist without an explicit operator decision. The decision stays attributable and auditable
+> through its recorded reason: the approval row is persisted already decided (`APPROVED`) with
+> the policy as its reason (`auto-approved: read-only platform tool
+> (aria.mcp.auto-approve-read-tools)`), delivery follows the ask's shape (the one-use
+> `WRITE_GRANT` ledger row of a manual `ALLOW_ONCE` decision for a `PLATFORM_MCP` ask, the
+> option-named native reply for a `NATIVE_TOOL` ask, held while the run is manually paused), and
+> no operator card or notification is raised.
+
 Approval authorizes an attempt; tool success comes only from the subsequent runtime event.
 Denial rejects that tool call and returns control to the same CLI session; the CLI may report a
 block or propose another action. A user cancelling the run terminates execution instead. Preserve

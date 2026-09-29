@@ -7,6 +7,8 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.PlatformMcpAutoApproval;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +35,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -189,11 +192,16 @@ class PermissionCoordinatorTest {
 
     /** A coordinator whose decided native replies are handed to the given sink. */
     private PermissionCoordinator coordinator(Instant now, PermissionReplySink sink) {
+        return coordinator(now, sink, new McpProperties());
+    }
+
+    /** A coordinator whose read-only platform-tool policy is configured by {@code mcp}. */
+    private PermissionCoordinator coordinator(Instant now, PermissionReplySink sink, McpProperties mcp) {
         this.clock = new MutableClock(now);
         this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, 30_000L);
         this.writeGrants = new WriteGrantService(permissionRepository, clock);
         return new PermissionCoordinator(gate, approvalRepository, decisionLocks, permissionRepository,
-                writeGrants, eventPublisher, () -> sink, clock);
+                writeGrants, new PlatformMcpAutoApproval(mcp), eventPublisher, () -> sink, clock);
     }
 
     private NativePermission permission(PermissionTarget target) {
@@ -297,6 +305,309 @@ class PermissionCoordinatorTest {
                 .hasMessage("Permission request 0 already exists for run " + RUN_ID
                         + " with a different payload; a changed request is rejected");
         assertThat(permissionRow(first).getToolName()).isEqualTo(TOOL);
+    }
+
+    // ------------------------------------------------------------------
+    // read-only platform-tool auto-approval (operator decision 2026-09-29)
+    // ------------------------------------------------------------------
+
+    /**
+     * An allowlisted read-only platform tool settles at registration: the
+     * approval is recorded APPROVED naming the policy, the one-use grant is
+     * written through the same delivery path a manual ALLOW_ONCE decision uses,
+     * and no operator-facing ask (no event, no card, no wait) is raised.
+     */
+    @Test
+    void anAllowlistedPlatformAskIsAutoApprovedWithoutAnOperatorCard() {
+        coordinator = coordinator(T0);
+        String tool = "mcp__aria-conductor__list_agents";
+        String arguments = "{\"limit\":10}";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                tool, PermissionTarget.PLATFORM_MCP, arguments, OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approval.getReason()).isEqualTo(PermissionCoordinator.AUTO_APPROVE_REASON);
+        assertThat(approval.getDecidedAt()).isEqualTo(T0);
+
+        // The correlation row is persisted, exactly as for any other ask ...
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getKind()).isEqualTo(AcpPermissionRequest.Kind.NATIVE_PERMISSION);
+        assertThat(row.getToolName()).isEqualTo(tool);
+        assertThat(row.getTarget()).isEqualTo(PermissionTarget.PLATFORM_MCP.name());
+        assertThat(row.getDecidedAt()).isEqualTo(T0);
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(row.getDeliveredAt()).isEqualTo(T0);
+
+        // ... and no operator ask is surfaced: no card, no notification, no wait.
+        assertThat(requestedEvents).isEmpty();
+
+        // Exactly one one-use grant, bound to this exact call.
+        List<AcpPermissionRequest> grants = permissionStore.values().stream()
+                .filter(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT)
+                .toList();
+        assertThat(grants).hasSize(1);
+        assertThat(grants.get(0).getToolName()).isEqualTo(tool);
+        String digest = WriteGrantService.digestOf(arguments);
+        assertThat(writeGrants.consume(RUN_ID, tool, digest)).isTrue();
+        assertThat(writeGrants.consume(RUN_ID, tool, digest)).isFalse();
+        assertThat(writeGrants.consume(OTHER_RUN, tool, digest)).isFalse();
+    }
+
+    // --- the live shape: the core reports a platform MCP call as a native ask ---
+
+    /**
+     * The live shape of a platform MCP call: the core reports it as a native
+     * permission request ({@code NATIVE_TOOL}) whose raw tool name carries the
+     * platform-MCP prefix. The policy settles it exactly like a manual
+     * ALLOW_ONCE decision, so the owning session receives the reply and the run
+     * proceeds — no operator card, no pending ask, no platform grant.
+     */
+    @Test
+    void anAllowlistedLivePlatformAskIsAutoApprovedAndAnsweredToTheOwningSession() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+        String tool = "mcp__aria-conductor__list_agents";
+        String arguments = "{\"limit\":10}";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                tool, PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approval.getReason()).isEqualTo(PermissionCoordinator.AUTO_APPROVE_REASON);
+        assertThat(approval.getDecidedAt()).isEqualTo(T0);
+
+        // The correlation row records the decision and its delivery, exactly as
+        // a manual ALLOW_ONCE decision does: nothing stays pending.
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getToolName()).isEqualTo(tool);
+        assertThat(row.getTarget()).isEqualTo(PermissionTarget.NATIVE_TOOL.name());
+        assertThat(row.getSelectedOptionId()).isEqualTo("proceed_once");
+        assertThat(row.getDecidedAt()).isEqualTo(T0);
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(row.getDeliveredAt()).isEqualTo(T0);
+        assertThat(coordinator.deliveryState(approvalId)).isEqualTo(PermissionDeliveryState.DELIVERED);
+        assertThat(requestedEvents).isEmpty();
+
+        // The owning session received exactly one ALLOW_ONCE reply, naming the
+        // option the core offered — and the same reply is never handed over a
+        // second time.
+        assertThat(delivered).containsExactly(
+                new PermissionReply(RUN_ID, SESSION_ID, REQUEST_ID, "proceed_once"));
+        assertThat(coordinator.deliverPending(approvalId)).isEmpty();
+        assertThat(delivered).hasSize(1);
+
+        // A native reply answered the CLI directly; no platform grant was issued.
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+        assertThat(writeGrants.consume(RUN_ID, tool, WriteGrantService.digestOf(arguments))).isFalse();
+    }
+
+    /**
+     * A mutating platform tool is never auto-approved, even in the live native
+     * shape: the ask keeps the operator card and stays pending until decided.
+     */
+    @Test
+    void aMutatingLivePlatformAskStillSurfacesToTheOperator() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+        String tool = "mcp__aria-conductor__create_agent";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                tool, PermissionTarget.NATIVE_TOOL, "{\"name\":\"scout\"}", OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(approval.getReason()).isEqualTo(
+                "Native permission request 0 from session ses_fixture_1 for tool " + tool + " (NATIVE_TOOL)");
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(row.getSelectedOptionId()).isNull();
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
+        assertThat(delivered).isEmpty();
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+    }
+
+    /**
+     * The exact boundary spec §6.3 protects: the core's own tools ask as native
+     * permission requests without the platform-MCP prefix, so they are never
+     * auto-approved — not even while the policy is enabled.
+     */
+    @Test
+    void aWebSearchNativeAskIsNeverCoveredEvenWithThePolicyEnabled() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "WebSearch", PermissionTarget.NATIVE_TOOL, "{\"query\":\"aria\"}", OFFERED, EXPIRES_AT));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(permissionRow(approvalId).getSelectedOptionId()).isNull();
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(delivered).isEmpty();
+    }
+
+    /**
+     * The {@link PermissionReplySink} is resolved at decision time, not at
+     * construction (the production seam that breaks the run coordinator's
+     * construction cycle): a coordinator built before its sink can still hand
+     * the auto-approved reply to the owning session once the sink resolves.
+     */
+    @Test
+    void anAutoApprovedNativeAskReachesASinkThatOnlyResolvesLater() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        AtomicReference<PermissionReplySink> sink = new AtomicReference<>();
+        this.clock = new MutableClock(T0);
+        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, 30_000L);
+        this.writeGrants = new WriteGrantService(permissionRepository, clock);
+        PermissionCoordinator coordinator = new PermissionCoordinator(gate, approvalRepository,
+                decisionLocks, permissionRepository, writeGrants, new PlatformMcpAutoApproval(new McpProperties()),
+                eventPublisher, sink::get, clock);
+        // The owning session — and with it the sink — only resolves after the
+        // coordinator was constructed.
+        sink.set(delivered::add);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "mcp__aria-conductor__list_agents", PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+
+        assertThat(delivered).containsExactly(
+                new PermissionReply(RUN_ID, SESSION_ID, REQUEST_ID, "proceed_once"));
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.DELIVERED.name());
+    }
+
+    /** A platform tool whose name is not on the allowlist keeps today's operator ask. */
+    @Test
+    void aNonAllowlistedPlatformAskStillSurfacesToTheOperator() {
+        coordinator = coordinator(T0);
+
+        UUID approvalId = coordinator.register(permission(PermissionTarget.PLATFORM_MCP));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+    }
+
+    /**
+     * The policy is a platform-ask policy, not a tool-name shortcut: a
+     * {@code NATIVE_TOOL} ask keeps the operator flow even when its tool name is
+     * on the read-only list.
+     */
+    @Test
+    void anAllowlistedToolNameOfANativeAskKeepsTheOperatorFlow() {
+        coordinator = coordinator(T0);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "list_agents", PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+    }
+
+    /** An empty configured list disables the policy: the ask keeps today's operator flow. */
+    @Test
+    void anEmptyConfiguredAllowlistDisablesThePolicyAndKeepsTheAskOperatorFacing() {
+        McpProperties disabled = new McpProperties();
+        disabled.setAutoApproveReadTools(List.of());
+        coordinator = coordinator(T0, null, disabled);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "mcp__aria-conductor__list_agents", PermissionTarget.PLATFORM_MCP, "{}", OFFERED, EXPIRES_AT));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+    }
+
+    /**
+     * The policy never approves past the ask's own window (spec §5.3): an
+     * allowlisted ask whose window already closed is not auto-approved and keeps
+     * the operator flow, where it settles as expired like any other late ask.
+     */
+    @Test
+    void anAllowlistedPlatformAskPastItsWindowIsNotAutoApproved() {
+        coordinator = coordinator(T0.plus(Duration.ofMinutes(6)));
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "list_agents", PermissionTarget.PLATFORM_MCP, "{}", OFFERED, EXPIRES_AT));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(requestedEvents).hasSize(1);
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+    }
+
+    /**
+     * A manual pause holds the auto-approved grant like any other decided ask:
+     * the one-use authorization is armed only when the resume owner delivers it.
+     */
+    @Test
+    void anAutoApprovedGrantOfAManuallyPausedRunIsHeldUntilResume() {
+        coordinator = coordinator(T0);
+        String tool = "mcp__aria-conductor__list_agents";
+        String digest = WriteGrantService.digestOf("{}");
+        coordinator.manualPause(RUN_ID);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                tool, PermissionTarget.PLATFORM_MCP, "{}", OFFERED, EXPIRES_AT));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.HELD_MANUAL_PAUSE.name());
+        assertThat(requestedEvents).isEmpty();
+        assertThat(writeGrants.consume(RUN_ID, tool, digest)).isEqualTo(false);
+
+        coordinator.manualResume(RUN_ID);
+        assertThat(coordinator.deliverPending(approvalId)).isEmpty();
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(writeGrants.consume(RUN_ID, tool, digest)).isEqualTo(true);
+    }
+
+    /**
+     * The pause-hold semantics reach the live native shape too: the
+     * auto-approved reply is held until the resume owner delivers it to the
+     * session, and this coordinator never hands the same reply over a second
+     * time.
+     */
+    @Test
+    void anAutoApprovedNativeAskOfAManuallyPausedRunIsHeldUntilResume() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+        coordinator.manualPause(RUN_ID);
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "mcp__aria-conductor__list_agents", PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+
+        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.HELD_MANUAL_PAUSE.name());
+        assertThat(requestedEvents).isEmpty();
+        assertThat(delivered).isEmpty();
+
+        // The resume owner hands the released reply to the session itself; this
+        // coordinator must not hand the same reply over a second time.
+        coordinator.manualResume(RUN_ID);
+        assertThat(coordinator.deliverPending(approvalId)).contains(
+                new PermissionReply(RUN_ID, SESSION_ID, REQUEST_ID, "proceed_once"));
+        assertThat(permissionRow(approvalId).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(delivered).isEmpty();
     }
 
     // ------------------------------------------------------------------

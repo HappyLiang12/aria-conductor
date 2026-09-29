@@ -457,7 +457,17 @@ export function TaskDrawer() {
         <footer>
           <button
             className="btn primary"
-            disabled={!item || transitionMutation.isPending || !validTransitions.includes('DONE')}
+            title={item?.pendingAskCount
+              ? `Decide the ${item.pendingAskCount} pending ask${item.pendingAskCount === 1 ? '' : 's'} first`
+              : undefined}
+            disabled={
+              !item
+              || transitionMutation.isPending
+              || !validTransitions.includes('DONE')
+              // Bulk Done is refused while asks are pending (the linked run is still
+              // alive): the asks above are what the operator has to settle first.
+              || !!item.pendingAskCount
+            }
             onClick={handleApprove}
           >
             Approve

@@ -337,6 +337,23 @@ describe('TaskDrawer review decision zone', () => {
     expect(mockedRejectApproval).not.toHaveBeenCalled();
   });
 
+  it('keeps the footer approve disabled while the card still has pending asks', async () => {
+    // The footer approve is a bulk Done: while asks are pending it would be
+    // refused by the linked-run guard and decide nothing, so it is disabled and
+    // names the asks the operator has to settle in the decision panel above.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ pendingAskCount: 2 }));
+    mockedListAsks.mockResolvedValue([]);
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    // Wait for the card itself: the footer renders before the query resolves.
+    expect(await screen.findByText('Spec task')).toBeInTheDocument();
+    const footer = document.querySelector('.drawer footer') as HTMLElement;
+    const approve = within(footer).getByRole('button', { name: 'Approve' });
+    expect(approve).toBeDisabled();
+    expect(approve).toHaveAttribute('title', 'Decide the 2 pending asks first');
+  });
+
   it('Approve on a QUESTION ask answers it with the typed answer', async () => {
     const user = userEvent.setup();
     mockedListAsks.mockResolvedValue([

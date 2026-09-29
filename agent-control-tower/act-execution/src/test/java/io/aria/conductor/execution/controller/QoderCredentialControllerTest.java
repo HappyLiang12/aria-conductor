@@ -1,38 +1,37 @@
 package io.aria.conductor.execution.controller;
 
+import io.aria.conductor.common.model.RuntimeCredential;
+import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.repository.RuntimeCredentialRepository;
+import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.runtime.UsageSnapshot;
+import io.aria.conductor.execution.security.ActorAuthenticationFilter;
+import io.aria.conductor.execution.security.OperatorSessionService;
+import io.aria.conductor.test.WebMvcTestBase;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.classic.spi.ThrowableProxyUtil;
+import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
-import io.aria.conductor.common.exception.GlobalExceptionHandler;
-import io.aria.conductor.execution.adk.qoder.QoderProperties;
-import io.aria.conductor.execution.credential.RuntimeCredentialException;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
-import io.aria.conductor.execution.credential.RuntimeCredentialStatus;
-import io.aria.conductor.test.WebMvcTestBase;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.stream.Stream;
+import java.time.ZoneOffset;
+import java.util.Optional;
+import java.util.UUID;
 
-import static io.aria.conductor.execution.credential.RuntimeCredentialException.Cause.CIPHER_FAILED;
-import static io.aria.conductor.execution.credential.RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.nullValue;
-import static org.mockito.Mockito.doThrow;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -40,365 +39,312 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Standalone MockMvc tests for {@link QoderCredentialController} — the operator-facing
- * credential management API for the qoder provider, pinned by the coordinator for B9:
- *
- * <ul>
- *   <li>{@code GET} → 200 masked status (absence is a normal 200 with nulls)</li>
- *   <li>{@code PUT {pat}} → 200 masked status, never an echo of the secret</li>
- *   <li>{@code DELETE} → 204, idempotent</li>
- *   <li>{@code POST /test} → bounded NON-billable structural probe</li>
- *   <li>{@code KEY_NOT_CONFIGURED} store failure → 503 for GET/PUT/POST-test</li>
- * </ul>
- *
- * <p>Security invariants asserted here: the supplied PAT never appears in a response body
- * (not even a substring longer than the allowed mask suffix), a header value, or a log
- * record. All tokens are synthetic ({@code qcp_test_...}); no real credential is used.
+ * Operator boundary and masking contract of the Qoder credential surface
+ * (plan section 2.2): masked reads, encrypted replacement, revocation, no
+ * model call on readiness, and a bounded test that is the only model-spending
+ * path.
  */
 class QoderCredentialControllerTest extends WebMvcTestBase {
 
-    private static final String URL = "/api/v1/adk/providers/qoder/credential";
-    private static final String PROVIDER_ID = "qoder";
-    private static final String SYNTHETIC_PAT = "qcp_test_abcde12345";
-    /** The service mask contract: {@code "****"} + last four characters. */
-    private static final String MASKED_PAT = "****2345";
-    private static final int MASK_SUFFIX_LENGTH = 4;
-    private static final String MODEL = "efficient";
-    private static final Instant UPDATED_AT = Instant.parse("2026-09-17T10:15:30Z");
+    private static final String SECRET = "synthetic-secret-42";
+    private static final String REF = RuntimeCredentialService.QODER_CREDENTIAL_REFERENCE;
+    private static final Instant NOW = Instant.parse("2026-09-23T10:00:00Z");
+    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
 
-    private final RuntimeCredentialService credentialService = mock(RuntimeCredentialService.class);
-    private final QoderProperties qoderProperties = new QoderProperties();
-
-    private MockMvc mvc;
-
-    @BeforeEach
-    void setUp() {
-        qoderProperties.setModel(MODEL);
-        mvc = mockMvcFor(new QoderCredentialController(credentialService, qoderProperties));
-    }
-
-    // ---- GET ----
-
-    @Test
-    void getCredential_configured_returnsMaskedStatus_onlySuffixVisible() throws Exception {
-        when(credentialService.maskedStatus(PROVIDER_ID))
-                .thenReturn(new RuntimeCredentialStatus(true, MASKED_PAT, UPDATED_AT));
-
-        MvcResult result = mvc.perform(get(URL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.providerId").value(PROVIDER_ID))
-                .andExpect(jsonPath("$.configured").value(true))
-                .andExpect(jsonPath("$.patMasked").value(MASKED_PAT))
-                .andExpect(jsonPath("$.updatedAt").value("2026-09-17T10:15:30Z"))
-                .andExpect(jsonPath("$.model").value(MODEL))
-                .andReturn();
-
-        assertNoSecretSubstringBeyondMaskSuffix(responseText(result));
-    }
-
-    @Test
-    void getCredential_absent_isANormal200WithConfiguredFalseAndNulls() throws Exception {
-        when(credentialService.maskedStatus(PROVIDER_ID))
-                .thenReturn(new RuntimeCredentialStatus(false, null, null));
-
-        mvc.perform(get(URL))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.providerId").value(PROVIDER_ID))
-                .andExpect(jsonPath("$.configured").value(false))
-                .andExpect(jsonPath("$.patMasked").value(nullValue()))
-                .andExpect(jsonPath("$.updatedAt").value(nullValue()))
-                .andExpect(jsonPath("$.model").value(MODEL));
-    }
-
-    @Test
-    void getCredential_keyNotConfigured_returns503WithCode() throws Exception {
-        when(credentialService.maskedStatus(PROVIDER_ID))
-                .thenThrow(new RuntimeCredentialException(KEY_NOT_CONFIGURED,
-                        "Cannot report masked status: PACK_CREDENTIAL_KEY is not configured"));
-
-        mvc.perform(get(URL))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("KEY_NOT_CONFIGURED"));
-    }
-
-    @Test
-    void getCredential_cipherFailed_returns500WithCode_andNoToken() throws Exception {
-        when(credentialService.maskedStatus(PROVIDER_ID))
-                .thenThrow(new RuntimeCredentialException(CIPHER_FAILED,
-                        "Failed to decrypt the stored runtime credential for provider qoder"));
-
-        MvcResult result = mvc.perform(get(URL))
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("CIPHER_FAILED"))
-                .andReturn();
-
-        assertNoSecretSubstringBeyondMaskSuffix(responseText(result));
-    }
-
-    // ---- PUT ----
-
-    @Test
-    void putCredential_storesViaTheService_andReturnsMaskedStatusOnly() throws Exception {
-        when(credentialService.maskedStatus(PROVIDER_ID))
-                .thenReturn(new RuntimeCredentialStatus(true, MASKED_PAT, UPDATED_AT));
-
-        MvcResult result = mvc.perform(put(URL)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("pat", SYNTHETIC_PAT))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.providerId").value(PROVIDER_ID))
-                .andExpect(jsonPath("$.configured").value(true))
-                .andExpect(jsonPath("$.patMasked").value(MASKED_PAT))
-                .andExpect(jsonPath("$.model").value(MODEL))
-                .andReturn();
-
-        verify(credentialService).save(PROVIDER_ID, SYNTHETIC_PAT);
-        // The raw body AND every response header must be free of the secret: neither the
-        // full token nor any substring longer than the allowed 4-char mask suffix.
-        assertNoSecretSubstringBeyondMaskSuffix(responseText(result));
-    }
-
-    @ParameterizedTest
-    @MethodSource("invalidPatBodies")
-    void putCredential_missingOrBlankPat_returns400_withoutEchoingTheValue(Map<String, String> body)
-            throws Exception {
-        MvcResult result = mvc.perform(put(URL)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(body)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("pat is required and must not be blank"))
-                .andReturn();
-
-        assertThat(responseText(result)).doesNotContain(SYNTHETIC_PAT);
-        verifyNoInteractions(credentialService);
-    }
-
-    static Stream<Map<String, String>> invalidPatBodies() {
-        return Stream.of(
-                Map.of("pat", ""),        // empty
-                Map.of("pat", "   "),     // blank
-                new HashMap<>());          // key missing entirely
-    }
-
-    @Test
-    void putCredential_keyNotConfigured_returns503WithCode() throws Exception {
-        doThrow(new RuntimeCredentialException(KEY_NOT_CONFIGURED,
-                "Cannot store a runtime credential: PACK_CREDENTIAL_KEY is not configured"))
-                .when(credentialService).save(PROVIDER_ID, SYNTHETIC_PAT);
-
-        MvcResult result = mvc.perform(put(URL)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("pat", SYNTHETIC_PAT))))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("KEY_NOT_CONFIGURED"))
-                .andReturn();
-
-        assertThat(responseText(result)).doesNotContain(SYNTHETIC_PAT);
-    }
-
-    // ---- DELETE ----
-
-    @Test
-    void deleteCredential_returns204_revokes_andIsIdempotentWhenAbsent() throws Exception {
-        mvc.perform(delete(URL)).andExpect(status().isNoContent());
-        // Second delete of an absent credential: same 204 no-op, not an error.
-        mvc.perform(delete(URL)).andExpect(status().isNoContent());
-
-        verify(credentialService, times(2)).delete(PROVIDER_ID);
-    }
-
-    // ---- POST /test (bounded, non-billable structural probe) ----
-
-    @Test
-    void test_credentialNotConfigured_reportsFailureReasonWithoutReading() throws Exception {
-        when(credentialService.configured(PROVIDER_ID)).thenReturn(false);
-
-        mvc.perform(post(URL + "/test"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.reason").value("NOT_CONFIGURED"))
-                .andExpect(jsonPath("$.message")
-                        .value("No usable credential is configured for provider qoder; save a PAT and retry."))
-                .andExpect(jsonPath("$.model").value(MODEL))
-                .andExpect(jsonPath("$.billable").value(false))
-                .andExpect(jsonPath("$.costNote").isNotEmpty());
-
-        verify(credentialService, never()).read(PROVIDER_ID);
-    }
-
-    @Test
-    void test_cipherFailed_reportsFailureReason_andNoToken() throws Exception {
-        when(credentialService.configured(PROVIDER_ID)).thenReturn(true);
-        when(credentialService.read(PROVIDER_ID))
-                .thenThrow(new RuntimeCredentialException(CIPHER_FAILED,
-                        "Failed to decrypt the stored runtime credential for provider qoder"));
-
-        MvcResult result = mvc.perform(post(URL + "/test"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.reason").value("CIPHER_FAILED"))
-                .andExpect(jsonPath("$.message")
-                        .value("The stored credential could not be decrypted; re-save the PAT."))
-                .andExpect(jsonPath("$.model").value(MODEL))
-                .andExpect(jsonPath("$.billable").value(false))
-                .andExpect(jsonPath("$.costNote").isNotEmpty())
-                .andReturn();
-
-        assertNoSecretSubstringBeyondMaskSuffix(responseText(result));
-    }
-
-    @Test
-    void test_blankStoredValue_reportsFailureInsteadOfSuccess() throws Exception {
-        when(credentialService.configured(PROVIDER_ID)).thenReturn(true);
-        when(credentialService.read(PROVIDER_ID)).thenReturn("   ");
-
-        mvc.perform(post(URL + "/test"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.reason").value("NOT_CONFIGURED"))
-                .andExpect(jsonPath("$.model").value(MODEL))
-                .andExpect(jsonPath("$.billable").value(false));
-    }
-
-    @Test
-    void test_keyNotConfigured_returns503WithCode() throws Exception {
-        when(credentialService.configured(PROVIDER_ID)).thenReturn(true);
-        when(credentialService.read(PROVIDER_ID))
-                .thenThrow(new RuntimeCredentialException(KEY_NOT_CONFIGURED,
-                        "Cannot read runtime credential: PACK_CREDENTIAL_KEY is not configured"));
-
-        mvc.perform(post(URL + "/test"))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("KEY_NOT_CONFIGURED"))
-                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
-                        "Runtime credential encryption is not configured")));
-    }
-
-    @Test
-    void test_success_reportsConfiguredModel_disclosesNonBillableProbe_andNeverEchoesPat()
-            throws Exception {
-        when(credentialService.configured(PROVIDER_ID)).thenReturn(true);
-        when(credentialService.read(PROVIDER_ID)).thenReturn(SYNTHETIC_PAT);
-
-        MvcResult result = mvc.perform(post(URL + "/test"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.reason").doesNotExist())
-                .andExpect(jsonPath("$.model").value(MODEL))
-                .andExpect(jsonPath("$.billable").value(false))
-                .andExpect(jsonPath("$.costNote")
-                        .value(org.hamcrest.Matchers.containsString("no billable inference")))
-                .andExpect(jsonPath("$.costNote")
-                        .value(org.hamcrest.Matchers.containsString("credits")))
-                .andReturn();
-
-        assertNoSecretSubstringBeyondMaskSuffix(responseText(result));
-    }
-
-    // ---- No leak into controller logs / request toString ----
-
-    @Test
-    void putCredential_tokenEmbeddedInMalformedBody_neverReachesErrorLogsOrBody() throws Exception {
-        // A malformed body can carry the PAT verbatim (unquoted JSON value): Jackson's parse
-        // error then quotes the token, and the shared GlobalExceptionHandler logs the exception
-        // and (on h2) echoes its message. The credential endpoint must not allow that echo.
-        String malformedBody = json(Map.of("pat", SYNTHETIC_PAT))
-                .replace("\"" + SYNTHETIC_PAT + "\"", SYNTHETIC_PAT);
-
-        Logger controllerLogger = (Logger) LoggerFactory.getLogger(QoderCredentialController.class);
-        Logger adviceLogger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        controllerLogger.addAppender(appender);
-        adviceLogger.addAppender(appender);
-        try {
-            MvcResult result = mvc.perform(put(URL)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(malformedBody))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.message").value("Invalid request body"))
-                    .andReturn();
-
-            assertThat(responseText(result)).doesNotContain(SYNTHETIC_PAT);
-            // Positive control: the endpoint still logs a safe rejection, so an empty appender
-            // cannot make this test pass vacuously.
-            assertThat(appender.list).isNotEmpty();
-            for (ILoggingEvent event : appender.list) {
-                assertThat(event.getFormattedMessage()).doesNotContain(SYNTHETIC_PAT);
-                if (event.getThrowableProxy() != null) {
-                    assertThat(ThrowableProxyUtil.asString(event.getThrowableProxy()))
-                            .doesNotContain(SYNTHETIC_PAT);
-                }
-            }
-        } finally {
-            controllerLogger.detachAppender(appender);
-            adviceLogger.detachAppender(appender);
-        }
-        verifyNoInteractions(credentialService);
-    }
-
-    @Test
-    void credentialEndpoints_neverLogOrEchoTheSuppliedToken_andPatRequestToStringIsMasked()
-            throws Exception {
-        when(credentialService.maskedStatus(PROVIDER_ID))
-                .thenReturn(new RuntimeCredentialStatus(true, MASKED_PAT, UPDATED_AT));
-
-        Logger logger = (Logger) LoggerFactory.getLogger(QoderCredentialController.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        logger.addAppender(appender);
-        try {
-            mvc.perform(put(URL)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(json(Map.of("pat", SYNTHETIC_PAT))))
-                    .andExpect(status().isOk());
-            mvc.perform(get(URL)).andExpect(status().isOk());
-            mvc.perform(delete(URL)).andExpect(status().isNoContent());
-
-            // Positive control: the controller really did log (otherwise this is vacuous).
-            assertThat(appender.list).isNotEmpty();
-            for (ILoggingEvent event : appender.list) {
-                assertThat(event.getFormattedMessage()).doesNotContain(SYNTHETIC_PAT);
-                assertThat(Arrays.toString(event.getArgumentArray())).doesNotContain(SYNTHETIC_PAT);
-            }
-        } finally {
-            logger.detachAppender(appender);
-        }
-
-        // The PAT-carrying request type must never render the value, even implicitly.
-        QoderCredentialDtos.PatRequest request = new QoderCredentialDtos.PatRequest(SYNTHETIC_PAT);
-        assertThat(request.toString()).isEqualTo("PatRequest[pat=****]");
-    }
-
-    // ---- helpers ----
-
-    /** Body plus every header value, so a secret cannot hide in either. */
-    private static String responseText(MvcResult result) throws Exception {
-        StringBuilder text = new StringBuilder(result.getResponse().getContentAsString());
-        for (String name : result.getResponse().getHeaderNames()) {
-            text.append('\n').append(name).append(": ").append(result.getResponse().getHeader(name));
-        }
-        return text.toString();
-    }
+    private final RuntimeCredentialRepository repository = mock(RuntimeCredentialRepository.class);
+    private final RuntimeCredentialService credentials =
+            new RuntimeCredentialService(repository, "test-runtime-credential-key", CLOCK);
+    private final OperatorSessionService operatorSessions = new OperatorSessionService(
+            "operator-bearer-secret", Duration.ofHours(8), "http://localhost:5173", false, CLOCK);
+    private final QoderCredentialController.CredentialProbe probe =
+            mock(QoderCredentialController.CredentialProbe.class);
+    private final MockMvc mvc = mockMvcFor(
+            new QoderCredentialController(credentials, operatorSessions, probe,
+                    QoderCredentialController.TEST_TIMEOUT));
 
     /**
-     * Asserts that the full synthetic PAT and every substring of it longer than the
-     * sanctioned mask suffix ({@code ****1234}) are absent from the given text (body plus
-     * headers). Callers pair this with an explicit mask assertion so it cannot pass
-     * vacuously: an empty response would still be caught by the positive assertions.
+     * The configured operator credential carries no expiry (see
+     * {@code ActorPrincipal.operator}); a fixed expiry here would silently start
+     * failing against the controller's real clock once that instant passed.
      */
-    private static void assertNoSecretSubstringBeyondMaskSuffix(String text) {
-        assertThat(text).doesNotContain(SYNTHETIC_PAT);
-        for (int length = MASK_SUFFIX_LENGTH + 1; length <= SYNTHETIC_PAT.length(); length++) {
-            for (int start = 0; start + length <= SYNTHETIC_PAT.length(); start++) {
-                assertThat(text)
-                        .as("secret substring of length %d leaked", length)
-                        .doesNotContain(SYNTHETIC_PAT.substring(start, start + length));
-            }
+    private static ActorPrincipal operator() {
+        return ActorPrincipal.operator(null);
+    }
+
+    /** A non-operator principal; the rejection is a role decision, never an expiry race. */
+    private static ActorPrincipal worker() {
+        return ActorPrincipal.worker(UUID.randomUUID(), null);
+    }
+
+    /** Stores one credential through the service and keeps it resolvable afterwards. */
+    private RuntimeCredential storedRow() {
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+        credentials.putQoder(SECRET, operator());
+        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
+        verify(repository).save(captor.capture());
+        RuntimeCredential row = captor.getValue();
+        when(repository.findById(REF)).thenReturn(Optional.of(row));
+        return row;
+    }
+
+    @Test
+    void getWithoutIdentityIsUnauthorized() throws Exception {
+        mvc.perform(get("/api/v1/adk/providers/qoder/credential"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void getWithWorkerIdentityIsForbidden() throws Exception {
+        mvc.perform(get("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, worker()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getReturnsExactMaskedMetadataAndNeverCallsAModel() throws Exception {
+        storedRow();
+
+        mvc.perform(get("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.credentialRef").value(REF))
+                .andExpect(jsonPath("$.coreId").value(RuntimeCredentialService.QODER_CORE_ID))
+                .andExpect(jsonPath("$.environmentVariable")
+                        .value(RuntimeCredentialService.QODER_ENVIRONMENT_VARIABLE))
+                .andExpect(jsonPath("$.configured").value(true))
+                .andExpect(jsonPath("$.maskedSecret").value("********"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString(SECRET))));
+        verifyNoInteractions(probe);
+    }
+
+    @Test
+    void putStoresEncryptedAndNeverEchoesTheSecret() throws Exception {
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+
+        mvc.perform(put("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"" + SECRET + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configured").value(true))
+                .andExpect(jsonPath("$.maskedSecret").value("********"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString(SECRET))));
+
+        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
+        verify(repository).save(captor.capture());
+        assertThat(captor.getValue().getEncValue()).isNotEqualTo(SECRET);
+        verifyNoInteractions(probe);
+    }
+
+    @Test
+    void putWithWorkerIdentityIsForbidden() throws Exception {
+        mvc.perform(put("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, worker())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"" + SECRET + "\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString(SECRET))));
+        verify(repository, never()).save(any(RuntimeCredential.class));
+    }
+
+    @Test
+    void cookieMutationWithoutCsrfTokenIsForbidden() throws Exception {
+        OperatorSessionService.OperatorSession session = operatorSessions.createSession();
+
+        mvc.perform(put("/api/v1/adk/providers/qoder/credential")
+                        .cookie(new jakarta.servlet.http.Cookie(
+                                OperatorSessionService.COOKIE_NAME, session.sessionId()))
+                        .header("Origin", "http://localhost:5173")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"" + SECRET + "\"}"))
+                .andExpect(status().isForbidden());
+        verify(repository, never()).save(any(RuntimeCredential.class));
+    }
+
+    @Test
+    void cookieMutationWithCsrfTokenStoresTheCredential() throws Exception {
+        OperatorSessionService.OperatorSession session = operatorSessions.createSession();
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+
+        mvc.perform(put("/api/v1/adk/providers/qoder/credential")
+                        .cookie(new jakarta.servlet.http.Cookie(
+                                OperatorSessionService.COOKIE_NAME, session.sessionId()))
+                        .header("Origin", "http://localhost:5173")
+                        .header(OperatorSessionService.CSRF_HEADER, session.csrfToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"" + SECRET + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configured").value(true));
+    }
+
+    @Test
+    void deleteRevokesFutureResolution() throws Exception {
+        storedRow();
+
+        mvc.perform(delete("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isNoContent());
+
+        verify(repository).deleteById(REF);
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> credentials.resolve(REF))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not configured");
+        verifyNoInteractions(probe);
+    }
+
+    @Test
+    void testWithoutProbeMakesNoCallAndReportsNoResult() throws Exception {
+        storedRow();
+        MockMvc noProbeMvc = mockMvcFor(new QoderCredentialController(
+                credentials, operatorSessions, null, QoderCredentialController.TEST_TIMEOUT));
+
+        noProbeMvc.perform(post("/api/v1/adk/providers/qoder/credential/test")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.tested").value(false));
+        verifyNoInteractions(probe);
+    }
+
+    @Test
+    void testWhenNotConfiguredIsConflict() throws Exception {
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+
+        mvc.perform(post("/api/v1/adk/providers/qoder/credential/test")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isConflict());
+        verifyNoInteractions(probe);
+    }
+
+    @Test
+    void testUsesTheBoundedProbeAndReportsUnknownUsageAsUnknown() throws Exception {
+        storedRow();
+        when(probe.test(any(SecretBundle.class), any(Duration.class))).thenReturn(
+                new QoderCredentialController.CredentialTestOutcome(
+                        true, "efficient", "session accepted",
+                        new UsageSnapshot(null, null, null, "efficient")));
+
+        mvc.perform(post("/api/v1/adk/providers/qoder/credential/test")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tested").value(true))
+                .andExpect(jsonPath("$.authenticated").value(true))
+                .andExpect(jsonPath("$.usage.inputTokens").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.usage.credits").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.costDisclosure").isNotEmpty())
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString(SECRET))));
+
+        ArgumentCaptor<SecretBundle> captor = ArgumentCaptor.forClass(SecretBundle.class);
+        verify(probe).test(captor.capture(), org.mockito.ArgumentMatchers.eq(
+                QoderCredentialController.TEST_TIMEOUT));
+        assertThat(captor.getValue().environment())
+                .containsEntry(RuntimeCredentialService.QODER_ENVIRONMENT_VARIABLE, SECRET);
+    }
+
+    // ------------------------------------------------------ payload and key readiness
+
+    @Test
+    void credentialRequestCarrierNeverPrintsItsSecret() {
+        assertThat(new QoderCredentialController.QoderCredentialRequest(SECRET).toString())
+                .doesNotContain(SECRET)
+                .isEqualTo("QoderCredentialRequest[redacted]");
+    }
+
+    @Test
+    void malformedPutBodyIsRejectedWithAFixedMessageAndNeverLogged() throws Exception {
+        ListAppender<ILoggingEvent> logs = attachedLogCapture();
+        MvcResult result;
+        try {
+            // A plausible paste error: the secret without its JSON quotes. Jackson's
+            // parse exception names the unrecognized token, so the default error path
+            // would log the plaintext prefix of the credential.
+            result = mvc.perform(put("/api/v1/adk/providers/qoder/credential")
+                            .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"secret\":" + SECRET + "}"))
+                    .andReturn();
+        } finally {
+            detachLogCapture(logs);
         }
+        assertThat(logs.list)
+                .as("no log event may carry a fragment of the plaintext payload")
+                .noneMatch(event -> renderedLogText(event).contains(SECRET.substring(0, 8)));
+        assertThat(result.getResponse().getStatus()).isEqualTo(400);
+        assertThat(result.getResponse().getContentAsString())
+                .contains("Malformed Qoder credential payload")
+                .doesNotContain(SECRET);
+        verify(repository, never()).save(any(RuntimeCredential.class));
+    }
+
+    @Test
+    void getWithTheConfiguredKeyReportsTheCredentialAsReadable() throws Exception {
+        storedRow();
+
+        mvc.perform(get("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configured").value(true))
+                .andExpect(jsonPath("$.encryptionKeyConfigured").value(true));
+    }
+
+    @Test
+    void getWithAMissingEncryptionKeyReportsTheStoredCredentialAsUnreadable() throws Exception {
+        storedRow();
+        MockMvc unkeyedMvc = mockMvcFor(new QoderCredentialController(
+                new RuntimeCredentialService(repository, "  ", CLOCK),
+                operatorSessions, probe, QoderCredentialController.TEST_TIMEOUT));
+
+        unkeyedMvc.perform(get("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configured").value(true))
+                .andExpect(jsonPath("$.encryptionKeyConfigured").value(false))
+                .andExpect(jsonPath("$.maskedSecret").value("********"));
+    }
+
+    @Test
+    void testWithoutKeyReportsTheMissingKeyNotTheMissingBridge() throws Exception {
+        storedRow();
+        MockMvc unkeyedMvc = mockMvcFor(new QoderCredentialController(
+                new RuntimeCredentialService(repository, "  ", CLOCK),
+                operatorSessions, null, QoderCredentialController.TEST_TIMEOUT));
+
+        unkeyedMvc.perform(post("/api/v1/adk/providers/qoder/credential/test")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.tested").value(false))
+                .andExpect(jsonPath("$.reason", org.hamcrest.Matchers.containsString("encryption key")));
+        verify(probe, never()).test(any(SecretBundle.class), any(Duration.class));
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private static ListAppender<ILoggingEvent> attachedLogCapture() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).addAppender(appender);
+        return appender;
+    }
+
+    private static void detachLogCapture(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).detachAppender(appender);
+    }
+
+    /** Message plus every throwable message of one event, the shape a log consumer would see. */
+    private static String renderedLogText(ILoggingEvent event) {
+        StringBuilder text = new StringBuilder(event.getFormattedMessage());
+        for (IThrowableProxy thrown = event.getThrowableProxy(); thrown != null; thrown = thrown.getCause()) {
+            text.append('\n').append(thrown.getClassName()).append(": ").append(thrown.getMessage());
+        }
+        return text.toString();
     }
 }

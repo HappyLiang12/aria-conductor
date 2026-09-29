@@ -147,7 +147,7 @@ test('Agent creation with config.maxToolCallRounds', async ({ page }) => {
         name,
         agentType: 'NATIVE',
         role: 'test',
-        adkProvider: 'langchain',
+        adkProvider: 'opencode',
         config: { maxToolCallRounds: 3 },
       }),
     });

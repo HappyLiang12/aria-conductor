@@ -69,14 +69,18 @@ class WorkflowToolsTest {
     }
 
     @Test
-    void instantiateWorkflowTemplate_debugOn_includesStack() {
+    void instantiateWorkflowTemplate_debugOn_stillHasNoStack() {
+        // Fix round 7: debug mode logs the cause server-side; the tool answer is
+        // always the truthful ok/errorType/message envelope.
         mcpProperties.setDebug(true);
         when(workflowTemplateService.instantiateTemplate(any(), any()))
                 .thenThrow(new IllegalArgumentException("Template requires repoUrl parameter"));
 
         String json = tools.instantiateWorkflowTemplate(UUID.randomUUID(), Map.of());
 
-        assertThat(json).contains("stackTrace").contains("IllegalArgumentException");
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"");
+        assertThat(json).doesNotContain("stackTrace");
+        assertThat(json).doesNotContain("IllegalArgumentException");
     }
 
     @Test

@@ -4,15 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
  * Uniform MCP tool result envelopes. Tools return JSON strings so every client
  * (opencode model, external agent) reads one shape: {"ok":bool, "data"|error fields}.
- * debug=true (aria.mcp.debug) adds the full stack trace for external-agent debugging.
+ * An error envelope is exactly {"ok":false, "errorType", "message"} on every
+ * transport: the client answer never carries a stack trace or exception class
+ * (information disclosure in an operator-facing tool response). debug=true
+ * (aria.mcp.debug) records the cause server-side in the log instead.
  */
 @Slf4j
 public final class ToolResponses {
@@ -31,21 +32,20 @@ public final class ToolResponses {
         return write(body);
     }
 
+    /**
+     * The uniform error envelope: exactly {@code ok=false}, {@code errorType} and
+     * {@code message}. The cause is never serialized to the client; when
+     * {@code debug} is on it is logged server-side instead.
+     */
     public static String error(String errorType, String message, Throwable cause, boolean debug) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", false);
         body.put("errorType", errorType);
         body.put("message", message);
         if (debug && cause != null) {
-            body.put("stackTrace", stackTraceOf(cause));
+            log.debug("MCP tool error [{}]: {}", errorType, message, cause);
         }
         return write(body);
-    }
-
-    private static String stackTraceOf(Throwable cause) {
-        StringWriter sw = new StringWriter();
-        cause.printStackTrace(new PrintWriter(sw));
-        return sw.toString();
     }
 
     private static String write(Map<String, Object> body) {

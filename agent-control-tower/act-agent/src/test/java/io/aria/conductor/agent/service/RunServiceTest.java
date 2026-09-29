@@ -11,6 +11,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.port.RunRuntimeControlPort;
 import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,6 +43,8 @@ class RunServiceTest {
     @Mock RunRepository runRepository;
     @Mock AgentService agentService;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock org.springframework.beans.factory.ObjectProvider<RunRuntimeControlPort> runtimeControlProvider;
+    @Mock RunRuntimeControlPort runtimeControl;
     @InjectMocks RunService service;
 
     private Agent healthyAgent(UUID id) {
@@ -293,6 +296,94 @@ class RunServiceTest {
 
         assertThatThrownBy(() -> service.pauseRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class);
+        verify(runRepository, never()).save(any());
+    }
+
+    // ── fix round 7: a coordinator-owned run is paused only on a verified ack ──
+
+    @Test
+    void pauseRun_ofACoordinatorOwnedRun_verifiesTheRuntimeBeforePersistingPaused() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+
+        RunResponse response = service.pauseRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.PAUSED);
+        verify(runtimeControl).pause(id);
+        verify(runRepository).save(any(Run.class));
+    }
+
+    @Test
+    void pauseRun_whenTheRuntimeRefuses_staysRunningAndPersistsNothing() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException(
+                        "Run " + id + " was not paused: the run-owned core did not verify the pause"))
+                .when(runtimeControl).pause(id);
+
+        assertThatThrownBy(() -> service.pauseRun(id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("did not verify the pause");
+        verify(runRepository, never()).save(any());
+    }
+
+    @Test
+    void pauseRun_ofARunNoRuntimeOwns_keepsTheRecordedTransition() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(false);
+
+        RunResponse response = service.pauseRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.PAUSED);
+        verify(runtimeControl, never()).pause(any());
+    }
+
+    @Test
+    void resumeRun_ofACoordinatorOwnedRun_verifiesTheRuntimeBeforePersistingRunning() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.PAUSED).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+
+        RunResponse response = service.resumeRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.RUNNING);
+        verify(runtimeControl).resume(id);
+        verify(runRepository).save(any(Run.class));
+    }
+
+    @Test
+    void resumeRun_whenTheRuntimeRefuses_staysPausedAndPersistsNothing() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.PAUSED).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException(
+                        "Run " + id + " was not resumed: the run-owned core did not verify the resume"))
+                .when(runtimeControl).resume(id);
+
+        assertThatThrownBy(() -> service.resumeRun(id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("did not verify the resume");
         verify(runRepository, never()).save(any());
     }
 

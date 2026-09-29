@@ -1,0 +1,2 @@
+live-matrix: MISSING PREREQUISITE: model-pin refusal: the qoder core is pinned to 'efficient' (requested 'premium-plus'); a paid model needs the explicit opt-in (--paid-opt-in or ARIA_LIVE_PAID_MODEL_OPT_IN=1)
+live-matrix refused before launching anything (core=qoder mode=HOST)

@@ -1,13 +1,17 @@
 package io.aria.conductor.execution.listener;
 
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
+import io.aria.conductor.execution.adk.AdkProvider;
+import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
@@ -57,19 +61,25 @@ public class WorkflowAutoChainer {
     private final ApplicationEventPublisher eventPublisher;
     private final GitBranchService gitBranchService;
     private final OpenCodeAdkProvider openCodeAdkProvider;
+    private final AdkProviderRegistry providerRegistry;
+    private final AgentRepository agentRepository;
 
     public WorkflowAutoChainer(WorkflowService workflowService,
                                DoDService dodService,
                                WorkflowChainRepository chainRepository,
                                ApplicationEventPublisher eventPublisher,
                                GitBranchService gitBranchService,
-                               OpenCodeAdkProvider openCodeAdkProvider) {
+                               OpenCodeAdkProvider openCodeAdkProvider,
+                               AdkProviderRegistry providerRegistry,
+                               AgentRepository agentRepository) {
         this.workflowService = workflowService;
         this.dodService = dodService;
         this.chainRepository = chainRepository;
         this.eventPublisher = eventPublisher;
         this.gitBranchService = gitBranchService;
         this.openCodeAdkProvider = openCodeAdkProvider;
+        this.providerRegistry = providerRegistry;
+        this.agentRepository = agentRepository;
     }
 
     @EventListener
@@ -300,15 +310,20 @@ public class WorkflowAutoChainer {
 
     /**
      * R9-F3: a rescheduled step (DEFECT / SPEC_GAP loop-back) must not reuse the
-     * previous run's sandbox/session — the opencode {@code serve} process may have
-     * died during the long QA gap (sandbox TTL expiry) while the cached healthy
-     * flag still reports true, so the rerun would fail with a stale session
+     * previous run's sandbox/session — the {@code serve} process may have died
+     * during the long QA gap (sandbox TTL expiry) while the cached healthy flag
+     * still reports true, so the rerun would fail with a stale session
      * (IOException -> ConnectException). Force-reset the rescheduled step's agent
-     * instance so the rerun prepares a fresh sandbox + session.
+     * instance so the rerun prepares a fresh environment + session.
      *
-     * <p>The new run id maps to a fresh session regardless ({@code createSession}
-     * is called per run), but a dead {@code serve} cannot honor that call — hence
-     * the full instance reset. Failures are logged loudly but never crash routing.
+     * <p>The reset goes through the provider registry's mode-neutral
+     * {@link io.aria.conductor.execution.adk.AdkProvider#resetRuntime(UUID)}
+     * instead of naming one concrete provider, so a Host, Sandbox or future
+     * placement resets its own runtime. A core without a provider bean (a
+     * first-delivery core such as qoder) has no agent-scoped runtime at all --
+     * runtimes are run-owned -- so its reset is a truthful no-op instead of a
+     * fail-closed resolution error. Failures are logged loudly but never crash
+     * routing.
      */
     private void resetAgentInstance(WorkflowChain chain, int stepIndex) {
         WorkflowStep step = workflowService.stepAt(chain, stepIndex);
@@ -318,13 +333,40 @@ public class WorkflowAutoChainer {
                     stepIndex, chain.getId());
             return;
         }
+        Agent agent = agentRepository.findById(agentId).orElse(null);
+        if (agent == null) {
+            log.warn("SDD reschedule: no agent row {} for chain {}; skipping provider reset",
+                    agentId, chain.getId());
+            return;
+        }
         try {
-            openCodeAdkProvider.resetAgent(agentId);
-            log.info("SDD reschedule: reset opencode instance for agent {} (chain {})", agentId, chain.getId());
+            AdkProvider provider = providerFor(agent);
+            if (provider == null) {
+                log.info("SDD reschedule: agent {} selects core '{}', which owns its runtimes per run;"
+                        + " no agent-scoped runtime to reset (chain {})", agentId, agent.getAdkProvider(),
+                        chain.getId());
+                return;
+            }
+            provider.resetRuntime(agentId);
+            log.info("SDD reschedule: reset the run runtime of agent {} (chain {})", agentId, chain.getId());
         } catch (Exception e) {
-            log.warn("SDD reschedule: failed to reset provider instance for agent {} (chain {}): {}",
+            log.warn("SDD reschedule: failed to reset the provider instance for agent {} (chain {}): {}",
                     agentId, chain.getId(), e.getMessage());
         }
+    }
+
+    /**
+     * The provider bean that serves the agent's core, or {@code null} when no
+     * provider-level runtime exists for it (a first-delivery core such as qoder, or
+     * an unknown/removed core). An agent that stores no core keeps the registry's
+     * documented default resolution.
+     */
+    private AdkProvider providerFor(Agent agent) {
+        String coreId = agent.getAdkProvider();
+        if (coreId == null || coreId.isBlank()) {
+            return providerRegistry.resolve(agent);
+        }
+        return providerRegistry.getProvider(coreId);
     }
 
     /**

@@ -1,275 +1,254 @@
 package io.aria.conductor.execution.credential;
 
 import io.aria.conductor.common.model.RuntimeCredential;
-import io.aria.conductor.common.repository.RuntimeCredentialRepository;
-import org.junit.jupiter.api.BeforeEach;
+import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.repository.RuntimeCredentialRepository;
+import io.aria.conductor.execution.runtime.SecretBundle;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Behaviour + security tests for {@link RuntimeCredentialService} — the DB-backed store for
- * runtime provider credentials (Qoder PAT). The cipher is mocked for the wiring tests so
- * assertions pin the service's contract (encrypt-on-save, decrypt-on-read, refusal of the
- * Base64 development fallback, typed failures) rather than crypto internals; one test uses a
- * real {@link PackCredentialCipher} to prove the persisted value is genuine ciphertext.
- *
- * <p>All tokens are synthetic ({@code pat-synthetic-1234}); no real credential is ever used.
+ * Behaviour tests for {@link RuntimeCredentialService} (spec 6.1): required-key
+ * authenticated encryption with a fresh nonce, core/reference binding as
+ * authenticated data, masked reads, operator-only management and revocation of
+ * future resolution. Synthetic secrets and a fixed clock only.
  */
-@ExtendWith(MockitoExtension.class)
 class RuntimeCredentialServiceTest {
 
-    private static final String PROVIDER = "qoder";
-    private static final String SYNTHETIC_PAT = "pat-synthetic-1234";
-    private static final String CIPHER_KEY = "test-master-key-for-runtime-credentials";
+    private static final String SECRET = "synthetic-secret-42";
+    private static final String KEY = "test-runtime-credential-key";
+    private static final Instant NOW = Instant.parse("2026-09-23T10:00:00Z");
+    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+    private static final String REF = RuntimeCredentialService.QODER_CREDENTIAL_REFERENCE;
 
-    @Mock private RuntimeCredentialRepository credentialRepo;
-    @Mock private PackCredentialCipher cipher;
+    private final RuntimeCredentialRepository repository = mock(RuntimeCredentialRepository.class);
+    private final RuntimeCredentialService service =
+            new RuntimeCredentialService(repository, KEY, CLOCK);
 
-    private RuntimeCredentialService service;
-
-    @BeforeEach
-    void setUp() {
-        service = new RuntimeCredentialService(credentialRepo, cipher);
+    private static ActorPrincipal operator() {
+        return ActorPrincipal.operator(null);
     }
 
-    private RuntimeCredential row(String encPat) {
-        return RuntimeCredential.builder()
-                .id(UUID.randomUUID().toString())
-                .providerId(PROVIDER)
-                .encPat(encPat)
-                .updatedAt(Instant.parse("2026-09-17T10:15:30Z"))
+    private static ActorPrincipal worker() {
+        return ActorPrincipal.worker(UUID.randomUUID(), NOW.plusSeconds(300));
+    }
+
+    /** Stores one credential through the service and returns the persisted row. */
+    private RuntimeCredential store() {
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+        service.putQoder(SECRET, operator());
+        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
+        verify(repository).save(captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    void resolveReturnsTheSecretOnlyInTheChildEnvironmentBundle() {
+        RuntimeCredential row = store();
+        when(repository.findById(REF)).thenReturn(Optional.of(row));
+
+        SecretBundle bundle = service.resolve(REF);
+
+        assertThat(bundle.reference()).isEqualTo(REF);
+        assertThat(bundle.environment())
+                .containsExactly(java.util.Map.entry(
+                        RuntimeCredentialService.QODER_ENVIRONMENT_VARIABLE, SECRET));
+        assertThat(bundle.toString())
+                .isEqualTo("SecretBundle[redacted]")
+                .doesNotContain(SECRET);
+    }
+
+    @Test
+    void putQoderPersistsOnlyCiphertextAndReturnsExactMaskedMetadata() {
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+        RuntimeCredentialService.MaskedMetadata masked = service.putQoder(SECRET, operator());
+        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
+        verify(repository).save(captor.capture());
+        RuntimeCredential row = captor.getValue();
+
+        assertThat(row.getCredentialRef()).isEqualTo(REF);
+        assertThat(row.getCoreId()).isEqualTo(RuntimeCredentialService.QODER_CORE_ID);
+        assertThat(row.getEnvironmentVariable())
+                .isEqualTo(RuntimeCredentialService.QODER_ENVIRONMENT_VARIABLE);
+        // Neither the plaintext nor a plain base64 encoding of it may be persisted.
+        assertThat(row.getEncValue()).isNotEqualTo(SECRET);
+        assertThat(row.getEncValue()).isNotEqualTo(
+                Base64.getEncoder().encodeToString(SECRET.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertThat(row.getCreatedAt()).isEqualTo(NOW);
+        assertThat(row.getUpdatedAt()).isEqualTo(NOW);
+
+        assertThat(masked.credentialRef()).isEqualTo(REF);
+        assertThat(masked.coreId()).isEqualTo(RuntimeCredentialService.QODER_CORE_ID);
+        assertThat(masked.environmentVariable())
+                .isEqualTo(RuntimeCredentialService.QODER_ENVIRONMENT_VARIABLE);
+        assertThat(masked.configured()).isTrue();
+        assertThat(masked.maskedSecret()).isEqualTo("********");
+        assertThat(masked.updatedAt()).isEqualTo(NOW);
+        assertThat(String.valueOf(masked)).doesNotContain(SECRET);
+    }
+
+    @Test
+    void everyEncryptionUsesAFreshNonce() {
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+
+        service.putQoder(SECRET, operator());
+        service.putQoder(SECRET, operator());
+
+        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
+        verify(repository, org.mockito.Mockito.times(2)).save(captor.capture());
+        assertThat(captor.getAllValues().get(0).getEncValue())
+                .as("a reused nonce would produce identical ciphertexts for identical plaintext")
+                .isNotEqualTo(captor.getAllValues().get(1).getEncValue());
+    }
+
+    @Test
+    void tamperedCiphertextIsRejected() {
+        RuntimeCredential row = store();
+        String ciphertext = row.getEncValue();
+        char flipped = ciphertext.charAt(ciphertext.length() / 2) == 'A' ? 'B' : 'A';
+        row.setEncValue(ciphertext.substring(0, ciphertext.length() / 2) + flipped
+                + ciphertext.substring(ciphertext.length() / 2 + 1));
+        when(repository.findById(REF)).thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.resolve(REF))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("decryption failed");
+    }
+
+    @Test
+    void ciphertextMovedToAnotherReferenceFailsToDecrypt() {
+        RuntimeCredential row = store();
+        // The row's reference is authenticated data: moving the same ciphertext under a
+        // different reference must fail rather than return the old secret.
+        row.setCredentialRef("qoder:rotated");
+        when(repository.findById("qoder:rotated")).thenReturn(Optional.of(row));
+
+        assertThatThrownBy(() -> service.resolve("qoder:rotated"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("decryption failed");
+    }
+
+    @Test
+    void missingEncryptionKeyFailsLoudlyAndNeverFallsBack() {
+        RuntimeCredentialService withoutKey =
+                new RuntimeCredentialService(repository, "  ", CLOCK);
+        RuntimeCredential stored = RuntimeCredential.builder()
+                .credentialRef(REF)
+                .coreId(RuntimeCredentialService.QODER_CORE_ID)
+                .environmentVariable(RuntimeCredentialService.QODER_ENVIRONMENT_VARIABLE)
+                .encValue("dW50b3VjaGVk")
+                .createdAt(NOW)
                 .build();
+        when(repository.findById(REF)).thenReturn(Optional.of(stored));
+
+        assertThatThrownBy(() -> withoutKey.putQoder(SECRET, operator()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("encryption key is not configured");
+        assertThatThrownBy(() -> withoutKey.resolve(REF))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("encryption key is not configured");
+        verify(repository, never()).save(any(RuntimeCredential.class));
     }
 
     @Test
-    void save_persistsOnlyCipherOutput_forNewRow() {
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.empty());
-        when(cipher.encrypt(SYNTHETIC_PAT)).thenReturn("opaque-cipher-output");
-
-        service.save(PROVIDER, SYNTHETIC_PAT);
-
-        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
-        verify(credentialRepo).save(captor.capture());
-        RuntimeCredential saved = captor.getValue();
-        assertThat(saved.getId()).isNotBlank();
-        assertThat(saved.getProviderId()).isEqualTo(PROVIDER);
-        assertThat(saved.getEncPat()).isEqualTo("opaque-cipher-output");
-        assertThat(saved.getEncPat()).isNotEqualTo(SYNTHETIC_PAT);
+    void workerAndUnownedActorsCannotManageTheCredential() {
+        assertThatThrownBy(() -> service.putQoder(SECRET, worker()))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("Operator authority required");
+        assertThatThrownBy(() -> service.deleteQoder(worker()))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("Operator authority required");
+        assertThatThrownBy(() -> service.putQoder(SECRET, null))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> service.deleteQoder(null))
+                .isInstanceOf(SecurityException.class);
+        verify(repository, never()).save(any(RuntimeCredential.class));
+        verify(repository, never()).deleteById(anyString());
     }
 
     @Test
-    void save_withRealCipher_storesCiphertext_thatDecryptsBackToThePat() {
-        PackCredentialCipher realCipher = new PackCredentialCipher(CIPHER_KEY);
-        RuntimeCredentialService realService = new RuntimeCredentialService(credentialRepo, realCipher);
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.empty());
+    void deleteQoderRevokesFutureResolution() {
+        RuntimeCredential row = store();
+        when(repository.findById(REF)).thenReturn(Optional.of(row));
 
-        realService.save(PROVIDER, SYNTHETIC_PAT);
+        service.deleteQoder(operator());
 
-        ArgumentCaptor<RuntimeCredential> captor = ArgumentCaptor.forClass(RuntimeCredential.class);
-        verify(credentialRepo).save(captor.capture());
-        String encPat = captor.getValue().getEncPat();
-        // Not the plaintext, not a plaintext-containing encoding, and actually decryptable.
-        assertThat(encPat).isNotEqualTo(SYNTHETIC_PAT).doesNotContain(SYNTHETIC_PAT);
-        assertThat(realCipher.decrypt(encPat)).isEqualTo(SYNTHETIC_PAT);
-    }
-
-    @Test
-    void save_updatesExistingRow_inPlace_keepingItsId() {
-        RuntimeCredential existing = row("enc-old");
-        String originalId = existing.getId();
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(existing));
-        when(cipher.encrypt(SYNTHETIC_PAT)).thenReturn("enc-new");
-
-        service.save(PROVIDER, SYNTHETIC_PAT);
-
-        verify(credentialRepo).save(existing);
-        assertThat(existing.getId()).isEqualTo(originalId);
-        assertThat(existing.getEncPat()).isEqualTo("enc-new");
-    }
-
-    @Test
-    void save_rejectsNullPat_beforeTouchingCipherOrRepository() {
-        assertThatThrownBy(() -> service.save(PROVIDER, null))
+        verify(repository).deleteById(REF);
+        when(repository.findById(REF)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.resolve(REF))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageNotContaining(SYNTHETIC_PAT);
-        verifyNoInteractions(credentialRepo, cipher);
+                .hasMessageContaining("not configured");
     }
 
     @Test
-    void save_rejectsBlankPat_andDoesNotEchoTheInput() {
-        String blankInput = "   ";
-        assertThatThrownBy(() -> service.save(PROVIDER, blankInput))
+    void metadataReadNeverDecryptsAndReportsUnconfiguredExactly() {
+        assertThat(service.qoderMetadata().configured()).isFalse();
+        assertThat(service.qoderMetadata().maskedSecret()).isNull();
+        assertThat(service.qoderMetadata().credentialRef()).isEqualTo(REF);
+
+        RuntimeCredential row = store();
+        when(repository.findById(REF)).thenReturn(Optional.of(row));
+        RuntimeCredentialService.MaskedMetadata masked = service.qoderMetadata();
+
+        assertThat(masked.configured()).isTrue();
+        assertThat(masked.maskedSecret()).isEqualTo("********");
+        assertThat(masked.updatedAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void blankSecretIsRejected() {
+        assertThatThrownBy(() -> service.putQoder("  ", operator()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageNotContaining(blankInput);
-        verifyNoInteractions(credentialRepo, cipher);
+                .hasMessageContaining("must not be blank");
+        verify(repository, never()).save(any(RuntimeCredential.class));
     }
 
     @Test
-    void save_refusesBase64Fallback_whenEncryptionDisabled() {
-        when(cipher.encryptionEnabled()).thenReturn(false);
-
-        assertThatThrownBy(() -> service.save(PROVIDER, SYNTHETIC_PAT))
-                .isInstanceOf(RuntimeCredentialException.class)
-                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
-                        .isEqualTo(RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED));
-
-        verify(cipher, never()).encrypt(any());
-        verify(credentialRepo, never()).save(any());
+    void authenticatedDataIsUnambiguousAcrossComponentPairs() {
+        // A plain "core:ref" concatenation would let ("a", "b:c") and ("a:b", "c")
+        // share one AAD, so a ciphertext could be rebound between references whose
+        // separator moved. Length prefixes make the components re-parse uniquely.
+        assertThat(RuntimeCredentialService.authenticatedData("a", "b:c"))
+                .as("two different pairs must never produce the same authenticated data")
+                .isNotEqualTo(RuntimeCredentialService.authenticatedData("a:b", "c"));
+        assertThat(RuntimeCredentialService.authenticatedData(
+                RuntimeCredentialService.QODER_CORE_ID, REF))
+                .contains(RuntimeCredentialService.QODER_CORE_ID)
+                .contains(REF);
     }
 
     @Test
-    void configured_trueWithRow_falseWithout_neverTouchingTheCipher() {
-        when(credentialRepo.findByProviderId(PROVIDER))
-                .thenReturn(Optional.of(row("enc-1")))
-                .thenReturn(Optional.empty());
+    void metadataReportsAStoredCredentialAsUnreadableWhenTheEncryptionKeyIsMissing() {
+        RuntimeCredential row = store();
+        when(repository.findById(REF)).thenReturn(Optional.of(row));
 
-        assertThat(service.configured(PROVIDER)).isTrue();
-        assertThat(service.configured(PROVIDER)).isFalse();
-        verifyNoInteractions(cipher);
-    }
+        assertThat(service.qoderMetadata().encryptionKeyConfigured()).isTrue();
 
-    @Test
-    void read_returnsDecryptedPat_whenConfigured() {
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(row("enc-stored")));
-        when(cipher.decrypt("enc-stored")).thenReturn(SYNTHETIC_PAT);
+        RuntimeCredentialService withoutKey = new RuntimeCredentialService(repository, "  ", CLOCK);
+        RuntimeCredentialService.MaskedMetadata metadata = withoutKey.qoderMetadata();
 
-        // The cipher stub output differs from the raw column value, so this cannot pass
-        // by returning the stored ciphertext.
-        assertThat(service.read(PROVIDER)).isEqualTo(SYNTHETIC_PAT);
-    }
-
-    @Test
-    void read_refusesBase64Fallback_whenEncryptionDisabled() {
-        when(cipher.encryptionEnabled()).thenReturn(false);
-
-        assertThatThrownBy(() -> service.read(PROVIDER))
-                .isInstanceOf(RuntimeCredentialException.class)
-                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
-                        .isEqualTo(RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED));
-
-        verify(cipher, never()).decrypt(any());
-    }
-
-    @Test
-    void read_throwsNotConfigured_whenNoRow() {
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.read(PROVIDER))
-                .isInstanceOf(RuntimeCredentialException.class)
-                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
-                        .isEqualTo(RuntimeCredentialException.Cause.NOT_CONFIGURED));
-    }
-
-    @Test
-    void read_throwsCipherFailed_whenDecryptFails_withoutEchoingCiphertext() {
-        RuntimeException cipherFailure = new RuntimeException("Credential decryption failed");
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(row("enc-corrupt")));
-        when(cipher.decrypt("enc-corrupt")).thenThrow(cipherFailure);
-
-        assertThatThrownBy(() -> service.read(PROVIDER))
-                .isInstanceOf(RuntimeCredentialException.class)
-                .hasCause(cipherFailure)
-                .hasMessageNotContaining("enc-corrupt")
-                .hasMessageNotContaining(SYNTHETIC_PAT)
-                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
-                        .isEqualTo(RuntimeCredentialException.Cause.CIPHER_FAILED));
-    }
-
-    @Test
-    void delete_removesRow_andIsIdempotentWhenAbsent() {
-        RuntimeCredential existing = row("enc-1");
-        when(credentialRepo.findByProviderId(PROVIDER))
-                .thenReturn(Optional.of(existing))
-                .thenReturn(Optional.empty());
-
-        service.delete(PROVIDER);
-        service.delete(PROVIDER);
-
-        verify(credentialRepo).delete(existing);
-        verify(credentialRepo, times(1)).delete(any(RuntimeCredential.class));
-    }
-
-    @Test
-    void maskedStatus_masksAllButTheLastFourChars_whenConfigured() {
-        RuntimeCredential existing = row("enc-stored");
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(existing));
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(cipher.decrypt("enc-stored")).thenReturn(SYNTHETIC_PAT);
-
-        RuntimeCredentialStatus status = service.maskedStatus(PROVIDER);
-
-        assertThat(status.configured()).isTrue();
-        assertThat(status.patMasked()).isEqualTo("****1234").doesNotContain(SYNTHETIC_PAT);
-        assertThat(status.updatedAt()).isEqualTo(existing.getUpdatedAt());
-    }
-
-    @Test
-    void maskedStatus_returnsBareMask_forShortOrMissingPat() {
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(row("enc-short")));
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(cipher.decrypt("enc-short")).thenReturn("ab").thenReturn(null);
-
-        assertThat(service.maskedStatus(PROVIDER).patMasked()).isEqualTo("****");
-        assertThat(service.maskedStatus(PROVIDER).patMasked()).isEqualTo("****");
-    }
-
-    @Test
-    void maskedStatus_reportsUnconfigured_whenNoRow_evenIfEncryptionIsDisabled() {
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.empty());
-
-        RuntimeCredentialStatus status = service.maskedStatus(PROVIDER);
-
-        assertThat(status).isEqualTo(new RuntimeCredentialStatus(false, null, null));
-        verifyNoInteractions(cipher);
-    }
-
-    @Test
-    void maskedStatus_refusesBase64Fallback_whenRowExistsButEncryptionDisabled() {
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(row("enc-1")));
-        when(cipher.encryptionEnabled()).thenReturn(false);
-
-        assertThatThrownBy(() -> service.maskedStatus(PROVIDER))
-                .isInstanceOf(RuntimeCredentialException.class)
-                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
-                        .isEqualTo(RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED));
-
-        verify(cipher, never()).decrypt(any());
-    }
-
-    @Test
-    void maskedStatus_throwsCipherFailed_whenDecryptFails_withoutEchoingCiphertext() {
-        RuntimeException cipherFailure = new RuntimeException("Credential decryption failed");
-        when(credentialRepo.findByProviderId(PROVIDER)).thenReturn(Optional.of(row("enc-corrupt")));
-        when(cipher.encryptionEnabled()).thenReturn(true);
-        when(cipher.decrypt("enc-corrupt")).thenThrow(cipherFailure);
-
-        assertThatThrownBy(() -> service.maskedStatus(PROVIDER))
-                .isInstanceOf(RuntimeCredentialException.class)
-                .hasCause(cipherFailure)
-                .hasMessageNotContaining("enc-corrupt")
-                .hasMessageNotContaining(SYNTHETIC_PAT)
-                .satisfies(e -> assertThat(((RuntimeCredentialException) e).cause())
-                        .isEqualTo(RuntimeCredentialException.Cause.CIPHER_FAILED));
+        assertThat(metadata.configured()).isTrue();
+        assertThat(metadata.encryptionKeyConfigured()).isFalse();
+        assertThat(metadata.maskedSecret()).isEqualTo("********");
+        // Reporting the unreadable state never repairs it: reading still fails loudly.
+        assertThatThrownBy(() -> withoutKey.resolve(REF))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("encryption key is not configured");
     }
 }

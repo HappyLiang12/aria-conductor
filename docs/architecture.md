@@ -8,18 +8,18 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
 
 ```
 ┌───────────────┐     ┌──────────────┐     ┌──────────────────────────────┐
-│   Dashboard   │────▶│   Backend    │────▶│   Agent Runtime              │
-│  (React/Vite) │◀────│ (Spring Boot)│◀────│  OpenCode sandbox (default)  │
-│   Port 3000   │     │   Port 8080  │     │    via OpenSandbox           │
-└───────────────┘     └──────┬───────┘     │  LangChain ADK: legacy,      │
-                            │              │    compose only (Port 9300)  │
-                     ┌──────▼───────┐      └──────────────────────────────┘
+│   Dashboard   │────▶│   Backend    │────▶│   Run-owned agent cores      │
+│  (React/Vite) │◀────│ (Spring Boot)│◀────│  opencode (default) / qoder  │
+│   Port 3000   │     │   Port 8080  │     │  HOST: on the backend host   │
+└───────────────┘     └──────┬───────┘     │  SANDBOX: via OpenSandbox    │
+                            │              └──────────────────────────────┘
+                     ┌──────▼───────┐
                      │   Database   │
                      │ H2 / MariaDB │
                      └──────────────┘
 ```
 
-> The Dashboard port above is the **compose** topology's (`FRONTEND_PORT`, default `3000`). In the
+> The Dashboard port above is the raw container stack's (`FRONTEND_PORT`, default `3000`). In the
 > default local-dev topology the Dashboard is the Vite dev server on `5173`, with the backend and
 > frontend both running on the host — see *Starting the stack* in [README.md](README.md).
 
@@ -29,7 +29,7 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
 |--------|---------------|
 | **act-common** | Shared models (Agent, Run, Approval, Knowledge), DTOs, repositories, enums |
 | **act-agent** | Agent lifecycle management — creation, configuration, health monitoring, template system |
-| **act-execution** | Tool execution engine, LLM client abstraction, ADK provider integration, circuit breaker |
+| **act-execution** | Tool execution engine, LLM client abstraction, run-owned core runtime (coordinator, launcher, adapters, Host/Sandbox backends), circuit breaker |
 | **act-knowledge** | Knowledge base management — CRUD, versioning, Git-backed storage |
 | **act-aria** | Aria AI assistant — chat sessions, agent orchestration, scheduled jobs |
 | **act-dashboard-api** | REST API controllers for the dashboard frontend |
@@ -40,11 +40,11 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
 
 ### Agent
 
-An autonomous AI entity with a defined role (Business Analyst, Developer, QA). Each agent runs on the OpenCode sandbox (via OpenSandbox, the default provider) or, when explicitly opted out, on the legacy LangChain ADK runtime — and can execute tools, participate in workflows, and respond to conversations.
+An autonomous AI entity with a defined role (Business Analyst, Developer, QA). Each agent carries a **core** (`opencode`, the default, or `qoder`), an **execution mode** (`HOST` — run on the backend host, no container runtime needed — or `SANDBOX` — run in an isolated container via OpenSandbox) and a workspace selection; it can execute tools, participate in workflows, and respond to conversations.
 
 ### Run
 
-A single execution cycle of an agent. Runs iterate through tool calls and LLM responses until completion, timeout, or cancellation. Each run has a status: `RUNNING` → `COMPLETED` / `FAILED` / `CANCELLED` / `TIMEOUT`.
+A single execution cycle of an agent. A run is owned end to end by the run coordinator: its core/mode selection is frozen into an immutable execution binding on the first attempt, the attempt is prepared with a workspace lease and a launch profile, executed through the core session, and finalized only on an observed verified stop. Each run has a status: `RUNNING` → `COMPLETED` / `FAILED` / `CANCELLED` / `TIMEOUT`.
 
 ### Approval Gate
 
@@ -62,11 +62,11 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 
 1. **User** submits a task via the Dashboard
 2. **Dashboard API** creates a Kanban item and assigns it to an agent
-3. **Execution Engine** starts a Run on the agent's ADK instance
-4. **ADK provider** processes the task using LLM + tools — the OpenCode sandbox by default, or the Python LangChain ADK runtime for langchain agents
+3. **Execution Engine** starts a Run: admission normalizes the agent's core/mode/workspace selection (unsupported values are refused, never substituted) and the run coordinator freezes the run's execution binding
+4. **The run-owned core session** processes the task using LLM + tools — placed in `HOST` mode on the backend host, or in `SANDBOX` mode in an isolated container via OpenSandbox
 5. **Agent** iterates: LLM call → tool execution → LLM call → ...
-6. **Run** completes and results are stored
-7. **Approval gates** may pause the workflow for human review
+6. **Run** completes (only on a verified stop) and results are stored
+7. **Approval gates** may pause the workflow for human review; write permissions are granted once per run through the coordinator
 8. **Dashboard** displays real-time status via WebSocket events
 
 ## LLM Integration
@@ -76,14 +76,17 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 - API keys are stored encrypted; providers can be activated/deactivated
 - Circuit breaker prevents runaway token consumption
 
-## ADK (Agent Development Kit)
+## Agent Cores and Execution Modes
 
-The ADK provider an agent runs on is selected by `adk.default-provider` (default: `opencode`).
+The supported cores are exactly `opencode` (default) and `qoder`; the `adk.default-provider`
+property (`opencode`) only selects the default for a new agent that omits the core. An unknown
+or removed core is refused explicitly — there is no fallback and the removed LangChain runtime
+is neither selectable nor resolvable.
 
-- **opencode** (default, recommended): the OpenCode CLI runs in a dedicated sandbox container per agent, managed through an OpenSandbox server (podman is the local-dev container runtime default; Docker is also supported)
-- **langchain** (legacy): Python-based runtime using LangChain + FastAPI; correct only for the full-stack compose topology, where the containerized backend cannot reach the OpenSandbox endpoints, or as an explicit opt-out
-- The langchain runtime can run as a subprocess (local dev) or connect to a standalone container (compose); it uses port range allocation 9300-9400 (the compose topology pins 9300) and is only needed when a langchain agent runs
-- Health monitoring with automatic restart on failure
+- **opencode** (default, recommended): the OpenCode CLI runs on the host (`HOST`) or in a dedicated sandbox container per agent (`SANDBOX`), managed through an OpenSandbox server (podman is the local-dev container runtime default; Docker is also supported)
+- **qoder**: the Qoder CLI driven over the ACP bridge, in the same two placements
+- `HOST` mode needs **no container runtime at all**; `SANDBOX` mode keeps an explicit OpenSandbox/container-runtime check at startup
+- Health monitoring: a service-level probe for the provider inventory plus run-scoped recovery through the coordinator (no permanent per-agent pre-warm)
 
 ## Configuration Profiles
 
@@ -98,7 +101,7 @@ The ADK provider an agent runs on is selected by `adk.default-provider` (default
 |-------|-----------|
 | Backend | Java 21, Spring Boot 3.3, Spring Data JPA, Flyway |
 | Frontend | React 19, Vite, TypeScript, Playwright (E2E) |
-| Agent Runtime | OpenCode sandbox via OpenSandbox (default) / Python 3.11, LangChain, FastAPI, Uvicorn (legacy, compose or opt-out) |
+| Agent Runtime | Run-owned cores: opencode (default) / qoder, placed HOST (on the backend host) or SANDBOX (OpenSandbox) |
 | Database | H2 (dev) / MariaDB (production) |
 | MCP | Node.js, TypeScript |
 | Build | Maven 3.9+, pnpm 9+ |

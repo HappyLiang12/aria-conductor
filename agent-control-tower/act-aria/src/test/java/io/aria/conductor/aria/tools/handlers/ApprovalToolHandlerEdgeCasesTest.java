@@ -2,7 +2,7 @@ package io.aria.conductor.aria.tools.handlers;
 
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
-import io.aria.conductor.execution.approval.ApprovalDecisionService;
+import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class ApprovalToolHandlerEdgeCasesTest {
 
-    @Mock private ApprovalDecisionService approvalDecisionService;
+    @Mock private ApprovalGate approvalGate;
     @Mock private ApprovalRepository approvalRepository;
 
     @InjectMocks
@@ -47,7 +47,7 @@ class ApprovalToolHandlerEdgeCasesTest {
                 "toolName", "decide_approval", "decision", "approve"));
 
         assertThat(result).startsWith("Error").contains("Missing required parameter: id");
-        verifyNoInteractions(approvalDecisionService);
+        verifyNoInteractions(approvalGate);
     }
 
     @Test
@@ -56,7 +56,7 @@ class ApprovalToolHandlerEdgeCasesTest {
                 "toolName", "decide_approval", "id", UUID.randomUUID().toString()));
 
         assertThat(result).startsWith("Error").contains("Missing required parameter: decision");
-        verifyNoInteractions(approvalDecisionService);
+        verifyNoInteractions(approvalGate);
     }
 
     @ParameterizedTest(name = "decision \"{0}\" -> approved={1}")
@@ -75,7 +75,7 @@ class ApprovalToolHandlerEdgeCasesTest {
         String result = handler.execute(Map.of(
                 "toolName", "decide_approval", "id", id.toString(), "decision", decision));
 
-        verify(approvalDecisionService).decide(id, expectedApproved, "");
+        verify(approvalGate).decideApproval(id, expectedApproved, "");
         assertThat(result).contains(expectedApproved ? "approved" : "denied");
     }
 
@@ -87,7 +87,7 @@ class ApprovalToolHandlerEdgeCasesTest {
                 "toolName", "decide_approval", "id", id.toString(),
                 "decision", "deny", "reason", "too risky"));
 
-        verify(approvalDecisionService).decide(id, false, "too risky");
+        verify(approvalGate).decideApproval(id, false, "too risky");
     }
 
     @Test
@@ -96,14 +96,14 @@ class ApprovalToolHandlerEdgeCasesTest {
                 "toolName", "decide_approval", "id", "nope", "decision", "approve"));
 
         assertThat(result).startsWith("Error");
-        verify(approvalDecisionService, never()).decide(any(), anyBoolean(), anyString());
+        verify(approvalGate, never()).decideApproval(any(), anyBoolean(), anyString());
     }
 
     @Test
-    void decide_dispatchFailureIsMappedToErrorString() {
+    void decide_gateFailureIsMappedToErrorString() {
         UUID id = UUID.randomUUID();
         doThrow(new IllegalStateException("approval already decided"))
-                .when(approvalDecisionService).decide(id, true, "");
+                .when(approvalGate).decideApproval(id, true, "");
 
         String result = handler.execute(Map.of(
                 "toolName", "decide_approval", "id", id.toString(), "decision", "approve"));

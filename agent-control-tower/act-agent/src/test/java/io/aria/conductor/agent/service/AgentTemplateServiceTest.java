@@ -37,7 +37,9 @@ class AgentTemplateServiceTest {
         assertThat(templates).allSatisfy(t -> {
             assertThat(t.getAgentType()).isEqualTo(AgentType.ADK);
             assertThat(t.getProvider()).isEqualTo("alibaba");
-            assertThat(t.getAdkProvider()).isEqualTo("langchain");
+            // Task 18 cutover: the removed langchain provider is never a template
+            // default; the templates seed the supported opencode core.
+            assertThat(t.getAdkProvider()).isEqualTo("opencode");
             assertThat(t.getLabel()).isNotBlank();
             assertThat(t.getDescription()).isNotBlank();
         });

@@ -238,6 +238,15 @@ public class ApprovalGate {
 
     /**
      * Process an approval decision — updates entity and unblocks the waiting virtual thread.
+     *
+     * <p>Operator authority is established by the caller (spec §6.2): the REST
+     * boundary resolves the authenticated operator session before it calls here,
+     * native permission asks are dispatched through
+     * {@link PermissionCoordinator#decide(java.util.UUID, PermissionChoice, io.aria.conductor.common.security.ActorPrincipal)},
+     * and the remaining callers are the platform's own sweeps (housekeeping
+     * expiry/cancellation) rather than an external request. A decision for a
+     * request that is no longer PENDING stays a no-op, preserving the existing
+     * idempotent behaviour for repeated delivery.
      */
     @Transactional
     public void decideApproval(UUID approvalId, boolean approved, String reason) {

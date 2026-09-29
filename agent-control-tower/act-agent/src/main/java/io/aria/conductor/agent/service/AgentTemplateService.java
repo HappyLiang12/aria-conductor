@@ -23,7 +23,7 @@ public class AgentTemplateService {
                     .role("ba")
                     .model("ali-copilot")
                     .provider("alibaba")
-                    .adkProvider("langchain")
+                    .adkProvider("opencode")
                     .build(),
             "dev", CreateAgentRequest.builder()
                     .name("Developer Agent")
@@ -33,7 +33,7 @@ public class AgentTemplateService {
                     .role("dev")
                     .model("ali-copilot")
                     .provider("alibaba")
-                    .adkProvider("langchain")
+                    .adkProvider("opencode")
                     .build(),
             "qa", CreateAgentRequest.builder()
                     .name("QA Agent")
@@ -43,7 +43,7 @@ public class AgentTemplateService {
                     .role("qa")
                     .model("ali-copilot")
                     .provider("alibaba")
-                    .adkProvider("langchain")
+                    .adkProvider("opencode")
                     .build()
     );
 

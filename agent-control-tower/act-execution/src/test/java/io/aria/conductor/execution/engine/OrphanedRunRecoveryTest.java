@@ -11,7 +11,8 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
 import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
+import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.dod.DoDService;
@@ -73,7 +74,8 @@ class OrphanedRunRecoveryTest {
     @Mock private HarnessProfileService harnessProfileService;
     @Mock private ToolSteeringGuard toolSteeringGuard;
     @Mock private ApprovalRepository approvalRepository;
-    @Mock private OpenCodeProperties openCodeProperties;
+    @Mock private TaskDeadlineProperties taskDeadlineProperties;
+    @Mock private org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
     @Mock private DoDService dodService;
     @Mock private KanbanService kanbanService;
 

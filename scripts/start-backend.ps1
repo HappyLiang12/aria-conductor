@@ -14,12 +14,31 @@ $BackendDir = Join-Path $ProjectRoot "agent-control-tower"
 . (Join-Path $PSScriptRoot "lib/container-runtime.ps1")
 Load-DotEnv $ProjectRoot
 
-# -SkipSandbox means no sandbox is available for the opencode provider to warm:
-# default the provider to langchain unless -AdkProvider was set explicitly
-# (an explicit provider always wins).
+# -SkipSandbox means no container runtime is available: default the provider to the
+# Host-capable core qoder unless -AdkProvider was set explicitly (an explicit
+# provider always wins). Host mode needs no Docker or Podman at all.
 if ($SkipSandbox -and -not $PSBoundParameters.ContainsKey('AdkProvider')) {
-    $AdkProvider = "langchain"
-    Write-Host "  -SkipSandbox: defaulting ADK provider to langchain (no sandbox to warm)."
+    $AdkProvider = "qoder"
+    Write-Host "  -SkipSandbox: defaulting ADK provider to qoder (Host mode needs no container runtime)."
+}
+$sandboxMode = $AdkProvider -eq "opencode" -and -not $SkipSandbox
+
+# ── Run-owned absolute paths (fix round 1: never cwd-relative) ──
+# A run's worktree, generated configuration and retained results are owned by the
+# backend's run roots, and the qoder bridge entry is a committed artifact of the
+# repository. All three are exported as absolute paths derived from this
+# repository root, so they do not depend on the working directory the Spring Boot
+# process happens to run in (mvn spring-boot:run -pl act-app runs in act-app/).
+# An operator-provided value always wins.
+if (-not $env:ARIA_WORKSPACES_RUNTIME_ROOT) {
+    $env:ARIA_WORKSPACES_RUNTIME_ROOT = Join-Path $BackendDir "act-app/data/workspaces/runs"
+}
+if (-not $env:ARIA_WORKSPACES_RESULT_ROOT) {
+    $env:ARIA_WORKSPACES_RESULT_ROOT = Join-Path $BackendDir "act-app/data/workspaces/results"
+}
+$bridgeEntry = Join-Path $ProjectRoot "packages/qoder-acp-bridge/dist/main.js"
+if (-not $env:ARIA_CORES_QODER_BRIDGE_ENTRY -and (Test-Path -LiteralPath $bridgeEntry -PathType Leaf)) {
+    $env:ARIA_CORES_QODER_BRIDGE_ENTRY = $bridgeEntry
 }
 
 # Prerequisites check
@@ -85,11 +104,10 @@ if (-not $env:GITHUB_TOKEN) {
     Write-Warning "GITHUB_TOKEN is not set; BA/Dev agents cannot read issues or clone repos in the sandbox. Set GITHUB_TOKEN and restart the backend: the credential is resolved once at startup. The dashboard has no credential editor yet; an operator with API access can store it via POST /api/v1/packs/pack-git-0001/credentials and restart."
 }
 
-# Windows: prefer the `py` launcher so the ADK subprocess can find a Python runtime.
-$env:ADK_PYTHON = "py"
+# Windows: the host cores find their own runtimes; no Python runtime is needed.
 
-# ── OpenSandbox server (required for opencode provider) ──
-if ($AdkProvider -eq "opencode" -and -not $SkipSandbox) {
+# ── OpenSandbox server (required for opencode provider in Sandbox mode) ──
+if ($sandboxMode) {
     Write-Host "Checking OpenSandbox server..." -ForegroundColor Cyan
     if ($runtimeError) {
         Write-Error "Container runtime unavailable: $runtimeError"
@@ -97,7 +115,7 @@ if ($AdkProvider -eq "opencode" -and -not $SkipSandbox) {
     }
     $rt = $runtimeInfo.Runtime
     if (-not $rt) {
-        Write-Error "Neither docker nor podman is available. The opencode provider requires a container runtime for the OpenSandbox server. Install Docker or podman, or use -SkipSandbox / -AdkProvider langchain."
+        Write-Error "Neither docker nor podman is available. The opencode provider in Sandbox mode requires a container runtime for the OpenSandbox server. Install Docker or podman, or run in Host mode with -SkipSandbox (qoder)."
         exit 1
     }
 

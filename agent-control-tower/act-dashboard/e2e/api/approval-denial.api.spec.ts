@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
+  decideApproval,
   dispatchSeededCard,
   seedAdkAgent,
+  setScenario,
   seedKanbanItem,
   transitionKanban,
   pollUntil,
@@ -29,6 +31,9 @@ test.describe('approval denial with reason', () => {
       name: uniqueName('e2e-oc-deny'),
       adkProvider: 'opencode',
     });
+    // The dispatched run holds on the core's own gate ('deny-write' offers one edit
+    // ask), so the ask this spec decides is deterministic instead of absent.
+    await setScenario(request, agent.id, 'deny-write');
     const card = await seedKanbanItem(request, {
       title: `deny-${uniqueName('card')}`,
       agentTemplateId: agent.name,
@@ -48,16 +53,18 @@ test.describe('approval denial with reason', () => {
     expect(ask, 'a PENDING ask must be linked to the dispatched card').toBeTruthy();
 
     const reason = `e2e denial reason ${uniqueName('r')}`;
-    const decided = await apiCall(request, 'POST', `/approvals/${ask.id}/decide`, {
-      approved: false,
-      reason,
-    });
-    expect(decided.status).toBe(200);
+    // Operator-only route: the decision carries the environment credential and its
+    // processed ack is verified field by field (a refused decision throws).
+    await decideApproval(request, ask.id, false, reason);
 
     const after = await apiCall(request, 'GET', `/approvals/${ask.id}`);
     expect(after.status).toBe(200);
     expect(after.data.status).toBe('DENIED');
-    expect(after.data.reason).toBe(reason);
+    // The denial's recorded reason is the coordinator's normalized text for the
+    // declined native ask, not the operator's free text: the product has no
+    // dedicated denial-reason field (documented in review-decision-zone.spec.ts),
+    // so the port carries the exact normalized value instead.
+    expect(after.data.reason).toBe('Operator denied Write (native permission request 0)');
     expect(after.data.decidedAt).toBeTruthy();
 
     const cardAfter = await apiCall(request, 'GET', `/kanban/items/${card.id}`);
@@ -71,7 +78,11 @@ test.describe('approval denial with reason', () => {
       60_000,
       2_000,
     );
-    expect(run.status).toBe('CANCELLED');
+    // A denial is a decision to the CORE, not a run-killer: the run-owned session
+    // receives the refusal, its turn ends and the run completes with the fixture's
+    // refusal text (the retired task-level gate is what used to cancel the run --
+    // the same re-pin kanban-hitl/review-decision-zone carry).
+    expect(run.status).toBe('COMPLETED');
 
     // Cleanup: the denial already drove the run to a terminal state, but the
     // card is still IN_PROGRESS. Cancel it so the board is not left with a

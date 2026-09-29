@@ -1,0 +1,23 @@
+# Docker build context hygiene for the repository-root builds.
+#
+# Only the sandbox images are built with the repository root as their context
+# (the core images consume agent-control-tower/runtime-sandbox plus, for Qoder,
+# packages/qoder-acp-bridge); every other build in this repository uses a
+# narrower context, so this file only affects those sandbox image builds.
+.git
+.gitignore
+.superpowers
+.qoder
+.env
+.env.*
+**/node_modules
+**/dist
+**/build
+**/target
+**/.pnpm-store
+**/*.log
+docs
+e2e/screenshots
+agent-control-tower/act-dashboard
+agent-control-tower/opencode-sandbox/README.md
+*.md

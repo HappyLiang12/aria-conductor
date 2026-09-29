@@ -2,21 +2,36 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, rejectApproval } from '../api/approvals';
-import {
-  acpToolLabel,
-  describeDecisionError,
-  hasAllowOnce,
-  isAcpAsk,
-  isAskExpired,
-  isUndecidableAcpAsk,
-  parseAcpDisplay,
-} from '../utils/acpAsk';
+import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import { formatTimestamp } from '../utils/formatTime';
+import {
+  NativePermissionFacts,
+  NativePermissionKindPill,
+  nativePermissionOf,
+} from './NativePermissionAsk';
 import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus } from '../types';
 
 interface PanelProps {
   item: KanbanItem;
   pendingAsks: Approval[];
+}
+
+function AskMeta({ ask, permission }: { ask: Approval; permission: ReturnType<typeof nativePermissionOf> }) {
+  if (permission) {
+    return (
+      <div className="ask-meta">
+        <NativePermissionKindPill permission={permission} />
+        <NativePermissionFacts ask={ask} permission={permission} />
+      </div>
+    );
+  }
+  return (
+    <div className="ask-meta">
+      <span className="pill">{ask.approvalType ?? 'TOOL_CALL'}</span>
+      {ask.riskTier && <span className="pill warn">risk {ask.riskTier}</span>}
+      {ask.expiresAt && <span className="owner">expires {formatTimestamp(ask.expiresAt)}</span>}
+    </div>
+  );
 }
 
 /** Ask decision surface - used by the collapsed drawer and the ReviewWorkspace rail. */
@@ -25,8 +40,14 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [requestFeedback, setRequestFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const acpAsks = pendingAsks.filter(isAcpAsk);
-  const legacyAsks = pendingAsks.filter((a) => !isAcpAsk(a));
+  const [operatorRejected, setOperatorRejected] = useState(false);
+
+  // A native permission ask is authorizable exactly once, never in bulk: the
+  // batch control below skips them so a batch action can never stand in for a
+  // persistent native authorization (spec §6.3). They stay decidable one by one.
+  const nativeAsks = pendingAsks.filter((ask) => nativePermissionOf(ask) !== null);
+  const batchApprovable = pendingAsks.filter((ask) => nativePermissionOf(ask) === null);
+
   const resolveAsk = useMutation({
     mutationFn: ({
       ask,
@@ -37,44 +58,32 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       approved: boolean;
       answer?: string;
     }): Promise<Approval | ApprovalDecisionReceipt> => {
-      // ACP asks always route through /decide regardless of askType — never
-      // through answerAsk. Legacy routing is unchanged.
-      if (isAcpAsk(ask) || ask.askType !== 'QUESTION') {
-        return approved ? approveApproval(ask.id, answer) : rejectApproval(ask.id, answer);
-      }
-      return answerAsk(ask.id, { approved, answer });
+      // Operator-only routes: carry the locally established session's CSRF token.
+      applyOperatorHeaders();
+      return ask.askType === 'QUESTION'
+        ? answerAsk(ask.id, { approved, answer })
+        : approved
+          ? approveApproval(ask.id, answer)
+          : rejectApproval(ask.id, answer);
     },
     onSuccess: () => {
-      // C5-fix1: the decision outcome is server truth — the parents derive
-      // the strip from the card ask list, so a successful decide only needs
-      // the lists refreshed (the decided ask leaves PENDING).
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
       // Badge + Waiting-on-you staleness: cards carry pendingAskCount.
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
     },
-    onError: (err, variables) => {
-      if (isAcpAsk(variables.ask)) {
-        // The rejection is the whole story: a typed 409 body surfaces as
-        // `code: message`; anything else gets the generic wording.
-        const rejection = describeDecisionError(err);
-        setError(
-          rejection ? `${rejection.code}: ${rejection.message}` : 'Action rejected — please retry.',
-        );
-        // The card may be stale (expired/decided elsewhere): refresh the lists.
-        queryClient.invalidateQueries({ queryKey: ['kanban'] });
-        queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
-        queryClient.invalidateQueries({ queryKey: ['approvals'] });
-        return;
-      }
-      setError('Action rejected — please retry.');
+    onError: (err: unknown) => {
+      setOperatorRejected(isOperatorRejection(err));
+      setError(apiErrorMessage(err, 'Action rejected — please retry.'));
     },
   });
   // Card-level fallback (spec 10.1): send the whole card back to the agent
   // with feedback even while asks are still pending on it.
   const requestChanges = useMutation({
-    mutationFn: (feedback: string) =>
-      transitionKanbanItem(item.id, { status: 'TODO', feedback: feedback.trim() || undefined }),
+    mutationFn: (feedback: string) => {
+      applyOperatorHeaders();
+      return transitionKanbanItem(item.id, { status: 'TODO', feedback: feedback.trim() || undefined });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
@@ -84,85 +93,20 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
 
   const resolve = (args: { ask: Approval; approved: boolean; answer?: string }) => {
     setError(null);
+    setOperatorRejected(false);
     resolveAsk.mutate(args);
   };
 
   return (
     <div className="decision-zone" role="region" aria-label="Decision panel">
       <div className="dz-title">⚑ NEEDS YOUR DECISION · {pendingAsks.length} asks</div>
-      {acpAsks.map((ask) => {
-        const display = parseAcpDisplay(ask);
-        const toolLabel = acpToolLabel(ask);
-        const expired = isAskExpired(ask);
-        // F3/R4: the backend refuses an approval the bridge truncated or that shows no readable
-        // display record (UNDECIDABLE_ASK), so Allow once must not be offered here either — the
-        // check fails closed exactly like the backend predicate. Deny still works.
-        const undecidable = isUndecidableAcpAsk(ask);
-        return (
-          <div key={ask.id} className="ask-card acp-card">
-            <div className="ask-q">
-              <span className="pill acp">ACP permission</span>
-              {/* Tool identity is backend-sanitized — rendered verbatim. */}
-              {toolLabel && <span className="acp-tool">{toolLabel}</span>}
-            </div>
-            {display?.rawInput && (
-              <details className="acp-details" open>
-                <summary>Permission request preview</summary>
-                {/* Redacted preview, verbatim from displayJson. */}
-                <pre className="acp-preview">{display.rawInput}</pre>
-                {display.rawInputTruncated && <div className="acp-truncated">truncated</div>}
-              </details>
-            )}
-            {display && display.options.length > 0 && (
-              <div className="acp-options">
-                {display.options.map((option, idx) => (
-                  <div key={`${option.optionId}-${idx}`} className="acp-option">
-                    {option.optionId}
-                    {option.kind ? ` · ${option.kind}` : ''}
-                    {option.name ? ` · ${option.name}` : ''}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="acp-expiry">
-              {expired && <span className="acp-expired">Expired</span>}
-              {expired ? ' · ' : ''}expires {formatTimestamp(ask.expiresAt)}
-            </div>
-            <div className="ask-actions">
-              {hasAllowOnce(ask) ? (
-                <button
-                  className="btn primary"
-                  disabled={resolveAsk.isPending || expired || undecidable}
-                  onClick={() => resolve({ ask, approved: true })}
-                >
-                  Allow once
-                </button>
-              ) : (
-                // The server would answer UNSUPPORTED_OPTIONS — no button, hint instead.
-                <span className="acp-hint">No allow-once option on this ask</span>
-              )}
-              <button
-                className="btn"
-                disabled={resolveAsk.isPending || expired}
-                onClick={() => resolve({ ask, approved: false })}
-              >
-                Deny
-              </button>
-              {undecidable && (
-                <span className="acp-hint">
-                  This ask cannot be approved: its input is incomplete or unreadable. Deny still works.
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      })}
-      {legacyAsks.map((ask) => (
+      {pendingAsks.map((ask) => (
         <div key={ask.id} className="ask-card">
           <div className="ask-q">
             {ask.askType === 'QUESTION' ? 'Question' : ask.askType === 'REVIEW_REQUEST' ? 'Review' : 'Approval'}
             : {ask.content?.slice(0, 160)}
           </div>
+          <AskMeta ask={ask} permission={nativePermissionOf(ask)} />
           {ask.contextMd && <div className="ask-ctx">{ask.contextMd}</div>}
           <textarea
             className="dod-textarea"
@@ -178,17 +122,21 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
           </div>
         </div>
       ))}
-      {legacyAsks.length > 0 && (
-        <button
-          className="btn primary"
-          disabled={resolveAsk.isPending}
-          onClick={() => {
-            setError(null);
-            legacyAsks.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
-          }}
-        >
-          ✓ Approve all
-        </button>
+      <button
+        className="btn primary"
+        disabled={resolveAsk.isPending || batchApprovable.length === 0}
+        onClick={() => {
+          setError(null);
+          batchApprovable.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
+        }}
+      >
+        ✓ Approve all
+      </button>
+      {nativeAsks.length > 0 && (
+        <div className="ask-ctx">
+          {nativeAsks.length} native permission ask{nativeAsks.length === 1 ? '' : 's'} not included in
+          Approve all: each is an allow-once decision and must be resolved individually.
+        </div>
       )}
       <textarea
         className="dod-textarea"
@@ -210,6 +158,12 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
         ✎ Request changes
       </button>
       {error && <div className="kanban-form-error">{error}</div>}
+      {operatorRejected && (
+        <div className="ask-ctx">
+          Approvals are operator-only — establish the operator session (Providers page, Operator
+          access) and retry. Nothing was decided by the refused call.
+        </div>
+      )}
     </div>
   );
 }

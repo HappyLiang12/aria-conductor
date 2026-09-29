@@ -13,14 +13,13 @@ import java.util.function.Consumer;
 /**
  * Strategy interface for ADK (Agent Development Kit) providers.
  *
- * <p>Each implementation wraps a specific agent runtime (LangChain ADK subprocess,
- * LangChain Python process, etc.) behind a uniform contract so that
+ * <p>Each implementation wraps a specific agent runtime behind a uniform contract so that
  * {@link io.aria.conductor.execution.engine.AgentLoopEngine} can invoke any
  * provider without knowing the concrete type.
  */
 public interface AdkProvider {
 
-    /** Unique identifier for this provider (e.g. {@code "langchain"}). */
+    /** Unique identifier for this provider (e.g. {@code "opencode"}). */
     String providerId();
 
     /**
@@ -80,8 +79,8 @@ public interface AdkProvider {
      * provider inventory / health API, {@code GET /api/v1/adk/providers/{id}/health}).
      *
      * <p>Unlike {@link #isHealthy(UUID)} (instance-scoped, requires an agentId),
-     * this probes the provider's underlying runtime service (ADK host:port for
-     * langchain, OpenSandbox server reachability for opencode). Defaults to
+     * this probes the provider's underlying runtime service (e.g. OpenSandbox
+     * server reachability for opencode). Defaults to
      * {@code true} for providers without a meaningful service-level probe.
      */
     default boolean isServiceHealthy() {
@@ -90,6 +89,21 @@ public interface AdkProvider {
 
     /** Shut down the runtime for a specific agent. */
     void shutdownAgent(UUID agentId);
+
+    /**
+     * Mode-neutral runtime reset before a rework/rerun loop-back (R9-F3): destroy
+     * any cached run runtime of the agent so the next attempt builds a fresh
+     * environment and session instead of reusing a stale one. Providers without a
+     * cached runtime treat this as a no-op, so a caller (the workflow chainer)
+     * never has to know which provider or execution mode an agent uses.
+     *
+     * <p>The default reuses {@link #shutdownAgent(UUID)}. A provider whose cached
+     * state is broader than that method (e.g. an in-flight preparation future)
+     * overrides this with its own reset.
+     */
+    default void resetRuntime(UUID agentId) {
+        shutdownAgent(agentId);
+    }
 
     /** Shut down all runtimes managed by this provider. */
     void shutdownAll();
@@ -103,21 +117,6 @@ public interface AdkProvider {
      */
     default boolean supportsTaskExecution() {
         return false;
-    }
-
-    /**
-     * Task-level constraints the engine must apply to {@link #executeTask} runs
-     * (frozen contract C0.6). Lets each provider resolve its own task limits
-     * (e.g. its configured task deadline) instead of the engine reading
-     * provider-specific properties.
-     *
-     * @return the constraints, or {@code null} when the provider states none.
-     *         Both {@code null} and a record whose
-     *         {@link TaskExecutionConstraints#maxTaskDuration()} is {@code null}
-     *         mean "no stated deadline": the engine then keeps its own fallback
-     */
-    default TaskExecutionConstraints taskConstraints() {
-        return null;
     }
 
     /**

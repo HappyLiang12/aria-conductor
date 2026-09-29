@@ -1,0 +1,27 @@
+{
+  "core": "qoder",
+  "mode": "HOST",
+  "os": "win32 x64",
+  "node": "v24.14.1",
+  "requestedModel": "efficient",
+  "observedModels": [],
+  "cliVersion": null,
+  "startedAt": "2026-09-26T19:35:42.441Z",
+  "status": "failed",
+  "prerequisites": [
+    "qoder CLI: C:\\Users\\<USER>\\.qoder\\bin\\qodercli\\qodercli.exe (1.1.61)",
+    "qoder bridge entry: C:\\Users\\<USER>\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\packages\\qoder-acp-bridge\\dist\\main.js",
+    "admitted repository HEAD e84b35f775983c59ebd04926b1fd2ddebce05c11"
+  ],
+  "results": [],
+  "backendLog": "C:\\Users\\User\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\docs\\reviews\\evidence\\2026-09-22-live-matrix\\qoder-HOST-acp.txt.backend.log",
+  "usage": {
+    "promptCalls": [],
+    "recordedModelAcknowledged": []
+  },
+  "backendPins": {
+    "ARIA_CORES_QODER_EXECUTABLE": "C:\\Users\\User\\.qoder\\bin\\qodercli\\qodercli.exe"
+  },
+  "error": "TypeError: fetch failed",
+  "finishedAt": "2026-09-26T19:49:21.365Z"
+}

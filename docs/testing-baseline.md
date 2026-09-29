@@ -46,10 +46,13 @@ measured with a CI-variance margin (ratchet iron law); all clear the plan's M1 f
 | Java unit tier (surefire) | 98 | 621 `@Test` |
 | Java integration tier (failsafe `*IntegrationTest`/`*E2ETest`) | 13 | ~55 |
 | Playwright E2E | 24 specs | 158 `test()` |
-| Python langchain-adk | 1 | 5 |
 | TS mcp-server | 15 | 75 |
 | Frontend (vitest) | 0 | 0 |
 | Contract | 0 | 0 |
+
+> The historical Python `langchain-adk` row (1 file, 5 tests) is gone with the removed LangChain
+> runtime (Task 18); the core runtime's coverage lives in the Java tiers and the
+> `e2e/agent-core/*.test.mjs` contract checks.
 
 ## Ratchet milestones (from the approved plan)
 
@@ -61,6 +64,7 @@ measured with a CI-variance margin (ratchet iron law); all clear the plan's M1 f
 | M2 | Phase C+D landed + re-measured | 60% line / 50% branch | — |
 | M3 | Phase E+F landed + re-measured | 70% line / 60% branch | act-app wiring exception ~50% |
 
-Mirrors: pytest `--cov-fail-under` 0 → 40 → 70; vitest `coverage.thresholds`
-raised in lockstep. PIT mutation score (nightly) is the primary honesty check;
+Mirrors: the historical pytest `--cov-fail-under` ladder (0 → 40 → 70) retired with the
+LangChain runtime; vitest `coverage.thresholds` raised in lockstep with the Java ratchet.
+PIT mutation score (nightly) is the primary honesty check;
 `mutationThreshold` ratchets to 60 after two weeks of stable reports.

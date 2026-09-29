@@ -106,12 +106,16 @@ class AgentToolsTest {
     }
 
     @Test
-    void createAgent_debugOn_includesStack() {
+    void createAgent_debugOn_stillHasNoStack() {
+        // Fix round 7: debug mode logs the cause server-side; the tool answer is
+        // always the truthful ok/errorType/message envelope.
         mcpProperties.setDebug(true);
 
         String json = tools.createAgent("bad", "worker", "quantum", null, null, null, null, null);
 
-        assertThat(json).contains("stackTrace").contains("IllegalArgumentException");
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"").contains("NATIVE, ADK");
+        assertThat(json).doesNotContain("stackTrace");
+        assertThat(json).doesNotContain("IllegalArgumentException");
     }
 
     @Test

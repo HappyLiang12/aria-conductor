@@ -106,13 +106,17 @@ class ReportToolsTest {
     }
 
     @Test
-    void amendReport_debugOn_includesStack() {
+    void amendReport_debugOn_stillHasNoStack() {
+        // Fix round 7: debug mode logs the cause server-side; the tool answer is
+        // always the truthful ok/errorType/message envelope.
         mcpProperties.setDebug(true);
         when(reportService.amend(eq("r-1"), any()))
                 .thenThrow(new IllegalStateException("HTML file missing on disk"));
 
         String json = tools.amendReport("r-1", "add a chart");
 
-        assertThat(json).contains("stackTrace").contains("IllegalStateException");
+        assertThat(json).contains("\"errorType\":\"CONFLICT\"");
+        assertThat(json).doesNotContain("stackTrace");
+        assertThat(json).doesNotContain("IllegalStateException");
     }
 }

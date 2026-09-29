@@ -99,12 +99,33 @@ public class OpenCodeHttpClient implements AutoCloseable {
      * @return the created session id
      */
     public String createSession(String title) {
+        return createSession(title, true);
+    }
+
+    /**
+     * Open a new session with single-shot semantics (task 11 governed session
+     * path): a retried {@code POST /session} whose response was lost would open
+     * a second native session the run does not know about, so the governed path
+     * never retries a non-idempotent creation call. The legacy
+     * {@link #createSession(String)} keeps its retrying transport for the
+     * existing ADK provider.
+     *
+     * @param title session title (typically the run id)
+     * @return the created session id
+     */
+    public String openSession(String title) {
+        return createSession(title, false);
+    }
+
+    private String createSession(String title, boolean retry) {
         ObjectNode body = objectMapper.createObjectNode();
         if (title != null && !title.isBlank()) {
             body.put("title", title);
         }
         String payload = body.isEmpty() ? "{}" : toJson(body);
-        HttpResponse<String> resp = send("POST", "/session", payload, requestTimeout);
+        HttpResponse<String> resp = retry
+                ? send("POST", "/session", payload, requestTimeout)
+                : sendNoRetry("POST", "/session", payload, requestTimeout);
         if (resp.statusCode() / 100 != 2) {
             throw providerError("POST /session returned status " + resp.statusCode());
         }
@@ -168,6 +189,123 @@ public class OpenCodeHttpClient implements AutoCloseable {
             log.debug("Could not parse abort response body as boolean: {}", resp.body());
             return true;
         }
+    }
+
+    /**
+     * The governed prompt path (task 11): one user message with the reviewed
+     * model, optional system material and the ordered text parts of the
+     * translated prompt. Single-shot on purpose -- a retried non-idempotent
+     * message POST could execute the same core action twice, and the native
+     * subset carries no idempotency key.
+     *
+     * <p>The native envelope members an OpenCode server may omit stay absent in
+     * the result: a message whose {@code info.tokens} is missing reports unknown
+     * counters, never zero. A message envelope carrying {@code info.error} (the
+     * recorded provider-failure shape, HTTP 200 with an error member) is a
+     * failed prompt, never an empty completion.
+     *
+     * @throws TaskExecutionException {@code PROVIDER_ERROR} for a refusal or a
+     *         provider error envelope, {@code TIMEOUT} when the deadline elapses
+     */
+    public MessageResult sendPrompt(String sessionId, String model, String systemPrompt,
+            List<String> textParts, Duration timeout) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("model", model);
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            body.put("system", systemPrompt);
+        }
+        ArrayNode parts = body.putArray("parts");
+        for (String text : textParts) {
+            parts.addObject().put("type", "text").put("text", text == null ? "" : text);
+        }
+        String path = "/session/" + sessionId + "/message";
+        Duration effectiveTimeout = timeout != null ? timeout : requestTimeout;
+        HttpResponse<String> resp = sendNoRetry("POST", path, toJson(body), effectiveTimeout);
+        if (resp.statusCode() / 100 != 2) {
+            throw refusalError(path, resp.statusCode(), resp.body());
+        }
+        MessageResult result = parseMessageResult(resp.body());
+        if (result.providerError() != null) {
+            throw providerError("OpenCode returned an assistant message error for " + path + ": "
+                    + result.providerError());
+        }
+        return result;
+    }
+
+    /**
+     * Parsed native assistant message envelope of {@link #sendPrompt}.
+     *
+     * @param rawJson       the exact response body (forwarded to CoreEvent payloads)
+     * @param messageId     id of the response {@code Message} (null when absent)
+     * @param finalOutput   concatenated text parts of the response
+     * @param inputTokens   reported prompt tokens, null when the core reported none
+     * @param outputTokens  reported completion tokens, null when the core reported none
+     * @param observedModel the model the core reports it used, null when unreported
+     * @param providerError flattened {@code info.error} diagnosis, null when the message succeeded
+     */
+    public record MessageResult(String rawJson, String messageId, String finalOutput,
+            Long inputTokens, Long outputTokens, String observedModel, String providerError) {
+    }
+
+    /** Parse one native assistant message envelope; missing members stay unknown. */
+    public MessageResult parseMessageResult(String body) {
+        JsonNode root = parse(body);
+        JsonNode info = root.path("info");
+        JsonNode parts = root.path("parts");
+
+        String messageId = info.path("id").asText(null);
+        StringBuilder text = new StringBuilder();
+        if (parts.isArray()) {
+            for (JsonNode part : parts) {
+                if ("text".equals(part.path("type").asText())) {
+                    String t = part.path("text").asText();
+                    if (!t.isBlank()) {
+                        if (!text.isEmpty()) {
+                            text.append('\n');
+                        }
+                        text.append(t);
+                    }
+                }
+            }
+        }
+        JsonNode tokens = info.path("tokens");
+        Long inputTokens = tokens.has("input") ? tokens.path("input").asLong() : null;
+        Long outputTokens = tokens.has("output") ? tokens.path("output").asLong() : null;
+        String observedModel = info.path("modelID").isTextual() ? info.path("modelID").asText() : null;
+        return new MessageResult(body, messageId, text.toString(), inputTokens, outputTokens,
+                observedModel, flattenProviderError(info.path("error")));
+    }
+
+    /** The recorded provider-failure member: {@code error.name} plus {@code error.data.message}. */
+    private static String flattenProviderError(JsonNode error) {
+        if (!error.isObject()) {
+            return null;
+        }
+        String name = error.path("name").asText(null);
+        String message = error.path("data").path("message").asText(null);
+        return (name == null ? "error" : name) + ": " + (message == null ? "" : message);
+    }
+
+    /**
+     * The refusal diagnosis of a non-2xx message response: the native provider
+     * error envelope when the body carries one, the bare status otherwise.
+     */
+    private TaskExecutionException refusalError(String path, int status, String body) {
+        String detail = null;
+        try {
+            JsonNode error = objectMapper.readTree(body).path("error");
+            if (error.isObject()) {
+                detail = error.path("data").path("message").asText(null);
+                if (detail == null) {
+                    detail = error.path("message").asText(null);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Could not parse the OpenCode refusal body: {}", body);
+        }
+        String message = "OpenCode refused POST " + path + " (status " + status + ")"
+                + (detail == null ? "" : ": " + detail);
+        return providerError(message);
     }
 
     /**

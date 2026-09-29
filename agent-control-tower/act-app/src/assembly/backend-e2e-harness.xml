@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Deterministic core E2E harness distribution (Task 16).
+
+  The ZIP is the test distribution the harness launcher runs on: it is NOT an
+  executable fat jar. `CoreE2eApplication` is started on the ordinary classpath
+  `app/ + harness/ + lib/*` and resolves the mock protocol peers and the built
+  Qoder ACP bridge as assets from the extracted tree (peers/ + scenarios.json,
+  bridge/).
+
+  Contents:
+    app/      production classes and resources of act-app (the same revision as
+              the fixture-free backend-jar)
+    harness/  the dedicated io.aria.conductor.app.e2e package plus the selected
+              act-test-support classes only (never the act-app test tree)
+    lib/      act-app's runtime dependency jars
+    peers/    the committed mock protocol executables and their scenario
+              manifest (peers read ../scenarios.json)
+    bridge/   the built Qoder ACP bridge dist tree (pnpm build output; the
+              dist directory is git-ignored and is rebuilt by this profile)
+-->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>backend-e2e-harness</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <fileSets>
+        <!-- Production application classes and resources. -->
+        <fileSet>
+            <directory>${project.build.outputDirectory}</directory>
+            <outputDirectory>app</outputDirectory>
+        </fileSet>
+        <!-- Dedicated harness classes. The intended launcher classes are pinned
+             individually by exact class file name (fix round 1) instead of globbing
+             io/aria/conductor/app/e2e/**, so a class whose name merely starts with a
+             pinned one (e.g. a *Test) cannot ride in on a wildcard: the harness
+             classpath carries no test framework. A new class in that package must be
+             added here on purpose, and to the packaging test's exact shipped set. -->
+        <fileSet>
+            <directory>${project.build.testOutputDirectory}</directory>
+            <outputDirectory>harness</outputDirectory>
+            <includes>
+                <include>io/aria/conductor/app/e2e/CoreE2eApplication.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eConfiguration.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eConfiguration$CoreE2eSettings.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eConfiguration$SandboxTransport.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eSetup.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eSetup$SetupRefusal.class</include>
+                <include>io/aria/conductor/app/e2e/DeterministicLlmClient.class</include>
+                <!-- Task 19 peer-launch wiring: the harness control routes, the scenario
+                     registry, the worker-token custody, the process transport and the
+                     two peer-backed core adapters. Pinned individually like the launcher
+                     classes above, so a class whose name merely starts with a pinned one
+                     cannot ride in on a wildcard. -->
+                <include>io/aria/conductor/app/e2e/CoreE2eController.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eController$ScenarioSelection.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eGitHubMock.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eScenarios.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eWorkerTokens.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eProcessBackend.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eProcessBackend$State.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eOpenCodeAdapter$PeerSession.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eQoderAdapter.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eQoderAdapter$SuspendableSession.class</include>
+                <!-- Fix round 1: the bounded authenticated endpoint readiness wait
+                     the adapters use before opening a session (the production host
+                     backend's launch-gate mirror). Its Probe interface is a nested
+                     class file like the other carriers above. -->
+                <include>io/aria/conductor/app/e2e/CoreE2eEndpointReadiness.class</include>
+                <include>io/aria/conductor/app/e2e/CoreE2eEndpointReadiness$Probe.class</include>
+            </includes>
+        </fileSet>
+        <!-- Selected support classes, unpacked explicitly in the profile. -->
+        <fileSet>
+            <directory>${project.build.directory}/e2e-support</directory>
+            <outputDirectory>harness</outputDirectory>
+        </fileSet>
+        <!-- Runtime dependency jars (includeScope=runtime in the profile). -->
+        <fileSet>
+            <directory>${project.build.directory}/e2e-lib</directory>
+            <outputDirectory>lib</outputDirectory>
+        </fileSet>
+        <!-- Mock protocol executables plus the scenario manifest they load from the
+             tree root (peer-actions.mjs reads join(peers/, '..', 'scenarios.json')). -->
+        <fileSet>
+            <directory>${project.basedir}/src/test/resources/e2e</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>scenarios.json</include>
+                <include>peers/mock-opencode.mjs</include>
+                <include>peers/mock-qoder.mjs</include>
+                <include>peers/peer-actions.mjs</include>
+            </includes>
+        </fileSet>
+        <!-- Built Qoder ACP bridge (packages/qoder-acp-bridge/dist, rebuilt by the profile). -->
+        <fileSet>
+            <directory>${e2e.bridge.dir}/dist</directory>
+            <outputDirectory>bridge</outputDirectory>
+        </fileSet>
+    </fileSets>
+</assembly>

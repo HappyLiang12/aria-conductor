@@ -10,10 +10,7 @@ import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.AdkSystemProperties;
-import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.maintenance.LegacySetupService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,16 +18,27 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.ApplicationArguments;
-import org.springframework.core.env.Environment;
 
-import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+/**
+ * Startup behavior of {@link AriaDefaultAgentInitializer} after the Task 18
+ * cutover: the Aria row is created through {@link LegacySetupService} on the
+ * supported {@code opencode}+{@code SANDBOX} built-in, an existing row is never
+ * rewritten, orchestration-tool assignment/pruning is unchanged, a step failure
+ * degrades instead of killing the boot, and no provider is ever pre-warmed
+ * (the permanent ADK pre-warm and its DEGRADED reconciler are gone with the
+ * LangChain runtime).
+ */
 @ExtendWith(MockitoExtension.class)
 class AriaDefaultAgentInitializerTest {
 
@@ -38,9 +46,7 @@ class AriaDefaultAgentInitializerTest {
     @Mock ToolDefinitionRepository toolDefinitionRepository;
     @Mock AgentToolRepository agentToolRepository;
     @Mock LlmProviderRepository llmProviderRepository;
-    @Mock AdkProviderRegistry adkProviderRegistry;
-    @Mock AdkProvider adkProvider;
-    @Mock Environment environment;
+    @Mock LegacySetupService legacySetupService;
     @Mock ApplicationArguments args;
 
     private Agent ariaAgent;
@@ -50,161 +56,66 @@ class AriaDefaultAgentInitializerTest {
         ariaAgent = Agent.builder()
                 .id(AriaConstants.ARIA_AGENT_ID)
                 .name("Aria")
-                .role("AI operator assistant")
                 .agentType(AgentType.NATIVE)
-                .adkProvider("langchain")
+                .adkProvider(LegacySetupService.BUILTIN_CORE)
+                .executionMode(LegacySetupService.BUILTIN_MODE)
                 .config("{\"maxToolCallRounds\":15}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
-        // The registry resolves whichever agent instance reaches the pre-warm
-        // lenient: profile-skip and recovery no-op tests never reach the resolve
-        lenient().when(adkProviderRegistry.resolve(any(Agent.class))).thenReturn(adkProvider);
     }
 
     @Test
-    void preWarmsAdk_whenNotTestProfile() {
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+    void createsAriaThroughLegacySetupService_whenMissing() {
+        when(legacySetupService.initializeMissingAria(any())).thenReturn(ariaAgent);
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(Optional.of(
+                io.aria.conductor.common.model.LlmProvider.builder().name("p").active(true).build()));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
+                agentToolRepository, llmProviderRepository, legacySetupService).run(args);
 
-        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
-    }
-
-    @Test
-    void survivesPreWarmFailure_whenOpencodeProviderThrowsTaskExecutionException() {
-        // Real failure mode (CI / local dev): OpenSandbox unreachable at pre-warm time makes
-        // OpenCodeAdkProvider.prepareAgent throw TaskExecutionException(SANDBOX_UNAVAILABLE).
-        // A transient pre-warm failure must NOT kill the JVM — the sandbox is created lazily
-        // on first real use (executeTask -> getOrPrepareInstance -> prepareInstance).
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                "OpenCode sandbox setup failed for agent: connection refused"))
-                .when(adkProvider).prepareAgent(any(), any());
-
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
-
-        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
-        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
-    }
-
-    @Test
-    void survivesPreWarmFailure_whenLangchainProviderThrowsIllegalState() {
-        // LangChainAdkProvider.prepareAgent throws IllegalStateException when the Python ADK
-        // subprocess never becomes ready — equally transient, must not kill startup.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        doThrow(new IllegalStateException("ADK server did not become ready within 60s"))
-                .when(adkProvider).prepareAgent(any(), any());
-
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
-
-        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
-        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
-    }
-
-    @Test
-    void marksAriaDegradedNotHealthy_whenPreWarmFails() {
-        // The pre-warm failed, so the agent must not be presented as fully ready:
-        // the persisted health stamp after the failure must be DEGRADED, never HEALTHY.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        doThrow(new IllegalStateException("ADK down")).when(adkProvider).prepareAgent(any(), any());
-
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
-        initializer.run(args);
-
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository, atLeastOnce()).save(captor.capture());
-        // last persisted state = post-pre-warm health stamp
-        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
-    }
-
-    @Test
-    void createdAriaGetsConfigAndDefaultProvider_evenWhenPreWarmFails() {
-        // On CREATE the initializer applies the managed config (taskApprovalRequired=false,
-        // round limit, system prompt) and the configured default provider; a pre-warm
-        // failure still completes startup and stamps DEGRADED. (Existing Aria records are
-        // never rewritten — see the UpsertTest operator-edits-survive coverage.)
-        AdkSystemProperties opencodeProps = new AdkSystemProperties();
-        opencodeProps.setDefaultProvider("opencode");
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
-        when(agentRepository.findAll()).thenReturn(java.util.List.of());
-        // Spring Data save() never returns null — the initializer keeps the managed
-        // instance, so model the persist contract (returns the entity itself).
-        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                "OpenCode sandbox setup failed"))
-                .when(adkProvider).prepareAgent(any(), any());
-
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
-
-        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
-
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository, atLeastOnce()).save(captor.capture());
-        Agent persisted = captor.getValue();
-        assertThat(persisted.getConfig())
+        ArgumentCaptor<String> config = ArgumentCaptor.forClass(String.class);
+        verify(legacySetupService).initializeMissingAria(config.capture());
+        assertThat(config.getValue())
                 .contains("\"taskApprovalRequired\":false")
                 .contains("\"maxToolCallRounds\":15")
-                .contains("systemPrompt");
-        assertThat(persisted.getAdkProvider()).isEqualTo("opencode");
-        assertThat(persisted.getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
+                .contains("You are Aria");
+        // the initializer never writes the agent row itself: creation belongs to the
+        // create-only setup service
+        verify(agentRepository, never()).save(any(Agent.class));
     }
 
     @Test
-    void skipsPreWarm_whenTestProfile() {
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
+    void neverPreWarmsOrStampsHealth() {
+        when(legacySetupService.initializeMissingAria(any())).thenReturn(ariaAgent);
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(Optional.of(
+                io.aria.conductor.common.model.LlmProvider.builder().name("p").active(true).build()));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
+                agentToolRepository, llmProviderRepository, legacySetupService).run(args);
 
-        verify(adkProvider, never()).prepareAgent(any(), any());
+        // no health stamp, no pre-warm, no DEGRADED write
+        verify(agentRepository, never()).save(any(Agent.class));
     }
 
     @Test
-    void skipsPreWarm_whenNoopLlmProfile() {
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"noop-llm"});
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-
-        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
-
-        verify(adkProvider, never()).prepareAgent(any(), any());
+    void permanentPreWarmAndItsReconcilerAreGone() {
+        // The Task 18 removal assertion: no permanent pre-warm seam and no DEGRADED
+        // recovery reconciler survives from the LangChain era.
+        assertThatThrownBy(() -> AriaDefaultAgentInitializer.class.getMethod("recoverDegradedAria"))
+                .isInstanceOf(NoSuchMethodException.class);
     }
 
     @Test
     void assignsOnlyOrchestrationTools_andPrunesOthers() {
         // #25: Aria must receive only orchestration tools (e.g. run_agent) and any previously-granted
         // non-orchestration tool (e.g. git_push) must be pruned at startup.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
         ToolDefinition runAgent = ToolDefinition.builder().id("tool-run_agent").name("run_agent").enabled(true).build();
         ToolDefinition gitPush = ToolDefinition.builder().id("tool-git_push").name("git_push").enabled(true).build();
         when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of(runAgent, gitPush));
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(Optional.of(
+                io.aria.conductor.common.model.LlmProvider.builder().name("p").active(true).build()));
         // Aria currently holds git_push (to be pruned) but not run_agent (to be added).
         when(agentToolRepository.findToolIdsByAgentId(AriaConstants.ARIA_AGENT_ID.toString()))
                 .thenReturn(java.util.List.of("tool-git_push"));
@@ -212,203 +123,37 @@ class AriaDefaultAgentInitializerTest {
                 .thenReturn(false);
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
+                agentToolRepository, llmProviderRepository, legacySetupService).run(args);
 
         verify(agentToolRepository).save(any()); // run_agent assigned
         verify(agentToolRepository).deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), "tool-git_push"));
     }
 
     @Test
-    void sddPrompt_containsIssueRepoAndFeedbackGuidanceInSavedConfig() {
-        // Config (incl. the SDD-aware system prompt) is written on CREATE.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
-
-        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties()).run(args);
-
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository).save(captor.capture());
-        String config = captor.getValue().getConfig();
-        assertThat(config).contains("pass issueRepo");
-        assertThat(config).contains("answer trivial questions");
-    }
-
-    // ---- Fresh-install boot-crash regression (stale-snapshot NULL created_at) ----
-
-    @Test
-    void freshDb_preWarmFailure_degradedWriteNeverCarriesNullCreatedAt() {
-        // Regression for the fresh-install boot crash: on a fresh DB the CREATE save()
-        // runs as a JPA merge (assigned UUID id, no @Version) — @PrePersist fills
-        // createdAt only on the managed COPY that Spring Data returns, and the
-        // builder-created original keeps createdAt=null. When the ADK pre-warm then
-        // throws, re-saving that stale snapshot issued "update agents set created_at=NULL"
-        // → H2 NOT NULL violation → DataIntegrityViolationException killed the boot.
-        // The degraded stamp must operate on an entity with populated audit columns.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        AdkSystemProperties opencodeProps = new AdkSystemProperties();
-        opencodeProps.setDefaultProvider("opencode");
-        final Agent[] committedRow = new Agent[1];
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
-                .thenReturn(Optional.empty()) // step 1: fresh DB, row absent
-                .thenAnswer(inv -> Optional.ofNullable(committedRow[0])); // catch-path re-read: row committed by the create
-        // save() models JPA merge on an assigned id: Hibernate persists a managed COPY
-        // (@PrePersist fires on the copy) and returns it — the detached argument is
-        // never mutated (merge does not copy callback state back into the source).
-        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> {
-            Agent detached = inv.getArgument(0);
-            Agent managed = Agent.builder()
-                    .id(detached.getId())
-                    .name(detached.getName())
-                    .role(detached.getRole())
-                    .agentType(detached.getAgentType())
-                    .adkProvider(detached.getAdkProvider())
-                    .config(detached.getConfig())
-                    .healthStatus(detached.getHealthStatus())
-                    .build();
-            managed.setUpdatedAt(detached.getUpdatedAt());
-            managed.setCreatedAt(detached.getCreatedAt() != null ? detached.getCreatedAt() : Instant.now());
-            committedRow[0] = managed;
-            return managed;
-        });
-        doThrow(new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                "OpenCode sandbox setup failed for agent: connection refused"))
-                .when(adkProvider).prepareAgent(any(), any());
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
-
-        // the boot must complete (no constraint violation escapes run())
-        assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
-
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository, atLeastOnce()).save(captor.capture());
-        // the last persisted write is the DEGRADED stamp...
-        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
-        // ...and it must NEVER carry a NULL created_at (the live crash wrote created_at=NULL)
-        assertThat(captor.getValue().getCreatedAt()).isNotNull();
-    }
-
-    @Test
-    void preWarmFailure_degradedStampWritesFreshlyLoadedEntity_notPreWarmSnapshot() {
-        // The pre-warm runs for 10-60s+; an operator edit landing inside that window
-        // must not be silently reverted by the DEGRADED stamp merging the pre-warm
-        // snapshot. The catch path must re-read the agent and stamp THAT entity.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        Agent preWarmSnapshot = Agent.builder()
-                .id(AriaConstants.ARIA_AGENT_ID)
-                .name("Aria")
-                .role("AI operator assistant")
-                .agentType(AgentType.NATIVE)
-                .adkProvider("opencode")
-                .config("{\"maxToolCallRounds\":15}")
-                .healthStatus(HealthStatus.HEALTHY)
-                .createdAt(Instant.now())
-                .build();
-        Agent operatorEdited = Agent.builder()
-                .id(AriaConstants.ARIA_AGENT_ID)
-                .name("Aria (operator renamed)")
-                .role("operator-tuned role")
-                .agentType(AgentType.NATIVE)
-                .adkProvider("opencode")
-                .config("{\"taskApprovalRequired\":true}")
-                .healthStatus(HealthStatus.HEALTHY)
-                .createdAt(Instant.now())
-                .build();
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID))
-                .thenReturn(Optional.of(preWarmSnapshot)) // step 1 load
-                .thenReturn(Optional.of(operatorEdited)); // catch-path re-read: operator edit landed during pre-warm
-        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
-        doThrow(new IllegalStateException("ADK server did not become ready within 60s"))
-                .when(adkProvider).prepareAgent(any(), any());
-        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenReturn(java.util.List.of());
-        when(llmProviderRepository.findByActiveTrue()).thenReturn(java.util.Optional.empty());
-
-        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment,
-                new AdkSystemProperties()).run(args);
-
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository, atLeastOnce()).save(captor.capture());
-        // the persisted DEGRADED stamp reflects the current DB row (operator edit intact),
-        // never the stale snapshot taken before the pre-warm
-        assertThat(captor.getValue().getName()).isEqualTo("Aria (operator renamed)");
-        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
-    }
-
-    @Test
     void stepFailureDuringInitialization_degradesAndBootsInsteadOfAborting() {
-        // Boot hardening: steps 1-3 run in the HIGHEST_PRECEDENCE ApplicationRunner —
-        // any exception there used to abort the JVM before every other runner (latent
-        // fresh-install crash; the DEGRADED reconciler could never retry because the
-        // app was dead). A failure must be caught (ERROR logged) and startup continues;
+        // Boot hardening: the initializer runs in the HIGHEST_PRECEDENCE ApplicationRunner —
+        // an exception there must be caught (ERROR logged) and startup must continue;
         // every step is idempotent and retried on the next boot.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"test"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.empty());
-        // step 2 (legacy-provider migration under the opencode default) hits a DB hiccup
-        when(agentRepository.findAll()).thenThrow(new RuntimeException("db hiccup"));
-        AdkSystemProperties opencodeProps = new AdkSystemProperties();
-        opencodeProps.setDefaultProvider("opencode");
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, opencodeProps);
+        when(legacySetupService.initializeMissingAria(any()))
+                .thenThrow(new RuntimeException("db hiccup"));
 
+        AriaDefaultAgentInitializer initializer = new AriaDefaultAgentInitializer(agentRepository,
+                toolDefinitionRepository, agentToolRepository, llmProviderRepository, legacySetupService);
+
+        // no exception escapes
         assertThatCode(() -> initializer.run(args)).doesNotThrowAnyException();
     }
 
-    // ---- DEGRADED recovery reconciler (called directly — test-friendly) ----
-
     @Test
-    void degradedRecovery_stampsHealthy_whenPreWarmSucceeds() {
-        // DEGRADED must not be a terminal state: the reconciler retries the pre-warm
-        // and, on success, re-stamps HEALTHY (previously nothing ever reset DEGRADED).
-        ariaAgent.setHealthStatus(HealthStatus.DEGRADED);
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
+    void toolAssignmentFailureIsCaught() {
+        when(toolDefinitionRepository.findAllApprovedAndEnabled()).thenThrow(new RuntimeException("db hiccup"));
+        when(legacySetupService.initializeMissingAria(any())).thenReturn(ariaAgent);
+        when(llmProviderRepository.findByActiveTrue()).thenReturn(Optional.of(
+                io.aria.conductor.common.model.LlmProvider.builder().name("p").active(true).build()));
 
         new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties())
-                .recoverDegradedAria();
+                agentToolRepository, llmProviderRepository, legacySetupService).run(args);
 
-        verify(adkProvider).prepareAgent(AriaConstants.ARIA_AGENT_ID, ariaAgent);
-        ArgumentCaptor<Agent> captor = ArgumentCaptor.forClass(Agent.class);
-        verify(agentRepository).save(captor.capture());
-        assertThat(captor.getValue().getHealthStatus()).isEqualTo(HealthStatus.HEALTHY);
-    }
-
-    @Test
-    void degradedRecovery_isNoOp_whenAriaHealthy() {
-        // HEALTHY agents are not probed and not re-saved by the reconciler.
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-
-        new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties())
-                .recoverDegradedAria();
-
-        verify(adkProvider, never()).prepareAgent(any(), any());
-        verify(agentRepository, never()).save(any(Agent.class));
-    }
-
-    @Test
-    void degradedRecovery_staysDegraded_whenPreWarmStillFails() {
-        // A still-failing pre-warm keeps the agent DEGRADED, never throws out of the
-        // scheduled method, and does not write a bogus HEALTHY stamp.
-        ariaAgent.setHealthStatus(HealthStatus.DEGRADED);
-        when(environment.getActiveProfiles()).thenReturn(new String[]{"prod"});
-        when(agentRepository.findById(AriaConstants.ARIA_AGENT_ID)).thenReturn(Optional.of(ariaAgent));
-        doThrow(new IllegalStateException("ADK server still not ready"))
-                .when(adkProvider).prepareAgent(any(), any());
-
-        var initializer = new AriaDefaultAgentInitializer(agentRepository, toolDefinitionRepository,
-                agentToolRepository, llmProviderRepository, adkProviderRegistry, environment, new AdkSystemProperties());
-
-        assertThatCode(() -> initializer.recoverDegradedAria()).doesNotThrowAnyException();
-
-        assertThat(ariaAgent.getHealthStatus()).isEqualTo(HealthStatus.DEGRADED);
-        verify(agentRepository, never()).save(any(Agent.class));
+        verify(agentToolRepository, never()).save(any());
     }
 }

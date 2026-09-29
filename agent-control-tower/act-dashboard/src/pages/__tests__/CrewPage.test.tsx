@@ -18,6 +18,7 @@ vi.mock('../../api/dashboard', () => ({
 }));
 vi.mock('../../api/adk', () => ({
   listAdkProviders: vi.fn().mockResolvedValue([]),
+  getAdkProviderHealth: vi.fn().mockResolvedValue({ providerId: 'opencode', healthy: true }),
 }));
 vi.mock('../../components/AgentCard', () => ({
   AgentCard: ({ agent, onSelect, selected }: {
@@ -171,6 +172,200 @@ describe('CrewPage bulk retire (H3)', () => {
     expect(retireAgent).toHaveBeenCalledWith('a-1');
     expect(retireAgent).toHaveBeenCalledWith('a-3');
     expect(retireAgent).not.toHaveBeenCalledWith('a-2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 15: governed core + explicit execution mode + Host workspace binding.
+// ---------------------------------------------------------------------------
+
+/** The two governed cores as the (post-Task-3) provider inventory serves them. */
+const GOVERNED_CORES = [
+  {
+    id: 'opencode',
+    displayName: 'OpenCode',
+    supportsTaskExecution: true,
+    isDefault: true,
+    executionModes: ['HOST', 'SANDBOX'],
+  },
+  {
+    id: 'qoder',
+    displayName: 'Qoder',
+    supportsTaskExecution: true,
+    isDefault: false,
+    executionModes: ['HOST', 'SANDBOX'],
+  },
+];
+
+describe('CrewPage core, mode and Host workspace selection (Task 15)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { listAdkProviders, getAdkProviderHealth } = await import('../../api/adk');
+    (listAdkProviders as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getAdkProviderHealth as ReturnType<typeof vi.fn>).mockResolvedValue({
+      providerId: 'opencode',
+      healthy: true,
+    });
+    // clearAllMocks keeps implementations; reset per-test so a template seeded
+    // by one case never leaks into the next.
+    const { getTemplates } = await import('../../api/agents');
+    (getTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  /** Open the Add Agent dialog against the governed core inventory. */
+  async function openWithGovernedCores() {
+    const { listAdkProviders } = await import('../../api/adk');
+    (listAdkProviders as ReturnType<typeof vi.fn>).mockResolvedValue(GOVERNED_CORES);
+    ui();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add Agent' }));
+  }
+
+  it('offers the governed cores with an explicit mode selector and no removed-core fallback', async () => {
+    await openWithGovernedCores();
+
+    expect(await screen.findByText('OpenCode')).toBeInTheDocument();
+    expect(screen.getByLabelText('Execution mode').textContent).toBe('Sandbox');
+    expect(screen.queryByText('LangChain ADK')).not.toBeInTheDocument();
+
+    // The declared default core is applied explicitly (never an invented one).
+    await waitFor(() => expect(screen.getByLabelText('Agent core')).toHaveValue('opencode'));
+  });
+
+  it('shows an explicit unavailable state instead of a removed-core fallback', async () => {
+    const { listAdkProviders } = await import('../../api/adk');
+    (listAdkProviders as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    ui();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add Agent' }));
+
+    expect(
+      await screen.findByText('Agent core inventory unavailable — no governed core was reported.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('LangChain ADK')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hire Agent' })).toBeDisabled();
+  });
+
+  it('keeps submission closed while the core inventory is still loading', async () => {
+    const { listAdkProviders } = await import('../../api/adk');
+    (listAdkProviders as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    const { createAgent } = await import('../../api/agents');
+    ui();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add Agent' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'No-Core-Yet' } });
+
+    // The inventory is the only core source: until it answers, no payload with
+    // an empty `adkProvider` may leave the dialog.
+    const hire = screen.getByRole('button', { name: 'Hire Agent' });
+    expect(hire).toBeDisabled();
+    fireEvent.click(hire);
+    expect(createAgent).not.toHaveBeenCalled();
+  });
+
+  it('never preselects Host and reveals the Host workspace inputs only for Host', async () => {
+    await openWithGovernedCores();
+    await screen.findByText('OpenCode');
+
+    expect(screen.getByLabelText('Execution mode').textContent).toBe('Sandbox');
+    expect(screen.queryByLabelText('Repository path')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Direct directory')).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText('Execution mode'));
+    await user.click(screen.getByRole('option', { name: 'Host' }));
+
+    expect(screen.getByLabelText('Execution mode').textContent).toBe('Host');
+    // Host workspace defaults to a managed worktree over an admitted repository.
+    expect(screen.getByLabelText('Host workspace mode')).toHaveValue('WORKTREE');
+    expect(screen.getByLabelText('Repository path')).toBeInTheDocument();
+    expect(screen.getByLabelText('Base ref (optional)')).toBeInTheDocument();
+    // A worktree without a repository path is not submittable.
+    expect(screen.getByRole('button', { name: 'Hire Agent' })).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText('Host workspace mode'), 'DIRECT');
+    // Direct is never inferred, demands an explicit directory and drops base ref.
+    expect(screen.getByLabelText('Direct directory')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Repository path')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Base ref (optional)')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hire Agent' })).toBeDisabled();
+  });
+
+  it('requires an explicit choice for a template carrying a removed core', async () => {
+    const { getTemplates } = await import('../../api/agents');
+    (getTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 't-legacy',
+        label: 'Legacy LangChain role',
+        agentType: 'ADK',
+        role: 'dev',
+        model: 'gpt-4o-mini',
+        provider: 'openai',
+        adkProvider: 'langchain',
+        description: 'pre-cutover template',
+      },
+    ]);
+    await openWithGovernedCores();
+    await screen.findByText('OpenCode');
+
+    fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'dev' } });
+
+    expect(screen.getByLabelText('Agent core')).toHaveValue('langchain');
+    expect(screen.getByText('Unsupported agent core: langchain')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hire Agent' })).toBeDisabled();
+  });
+
+  it('submits the explicit core, mode and Host workspace binding', async () => {
+    const { createAgent } = await import('../../api/agents');
+    (createAgent as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'agent-1' });
+    await openWithGovernedCores();
+    await screen.findByText('OpenCode');
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText('Name'), 'Atlas-7');
+    await user.click(screen.getByLabelText('Execution mode'));
+    await user.click(screen.getByRole('option', { name: 'Host' }));
+    await user.type(screen.getByLabelText('Repository path'), '/srv/repos/atlas');
+    await user.type(screen.getByLabelText('Base ref (optional)'), 'main');
+
+    await user.click(screen.getByRole('button', { name: 'Hire Agent' }));
+
+    await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(1));
+    expect(createAgent).toHaveBeenCalledWith({
+      name: 'Atlas-7',
+      agentType: 'NATIVE',
+      role: 'dev',
+      model: undefined,
+      provider: 'openai',
+      description: undefined,
+      adkProvider: 'opencode',
+      executionMode: 'HOST',
+      workspaceMode: 'WORKTREE',
+      workspacePath: '/srv/repos/atlas',
+      workspaceBaseRef: 'main',
+      config: { maxToolCallRounds: 15 },
+    });
+  });
+
+  it('sends no workspace binding for a sandbox run', async () => {
+    const { createAgent } = await import('../../api/agents');
+    (createAgent as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'agent-2' });
+    await openWithGovernedCores();
+    await screen.findByText('OpenCode');
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText('Name'), 'Sandbox-1');
+    await user.click(screen.getByRole('button', { name: 'Hire Agent' }));
+
+    await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(1));
+    expect(createAgent).toHaveBeenCalledWith({
+      name: 'Sandbox-1',
+      agentType: 'NATIVE',
+      role: 'dev',
+      model: undefined,
+      provider: 'openai',
+      description: undefined,
+      adkProvider: 'opencode',
+      executionMode: 'SANDBOX',
+      config: { maxToolCallRounds: 15 },
+    });
   });
 });
 

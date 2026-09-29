@@ -23,7 +23,7 @@ export const agentTools = [
       description: z.string().optional().describe('Agent description'),
       systemPrompt: z.string().optional().describe('System prompt for the agent'),
       modelId: z.string().optional().describe('LLM model identifier'),
-      adkProvider: z.enum(['langchain']).optional().describe('ADK runtime provider: langchain'),
+      adkProvider: z.enum(['qoder', 'opencode']).optional().describe('ADK runtime core: qoder or opencode'),
     }),
     handler: async (body: Record<string, unknown>) => toJsonResult(await http.post('/api/v1/agents', body)),
   },
@@ -36,7 +36,7 @@ export const agentTools = [
       description: z.string().optional().describe('Agent description'),
       systemPrompt: z.string().optional().describe('System prompt'),
       modelId: z.string().optional().describe('LLM model identifier'),
-      adkProvider: z.enum(['langchain']).optional().describe('ADK runtime provider: langchain'),
+      adkProvider: z.enum(['qoder', 'opencode']).optional().describe('ADK runtime core: qoder or opencode'),
     }),
     handler: async ({ id, ...body }: { id: string;[k: string]: unknown }) =>
       toJsonResult(await http.put(`/api/v1/agents/${id}`, body)),

@@ -51,7 +51,7 @@ public class AgentTools implements McpTool {
     }
 
     @Tool(name = "create_agent",
-            description = "Create an agent. agentType is optional and defaults to NATIVE; ADK agents run on the Python runtime.")
+            description = "Create an agent. agentType is optional and defaults to NATIVE; ADK agents run on a governed core (qoder or opencode).")
     public String createAgent(
             @ToolParam(description = "Agent name") String name,
             @ToolParam(description = "Agent role, e.g. orchestrator, worker, developer", required = false) String role,
@@ -59,7 +59,7 @@ public class AgentTools implements McpTool {
             @ToolParam(description = "Agent description", required = false) String description,
             @ToolParam(description = "LLM model id", required = false) String model,
             @ToolParam(description = "LLM provider name", required = false) String provider,
-            @ToolParam(description = "ADK provider name, e.g. langchain", required = false) String adkProvider,
+            @ToolParam(description = "ADK core name: qoder or opencode", required = false) String adkProvider,
             @ToolParam(description = "Extra agent config", required = false) Map<String, Object> config) {
         try {
             AgentType type = agentType == null || agentType.isBlank()

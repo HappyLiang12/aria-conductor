@@ -116,7 +116,7 @@ public class AgentToolHandler implements ToolHandler {
                 .agentType(AgentType.NATIVE)
                 .model(model)
                 .provider(provider)
-                .adkProvider("langchain")
+                .adkProvider("opencode")
                 .build();
         AgentResponse resp = agentService.createAgent(req);
         return "Agent '" + name + "' created (id: " + resp.getId() + ", model: " + model + ")";

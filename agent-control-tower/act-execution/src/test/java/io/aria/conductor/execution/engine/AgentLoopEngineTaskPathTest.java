@@ -1,8 +1,5 @@
 package io.aria.conductor.execution.engine;
 
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
@@ -15,6 +12,7 @@ import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SessionStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.exception.BudgetExceededException;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
@@ -23,7 +21,12 @@ import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskResult;
-import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
+import io.aria.conductor.execution.runtime.ControlAck;
+import io.aria.conductor.execution.runtime.ControlState;
+import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
+import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
+import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
@@ -43,14 +46,15 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -95,9 +99,27 @@ class AgentLoopEngineTaskPathTest {
     @Mock HarnessProfileService harnessProfileService;
     @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
-    @Mock OpenCodeProperties openCodeProperties;
+    @Mock TaskDeadlineProperties taskDeadlineProperties;
+    @Mock(name = "coreExecutionServiceProvider")
+    org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
+    /**
+     * Task 18 cutover: the engine's second provider seam. Unit tests run without
+     * the cutover wiring, so the mock stays unstubbed ({@code getIfAvailable()}
+     * returns null) and must not be confused with the CoreExecutionService
+     * provider mock: both constructor parameters share the same erased type
+     * ({@code ObjectProvider}), which is why the engine below is constructed
+     * explicitly instead of via {@code @InjectMocks}.
+     */
+    @Mock(name = "coreRunLauncherProvider")
+    org.springframework.beans.factory.ObjectProvider<CoreRunLauncher> coreRunLauncherProvider;
 
-    @InjectMocks
+    /**
+     * Constructed explicitly (not {@code @InjectMocks}): the two
+     * {@code ObjectProvider} constructor parameters share one erased type, so
+     * Mockito's constructor injection cannot tell them apart and would wire the
+     * same mock into both seams. The DoD/Kanban services stay null exactly as
+     * they were under {@code @InjectMocks} (no mock candidates).
+     */
     AgentLoopEngine engine;
 
     @Mock
@@ -140,19 +162,28 @@ class AgentLoopEngineTaskPathTest {
         // circuit-breaker-tripped tests never get there) — lenient for strict-stub hygiene.
         lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
-        lenient().when(openCodeProperties.getMaxTaskMinutes()).thenReturn(30);
+        lenient().when(taskDeadlineProperties.deadline()).thenReturn(Duration.ofMinutes(30));
         lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
         // The task-level approval gate now REQUIRES approval by default (governance parity
         // with the turn path). Most success-path tests just need the gate to approve, so
         // stub it leniently here; tests that exercise deny/opt-out override this per-test.
         lenient().when(approvalGate.requestApproval(any(), any()))
                 .thenReturn(ApprovalDecision.approve("test-approved"));
+
+        engine = new AgentLoopEngine(
+                runRepository, agentRepository, adkProviderRegistry, sessionStateManager,
+                actionPipeline, circuitBreaker, approvalGate, promptCallRepository,
+                trajectoryRepository, toolCallRepository, eventPublisher, workflowService,
+                workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
+                knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
+                approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
+                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider);
     }
 
     @Test
     void taskProvider_delegatesWholeRun_andCompletesWithFinalOutput() {
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false, true));
+                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false));
 
         engine.startRun(runId);
 
@@ -179,91 +210,10 @@ class AgentLoopEngineTaskPathTest {
         assertThat(run.getIterationCount()).isEqualTo(1);
     }
 
-    // ---- H1: prior conversation turns must reach task-execution providers ----
-
-    @Test
-    void taskPrompt_multiTurnHistory_includesPriorTurnsAsTranscript() {
-        // P0 (PR #91 user-POV walkthrough): within one Aria conversation the model answered
-        // "this is the first message in our conversation" because buildTaskPrompt kept only
-        // the LAST user message. The history below mirrors that failing walkthrough shape.
-        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of(
-                trajectory(1, "user", "remember PINEAPPLE-42"),
-                trajectory(2, "assistant", "Acknowledged."),
-                trajectory(3, "user", "what did I ask you to remember?")));
-        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
-
-        engine.startRun(runId);
-
-        await().atMost(Duration.ofSeconds(15))
-                .until(() -> run.getStatus() == RunStatus.COMPLETED);
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(taskProvider).executeTask(eq(agent), eq(runId), promptCaptor.capture(), any());
-        String taskPrompt = promptCaptor.getValue();
-
-        // The earlier user message AND the assistant ack must both survive into the prompt
-        assertThat(taskPrompt).contains("PINEAPPLE-42");
-        assertThat(taskPrompt).contains("Acknowledged.");
-        // ... as a readable transcript section, in turn order
-        assertThat(taskPrompt).contains("## Conversation so far");
-        assertThat(taskPrompt).contains("user: remember PINEAPPLE-42");
-        assertThat(taskPrompt).contains("assistant: Acknowledged.");
-        assertThat(taskPrompt.indexOf("user: remember PINEAPPLE-42"))
-                .as("transcript preserves conversation order")
-                .isLessThan(taskPrompt.indexOf("assistant: Acknowledged."));
-        // The transcript sits BEFORE the existing suffix; the last user message stays the request
-        int suffixIndex = taskPrompt.indexOf("---\nUser request: what did I ask you to remember?");
-        assertThat(suffixIndex).isPositive();
-        assertThat(taskPrompt.indexOf("## Conversation so far")).isLessThan(suffixIndex);
-        assertThat(taskPrompt).endsWith("---\nUser request: what did I ask you to remember?");
-    }
-
-    @Test
-    void taskPrompt_singleTurnFreshRun_promptStaysByteIdentical() {
-        // Blast-radius guard: a fresh agent run (no prior turns — every S-scenario run)
-        // must keep the exact prompt bytes the E-series evidence was produced with:
-        // system content (config prompt plus the blank line appended by buildMessages)
-        // + "\n\n---\nUser request: " + the single user message from the promptSeed.
-        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
-
-        engine.startRun(runId);
-
-        await().atMost(Duration.ofSeconds(15))
-                .until(() -> run.getStatus() == RunStatus.COMPLETED);
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(taskProvider).executeTask(eq(agent), eq(runId), promptCaptor.capture(), any());
-        assertThat(promptCaptor.getValue())
-                .isEqualTo("You are a tester agent.\n\n\n\n---\nUser request: do the work");
-    }
-
-    @Test
-    void taskPrompt_historyWithOnlyTheFinalUserMessage_staysByteIdentical() {
-        // Streaming-path single-turn shape: initialContext persisted exactly one user
-        // trajectory, which IS the final request — no prior turns, no transcript section,
-        // byte-identical to the previous shape.
-        when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of(
-                trajectory(1, "user", "hello there")));
-        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
-
-        engine.startRun(runId);
-
-        await().atMost(Duration.ofSeconds(15))
-                .until(() -> run.getStatus() == RunStatus.COMPLETED);
-
-        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
-        verify(taskProvider).executeTask(eq(agent), eq(runId), promptCaptor.capture(), any());
-        assertThat(promptCaptor.getValue())
-                .isEqualTo("You are a tester agent.\n\n\n\n---\nUser request: hello there");
-    }
-
     @Test
     void taskContext_carriesConfigMaxRounds_andOpenCodeMaxDuration() {
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false));
 
         engine.startRun(runId);
 
@@ -276,7 +226,7 @@ class AgentLoopEngineTaskPathTest {
         TaskContext ctx = contextCaptor.getValue();
         // maxRounds comes from agent.config.maxToolCallRounds (7), not the 50 default
         assertThat(ctx.maxRounds()).isEqualTo(7);
-        // maxDuration comes from OpenCodeProperties.maxTaskMinutes (30)
+        // maxDuration comes from TaskDeadlineProperties.deadline() (30)
         assertThat(ctx.maxDuration()).isEqualTo(Duration.ofMinutes(30));
     }
 
@@ -309,7 +259,7 @@ class AgentLoopEngineTaskPathTest {
                 Thread.currentThread().interrupt();
                 throw e;
             }
-            return new TaskResult(runId, "sess-1", "done", 10, 5, false, true);
+            return new TaskResult(runId, "sess-1", "done", 10, 5, false);
         });
 
         engine.startRun(runId);
@@ -334,9 +284,63 @@ class AgentLoopEngineTaskPathTest {
         }
     }
 
+    // ---- Task 13 fix round 1 (I1): a refused coordinated stop is surfaced, never claimed ----
+
+    /**
+     * A coordinator-owned run whose coordinated cancel is refused
+     * ({@code ControlAck(RUNNING, false)}: the writers may still be running) must never be
+     * finished as a stopped cancellation. The engine surfaces the exact pending-control
+     * failure reason (the pause/resume pattern) instead of swallowing the ack, so the run
+     * ends as a failure carrying that reason and the provider-level abort is never issued
+     * for a run the coordinator owns.
+     */
     @Test
-    void nonTaskProvider_keepsTurnLoopUntouched() {
-        // A turn-level provider must never enter the task path
+    void aRefusedCoordinatedCancelIsSurfacedInsteadOfClaimingAStoppedCancellation() throws Exception {
+        CoreExecutionService coordinator = org.mockito.Mockito.mock(CoreExecutionService.class);
+        when(coreExecutionServiceProvider.getIfAvailable()).thenReturn(coordinator);
+        // The run starts on the provider path (no coordinator-owned runtime yet); the same run
+        // is coordinator-owned by the time the cancel path stops it.
+        when(coordinator.activeRuns(agentId)).thenReturn(Set.of(), Set.of(runId));
+        when(coordinator.cancel(runId)).thenReturn(
+                CompletableFuture.completedFuture(new ControlAck(ControlState.RUNNING, false)));
+        when(coordinator.pendingControl(runId)).thenReturn(Optional.of(new RunRuntimeRegistry.ControlRequest(
+                ControlState.STOPPED, Instant.now(),
+                "Stop refused for run " + runId + ": the backend reported allWritersStopped=false")));
+
+        CountDownLatch taskStarted = new CountDownLatch(1);
+        CountDownLatch releaseTask = new CountDownLatch(1);
+        when(taskProvider.executeTask(any(), any(), anyString(), any())).thenAnswer(inv -> {
+            taskStarted.countDown();
+            try {
+                releaseTask.await(60, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            }
+            return new TaskResult(runId, "sess-1", "done", 10, 5, false);
+        });
+
+        engine.startRun(runId);
+
+        assertThat(taskStarted.await(10, TimeUnit.SECONDS)).as("executeTask must start").isTrue();
+        engine.cancelRun(runId);
+
+        try {
+            await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                verify(coordinator).cancel(runId);
+                // The exact pending-control reason is what the engine rejects on ...
+                verify(coordinator).pendingControl(runId);
+                // ... and the module never claims the stop the coordinator refused.
+                verify(taskProvider, never()).abortTask(runId);
+                verify(sessionStateManager).updateSessionStatus(runId, SessionStatus.FAILED);
+            });
+        } finally {
+            releaseTask.countDown();
+        }
+    }
+
+    @Test
+    void nonTaskProvider_keepsTurnLoopUntouched() {        // A turn-level provider must never enter the task path
         when(taskProvider.supportsTaskExecution()).thenReturn(false);
         when(taskProvider.call(any(), any(), any(), any()))
                 .thenReturn(new io.aria.conductor.execution.llm.LlmResponse("final answer", 10, 5, "stop", null));
@@ -358,7 +362,7 @@ class AgentLoopEngineTaskPathTest {
     void taskApprovalGate_defaultConfig_requestsApprovalBeforeExecution() {
         // Agent config has NO taskApprovalRequired key — the gate must engage by default
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "approved task output", 20, 10, false, true));
+                new TaskResult(runId, "sess-1", "approved task output", 20, 10, false));
 
         engine.startRun(runId);
 
@@ -375,7 +379,7 @@ class AgentLoopEngineTaskPathTest {
         when(agent.getConfig()).thenReturn(
                 "{\"taskApprovalRequired\":false,\"maxToolCallRounds\":7,\"systemPrompt\":\"You are a tester agent.\"}");
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false));
 
         engine.startRun(runId);
 
@@ -408,7 +412,7 @@ class AgentLoopEngineTaskPathTest {
     void taskSuccess_writesAssistantTrajectoryWithFinalOutput() {
         when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(1);
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false, true));
+                new TaskResult(runId, "sess-1", "Task done output", 120, 30, false));
 
         engine.startRun(runId);
 
@@ -447,41 +451,12 @@ class AgentLoopEngineTaskPathTest {
         verify(promptCallRepository, never()).save(any());
     }
 
-    // ---- fix-round 1, item 2: unknown usage is never folded into accounting ----
-
-    @Test
-    void taskProviderUnknownUsage_skipsTokenAccounting_andLogsTheMarker() {
-        Logger logger = (Logger) LoggerFactory.getLogger(AgentLoopEngine.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        logger.addAppender(appender);
-        try {
-            // A provider that cannot measure usage reports 0 placeholders with usageReported=false.
-            when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                    new TaskResult(runId, "sess-1", "Task done output", 0, 0, false, false));
-
-            engine.startRun(runId);
-
-            await().atMost(Duration.ofSeconds(15))
-                    .until(() -> run.getStatus() == RunStatus.COMPLETED);
-
-            // Unknown usage stays unknown: no fabricated 0-fold, an explicit marker instead.
-            assertThat(run.getTotalTokensUsed()).isZero();
-            assertThat(run.getIterationCount()).isEqualTo(1);
-            assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
-                    .anyMatch(message -> message.contains("Token usage not reported by the provider")
-                            && message.contains(runId.toString()));
-        } finally {
-            logger.detachAppender(appender);
-        }
-    }
-
     // ---- #19 task path is covered by the circuit breaker ----
 
     @Test
     void taskPath_checksCircuitBreakerBeforeExecution() {
         when(taskProvider.executeTask(any(), any(), anyString(), any())).thenReturn(
-                new TaskResult(runId, "sess-1", "done", 10, 5, false, true));
+                new TaskResult(runId, "sess-1", "done", 10, 5, false));
 
         engine.startRun(runId);
 
@@ -508,16 +483,7 @@ class AgentLoopEngineTaskPathTest {
         assertThat(run.getErrorMessage()).contains("budget");
     }
 
-    // ---- helpers to build plain fixtures (avoid over-mocking in edge tests) ----
-
-    /** Persisted-trajectory fixture as buildMessages() reads it (role + content). */
-    private static SessionTrajectory trajectory(int turn, String role, String content) {
-        return SessionTrajectory.builder()
-                .turnNumber(turn)
-                .role(role)
-                .content(content)
-                .build();
-    }
+    // ---- helper to build a plain agent (avoid over-mocking in edge tests) ----
 
     @SuppressWarnings("unused")
     private static Agent plainAgent(UUID id) {

@@ -17,11 +17,6 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Setup LangChain ADK venv
-        run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Install reactor (skip tests)
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Restore PIT history cache
@@ -52,20 +47,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
       - uses: pnpm/action-setup@v4
         with:
           version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: pip-audit (langchain-adk)
-        continue-on-error: true
-        run: |
-          pip install pip-audit
-          cd langchain-adk && pip-audit -r requirements.txt || true
       - name: pnpm audit (mcp-server)
         continue-on-error: true
         run: cd packages/mcp-server && pnpm install --frozen-lockfile && pnpm audit --audit-level=high || true

@@ -127,10 +127,12 @@ public class AriaService {
         // Execute via unified engine with prior conversation context
         agentLoopEngine.startRun(run.getId(), priorMessages);
 
-        // Poll for completion (synchronous non-streaming contract)
+        // Poll for completion (synchronous non-streaming contract). Every read must
+        // observe the engine's committed progress, not the request-scoped snapshot
+        // (see readCommittedState).
         int polls = 0;
         while (polls < 120) {
-            Run current = runRepository.findById(run.getId()).orElse(null);
+            RunRepository.RunStateView current = readCommittedState(run.getId());
             if (current != null && (current.getStatus() == RunStatus.COMPLETED
                     || current.getStatus() == RunStatus.FAILED
                     || current.getStatus() == RunStatus.CANCELLED)) {
@@ -162,7 +164,7 @@ public class AriaService {
         // Timeout: grace wait for budget exhaustion summary (takes 2-5s for LLM call)
         log.warn("Aria sync chat exceeded the sync window for run {} — grace wait for final output", run.getId());
         try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        Run finalCheck = runRepository.findById(run.getId()).orElse(null);
+        RunRepository.RunStateView finalCheck = readCommittedState(run.getId());
         if (finalCheck != null && (finalCheck.getStatus() == RunStatus.COMPLETED
                 || finalCheck.getStatus() == RunStatus.FAILED)) {
             String output = finalCheck.getFinalOutput();
@@ -187,6 +189,17 @@ public class AriaService {
                 .actionsTaken(buildActionsTaken(run.getId()))
                 .timestamp(Instant.now())
                 .build();
+    }
+
+    /**
+     * Reads the run's committed status and output. Open Session In View binds the
+     * persistence context to this HTTP request, so {@code findById} serves the very
+     * instance this request saved (PENDING) for the whole poll and the loop would
+     * never observe the engine's terminal state; refreshing that instance fails
+     * without a transaction. The projection query always issues its SELECT.
+     */
+    private RunRepository.RunStateView readCommittedState(UUID runId) {
+        return runRepository.findStateById(runId).orElse(null);
     }
 
     String buildSystemPrompt() {

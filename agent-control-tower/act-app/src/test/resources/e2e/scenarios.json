@@ -1,0 +1,423 @@
+{
+  "schemaVersion": 1,
+  "description": "Deterministic protocol-peer scenarios for the Agent Core execution-modes harness. Scenario selection is harness-only and authenticated; the peers are test artifacts and must never be packaged into a production image.",
+  "source": "docs/superpowers/specs/2026-09-22-agent-core-execution-modes-design.md section 8.2 plus e2e/agent-core/fixtures recordings from Task 1",
+  "control": {
+    "harnessOnly": true,
+    "controlTokenEnv": "ARIA_PEER_CONTROL_TOKEN",
+    "runIdEnv": "ARIA_PEER_RUN_ID",
+    "scenarioArgv": "--scenario",
+    "scenarioEnv": "ARIA_PEER_SCENARIO",
+    "workspaceArgv": "--workspace",
+    "workspaceEnv": "ARIA_PEER_WORKSPACE",
+    "portArgv": "--port",
+    "bindAddress": "127.0.0.1",
+    "databaseAccess": false,
+    "notes": [
+      "A peer refuses to start unless ARIA_PEER_CONTROL_TOKEN (>= 16 characters) is present in its environment.",
+      "The scenario is chosen at launch time; there is no per-request scenario selection route.",
+      "The mock OpenCode control routes require the same token as an x-peer-control-token header.",
+      "A non-numeric or out-of-range --port fails closed with the usage exit code (peer.invalid_port), never with a NaN listen throw.",
+      "Fixture writes happen only through applyDecision() after a genuine allow-once decision, confined to the admitted workspace by the helper itself."
+    ]
+  },
+  "fixtures": {
+    "models": {
+      "available": ["efficient", "qmodel_38max", "qfmodel"],
+      "default": "efficient"
+    },
+    "options": {
+      "edit": [
+        { "optionId": "proceed_always", "name": "Allow for this session", "kind": "allow_always" },
+        { "optionId": "proceed_once", "name": "Allow", "kind": "allow_once" },
+        { "optionId": "cancel", "name": "Reject", "kind": "reject_once" }
+      ],
+      "execute": [
+        { "optionId": "proceed_always_and_save", "nameTemplate": "Always allow \"${program}\"", "kind": "allow_always" },
+        { "optionId": "proceed_once", "name": "Allow", "kind": "allow_once" },
+        { "optionId": "cancel", "name": "Reject", "kind": "reject_once" }
+      ]
+    },
+    "writer": {
+      "files": ["spawn-writer.mjs", "writer.mjs"],
+      "command": "node spawn-writer.mjs ticks.log",
+      "logName": "ticks.log",
+      "intervalMs": 50
+    },
+    "notes": [
+      "Framing, message envelopes, permission options, cancel semantics and control evidence are taken from the sanitized Task 1 recordings (qoder-host-cli-1.1.61-protocol.jsonl/-events.json, opencode-host-cli-1.14.31-events.json).",
+      "Permission options are declared per tool kind because the recording offers proceed_always/\"Allow for this session\" for edit requests (protocol.jsonl lines 41/66/136) and proceed_always_and_save/\"Always allow \\\"<program>\\\"\" for execute requests (lines 84/165); the permission-request toolCall copy is built per kind (edit: title \"Edit <basename>\" and diff _meta.kind=add present; execute: identical to the tool_call update).",
+      "Fixture message texts for failures the recording does not contain (handshake rejection, unsupported model, provider error) reuse the recorded error envelope (-32000 / name+data shape); the texts themselves are fixture-defined.",
+      "The vendor available_commands_update list is deliberately not reproduced; the peers advertise a minimal fixture command list in the recorded envelope shape."
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "complete",
+      "title": "Handshake, session creation, model acknowledgment, streaming and normal completion",
+      "prompt": "Reply with exactly the single word: pong",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "frames": ["initialize", "session/new", "session/set_model", "session/prompt", "session/update*", "prompt result end_turn"],
+        "writes": 0,
+        "stopReason": "end_turn",
+        "exit": "0 after stdin close"
+      },
+      "opencode": {
+        "http": ["GET /global/health", "POST /session", "POST /session/:id/message", "GET /session/:id/message", "POST /session/:id/abort"],
+        "writes": 0,
+        "model": "efficient"
+      },
+      "expected": ["no fixture write", "no external model request", "acknowledged model equals the requested model"]
+    },
+    {
+      "id": "reported-usage",
+      "title": "Completion that reports the observed model and the fixture usage counters",
+      "prompt": "Reply with the fixture completion",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "frames": ["initialize", "session/new", "session/set_model", "session/prompt", "session/update*", "prompt result end_turn"],
+        "usage": { "inputTokens": 12, "outputTokens": 7, "totalTokens": 19 },
+        "observedModel": "efficient",
+        "finalOutput": "fixture-complete",
+        "writes": 0
+      },
+      "opencode": {
+        "http": ["POST /session", "POST /session/:id/message"],
+        "tokens": { "input": 12, "output": 7 },
+        "modelID": "efficient",
+        "finalOutput": "fixture-complete",
+        "writes": 0
+      },
+      "expected": ["exact recorded usage values pass through", "the observed model comes from the core's report"]
+    },
+    {
+      "id": "sdd-qa-pass",
+      "title": "SDD QA step: the deterministic PASS verdict the chain router consumes",
+      "prompt": "QA the dev output and report your verdict",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "frames": ["initialize", "session/new", "session/set_model", "session/prompt", "session/update*", "prompt result end_turn"],
+        "usage": { "inputTokens": 12, "outputTokens": 7, "totalTokens": 19 },
+        "observedModel": "efficient",
+        "finalOutput": "fixture-qa-report\nVERDICT=PASS",
+        "writes": 0
+      },
+      "opencode": {
+        "http": ["POST /session", "POST /session/:id/message"],
+        "tokens": { "input": 12, "output": 7 },
+        "modelID": "efficient",
+        "finalOutput": "fixture-qa-report\nVERDICT=PASS",
+        "writes": 0
+      },
+      "expected": [
+        "the QA run completes with the fixture report text",
+        "the trailing VERDICT=PASS marker is the verdict the SDD router applies"
+      ]
+    },
+    {
+      "id": "unknown-usage",
+      "title": "The core reports no usage counters and no observed model: unknown stays unknown",
+      "prompt": "Reply with the fixture completion",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "result": "no usage member and no _meta.quota member",
+        "finalOutput": "fixture-usage-unknown",
+        "writes": 0
+      },
+      "opencode": {
+        "info": "no tokens member and no modelID member",
+        "finalOutput": "fixture-usage-unknown",
+        "writes": 0
+      },
+      "expected": ["unknown usage is null, never zero", "the requested model is never reported as an observed model"]
+    },
+    {
+      "id": "two-turn-nonce",
+      "title": "Two turns of one session: the core echoes the exact context it received",
+      "prompt": "Reply with the exact text you received",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "echo": "the agent_message_chunk text is the exact text of the received prompt",
+        "stopReason": "end_turn",
+        "writes": 0
+      },
+      "opencode": {
+        "echo": "the assistant message text is the exact received text parts joined by a newline",
+        "records": ["peer.message_request"],
+        "writes": 0
+      },
+      "expected": ["the second turn carries the exact prior user and assistant messages as context", "no fixture write and no permission request"]
+    },
+    {
+      "id": "write-twice",
+      "title": "Two permission requests with distinct ids: one granted write, one denied write",
+      "prompt": "Create the fixture file, then run the fixture command",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "requests": [
+          { "id": 0, "kind": "edit", "toolName": "Write", "target": "probe-allow-once.txt", "contents": "alpha-allow-once" },
+          { "id": 1, "kind": "execute", "toolName": "Bash", "target": "probe-write-twice-2.txt", "contents": "gamma-permission-twice" }
+        ],
+        "stopReason": "end_turn"
+      },
+      "opencode": {
+        "decisionGate": "POST /__peer/decision",
+        "requests": [
+          { "id": 0, "kind": "edit", "target": "probe-allow-once.txt", "contents": "alpha-allow-once" },
+          { "id": 1, "kind": "execute", "target": "probe-write-twice-2.txt", "contents": "gamma-permission-twice" }
+        ]
+      },
+      "expected": ["allow-once writes the exact bytes", "denial creates no file", "distinct request ids and toolCallIds"]
+    },
+    {
+      "id": "deny-write",
+      "title": "Denial leaves the pre-existing bytes untouched",
+      "prompt": "Overwrite probe-deny.txt with the fixture text",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "requests": [{ "id": 0, "kind": "edit", "toolName": "Write", "target": "probe-deny.txt", "contents": "beta-should-not-exist" }],
+        "stopReason": "end_turn",
+        "toolCallStatus": "failed"
+      },
+      "opencode": {
+        "decisionGate": "POST /__peer/decision",
+        "requests": [{ "id": 0, "kind": "edit", "target": "probe-deny.txt", "contents": "beta-should-not-exist" }]
+      },
+      "expected": ["original bytes unchanged", "no additional file created"]
+    },
+    {
+      "id": "git-push",
+      "title": "The governed git_push tool call: a PUSH-tier ask, then the approved push lands on the named remote",
+      "prompt": "Push branch e2e-pack-gate-<unique> to origin.",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "request": {
+          "kind": "execute",
+          "toolName": "git_push",
+          "command": "git push origin HEAD:refs/heads/<branch named by the prompt>"
+        },
+        "push": "only after a genuine allow-once decision: git push <remote> HEAD:refs/heads/<branch>, cwd = the admitted run worktree",
+        "stopReason": "end_turn"
+      },
+      "opencode": {
+        "request": {
+          "kind": "execute",
+          "toolName": "git_push",
+          "command": "git push origin HEAD:refs/heads/<branch named by the prompt>"
+        },
+        "decisionGate": "POST /__peer/decision (the message response is held until the decision resolves)",
+        "push": "only after a genuine allow-once decision: git push <remote> HEAD:refs/heads/<branch>, cwd = the admitted run worktree"
+      },
+      "expected": [
+        "the platform registers the native permission request with the recorded execute option set (proceed_once/cancel are the decidable one-use grant and the reject option)",
+        "a denial pushes nothing",
+        "an allow-once decision lands exactly the worktree HEAD on refs/heads/<branch> of the remote the prompt named"
+      ]
+    },
+    {
+      "id": "permission-expiry",
+      "title": "A pending permission expires and a late decision is refused",
+      "prompt": "Create probe-expiry.txt with the fixture text",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "request": { "id": 0, "kind": "edit", "target": "probe-expiry.txt", "contents": "epsilon-expired" },
+        "windowMs": 300,
+        "records": ["peer.permission_expired", "peer.late_decision"],
+        "stopReason": "end_turn"
+      },
+      "opencode": {
+        "request": { "id": 0, "kind": "edit", "target": "probe-expiry.txt", "contents": "epsilon-expired" },
+        "windowMs": 300
+      },
+      "expected": ["no write on expiry", "late allow-once decision produces no write"]
+    },
+    {
+      "id": "cancel-pending",
+      "title": "Cancel during a pending permission request",
+      "prompt": "Create probe-cancel-pending.txt with the fixture text",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "request": { "id": 0, "kind": "edit", "target": "probe-cancel-pending.txt", "contents": "gamma-cancel-pending" },
+        "cancel": "session/cancel notification while the request is unanswered",
+        "stopReason": "cancelled"
+      },
+      "opencode": {
+        "request": { "id": 0, "kind": "edit", "target": "probe-cancel-pending.txt", "contents": "gamma-cancel-pending" },
+        "cancel": "POST /session/:id/abort while the decision is pending"
+      },
+      "expected": ["no write", "stopReason cancelled"]
+    },
+    {
+      "id": "pause-resume",
+      "title": "Process-level suspension: no outputs or writes advance while suspended, both resume afterwards",
+      "prompt": "Run this exact command with the Bash tool: node spawn-writer.mjs ticks.log. Keep streaming until cancelled",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "request": { "id": 0, "kind": "execute", "target": "ticks.log", "contents": "fixture-writer-start\n" },
+        "streaming": "agent_message_chunk every 1000 ms until cancelled",
+        "controlTechnique": "process suspension of the owned tree (Task 1: nativePauseRpcUsed false)",
+        "nativePauseRpc": false
+      },
+      "opencode": {
+        "request": { "id": 0, "kind": "execute", "target": "ticks.log", "contents": "fixture-writer-start\n" },
+        "streaming": "assistant message parts appended every 1000 ms until aborted",
+        "controlTechnique": "process suspension of the owned tree (Task 1: nativePauseRpcUsed false)",
+        "nativePauseRpc": false
+      },
+      "expected": ["zero new frames and zero byte growth while suspended", "streaming and writer growth resume after resume"]
+    },
+    {
+      "id": "malformed-frame",
+      "title": "Malformed, oversized and split protocol frames",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "emits": [
+          "truncated JSON object line",
+          "single line larger than 1 MiB that is still valid JSON",
+          "valid frame delivered as two partial writes"
+        ],
+        "continues": true
+      },
+      "opencode": {
+        "emits": ["truncated JSON body on POST /session/:id/message"],
+        "continues": true
+      },
+      "expected": ["the adapter must fail explicitly on malformed input", "the peer must keep serving afterwards"]
+    },
+    {
+      "id": "disconnect",
+      "title": "Core disconnects mid-prompt without a result",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "beforeDrop": "two agent_thought_chunk updates",
+        "exitCode": 7
+      },
+      "opencode": {
+        "beforeDrop": "response body truncated and the socket destroyed"
+      },
+      "expected": ["no prompt result is delivered", "the adapter reports the disconnect as a failure"]
+    },
+    {
+      "id": "invalid-auth",
+      "title": "Invalid authentication is rejected without a session",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "method": "session/new",
+        "error": { "code": -32000, "message": "Authentication required: Authentication is required." },
+        "recorded": true
+      },
+      "opencode": {
+        "method": "POST /session",
+        "status": 401,
+        "body": { "error": "unauthorized", "message": "invalid authentication" }
+      },
+      "expected": ["no session is created", "no provider fallback is attempted"]
+    },
+    {
+      "id": "unsupported-model",
+      "title": "Unsupported model is refused without a core or model fallback",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "method": "session/set_model",
+        "error": { "code": -32000, "message": "Unsupported model id: <requested id>" },
+        "exitCode": 3
+      },
+      "opencode": {
+        "method": "POST /session/:id/message",
+        "status": 400,
+        "body": { "error": { "name": "APIError", "data": { "message": "Unsupported model id: <requested id>", "statusCode": 400, "isRetryable": false } } }
+      },
+      "expected": ["explicit model rejection", "no prompt execution"]
+    },
+    {
+      "id": "unsupported-mode",
+      "title": "Unsupported mode/control methods are refused with -32601, never invented",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "methods": ["session/set_mode", "session/pause"],
+        "error": { "code": -32601, "message": "Method not found" }
+      },
+      "opencode": {
+        "methods": ["POST /session/:id/pause"],
+        "status": 404
+      },
+      "expected": ["no pause/resume RPC exists in the peer protocol"]
+    },
+    {
+      "id": "timeout",
+      "title": "A hung core leaves the request unanswered while staying alive",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "hangsOn": "session/new",
+        "record": "peer.request_pending"
+      },
+      "opencode": {
+        "hangsOn": "POST /session/:id/message"
+      },
+      "expected": ["the caller timeout must fire", "the peer process stays alive"]
+    },
+    {
+      "id": "handshake-failure",
+      "title": "Handshake rejection is explicit and terminal",
+      "prompt": "Reply with the fixture acknowledgment",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "method": "initialize",
+        "error": { "code": -32000, "message": "Handshake rejected: fixture core does not accept protocolVersion 1" },
+        "exitCode": 3
+      },
+      "opencode": {
+        "method": "GET /global/health",
+        "status": 503,
+        "body": { "healthy": false, "version": "1.14.31" }
+      },
+      "expected": ["no session is created", "no retry with another core"]
+    },
+    {
+      "id": "background-writer",
+      "title": "A controlled background child keeps writing after prompt completion",
+      "prompt": "Run this exact command with the Bash tool: node spawn-writer.mjs ticks.log. Then reply with the exact text DONE",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "request": { "id": 0, "kind": "execute", "target": "ticks.log", "contents": "fixture-writer-start\n" },
+        "stopReason": "end_turn",
+        "child": "node spawn-writer.mjs ticks.log",
+        "childSurvivesPromptCompletion": true
+      },
+      "opencode": {
+        "request": { "id": 0, "kind": "execute", "target": "ticks.log", "contents": "fixture-writer-start\n" },
+        "child": "node spawn-writer.mjs ticks.log",
+        "childSurvivesMessageCompletion": true
+      },
+      "expected": [
+        "the writer keeps growing after the completion event",
+        "stopping the writer freezes the bytes",
+        "the writer is a real descendant process"
+      ]
+    },
+    {
+      "id": "non-cooperative",
+      "title": "Non-cooperative shutdown ignores a cooperative cancel and a stdin close",
+      "prompt": "Run this exact command with the Bash tool: node spawn-writer.mjs ticks.log. Then reply with the exact text DONE",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "ignores": ["session/cancel notification", "stdin close"],
+        "child": "node spawn-writer.mjs ticks.log",
+        "escalation": "the harness must terminate the owned tree"
+      },
+      "opencode": {
+        "ignores": ["POST /session/:id/abort"],
+        "child": "node spawn-writer.mjs ticks.log",
+        "escalation": "the harness must terminate the owned tree"
+      },
+      "expected": ["the peer and the writer survive the cooperative cancel", "terminating the tree kills both and freezes the bytes"]
+    }
+  ]
+}

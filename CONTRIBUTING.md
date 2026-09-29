@@ -43,13 +43,14 @@ After switching branches, run `mvn install -DskipTests` once so dependent module
 
 - Java: Follow existing code conventions (no enforced formatter yet)
 - TypeScript/React: Prettier + ESLint (configured in project)
-- Python: Follow PEP 8
 
 ### Testing
 
 - Run Java tests: `cd agent-control-tower && mvn test`
 - Run frontend build check: `cd agent-control-tower/act-dashboard && pnpm build`
-- Run Python tests: `cd langchain-adk && pytest`
+- Run frontend unit tests: `cd agent-control-tower/act-dashboard && pnpm test`
+- Run MCP server tests: `cd packages/mcp-server && pnpm test`
+- Run the core cutover contract checks: `node --test e2e/agent-core/cutover-contract.test.mjs`
 
 ### Commit Messages
 

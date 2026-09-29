@@ -1,119 +1,146 @@
-# Aria Conductor - Qoder CLI Sandbox Template Image
-# Pre-installs the Qoder CLI (agent runtime) for OpenSandbox sandboxes.
-# Build: podman build -t aria-conductor/qoder-sandbox:0.1 agent-control-tower/qoder-sandbox
+# Aria Conductor - Qoder Sandbox Template Image
+# Runs the governed run-owned Qoder ACP bridge (packages/qoder-acp-bridge) and
+# the pinned Qoder CLI inside a run-owned OpenSandbox sandbox.
 #
-# Artifact provenance (verified 2026-09-17; see e2e/qoder/slice-a/01-boot.md):
-#   - Official install methods (Qoder docs, https://docs.qoder.com/cli/installation):
-#       1) install script:  curl -fsSL https://qoder.com/install | bash
-#       2) npm package:     npm install -g @qoder-ai/qodercli
-#   - The install script resolves a per-version release manifest
-#     (https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/channels/<version>/manifest.json)
-#     that lists each platform archive URL together with its sha256 checksum.
-#   - This image pins that exact archive URL + checksum instead of piping a remote
-#     script into bash, so the build is reproducible and the artifact is checksum-verified.
-#   - The `amd64` (not `amd64-baseline`) artifact is the one the official install script
-#     selects when the CPU exposes sse4_2/popcnt/avx/avx2/bmi1/bmi2/fma (verified for the
-#     OpenSandbox podman VM on this machine).
-#   - No credentials are baked into this image; the CLI is not configured or logged in here.
+# Build (context = repository root: the image consumes the bridge source tree
+# and the shared runtime-sandbox scripts, and its dist/ tree is git-ignored, so
+# the image BUILDS the bridge rather than copying a build artifact):
 #
-# B4 image contents (CLI + bridge + plugin; evidence: e2e/qoder/slice-b/01-image.md):
-#   - The sandbox bridge (bridge/, TypeScript ESM) is compiled in the `bridge-builder`
-#     stage with `npm ci && npm run build`; only `dist/` and `package.json` reach the
-#     final image, so the image never consumes host-built node_modules/dist output
-#     (.dockerignore keeps both out of the build context).
-#   - The pinned plugin bundle (plugin/) is baked verbatim at /opt/qoder/plugin, root-owned and
-#     mode-normalized (see the normalization layer below); the bridge loads it explicitly via
-#     its C0.3 step-1 spawn argv `--plugin-dir /opt/qoder/plugin` (amended 2026-09-18; design §7.2).
-#   - Auto-update is disabled for the pinned CLI by baking the documented user-settings
-#     key `general.enableAutoUpdate=false` into $HOME/.qoder/settings.json. The key is
-#     present in the pinned 1.1.41 binary (in-image `grep -a -o 'general.enableAutoUpdate'`
-#     returns 8 occurrences / 4 matching lines). That the CLI honors it on the
-#     `qodercli --acp` entry path the bridge uses is NOT yet exercised; verify it with a
-#     real sandbox in C6.
-#   - The container runs as the non-root `node` user (uid/gid 1000); /workspace and the
-#     CLI config root are owned by it. The bridge listens on 4097 inside the sandbox.
-
-# ---------------------------------------------------------------------------------------
-# Stage 1: compile the sandbox bridge from source (clean checkout, no host-built artifacts)
-# ---------------------------------------------------------------------------------------
-FROM node:22-slim AS bridge-builder
-
-WORKDIR /build/bridge
-# Manifests first so the dependency layer is cached independently of the sources.
-COPY bridge/package.json bridge/package-lock.json ./
-RUN npm ci
-COPY bridge/tsconfig.json ./
-COPY bridge/src ./src
-RUN npm run build
-
-# ---------------------------------------------------------------------------------------
-# Stage 2: final image - pinned CLI + compiled bridge + pinned plugin bundle
-# ---------------------------------------------------------------------------------------
-FROM node:22-slim
-
-ARG QODERCLI_VERSION=1.1.41
-ARG QODERCLI_LINUX_X64_SHA256=1c2d174b098eb472a9ac19a80b89a664fdcb7d37dca09e64f44243faa4e3eca7
-ARG QODERCLI_LINUX_X64_URL=https://qoder-ide.oss-accelerate.aliyuncs.com/qodercli/releases/${QODERCLI_VERSION}/qodercli-linux-x64.tar.gz
-
-# node:22-slim ships no curl; the archive layout is the one the official install
-# script expects (a single `qodercli` binary at the archive root).
+#   docker build -t aria-conductor/qoder-sandbox:1.0 \
+#     -f agent-control-tower/qoder-sandbox/Dockerfile \
+#     --build-arg QODER_CLI_VERSION=<pinned version> \
+#     --build-arg QODER_CLI_ARTIFACT_URL=<pinned https artifact url> \
+#     --build-arg QODER_CLI_SHA256=<sha256 of that artifact> \
+#     --build-arg QODER_CLI_LICENSE_ACCEPTED=yes .
 #
-# The archive is extracted into a dedicated directory instead of `-C /tmp`: its first
-# entry is `./` (dir, mode 0700), and GNU tar applies that entry's metadata to the
-# extraction target itself, which would corrupt /tmp for the non-root `node` user
-# (observed: /tmp became 0700 and qodercli then failed to create its native-module
-# staging dir: "EACCES ... mkdir '/tmp/.setup-qodercli-natives-*'"). The extraction
-# target is removed in the same layer; the final `test` re-asserts that /tmp itself
-# still carries its standard metadata.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL --retry 2 --connect-timeout 30 --max-time 300 "$QODERCLI_LINUX_X64_URL" -o /tmp/qodercli.tar.gz \
-    && echo "$QODERCLI_LINUX_X64_SHA256  /tmp/qodercli.tar.gz" | sha256sum -c - \
-    && mkdir -p /tmp/qodercli-extract \
-    && tar -xzf /tmp/qodercli.tar.gz -C /tmp/qodercli-extract \
-    && install -m 0755 /tmp/qodercli-extract/qodercli /usr/local/bin/qodercli \
-    && rm -rf /tmp/qodercli-extract /tmp/qodercli.tar.gz \
-    && HOME=/tmp/qodercli-smoke qodercli --version \
-    && rm -rf /tmp/qodercli-smoke /tmp/qodercli-natives-* \
-    && test "$(stat -c '%a %u:%g' /tmp)" = "1777 0:0"
+# NOT VERIFIED as of this task: Task 1 recorded that no Linux qodercli artifact
+# has been verified yet (the only observed standalone CLI is the operator's
+# Windows build, qodercli 1.1.61), and no OpenSandbox server or image exists on
+# the implementation machine. The build therefore REFUSES to run without an
+# explicitly pinned, checksum-verified Linux artifact and an explicit license
+# acceptance -- it never falls back to "latest" and never installs an unpinned
+# binary. The artifact URL, its version pin and its license terms are operator
+# inputs (the CLI is a proprietary Qoder artifact; the image bakes in no
+# credentials and no license keys).
+#
+# Isolation contract (specified, not optional):
+#   * runs as the unprivileged user `aria` (uid 10001);
+#   * contains NO host credential material and NO container-runtime socket;
+#   * a core is only ever started through /opt/aria/launch.mjs with a trusted
+#     launch manifest uploaded by the backend (explicit argv, shell: false);
+#   * the per-run Qoder credential and the bridge's per-run control secret are
+#     injected through the launch manifest environment, never baked in;
+#   * /opt/aria/stop-writers.mjs stops the bridge and its CLI child (and their
+#     descendants) while leaving the Sandbox export facility (execd) alive.
 
-# Compiled bridge from stage 1. package.json must sit next to dist/ so Node treats the
-# modules as ESM (`"type": "module"`); its `main` field stays accurate for this layout.
-COPY --from=bridge-builder /build/bridge/dist /opt/qoder/bridge/dist
-COPY bridge/package.json /opt/qoder/bridge/package.json
+ARG NODE_IMAGE=node:22-slim
 
-# Pinned plugin bundle (A2 format), on-disk layout unchanged. Root-owned on purpose, and it
-# is the mode normalization below (not the ownership alone) that makes this image copy
-# read-only for the sandbox user: unlike a runtime-uploaded copy in the agent workspace, this
-# image copy cannot be modified from inside the sandbox.
-COPY plugin /opt/qoder/plugin
+# ------------------------------------------------------------------ bridge build
+# The bridge's dist/ tree is git-ignored, so it is built here from the pinned
+# source tree and lockfile (the same source tree the Host placement consumes).
+FROM ${NODE_IMAGE} AS bridge
 
-# COPY takes the modes from the build host (a Windows host yields 0777), so the pinned bundle
-# would be writable by the in-sandbox `node` user and the image would vary with the builder.
-# Normalize explicitly: root-owned, read/traverse-only for everyone else. No file under
-# /opt/qoder needs an execute bit (the CLI is at /usr/local/bin/qodercli, the bridge is
-# spawned as `node <path>`, the plugin files are data).
-RUN find /opt/qoder -type d -exec chmod 0755 {} + \
-    && find /opt/qoder -type f -exec chmod 0644 {} +
+ARG PNPM_VERSION=9.15.9
+RUN npm install -g "pnpm@${PNPM_VERSION}"
 
-# Qoder CLI auto-update off (documented key `general.enableAutoUpdate`, default true).
-# The CLI resolves its user config root from HOME on every start. This ENV is verified for a
-# direct `podman run`; that the OpenSandbox bootstrap also starts the sandbox with HOME set to
-# /home/node is NOT VERIFIED here (A1/A2 observed HOME=/root inside an OpenSandbox-created
-# sandbox) — C6 must observe it in a real sandbox before the pinned-CLI property is trusted.
-ENV HOME=/home/node
-RUN install -d -o node -g node /home/node/.qoder \
-    && printf '{\n  "general": {\n    "enableAutoUpdate": false\n  }\n}\n' > /home/node/.qoder/settings.json \
-    && chown node:node /home/node/.qoder/settings.json
+WORKDIR /bridge
+COPY packages/qoder-acp-bridge/package.json packages/qoder-acp-bridge/pnpm-lock.yaml \
+     packages/qoder-acp-bridge/tsconfig.json ./
+RUN pnpm install --frozen-lockfile
+COPY packages/qoder-acp-bridge/src ./src
+RUN pnpm run build \
+    && test -f dist/main.js
 
-# Agents' workspace files are uploaded here by the Java side; owned by the runtime user
-# because in-sandbox commands (execd runs as the image USER) execute as `node`.
-RUN install -d -o node -g node /workspace
+# ------------------------------------------------------------------ runtime image
+FROM ${NODE_IMAGE}
 
-# The bridge process is started per agent by the Java side with BRIDGE_TOKEN injected;
-# the container default below is only a smoke default (it fails closed without a token).
-USER node
+# The pinned Qoder CLI artifact. All four build args are required: a missing
+# pin, a missing checksum or an unaccepted license FAILS the build instead of
+# producing an image with an unverifiable agent binary.
+ARG QODER_CLI_VERSION
+ARG QODER_CLI_ARTIFACT_URL
+ARG QODER_CLI_SHA256
+ARG QODER_CLI_LICENSE_ACCEPTED
+
+RUN set -eux; \
+    if [ -z "${QODER_CLI_VERSION}" ] || [ -z "${QODER_CLI_ARTIFACT_URL}" ] \
+       || [ -z "${QODER_CLI_SHA256}" ] || [ "${QODER_CLI_LICENSE_ACCEPTED}" != "yes" ]; then \
+      echo "ERROR: this image requires an explicitly pinned Linux qodercli artifact:" >&2; \
+      echo "  --build-arg QODER_CLI_VERSION=<version> --build-arg QODER_CLI_ARTIFACT_URL=<https url>" >&2; \
+      echo "  --build-arg QODER_CLI_SHA256=<sha256>  --build-arg QODER_CLI_LICENSE_ACCEPTED=yes" >&2; \
+      echo "  (Task 1 has not verified a Linux artifact yet; the operator supplies the pin and accepts the license.)" >&2; \
+      exit 1; \
+    fi; \
+    case "${QODER_CLI_ARTIFACT_URL}" in \
+      https://*) ;; \
+      *) echo "ERROR: QODER_CLI_ARTIFACT_URL must be an https URL, got ${QODER_CLI_ARTIFACT_URL}" >&2; exit 1;; \
+    esac; \
+    case "${QODER_CLI_VERSION}" in \
+      latest|*latest*) echo "ERROR: QODER_CLI_VERSION must be a pinned version, not '${QODER_CLI_VERSION}'" >&2; exit 1;; \
+    esac; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl tar gzip; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /tmp/qoder-artifact; \
+    curl -fsSL "${QODER_CLI_ARTIFACT_URL}" -o /tmp/qoder-cli.artifact; \
+    echo "${QODER_CLI_SHA256}  /tmp/qoder-cli.artifact" | sha256sum -c -; \
+    case "${QODER_CLI_ARTIFACT_URL}" in \
+      *.tar.gz|*.tgz) tar -xzf /tmp/qoder-cli.artifact -C /tmp/qoder-artifact ;; \
+      *.tar) tar -xf /tmp/qoder-cli.artifact -C /tmp/qoder-artifact ;; \
+      *) install -m 0755 /tmp/qoder-cli.artifact /tmp/qoder-artifact/qodercli ;; \
+    esac; \
+    binary="$(find /tmp/qoder-artifact -type f -name 'qodercli' -perm -u+x | head -n 1)"; \
+    if [ -z "${binary}" ]; then \
+      echo "ERROR: the pinned artifact does not contain an executable qodercli binary" >&2; exit 1; \
+    fi; \
+    install -m 0755 "${binary}" /usr/local/bin/qodercli; \
+    rm -rf /tmp/qoder-artifact /tmp/qoder-cli.artifact; \
+    observed="$(/usr/local/bin/qodercli --version 2>&1 | tr -d '\r')"; \
+    case "${observed}" in \
+      *"${QODER_CLI_VERSION}"*) ;; \
+      *) echo "ERROR: the artifact reports '${observed}', which does not match the pinned QODER_CLI_VERSION ${QODER_CLI_VERSION}" >&2; exit 1;; \
+    esac; \
+    echo "Installed qodercli ${observed}"
+
+# The governed bridge, built from the same source tree as the Host placement.
+COPY --from=bridge /bridge/dist /opt/aria/bridge/dist
+COPY packages/qoder-acp-bridge/package.json /opt/aria/bridge/package.json
+
+# The fixed run-owned launcher and writer-control script (single source of truth
+# in agent-control-tower/runtime-sandbox; copied, never re-implemented here).
+COPY agent-control-tower/runtime-sandbox/launch.mjs /opt/aria/launch.mjs
+COPY agent-control-tower/runtime-sandbox/stop-writers.mjs /opt/aria/stop-writers.mjs
+
+# Unprivileged runtime user. The image never gains a docker/podman socket, a
+# host credential mount or an elevated entrypoint.
+#
+# /opt/aria is the control plane the core is judged by (the launcher, the
+# writer-control script and the entrypoint allowlist): it stays root-owned and
+# read-only, so the unprivileged core can never rewrite the script that
+# produces its stop proof or the allowlist that constrains its entrypoint.
+RUN groupadd --gid 10001 aria \
+    && useradd --uid 10001 --gid aria --create-home --shell /usr/sbin/nologin aria \
+    && mkdir -p /workspace /home/aria/run \
+    && chown -R aria:aria /workspace /home/aria \
+    && chmod 0555 /opt/aria/launch.mjs /opt/aria/stop-writers.mjs
+
+# The image's own entrypoint allowlist: a launch manifest cannot name anything
+# that is not listed here, and `launch.mjs` resolves bare names through it.
+RUN printf '%s\n' \
+    '{"names":{"qodercli":"/usr/local/bin/qodercli","node":"/usr/local/bin/node",' \
+    '"bridge":"/opt/aria/bridge/dist/main.js"},' \
+    '"paths":["/usr/local/bin/qodercli","/usr/local/bin/node","/opt/aria/bridge/dist/main.js"],' \
+    '"comment":"fixed image entrypoints; a launch manifest may only name these"}' \
+    > /opt/aria/entrypoints.json \
+    && chmod 0444 /opt/aria/entrypoints.json
+
+# Agents' workspace files are uploaded here by the backend.
 WORKDIR /workspace
-EXPOSE 4097
-CMD ["node", "/opt/qoder/bridge/dist/main.js"]
+
+# The Qoder core speaks ACP through the bridge; the default bridge port is used
+# for the run's endpoint mapping and is bound by the launch manifest.
+EXPOSE 9310
+
+USER aria
+
+CMD ["/usr/local/bin/qodercli", "--version"]

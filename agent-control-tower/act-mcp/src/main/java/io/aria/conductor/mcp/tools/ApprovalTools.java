@@ -1,23 +1,41 @@
 package io.aria.conductor.mcp.tools;
 
 import io.aria.conductor.common.model.ApprovalStatus;
-import io.aria.conductor.execution.approval.AcpDecisionRejectedException;
-import io.aria.conductor.execution.approval.ApprovalDecisionService;
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.approval.ApprovalQueryService;
+import io.aria.conductor.execution.approval.PermissionChoice;
+import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.mcp.McpActorContext;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
+/**
+ * Approval surfaces of the platform MCP endpoint. {@code decide_approval} is
+ * OPERATOR_ONLY in the reviewed {@link ToolPolicyRegistry}: the MCP transports
+ * carry run-scoped worker credentials only, so a worker can never approve
+ * itself. The tool resolves identity exclusively from the transport context
+ * (never from tool JSON) and dispatches the decision to the permission
+ * coordinator, which owns the operator check, the state/expiry re-check and the
+ * delivery tracking of native permission asks.
+ */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class ApprovalTools implements McpTool {
 
+    static final String DECIDE_APPROVAL = "decide_approval";
+
     private final ApprovalQueryService approvalQueryService;
-    private final ApprovalDecisionService approvalDecisionService;
+    private final io.aria.conductor.execution.approval.ApprovalGate approvalGate;
+    private final PermissionCoordinator permissionCoordinator;
+    private final ToolPolicyRegistry toolPolicies;
     private final McpProperties mcpProperties;
 
     @Tool(name = "list_approvals",
@@ -35,20 +53,38 @@ public class ApprovalTools implements McpTool {
     }
 
     @Tool(name = "decide_approval",
-            description = "Decide an approval (approve or deny). Legacy gates ignore non-PENDING repeats (idempotent). ACP permission asks return a typed error code (EXPIRED, ALREADY_DECIDED, UNSUPPORTED_OPTIONS, INCONSISTENT_ASK, UNDECIDABLE_ASK, GRANT_ALREADY_CONSUMED) when they cannot take the decision.")
+            description = "Decide a PENDING approval gate (approve or deny). Operator authority only: the transport-resolved caller must be the authenticated OPERATOR — a run-scoped worker credential is refused with FORBIDDEN and no approval changes state.")
     public String decideApproval(
             @ToolParam(description = "Approval id") UUID approvalId,
             @ToolParam(description = "true = approve, false = deny") boolean approved,
-            @ToolParam(description = "Decision reason", required = false) String reason) {
+            @ToolParam(description = "Decision reason (audit note; a native permission ask records its own decision reason)",
+                    required = false) String reason,
+            ToolContext toolContext) {
         try {
-            approvalDecisionService.decide(approvalId, approved, reason);
-            return ToolResponses.ok(java.util.Map.of("approvalId", approvalId.toString(), "approved", approved));
-        } catch (AcpDecisionRejectedException e) {
-            // An ACP ask that cannot take the decision: the code tells the caller whether the
-            // ask is gone (EXPIRED / ALREADY_DECIDED) or can never be approved as it stands.
-            return ToolResponses.error(e.code().name(), e.getMessage(), e, mcpProperties.isDebug());
+            ActorPrincipal actor = McpActorContext.require(toolContext);
+            // Reviewed tool policy: decide_approval is OPERATOR_ONLY, and an
+            // unclassified tool name stays gated. The MCP surface is the worker
+            // surface, so this refuses every run-scoped credential.
+            toolPolicies.requireAuthority(DECIDE_APPROVAL, actor);
+            log.info("MCP approval decision requested: id={}, approved={}, reason={}", approvalId, approved, reason);
+            if (permissionCoordinator.isNativePermissionRequest(approvalId)) {
+                permissionCoordinator.decide(approvalId,
+                        approved ? PermissionChoice.ALLOW_ONCE : PermissionChoice.DENY, actor);
+            } else {
+                // A gate approval (workflow, kanban, tool call) keeps its decision
+                // semantics: the same authority the REST route delegates to, so an
+                // external MCP client can drive the whole loop instead of being
+                // refused as "not a native permission request".
+                approvalGate.decideApproval(approvalId, approved, reason);
+            }
+            return ToolResponses.ok(java.util.Map.of(
+                    "approvalId", approvalId.toString(), "approved", approved, "status", "processed"));
+        } catch (SecurityException e) {
+            return ToolResponses.error("FORBIDDEN", e.getMessage(), e, mcpProperties.isDebug());
         } catch (IllegalArgumentException e) {
             return ToolResponses.error("NOT_FOUND", e.getMessage(), e, mcpProperties.isDebug());
+        } catch (IllegalStateException e) {
+            return ToolResponses.error("CONFLICT", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("DECISION_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }

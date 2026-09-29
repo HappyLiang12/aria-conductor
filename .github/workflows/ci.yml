@@ -1,20 +1,38 @@
 name: CI
 
+# Rewired around the deterministic core E2E harness (Task 19):
+#   * the `build` job builds the Qoder ACP bridge (its dist/ is git-ignored), then
+#     the whole reactor with `-Pcore-e2e-harness`, runs the mandatory packaging IT
+#     in the profile lane (tests enabled; the default Failsafe lane excludes it),
+#     and uploads BOTH artifacts: the production `backend-jar` and the
+#     `backend-e2e-harness` distribution;
+#   * the smoke and Playwright lanes boot the harness distribution through
+#     `.github/actions/start-stack` (process sandbox transport, synthetic operator
+#     and peer credentials, explicit CoreE2eSetup) - never the production jar;
+#   * no PR lane needs a live-LLM key or a Qoder PAT: the harness supplies the
+#     deterministic LLM client. Live tiers stay in the nightly workflow.
+# The real OpenSandbox lane lives in its own requirement-triggered workflow
+# (sandbox-lifecycle.yml) and is never substituted by this process-transport job.
+
 on:
   pull_request:
     branches: [main]
+  # Explicit branch validation: run this workflow on any branch on demand.
+  workflow_dispatch: {}
 
 # Stacked pushes to the same PR cancel the previous in-flight run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   changes:
     name: Detect Changed Trees
     runs-on: ubuntu-latest
     outputs:
-      python: ${{ steps.filter.outputs.python }}
       mcp: ${{ steps.filter.outputs.mcp }}
       frontend: ${{ steps.filter.outputs.frontend }}
       java: ${{ steps.filter.outputs.java }}
@@ -24,8 +42,6 @@ jobs:
         id: filter
         with:
           filters: |
-            python:
-              - 'langchain-adk/**'
             mcp:
               - 'packages/mcp-server/**'
             frontend:
@@ -33,15 +49,19 @@ jobs:
             java:
               - 'agent-control-tower/**'
               - '!agent-control-tower/act-dashboard/**'
+              - 'packages/qoder-acp-bridge/**'
+              - 'e2e/**'
+              - 'scripts/**'
               - '.github/workflows/ci.yml'
               - '.github/actions/**'
 
   build:
-    name: Build Backend (once)
+    name: Build Backend + Harness Distribution (once)
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 30
     needs: [changes]
-    # E2E consumes the jar even for frontend-only changes; skip only for docs/python/mcp-only PRs.
+    # E2E consumes the harness distribution even for frontend-only changes; skip only
+    # for docs/mcp-only PRs.
     if: needs.changes.outputs.java == 'true' || needs.changes.outputs.frontend == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -50,13 +70,38 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - name: Build all modules (skip tests)
-        run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
-      - name: Upload backend jar
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: packages/qoder-acp-bridge/pnpm-lock.yaml
+      - name: Build the Qoder ACP bridge (git-ignored dist/)
+        # The harness packaging profile rebuilds dist/ itself (antrun + tsc); the
+        # node_modules install is the CI-side prerequisite for that build.
+        run: cd packages/qoder-acp-bridge && pnpm install --frozen-lockfile && pnpm build
+      - name: Build all modules and the harness distribution (skip tests)
+        run: mvn -q -T 1C -f agent-control-tower/pom.xml -Pcore-e2e-harness install -DskipTests
+      - name: Run the harness packaging IT (profile lane, tests enabled)
+        # The default Failsafe lane EXCLUDES CoreE2ePackagingIntegrationTest; this
+        # profile lane clears that exclusion and is mandatory, so the shipped ZIP
+        # and the production jar boundary are always checked as they ship.
+        run: >
+          mvn -f agent-control-tower/pom.xml -Pcore-e2e-harness -pl act-app verify
+          -Dskip.unit.tests=true -Dit.test=CoreE2ePackagingIntegrationTest
+      - name: Upload production backend jar
         uses: actions/upload-artifact@v4
         with:
           name: backend-jar
           path: agent-control-tower/act-app/target/act-app-*.jar
+          retention-days: 1
+      - name: Upload deterministic core E2E harness distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-e2e-harness
+          path: agent-control-tower/act-app/target/act-app-*-backend-e2e-harness.zip
           retention-days: 1
 
   java-unit-tests:
@@ -75,8 +120,8 @@ jobs:
             modules: act-execution
           - group: knowledge-aria
             modules: act-knowledge,act-aria
-          - group: dashboard-app
-            modules: act-dashboard-api,act-app
+          - group: api-mcp-app
+            modules: act-dashboard-api,act-mcp,act-app
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -84,16 +129,11 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - uses: actions/setup-python@v5
-        if: matrix.group == 'execution'
-        with:
-          python-version: '3.11'
-      - name: Setup LangChain ADK venv (only act-execution's ADK provider tests spawn it)
-        if: matrix.group == 'execution'
-        run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
       - name: Install reactor (skip tests)
         # Deliberate: rebuilding from source with the setup-java Maven cache is cheap and
         # simpler than piping a ~200MB repo artifact between jobs (plan PR-2 decision).
+        # The reactor install must precede every module lane: a stale installed jar once
+        # made Mockito fail on "could not modify all classes" for a new type.
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Run unit tier with JaCoCo
         run: cd agent-control-tower && mvn test -pl ${{ matrix.modules }} -Dspring.profiles.active=h2 -Dskip.integration.tests=true
@@ -117,11 +157,19 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - uses: actions/setup-python@v5
+      - uses: pnpm/action-setup@v4
         with:
-          python-version: '3.11'
-      - name: Setup LangChain ADK venv
-        run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: packages/qoder-acp-bridge/pnpm-lock.yaml
+      - name: Build the Qoder ACP bridge (git-ignored dist/)
+        # The core adapter contract ITs launch the real bridge against the mock peer
+        # CLI: the entry is a committed path whose dist/ is git-ignored, so the lane
+        # that runs them must build it (the harness `build` job does the same).
+        run: cd packages/qoder-acp-bridge && pnpm install --frozen-lockfile && pnpm build
       - name: Install reactor (skip tests)
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
       - name: Run integration tier only
@@ -157,17 +205,13 @@ jobs:
           retention-days: 1
 
   e2e-smoke:
-    name: E2E Smoke Test (Backend Endpoints)
+    name: E2E Smoke Test (deterministic harness)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     needs: [build]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - name: Start stack (backend only)
+      - name: Start the deterministic harness (backend only)
         uses: ./.github/actions/start-stack
         with:
           frontend-mode: none
@@ -189,31 +233,9 @@ jobs:
           curl -sf "http://localhost:8080/api/v1/knowledge?type=WORKFLOW"
           echo ""
           echo "All smoke tests passed."
-
-  python-tests:
-    name: Python Tests + Coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [changes]
-    if: needs.changes.outputs.python == 'true' || github.event_name != 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-      - name: Install dependencies
-        run: cd langchain-adk && pip install -e ".[dev]"
-      - name: Run tests with coverage
-        # Coverage ratchet mirror of the JaCoCo M1 step (docs/testing-baseline.md).
-        # Measured 98% line; gate set to 70 (plan mirror target, below measured).
-        run: cd langchain-adk && pytest --cov=src --cov-report=xml --cov-fail-under=70
-      - name: Upload coverage to Codecov
-        if: always()
-        uses: codecov/codecov-action@v4
-        with:
-          files: langchain-adk/coverage.xml
-          fail_ci_if_error: false
+      - name: Dump backend log tail (diagnose)
+        if: failure()
+        run: tail -n 300 backend.log || true
 
   ts-tests:
     name: TS MCP Server Tests + Coverage
@@ -243,40 +265,30 @@ jobs:
   e2e-playwright:
     name: E2E Playwright (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     needs: [build, frontend-build]
-    env:
-      # Real-LLM E2E specs (opencode-adk-e2e, langchain-adk-e2e, real-llm-scenarios)
-      # skip themselves when this is unset. Set the DEEPSEEK_API_KEY repository
-      # secret to actually exercise the provider run paths in CI (they were
-      # previously always skipped, leaving the exchangeable-provider flow untested).
-      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: '9'
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: pnpm
           cache-dependency-path: agent-control-tower/act-dashboard/pnpm-lock.yaml
-      - name: Start stack (dist preview)
+      - name: Start the deterministic harness (dist preview)
         uses: ./.github/actions/start-stack
         with:
           frontend-mode: dist
       - name: Install Playwright browsers
         run: cd agent-control-tower/act-dashboard && npx playwright install --with-deps chromium
       - name: Run E2E shard
-        run: cd agent-control-tower/act-dashboard && CI=true npx playwright test --shard=${{ matrix.shard }}/4 --workers=1
+        run: CI=true pnpm --dir "$GITHUB_WORKSPACE/agent-control-tower/act-dashboard" exec playwright test --shard=${{ matrix.shard }}/4 --workers=1
       - name: Dump backend log tail (diagnose backend death)
         if: failure()
         run: tail -n 300 backend.log || true; ls hs_err_pid*.log 2>/dev/null && cat hs_err_pid*.log || true
@@ -294,6 +306,8 @@ jobs:
   # BURN-IN complete (one week of green runs since 2026-07-25): the legacy
   # e2e-workflow-governance / e2e-agent-dev-workflow jobs are removed — their
   # specs are covered by the sharded matrix (plan Phase A3).
+  # The real OpenSandbox lane is NOT here: it runs in sandbox-lifecycle.yml and
+  # its results are reported separately (never substituted by this job).
   # ---------------------------------------------------------------------------
 
   docker-build:
@@ -315,5 +329,3 @@ jobs:
           '
       - name: Build frontend image
         run: docker build -t aria-frontend ./agent-control-tower/act-dashboard
-      - name: Build ADK image
-        run: docker build -t aria-adk ./langchain-adk

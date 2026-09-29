@@ -101,6 +101,18 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
            "and a.source = io.aria.conductor.common.model.ApprovalSource.LEGACY_GATE")
     int markStaleByKanbanItemId(@Param("itemId") String itemId, @Param("now") Instant now);
 
+    /** Review-card mirror: writes only the column the mirror owns, guarded on it
+     *  still being null, so a mirror that read the approval while it was PENDING
+     *  and commits after an operator decision can never rewrite the decision
+     *  (nor anything else) from its stale snapshot. Single-statement bulk update,
+     *  no entity load; callers must be @Transactional and results bypass the
+     *  persistence context. Returns the number of rows linked (0 or 1): 0 when
+     *  another writer won the link or the approval is already linked. */
+    @Modifying
+    @Query("update Approval a set a.kanbanItemId = :kanbanItemId " +
+           "where a.id = :id and a.kanbanItemId is null")
+    int linkKanbanItemIdIfAbsent(@Param("id") UUID id, @Param("kanbanItemId") String kanbanItemId);
+
     /** Housekeeping S1: single-statement bulk delete (set-based, no entity load). */
     @Modifying
     @Query("DELETE FROM Approval a WHERE a.runId IN :ids")

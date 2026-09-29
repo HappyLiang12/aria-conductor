@@ -1,0 +1,43 @@
+{
+  "core": "qoder",
+  "mode": "HOST",
+  "os": "win32 x64",
+  "node": "v24.14.1",
+  "requestedModel": "efficient",
+  "observedModels": [],
+  "cliVersion": null,
+  "startedAt": "2026-09-26T22:57:21.797Z",
+  "status": "verified",
+  "prerequisites": [
+    "qoder CLI: C:\\Users\\<USER>\\.qoder\\bin\\qodercli\\qodercli.exe (1.1.61)",
+    "qoder bridge entry: C:\\Users\\<USER>\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\packages\\qoder-acp-bridge\\dist\\main.js",
+    "admitted repository HEAD 7151617b13b20c1774e3458244cc3b7d4d895e2d"
+  ],
+  "results": [
+    {
+      "id": "expiry",
+      "title": "an undecided ask expires and writes nothing",
+      "status": "PASS",
+      "criteria": {
+        "ask reached a non-PENDING state": true,
+        "ask state is EXPIRED": true,
+        "expired file absent from disk": true
+      },
+      "details": {
+        "runId": "9fbc47a4-39dd-46d8-810e-1a3fdfa98860",
+        "askStatus": "EXPIRED",
+        "runStatus": "FAILED",
+        "declaredWindowMs": 169317
+      }
+    }
+  ],
+  "backendLog": "C:\\Users\\User\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\docs\\reviews\\evidence\\2026-09-22-live-matrix\\qoder-HOST-t20-expiry.txt.backend.log",
+  "usage": null,
+  "backendPins": {
+    "ARIA_WORKSPACES_RUNTIME_ROOT": "C:/Users/User/AppData/Local/Temp/t20-runtime",
+    "ARIA_WORKSPACES_RESULT_ROOT": "C:/Users/User/AppData/Local/Temp/t20-runtime/results",
+    "ARIA_CORES_QODER_EXECUTABLE": "C:\\Users\\User\\.qoder\\bin\\qodercli\\qodercli.exe",
+    "JAVA_TOOL_OPTIONS": "-Daria.tasks.deadline-minutes=3 -Dapprovals.timeout-ms=180000"
+  },
+  "finishedAt": "2026-09-26T23:01:05.114Z"
+}

@@ -1,5 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { dispatchSeededCard, seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
+import {
+  apiCall,
+  runExecutionBinding,
+  seedAdkAgent,
+  seedKanbanItem,
+  setScenario,
+  transitionKanbanSettled,
+  uniqueName,
+} from './fixtures';
 
 /**
  * Kanban board E2E (HITL redesign board: Backlog / Todo / In Progress / Review / Done).
@@ -7,7 +15,17 @@ import { dispatchSeededCard, seedAgent, seedKanbanItem, transitionKanban, unique
  * ADAPTATION NOTE: KanbanPage.tsx exists in src/pages but is not wired into
  * the router (App.tsx has no /kanban route). The shipped Kanban surface is the
  * KanbanBoard panel on the Overview page ('/'), so this spec targets that.
+ *
+ * The dispatched-run fixture: a card's run is settled by its agent's declared
+ * scenario, so the in-flight states below are only deterministic when the run is
+ * HELD. 'deny-write' holds the prompt on its own permission gate (the same
+ * fixture kanban-hitl.spec.ts uses), which keeps the card IN_PROGRESS until a
+ * decision; the instant-completing default scenario would settle it into REVIEW
+ * first, and REVIEW -> TODO is the redesign's request-changes move (it
+ * re-dispatches) rather than a pause.
  */
+const HOLDING_SCENARIO = 'deny-write';
+
 test.describe('Kanban board (Overview governed flow)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -66,34 +84,55 @@ test.describe('Kanban board (Overview governed flow)', () => {
     // non-retired, non-unhealthy agent. The card is pinned to THIS fresh agent
     // (AgentPickerService matches agentTemplateId against agent names) so the
     // picker cannot fall back to the Aria assistant, whose real-LLM run moves
-    // cards asynchronously via its kanban MCP tools.
-    const agent = await seedAgent(request);
+    // cards asynchronously via its kanban MCP tools. The agent's scenario holds
+    // its run on a permission gate, so the card is still IN_PROGRESS when the
+    // pause below runs (an instant completion would settle it into REVIEW, whose
+    // TODO move is request-changes, not a pause).
+    const agent = await seedAdkAgent(request, {
+      name: uniqueName('e2e-kanban-move-agent'),
+      adkProvider: 'opencode',
+      executionMode: 'HOST',
+    });
+    await setScenario(request, agent.id, HOLDING_SCENARIO);
     const item = await seedKanbanItem(request, {
       title: uniqueName('e2e-kanban-move'),
       agentTemplateId: agent.name,
     });
 
-    // Same auto-dispatch race as the other specs; the comment was decorative (never asserted).
-    await dispatchSeededCard(request, item.id);
+    const dispatched = await transitionKanbanSettled(request, item.id, 'IN_PROGRESS', {
+      comment: 'e2e dispatch',
+    });
+    expect(dispatched.status, JSON.stringify(dispatched.data)).toBe(200);
+    expect(dispatched.data?.status).toBe('IN_PROGRESS');
 
     await page.reload();
     await page.waitForLoadState('networkidle');
-    // D8: a mock/instant run completes immediately, moving the card to REVIEW.
     await expect(
-      page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`).or(
-        page.locator(`[data-col="REVIEW"] [data-card="${item.id}"]`),
-      ),
-    ).toBeVisible();
+      page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`),
+    ).toBeVisible({ timeout: 15_000 });
 
     // Pause: IN_PROGRESS → TODO is a legal, run-pausing move under the redesign
-    // (it was rejected as illegal before).
-    const paused = await transitionKanban(request, item.id, 'TODO');
-    expect(paused.status).toBe(200);
+    // (it was rejected as illegal before). A coordinated run can only be paused
+    // once its SESSION is open — the coordinator registers the run's runtime
+    // after the backend launched and the core session opened, and records
+    // runtimeState=RUNNING/BACKEND_SUSPEND on the run's frozen binding at that moment. Before
+    // that, a pause is refused with the coordinator's truthful conflict ("has no
+    // run-owned runtime in this process; there is nothing to pause"). The board's
+    // own auto flow dispatches a created card immediately, so the spec waits for
+    // the recorded runtime state instead of racing the launch window.
+    const linkedRunId = (await apiCall(request, 'GET', `/kanban/items/${item.id}`)).data?.linkedRunId;
+    expect(linkedRunId, 'the dispatch must link the card to its run').toMatch(/^[0-9a-f-]{36}$/);
+    await expect
+      .poll(async () => (await runExecutionBinding(request, linkedRunId)).runtimeState, { timeout: 60_000 })
+      .toBe('RUNNING/BACKEND_SUSPEND');
+
+    const paused = await transitionKanbanSettled(request, item.id, 'TODO');
+    expect(paused.status, JSON.stringify(paused.data)).toBe(200);
     expect(paused.data.status).toBe('TODO');
 
     // Idempotent no-op: repeating the current status must not error or re-dispatch.
-    const noop = await transitionKanban(request, item.id, 'TODO');
-    expect(noop.status).toBe(200);
+    const noop = await transitionKanbanSettled(request, item.id, 'TODO');
+    expect(noop.status, JSON.stringify(noop.data)).toBe(200);
     expect(noop.data.status).toBe('TODO');
 
     await page.reload();

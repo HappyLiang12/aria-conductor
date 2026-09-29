@@ -4,11 +4,16 @@ import io.aria.conductor.common.model.*;
 import io.aria.conductor.common.repository.AgentSkillRepository;
 import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.ToolDefinitionRepository;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
-import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmResponse;
+import io.aria.conductor.execution.repository.PromptCallRepository;
+import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
+import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -21,23 +26,39 @@ import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeast;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * Integration coverage of the Task 18 cutover dispatch for a default-core agent
+ * (no explicit core resolves to {@code opencode}, no explicit mode to SANDBOX):
+ * the run is owned by the run coordinator through {@link CoreRunLauncher}, and
+ * the armed turn-level {@link AdkProvider} double is never consulted. The
+ * {@link CoreTask} the engine assembles for the core carries the same injection
+ * material the turn loop built (knowledge + skills via {@code buildMessages}
+ * reuse), and with no sandbox endpoint in the test environment the run
+ * terminates {@code FAILED} with the coordinator's exact sandbox-launch refusal.
+ *
+ * <p>The legacy expectation this class used to pin -- the turn loop calling
+ * {@code adkProvider.call(agentId, messages, tools, sink)} with the agent's tool
+ * list, captured off the provider -- no longer exists for a production-core run
+ * (AgentLoopEngine.java:775-779); the core's tool binding is part of its launch
+ * profile, not the prompt. That provider-double path keeps its own unit pin
+ * ({@code AgentLoopEngineTaskPathTest}, act-execution, without the cutover wiring).
+ */
 @SpringBootTest
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
@@ -50,8 +71,12 @@ class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
     @Autowired KnowledgeItemRepository knowledgeItemRepository;
     @Autowired SkillDefinitionRepository skillDefinitionRepository;
     @Autowired AgentSkillRepository agentSkillRepository;
+    @Autowired RunExecutionBindingRepository runExecutionBindingRepository;
+    @Autowired PromptCallRepository promptCallRepository;
+    @Autowired OpenCodeProperties openCodeProperties;
 
     @MockBean AdkProviderRegistry adkProviderRegistry;
+    @SpyBean CoreRunLauncher coreRunLauncher;
     private AdkProvider adkProvider;
 
     @BeforeEach
@@ -59,13 +84,14 @@ class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
         adkProvider = Mockito.mock(AdkProvider.class);
         when(adkProviderRegistry.resolve(any())).thenReturn(adkProvider);
         when(adkProvider.isHealthy(any())).thenReturn(true);
+        // The turn loop is armed with a ready single-turn answer; the cutover must never ask it.
         when(adkProvider.call(any(), any(), any(), any()))
                 .thenReturn(new LlmResponse("done", 10, 5, "stop", null));
         when(adkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
     }
 
     @Test
-    void regularAgentRun_receivesToolsSkillsAndKnowledge() {
+    void regularAgentRun_isCoordinatorOwned_carriesSystemRuleTask_andNeverConsultsTheProvider() {
         // --- seed (committed — no @Transactional on the test class) ---
         Agent agent = agentRepository.save(Agent.builder()
                 .id(UUID.randomUUID()).name("test-agent").description("Agent for injection test")
@@ -104,33 +130,49 @@ class AgentLoopInjectionIntegrationTest extends BaseH2IntegrationTest {
         // --- act ---
         agentLoopEngine.startRun(run.getId());
 
-        // --- await the LLM call (loop runs on a virtual thread) ---
-        // S12: the engine invokes the 4-arg call(agentId, messages, tools, streamSink).
-        await().atMost(java.time.Duration.ofSeconds(20))
-                .untilAsserted(() -> verify(adkProvider, atLeast(1))
-                        .call(eq(agent.getId()), any(), any(), any()));
+        // --- the coordinated attempt reaches its terminal refusal deterministically ---
+        await().atMost(Duration.ofSeconds(20))
+                .until(() -> runRepository.findById(run.getId())
+                        .map(r -> r.getStatus() == RunStatus.FAILED).orElse(false));
 
-        // --- capture + assert ---
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<LlmMessage>> msgCaptor = ArgumentCaptor.forClass(List.class);
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<Map<String, Object>>> toolCaptor = ArgumentCaptor.forClass(List.class);
-        verify(adkProvider).call(eq(agent.getId()), msgCaptor.capture(), toolCaptor.capture(), any());
-
-        List<LlmMessage> messages = msgCaptor.getValue();
-        Optional<LlmMessage> systemMsg = messages.stream()
-                .filter(m -> "system".equals(m.role())).findFirst();
-        assertThat(systemMsg).as("system message must be present").isPresent();
-        String systemPrompt = systemMsg.get().content();
-        assertThat(systemPrompt)
+        // --- the CoreTask handed to the run-owned core carries the injection material ---
+        ArgumentCaptor<CoreTask> taskCaptor = ArgumentCaptor.forClass(CoreTask.class);
+        verify(coreRunLauncher).execute(
+                argThat(r -> run.getId().equals(r.getId())),
+                argThat(a -> agent.getId().equals(a.getId())),
+                taskCaptor.capture());
+        CoreTask task = taskCaptor.getValue();
+        assertThat(task.systemPrompt())
                 .as("knowledge must be injected for non-Aria agents")
                 .contains("## Knowledge Context", "deploy-proc");
-        assertThat(systemPrompt)
+        assertThat(task.systemPrompt())
                 .as("enabled skills must be injected (resolves #56 skills orphan)")
                 .contains("## Skills", "When triaging, check logs first");
+        assertThat(task.userPrompt()).isEqualTo("do the work");
 
-        assertThat(toolCaptor.getValue())
-                .as("agent's tools must be passed to the ADK provider")
-                .hasSize(1);
+        // --- the frozen binding captures exactly this run on the production core ---
+        RunExecutionBinding binding = runExecutionBindingRepository.findById(run.getId()).orElseThrow();
+        assertThat(binding.getRunId()).isEqualTo(run.getId());
+        assertThat(binding.getAgentId()).isEqualTo(agent.getId());
+        assertThat(binding.getCoreId()).isEqualTo("opencode");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+        assertThat(binding.getDeadline()).as("every attempt freezes a deadline").isNotNull();
+        assertThat(binding.getDeadline().getNano())
+                .as("the frozen deadline is persisted at TIMESTAMP granularity")
+                .isZero();
+
+        // --- terminal state: the coordinator's exact sandbox-launch refusal ---
+        Run failed = runRepository.findById(run.getId()).orElseThrow();
+        assertThat(failed.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(failed.getErrorMessage())
+                .startsWith("OpenSandbox sandbox creation failed for image "
+                        + openCodeProperties.getImage() + ": Network connectivity error: Failed to connect to")
+                .endsWith(":18080");
+
+        // --- the armed turn-level double is never consulted ---
+        verify(adkProvider, never()).call(any(), any(), any());
+        verify(adkProvider, never()).call(any(), any(), any(), any());
+        verify(adkProvider, never()).executeTask(any(), any(), any(), any());
+        assertThat(promptCallRepository.findByRunId(run.getId())).isEmpty();
     }
 }

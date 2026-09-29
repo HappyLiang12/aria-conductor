@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { apiCall, dispatchSeededCard, pollRunTerminal, seedAgent, seedKanbanItem, transitionKanban, uniqueName } from './fixtures';
+import { apiCall, dispatchSeededCard, pollRunTerminal, seedAgent, seedKanbanItem, transitionKanban, transitionKanbanSettled, uniqueName } from './fixtures';
 
 /**
  * Housekeeping e2e (no-LLM gate track): scan renders counts, kanban quick-clear
@@ -22,7 +22,9 @@ test.describe('Housekeeping cleanup', () => {
     // show: TODO → CANCELLED is legal without a run and counts in the scan's
     // kanban category (DONE + CANCELLED).
     const item = await seedKanbanItem(request, { title: uniqueName('e2e-hk-scan') });
-    const cancelled = await transitionKanban(request, item.id, 'CANCELLED');
+    // The board's own flow can write the card concurrently, so the move follows the
+    // documented optimistic-lock contract (refresh and retry).
+    const cancelled = await transitionKanbanSettled(request, item.id, 'CANCELLED');
     expect(cancelled.status).toBe(200);
 
     await page.goto('/ops');

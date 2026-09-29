@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DecisionPanel, ShortApprovalView } from '../ReviewPanels';
+import { formatTimestamp } from '../../utils/formatTime';
 import type { Approval, KanbanItem } from '../../types';
 
 vi.mock('../../api/kanban', () => ({
@@ -106,6 +107,83 @@ describe('DecisionPanel', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban-items'] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['approvals'] });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 15: normalized native permission asks (kind + expiry) and batch safety.
+// ---------------------------------------------------------------------------
+
+/** The normalized correlation the backend registers for a native ask
+ *  (PermissionCoordinator.registrationReason: target = NATIVE_TOOL). */
+const NATIVE_ASK_REASON =
+  'Native permission request req-42 from session sess-7 for tool write_file (NATIVE_TOOL)';
+const NATIVE_ASK_EXPIRES_AT = '2026-09-22T12:05:00Z';
+
+function nativeAsk(): Approval {
+  return {
+    id: 'a-native',
+    runId: 'run-abc',
+    toolCallId: null,
+    status: 'PENDING',
+    reason: NATIVE_ASK_REASON,
+    requestedAt: '2026-09-22T11:55:00Z',
+    decidedAt: null,
+    expiresAt: NATIVE_ASK_EXPIRES_AT,
+    askType: 'APPROVAL',
+  } as Approval;
+}
+
+function gateAsk(): Approval {
+  return {
+    id: 'a-gate',
+    runId: 'run-abc',
+    toolCallId: 'tc-1',
+    status: 'PENDING',
+    reason: 'Task-level approval',
+    requestedAt: '2026-09-22T11:55:00Z',
+    decidedAt: null,
+    expiresAt: NATIVE_ASK_EXPIRES_AT,
+    askType: 'APPROVAL',
+  } as Approval;
+}
+
+describe('DecisionPanel normalized asks (Task 15)', () => {
+  it('renders the permission kind and the expiry of a normalized native ask', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[nativeAsk()]} />);
+    expect(screen.getByText('Native permission · NATIVE_TOOL')).toBeInTheDocument();
+    expect(screen.getByText('tool write_file')).toBeInTheDocument();
+    expect(screen.getByText('request req-42')).toBeInTheDocument();
+    expect(screen.getByText(`expires ${formatTimestamp(NATIVE_ASK_EXPIRES_AT)}`)).toBeInTheDocument();
+  });
+
+  it('never routes a native permission ask through the batch approval', async () => {
+    mockedApprove.mockResolvedValue({ approvalId: 'a-gate', approved: true, status: 'processed' });
+    renderPanel(<DecisionPanel item={item} pendingAsks={[gateAsk(), nativeAsk()]} />);
+
+    expect(
+      screen.getByText(
+        '1 native permission ask not included in Approve all: each is an allow-once decision and must be resolved individually.',
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /approve all/i }));
+    await waitFor(() => expect(mockedApprove).toHaveBeenCalledTimes(1));
+    expect(mockedApprove).toHaveBeenCalledWith('a-gate', undefined);
+    expect(mockedApprove).not.toHaveBeenCalledWith('a-native', undefined);
+
+    // The native ask stays individually decidable (allow-once through /decide).
+    await userEvent.click(screen.getAllByRole('button', { name: 'Approve' })[1]);
+    await waitFor(() => expect(mockedApprove).toHaveBeenCalledTimes(2));
+    expect(mockedApprove).toHaveBeenLastCalledWith('a-native', undefined);
+  });
+
+  it('leaves a shared reason that is not a normalized correlation as a gate approval', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[
+      { ...gateAsk(), reason: 'Native permission request text without the correlation' } as Approval,
+    ]} />);
+    expect(screen.getByText('TOOL_CALL')).toBeInTheDocument();
+    expect(screen.queryByText('Native permission · NATIVE_TOOL')).not.toBeInTheDocument();
   });
 });
 

@@ -2,12 +2,14 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   apiCall,
   approveRunApproval,
-  dispatchSeededCard,
   pollRunTerminal,
   seedAdkAgent,
   seedAgent,
   seedKanbanItem,
   seedRun,
+  setScenario,
+  transitionKanbanSettled,
+  uniqueName,
 } from './fixtures';
 
 /**
@@ -135,8 +137,15 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     // the card is pinned to THIS fresh agent (AgentPickerService matches
     // agentTemplateId against agent names) — without pinning the picker falls
     // back to the Aria assistant, whose real-LLM run moves cards asynchronously
-    // via its kanban MCP tools.
-    const agent = await seedAgent(request);
+    // via its kanban MCP tools. The agent's fixture holds its run on a
+    // permission gate, so the moved card stays IN_PROGRESS (the harness refuses
+    // to launch a peer for an agent without a declared scenario).
+    const agent = await seedAdkAgent(request, {
+      name: uniqueName('e2e-obs-live-agent'),
+      adkProvider: 'opencode',
+      executionMode: 'HOST',
+    });
+    await setScenario(request, agent.id, 'deny-write');
     const item = await seedKanbanItem(request, {
       title: 'e2e-obs-live-move',
       agentTemplateId: agent.name,
@@ -148,8 +157,10 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
       page.locator(`[data-card="${item.id}"]`),
     ).toBeVisible({ timeout: 15_000 });
 
-    // Same auto-dispatch race as the other specs; the comment was decorative (never asserted).
-    await dispatchSeededCard(request, item.id);
+    const { status } = await transitionKanbanSettled(
+      request, item.id, 'IN_PROGRESS', { comment: 'e2e observability move' },
+    );
+    expect(status).toBe(200);
 
     // WS kanban.transitioned → invalidate → the card lands in the target column.
     // The 1.2s flash class on the moved card is timing-fragile to observe E2E
@@ -157,10 +168,7 @@ test.describe('Track A — live observability gate (no LLM key)', () => {
     // covered deterministically by KanbanBoard.test.tsx ("flashes the moved
     // card on kanban.transitioned and clears after ~1.2s"), so here we assert
     // the observable final state: present in the new column, gone from todo.
-    // D8: a mock/instant run completes immediately, moving the card to REVIEW.
-    const moved = page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`).or(
-      page.locator(`[data-col="REVIEW"] [data-card="${item.id}"]`),
-    );
+    const moved = page.locator(`[data-col="IN_PROGRESS"] [data-card="${item.id}"]`);
     await expect(moved).toBeVisible({ timeout: 15_000 });
     await expect(page.locator(`[data-col="TODO"] [data-card="${item.id}"]`)).toHaveCount(0);
   });

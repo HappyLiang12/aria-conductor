@@ -1,0 +1,104 @@
+{
+  "core": "qoder",
+  "mode": "HOST",
+  "os": "win32 x64",
+  "node": "v24.14.1",
+  "requestedModel": "efficient",
+  "observedModels": [],
+  "cliVersion": null,
+  "startedAt": "2026-09-26T22:43:02.899Z",
+  "status": "verified",
+  "prerequisites": [
+    "qoder CLI: C:\\Users\\<USER>\\.qoder\\bin\\qodercli\\qodercli.exe (1.1.61)",
+    "qoder bridge entry: C:\\Users\\<USER>\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\packages\\qoder-acp-bridge\\dist\\main.js",
+    "admitted repository HEAD 7151617b13b20c1774e3458244cc3b7d4d895e2d"
+  ],
+  "results": [
+    {
+      "id": "coding-task",
+      "title": "one real coding task in qoder/HOST",
+      "status": "PASS",
+      "criteria": {
+        "run reached COMPLETED": true,
+        "file bytes on disk equal the requested content": true,
+        "approval ask observed": true,
+        "ask approved once": true
+      },
+      "details": {
+        "runId": "498a4cbc-4486-43be-bec9-2f1806749ebf",
+        "runStatus": "COMPLETED",
+        "observedBytes": "aria-live-qoder-HOST",
+        "expectedBytes": "aria-live-qoder-HOST",
+        "sha256": "b2830b19de8750fc116f9eee849bf7854ed700f8bd9dce13d53be75759637196",
+        "worktree": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\t20-runtime\\worktrees\\498a4cbc-4486-43be-bec9-2f1806749ebf",
+        "finalOutput": "Let me verify the file has no trailing newline.\n\nDONE",
+        "usage": {
+          "promptCalls": [],
+          "recordedModelAcknowledged": []
+        }
+      }
+    },
+    {
+      "id": "worktree",
+      "title": "WORKTREE runs write in a run-owned worktree and leave the admitted repository untouched",
+      "status": "PASS",
+      "criteria": {
+        "run-owned worktree exists": true,
+        "the run wrote its file inside the run worktree": true,
+        "the admitted repository has no run file": true,
+        "admitted repository HEAD unchanged": true
+      },
+      "details": {
+        "worktree": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\t20-runtime\\worktrees\\498a4cbc-4486-43be-bec9-2f1806749ebf",
+        "repoHeadBefore": "7151617b13b20c1774e3458244cc3b7d4d895e2d",
+        "repoHeadAfter": "7151617b13b20c1774e3458244cc3b7d4d895e2d",
+        "repoStatus": "M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/01-cancel-button-visible.png\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/02-cancel-clicked.png\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/03-cancelled-message.png\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/04-can-send-again.png\n M agent-control-tower/act-dash",
+        "diffStatus": 200,
+        "diff": "{\"runId\":\"498a4cbc-4486-43be-bec9-2f1806749ebf\",\"hasWorkspace\":true,\"summary\":\" M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/01-cancel-button-visible.png\\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/02-cancel-clicked.png\\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/03-cancelled-message.png\\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/04-can-send-again.png\\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/05-silent-close-error.png\\n M agent-control-tower/act-dashboard/e2e/screenshots/timeout-cancel/06-retry-button-shown.png\\n M e2e/agent-core/live-matrix.mjs\\n M e2e/agent-core/live-matrix.ps1\\n M e2e/agent-core/live-matrix.sh\\n?? agent-control-tower/act-dashboard/e2e/screenshots/ap-01-providers-page.png\\n?? agent-control-tower/act-dashboard/e2e/screenshots/ap-02-crew-adk-dropdown.png\\n?? agent-control-tower/act-dashboard/e2e/screenshots/oc-01-dashboard.png\\n?? agent-control-tower/act-dashboard/e2e/screenshots/oc-03-create-opencode-agent.png\\n?? agent-control-tower/act-dashboard/e2e/screenshots/oc-04-opencode-agent-created.png\\n?? agent-control-tower/act-dashboard/e2e/scre"
+      }
+    },
+    {
+      "id": "approve-once",
+      "title": "a one-use grant re-asks for the second write",
+      "status": "PASS",
+      "criteria": {
+        "second approval ask observed after the one-use grant": true,
+        "run reached COMPLETED": true,
+        "final bytes are the second pass": true
+      },
+      "details": {
+        "runId": "590b79c5-db76-4197-955f-03d690e589d9",
+        "firstAsk": "5740005f-6acd-464e-9af4-9dd9b4cf55b4",
+        "secondAsk": "743f97df-37ef-4d37-bff7-aae0f410d50f",
+        "observedBytes": "second-pass"
+      }
+    },
+    {
+      "id": "deny",
+      "title": "a denial leaves the workspace unwritten",
+      "status": "PASS",
+      "criteria": {
+        "denied file absent from disk": true,
+        "ask reached DENIED": true,
+        "run reached a terminal state": true
+      },
+      "details": {
+        "runId": "b2d1ebdc-d239-4366-b733-c69a8502939d",
+        "askStatus": "DENIED",
+        "runStatus": "COMPLETED",
+        "finalOutput": "DONE"
+      }
+    }
+  ],
+  "backendLog": "C:\\Users\\User\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\docs\\reviews\\evidence\\2026-09-22-live-matrix\\qoder-HOST-t20-headline.txt.backend.log",
+  "usage": {
+    "promptCalls": [],
+    "recordedModelAcknowledged": []
+  },
+  "backendPins": {
+    "ARIA_WORKSPACES_RUNTIME_ROOT": "C:/Users/User/AppData/Local/Temp/t20-runtime",
+    "ARIA_WORKSPACES_RESULT_ROOT": "C:/Users/User/AppData/Local/Temp/t20-runtime/results",
+    "ARIA_CORES_QODER_EXECUTABLE": "C:\\Users\\User\\.qoder\\bin\\qodercli\\qodercli.exe"
+  },
+  "finishedAt": "2026-09-26T22:55:20.570Z"
+}

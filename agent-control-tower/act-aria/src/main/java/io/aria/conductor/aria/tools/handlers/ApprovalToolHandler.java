@@ -2,8 +2,7 @@ package io.aria.conductor.aria.tools.handlers;
 
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
-import io.aria.conductor.execution.approval.AcpDecisionRejectedException;
-import io.aria.conductor.execution.approval.ApprovalDecisionService;
+import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -15,12 +14,11 @@ import java.util.*;
 @Component("approvalToolHandler")
 public class ApprovalToolHandler implements ToolHandler {
 
-    private final ApprovalDecisionService approvalDecisionService;
+    private final ApprovalGate approvalGate;
     private final ApprovalRepository approvalRepository;
 
-    public ApprovalToolHandler(ApprovalDecisionService approvalDecisionService,
-                               ApprovalRepository approvalRepository) {
-        this.approvalDecisionService = approvalDecisionService;
+    public ApprovalToolHandler(ApprovalGate approvalGate, ApprovalRepository approvalRepository) {
+        this.approvalGate = approvalGate;
         this.approvalRepository = approvalRepository;
     }
 
@@ -68,13 +66,7 @@ public class ApprovalToolHandler implements ToolHandler {
             return error("This approval must be decided by a human via the dashboard, not by an agent.");
         }
         boolean approved = Set.of("approve","approved","yes","true").contains(decision.toLowerCase());
-        // R20.3: an ACP permission ask rejects a raced decision with a typed code
-        // (EXPIRED / ALREADY_DECIDED / ...) the agent should see verbatim.
-        try {
-            approvalDecisionService.decide(approvalId, approved, reason);
-        } catch (AcpDecisionRejectedException e) {
-            return error(e.code().name() + ": " + e.getMessage());
-        }
+        approvalGate.decideApproval(approvalId, approved, reason);
         return "Approval " + id + " " + (approved ? "approved" : "denied") + ".";
     }
 

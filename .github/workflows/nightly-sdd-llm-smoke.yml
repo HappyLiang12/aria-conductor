@@ -1,65 +1,126 @@
 name: Nightly SDD LLM Smoke
 
-# Runs one real-LLM Spec-Driven Development loop (BA -> spec approval gate) against
-# the DeepSeek API via the LangChain ADK. Gated on the DEEPSEEK_API_KEY repository
-# secret: when unset, every LLM-dependent step is skipped (no-op).
+# Live-LLM canary for the governed SDD path (Task 19 retarget): a real BA run must
+# produce a spec through a live provider and pause the chain at WAITING_APPROVAL.
 #
-# This is a nightly canary for the governed SDD path — it proves the BA agent can
-# actually produce a spec through a live provider and pause the chain at WAITING_APPROVAL.
+# Retargeted from the removed LangChain runtime to the OpenCode core (the default
+# and recommended core), placed in HOST mode so the runner needs no container
+# runtime. The live tier is gated on BOTH:
+#   * an explicit workflow_dispatch with `live: true` (a scheduled run alone never
+#     spends live tokens on a provider), and
+#   * the DEEPSEEK_API_KEY repository secret.
+# When either is missing every live step is guarded off and the run states so: it
+# never reports a pass for work it did not do. This lane is NOT part of the PR
+# pipeline — no required PR job needs a live-LLM key.
 
 on:
   schedule:
     - cron: '0 2 * * *' # 02:00 UTC nightly
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Run the live-LLM tier (requires the DEEPSEEK_API_KEY secret)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   nightly-sdd-llm-smoke:
-    name: Real-LLM SDD Loop Smoke
+    name: Real-LLM SDD Loop Smoke (opencode, HOST)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      SDD_REPO_URL: https://github.com/${{ github.repository }}.git
     steps:
       - uses: actions/checkout@v4
 
+      - name: Decide whether the live tier runs
+        id: live
+        env:
+          LIVE_REQUESTED: ${{ inputs.live }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DEEPSEEK_API_KEY}" ] && [ "${LIVE_REQUESTED}" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Live tier enabled: explicit dispatch input and the credential secret are both present."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "NOT VERIFIED: the live tier needs workflow_dispatch with live=true AND the DEEPSEEK_API_KEY secret."
+          fi
+
+      - name: Generate the synthetic operator credential and the runtime-credential key
+        if: steps.live.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "ARIA_OPERATOR_BEARER_TOKEN=nightly-operator-$(openssl rand -hex 16)"
+            echo "ARIA_RUNTIME_CREDENTIAL_KEY=$(openssl rand -base64 32 | tr -d '\n')"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/setup-java@v4
+        if: steps.live.outputs.enabled == 'true'
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
+        if: steps.live.outputs.enabled == 'true'
         with:
-          python-version: '3.11'
+          node-version: '20'
+
+      - name: Install the OpenCode core CLI (same pin as the sandbox image)
+        if: steps.live.outputs.enabled == 'true'
+        run: npm install -g opencode-ai@1.18.15 && opencode --version
 
       - name: Build backend (skip tests)
-        if: env.DEEPSEEK_API_KEY != ''
+        if: steps.live.outputs.enabled == 'true'
         run: cd agent-control-tower && mvn -q -T 1C install -DskipTests
 
-      - name: Setup LangChain ADK venv
-        if: env.DEEPSEEK_API_KEY != ''
-        run: cd langchain-adk && python -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
-
-      - name: Start backend (H2 + langchain ADK)
-        if: env.DEEPSEEK_API_KEY != ''
+      - name: Start backend (H2 + OpenCode core, live provider)
+        if: steps.live.outputs.enabled == 'true'
         env:
-          # LangChain ADK subprocess reads LLM_API_KEY / LLM_BASE_URL / LLM_DEFAULT_MODEL;
-          # AriaDefaultAgentInitializer also auto-creates an active provider from these.
+          # The model-provider variables the OpenCode core child resolves
+          # (application.yml `opencode.sandbox-env`) plus the provider settings.
           LLM_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           LLM_BASE_URL: https://api.deepseek.com/v1
           LLM_MODEL: deepseek-chat
-          # application-h2.yml resolves adk.runtime.langchain.llm-* from these.
           LLM_PROVIDER_BASE_URL: https://api.deepseek.com/v1
           LLM_PROVIDER_MODEL: deepseek-chat
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd agent-control-tower
-          PYTHON_PATH=$GITHUB_WORKSPACE/langchain-adk/.venv/bin/python \
-            java --enable-preview -jar act-app/target/act-app-*.jar \
-            --spring.profiles.active=h2 --adk.default-provider=langchain > ../backend.log 2>&1 &
+          java --enable-preview -jar act-app/target/act-app-*.jar \
+            --spring.profiles.active=h2 \
+            --aria.cores.opencode.executable=opencode > ../backend.log 2>&1 &
           timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
 
+      - name: Prepare the SDD role agents (built-ins, OpenCode, HOST placement)
+        # The runner has no container runtime, so the seeded SDD role agents are
+        # pinned to the HOST-capable OpenCode selection through the production
+        # agent route before the chain is instantiated. The workflow template
+        # resolves its steps by agent role (ba/dev/qa).
+        if: steps.live.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          API=http://localhost:8080
+          AUTH="Authorization: Bearer ${ARIA_OPERATOR_BEARER_TOKEN}"
+          curl -sf -X POST -H "$AUTH" "$API/api/v1/maintenance/initialize-builtins"
+          for role in ba dev qa; do
+            AGENT_ID=$(curl -sf "$API/api/v1/agents" | jq -r --arg role "$role" '.[] | select(.role == $role) | .id' | head -1)
+            test -n "$AGENT_ID" && test "$AGENT_ID" != "null"
+            echo "pinning $role agent $AGENT_ID to opencode/HOST"
+            curl -sf -X PUT -H "$AUTH" -H 'Content-Type: application/json' \
+              -d '{"adkProvider":"opencode","executionMode":"HOST"}' \
+              "$API/api/v1/agents/$AGENT_ID" > /dev/null
+          done
+
       - name: Run SDD loop until WAITING_APPROVAL
-        if: env.DEEPSEEK_API_KEY != ''
+        if: steps.live.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           API=http://localhost:8080
@@ -73,7 +134,7 @@ jobs:
           # Instantiate the template -> starts the BA run with a real LLM.
           CHAIN_ID=$(curl -sf -X POST "$API/api/v1/knowledge/$TPL_ID/instantiate-workflow" \
             -H 'Content-Type: application/json' \
-            -d '{"parameters":{"issueRef":"#1-nightly-smoke"}}' | jq -r '.id')
+            -d '{"parameters":{"issueRef":"#1-nightly-smoke","repoUrl":"'"$SDD_REPO_URL"'"}}' | jq -r '.id')
           test -n "$CHAIN_ID" && test "$CHAIN_ID" != "null"
           echo "chain id: $CHAIN_ID"
 
@@ -82,7 +143,7 @@ jobs:
             STATUS=$(curl -sf "$API/api/v1/workflows/$CHAIN_ID" | jq -r '.status')
             echo "chain status: $STATUS"
             if [ "$STATUS" = "WAITING_APPROVAL" ]; then
-              echo "PASS: SDD loop reached WAITING_APPROVAL with a real LLM."
+              echo "PASS: SDD loop reached WAITING_APPROVAL with a real LLM on the OpenCode core."
               exit 0
             fi
             case "$STATUS" in
@@ -100,7 +161,7 @@ jobs:
         # No dedicated "fail run" maintenance endpoint exists; cancel each RUNNING run via
         # the cancel endpoint. The H2 file DB is runner-scoped and discarded with the
         # ephemeral runner, so residual state does not persist either way.
-        if: always()
+        if: always() && steps.live.outputs.enabled == 'true'
         run: |
           set -uo pipefail
           for id in $(curl -sf http://localhost:8080/api/v1/runs?status=RUNNING | jq -r '.[].id' 2>/dev/null); do

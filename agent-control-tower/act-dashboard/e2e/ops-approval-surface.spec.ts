@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
-  dispatchSeededCard,
+  establishOperatorSession,
   pollUntil,
   seedAdkAgent,
   seedKanbanItem,
+  setScenario,
+  transitionKanbanSettled,
   uniqueName,
 } from './fixtures';
 
@@ -18,22 +20,24 @@ import {
  * review-decision-zone.spec.ts covers the kanban decision zone, which uses a
  * different api module, so this surface had no coverage and the bug shipped.
  *
- * Reach path: identical to review-decision-zone.spec.ts — the default-on
- * task-level approval gate (AgentLoopEngine.java:704, before any provider call)
- * creates a PENDING ask, so no LLM key and no sandbox are needed.
+ * Reach path: the dispatched card's run is held on its core's own permission
+ * gate. Post-cutover no task-level gate exists, so the ask is raised by the
+ * core (the recorded 'write-twice' fixture offers an edit gate first) and the
+ * harness refuses to launch a peer for an agent without a declared scenario --
+ * the declared fixture therefore is the reach path, with no LLM key and no
+ * sandbox needed.
  */
 test('approving from the Operations surface resolves the ask', async ({ page, request }) => {
   const agent = await seedAdkAgent(request, {
     name: uniqueName('e2e-oc-opsap'),
     adkProvider: 'opencode',
   });
+  await setScenario(request, agent.id, 'write-twice');
   const card = await seedKanbanItem(request, {
     title: `opsap-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  // TODO→IN_PROGRESS is a dispatch; the auto-dispatch listener races this explicit move with
-  // the same dispatch and the loser answers 409 (0a18d96). The contract is the linked run.
-  await dispatchSeededCard(request, card.id);
+  expect((await transitionKanbanSettled(request, card.id, 'IN_PROGRESS')).status).toBe(200);
 
   const asks = await pollUntil<any[]>(
     request,
@@ -46,6 +50,7 @@ test('approving from the Operations surface resolves the ask', async ({ page, re
   expect(ask).toBeTruthy();
   const approvalId = ask!.id;
 
+  await establishOperatorSession(page);
   await page.goto('/ops');
   const approvalCard = page.locator(`[data-approval-id="${approvalId}"]`);
   await expect(approvalCard).toBeVisible({ timeout: 15_000 });

@@ -372,6 +372,24 @@
                 </plugins>
             </build>
         </profile>
+        <!--
+          Deterministic core E2E harness (Task 16). `-Pcore-e2e-harness` activates the
+          same-named profile in act-app, which builds the `backend-e2e-harness` test
+          distribution (app/ + harness/ + lib/ + peers/ + bridge/) next to the
+          untouched production `backend-jar`. This root entry declares the shared
+          descriptor location and exists so the profile is visible at the reactor
+          root; it deliberately adds no build steps to any other module, and the
+          surefire/failsafe tiering stays exactly as configured above.
+
+          Usage:
+            mvn -f agent-control-tower/pom.xml -Pcore-e2e-harness install -DskipTests
+        -->
+        <profile>
+            <id>core-e2e-harness</id>
+            <properties>
+                <e2e.harness.assembly.descriptor>src/assembly/backend-e2e-harness.xml</e2e.harness.assembly.descriptor>
+            </properties>
+        </profile>
     </profiles>
     <pluginRepositories>
         <pluginRepository>

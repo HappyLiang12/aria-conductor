@@ -1,11 +1,12 @@
 import { test, expect } from '@playwright/test';
 import {
   apiCall,
-  dispatchSeededCard,
+  establishOperatorSession,
   pollUntil,
   seedAdkAgent,
   seedKanbanItem,
-  transitionKanban,
+  setScenario,
+  transitionKanbanSettled,
   uniqueName,
 } from './fixtures';
 
@@ -15,10 +16,13 @@ import {
  * kanban-hitl.spec.ts:133-178 reaches the decision zone and asserts it renders,
  * but never clicks a decision control. This spec closes that half.
  *
- * Reach path (LLM-free, CI-safe): kanban-hitl.spec.ts:133-158 — pin a
- * task-capable opencode agent, dispatch the card, and the default-on
- * task-level approval gate (AgentLoopEngine.java:704, BEFORE any provider
- * call) creates a PENDING ask. No LLM key and no sandbox are needed.
+ * Reach path (LLM-free, CI-safe): pin an opencode agent whose core fixture is
+ * the recorded 'write-twice' scenario (its first offer is an edit gate), dispatch
+ * the card, and the run holds on that native ask. Post-cutover there is no
+ * task-level gate to reach -- the core's own permission request IS the ask, and
+ * the harness refuses to launch a peer for an agent without a declared
+ * scenario, so the selection is part of the reach path. No LLM key and no
+ * sandbox are needed.
  *
  * Locator note: the Overview page ALSO mounts ReviewQueue, which renders a
  * `Deny` button per globally-PENDING approval. Measured on the live stack, an
@@ -40,11 +44,12 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
     name: uniqueName('e2e-oc-uidz'),
     adkProvider: 'opencode',
   });
+  await setScenario(request, agent.id, 'deny-write');
   const card = await seedKanbanItem(request, {
     title: `uidz-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  await dispatchSeededCard(request, card.id);
+  expect((await transitionKanbanSettled(request, card.id, 'IN_PROGRESS')).status).toBe(200);
 
   const asks = await pollUntil<any[]>(
     request,
@@ -56,8 +61,9 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
   const ask = asks.find((a) => a.status === 'PENDING');
   expect(ask).toBeTruthy();
 
-  expect((await transitionKanban(request, card.id, 'REVIEW')).status).toBe(200);
+  expect((await transitionKanbanSettled(request, card.id, 'REVIEW')).status).toBe(200);
 
+  await establishOperatorSession(page);
   await page.goto('/');
   const reviewCard = page.locator(`[data-col="REVIEW"] [data-card="${card.id}"]`);
   await expect(reviewCard).toBeVisible({ timeout: 15_000 });
@@ -84,21 +90,19 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
     )
     .toBe('DENIED');
 
-  // Card state, asserted. The denial cancelled the linked run (ApprovalGate.java:253),
-  // and RunKanbanAutoCreator.onRunCompleted maps a cancelled/aborted run to a
-  // CANCELLED card (listener/RunKanbanAutoCreator.java:103-104), so the eventual
-  // state is deterministic. Polled read-only via GET /kanban/items/{id}.
+  // Card state, asserted. A denial is a decision to the CORE, not a run-killer:
+  // the run-owned session receives the refusal, its turn ends and the run
+  // completes with the fixture's refusal text, so
+  // RunKanbanAutoCreator.onRunCompleted maps the finished run to REVIEW
+  // (listener/RunKanbanAutoCreator.java:102). The previous expectation
+  // (CANCELLED) described the retired task-level gate, whose denial cancelled
+  // the run; CANCELLED is now only reachable for an actually cancelled/aborted
+  // run (:103-104). Polled read-only via GET /kanban/items/{id}.
   //
   // This replaces a cleanup that wrote CANCELLED explicitly and merely logged a
-  // non-200. That write was redundant with the listener's move, so the two could
-  // interleave and the write could lose the optimistic-lock race (HTTP 409,
-  // GlobalExceptionHandler.java:62-70) or be rejected because the card had already
-  // moved somewhere the matrix forbids leaving (InvalidStateTransitionException ->
+  // non-200. That write raced the listener's move (optimistic-lock 409,
+  // GlobalExceptionHandler.java:62-70, or InvalidStateTransitionException ->
   // 409, :35-38). Removing the write removes the race; the state claim stays.
-  // The transition itself is real: CANCELLED routes to cancel()
-  // (KanbanTransitionService.java:138), REVIEW -> CANCELLED is allowed
-  // (KanbanService.java:42-43), and CANCELLED is terminal, with no outgoing edges
-  // (:48). A card that does not reach CANCELLED is a genuine failure here.
   await expect
     .poll(
       async () => {
@@ -107,7 +111,7 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
       },
       { timeout: 30_000 },
     )
-    .toBe('CANCELLED');
+    .toBe('REVIEW');
 });
 
 /**
@@ -137,24 +141,23 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
  * /approvals/{id}/approve route (ApprovalController has only list, get, decide,
  * answer); calling one directly is a 404.
  *
- * Timing note: approving the task gate (AgentLoopEngine.java:704-722) lets the
- * run resume into the provider call, so with the healthy local opencode provider
- * the run may start executing. This test therefore asserts the ask becomes
- * APPROVED, that the resumed run leaves PAUSED, and that the card ends in REVIEW
- * — the sign-off column RunKanbanAutoCreator maps a finished run to. It makes no
- * assertion about the run's TERMINAL status, which differs by environment
- * (COMPLETED locally, FAILED in CI without a sandbox).
+ * Timing note: approving the core's gate lets the run-owned session continue, so
+ * the run proceeds to its scenario's completion. This test therefore asserts the
+ * ask becomes APPROVED, that the run is not parked PAUSED, and that the card ends
+ * in REVIEW — the sign-off column RunKanbanAutoCreator maps a finished run to. It
+ * makes no assertion about the run's TERMINAL status beyond that.
  */
 test('clicking Approve in the decision zone resolves the ask', async ({ page, request }) => {
   const agent = await seedAdkAgent(request, {
     name: uniqueName('e2e-oc-uiaz'),
     adkProvider: 'opencode',
   });
+  await setScenario(request, agent.id, 'deny-write');
   const card = await seedKanbanItem(request, {
     title: `uiaz-${uniqueName('card')}`,
     agentTemplateId: agent.name,
   });
-  await dispatchSeededCard(request, card.id);
+  expect((await transitionKanbanSettled(request, card.id, 'IN_PROGRESS')).status).toBe(200);
 
   const asks = await pollUntil<any[]>(
     request,
@@ -166,8 +169,9 @@ test('clicking Approve in the decision zone resolves the ask', async ({ page, re
   const ask = asks.find((a) => a.status === 'PENDING');
   expect(ask).toBeTruthy();
 
-  expect((await transitionKanban(request, card.id, 'REVIEW')).status).toBe(200);
+  expect((await transitionKanbanSettled(request, card.id, 'REVIEW')).status).toBe(200);
 
+  await establishOperatorSession(page);
   await page.goto('/');
   const reviewCard = page.locator(`[data-col="REVIEW"] [data-card="${card.id}"]`);
   await expect(reviewCard).toBeVisible({ timeout: 15_000 });

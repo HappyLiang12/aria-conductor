@@ -1,8 +1,10 @@
 # Qoder CLI agent core: ACP bridge and governed execution
 
+> Superseded by [Agent cores with Host/Sandbox execution and LangChain retirement](2026-09-22-agent-core-execution-modes-design.md). This document retains the historical sandbox-only proposal; its runtime topology, provider-retention assumptions, and delivery scope are not the current design.
+
 Date: 2026-09-17
 Baseline: `c6d37f8` (`main`, PR #89).
-Status: **Design approved by the user on 2026-09-17, including Section 1.1. Proceed to implementation planning; runtime gates remain unverified.**
+Status: **Historical design approval from 2026-09-17; superseded on 2026-09-22. Runtime gates remain unverified.**
 Evidence: `docs/reviews/2026-09-17-qoder-cli-acp-spike.md`.
 
 All components, endpoints, fields and behavior described as target design below are proposed,

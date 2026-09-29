@@ -11,6 +11,21 @@ export type ToolCallStatus = 'PENDING' | 'EXECUTING' | 'COMPLETED' | 'FAILED' | 
 export type WorkflowStatus = 'PENDING' | 'RUNNING' | 'WAITING_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type WorkflowStepStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 
+// === Execution core / mode (agent-core agent execution, Tasks 3 + 15) ===
+/**
+ * The governed agent cores. `adkProvider` keeps its field name and becomes the
+ * core identifier; `langchain` is a removed core and is deliberately NOT part
+ * of this union — a stored value outside it renders as an explicit unsupported
+ * state and is never silently remapped to a supported core.
+ */
+export type AgentCore = 'qoder' | 'opencode';
+
+/** Where a run executes: on the backend machine (`HOST`) or in a run-owned sandbox. */
+export type ExecutionMode = 'HOST' | 'SANDBOX';
+
+/** How a Host run obtains its working directory (worktree default, Direct explicit). */
+export type WorkspaceMode = 'WORKTREE' | 'DIRECT';
+
 // === Entities ===
 export interface Agent {
   id: string;
@@ -20,7 +35,18 @@ export interface Agent {
   role: string;
   model: string;
   provider: string;
-  adkProvider?: string;
+  /**
+   * Stored core id (field name kept from the ADK era). Typed for the governed
+   * cores while still accepting a stored removed value (e.g. `langchain`) so
+   * the UI can render it as an explicit unsupported state.
+   */
+  adkProvider?: AgentCore | (string & {});
+  /** Stored execution placement; absent on records predating the mode field. */
+  executionMode?: ExecutionMode;
+  /** Host workspace selection; absent on records predating the field. */
+  workspaceMode?: WorkspaceMode;
+  workspacePath?: string;
+  workspaceBaseRef?: string;
   config?: Record<string, unknown>;
   healthStatus: AgentHealthStatus;
   createdAt: string;
@@ -52,6 +78,12 @@ export interface Approval {
   runId: string;
   toolCallId: string | null;
   status: ApprovalStatus;
+  /**
+   * Human-readable detail. A normalized native permission ask is carried here
+   * by the backend (`Native permission request <req> from session <sid> for
+   * tool <tool> (<NATIVE_TOOL|PLATFORM_MCP>)`), which is how the Review
+   * surface renders the permission kind of such an ask.
+   */
   reason: string;
   requestedAt: string;
   decidedAt: string | null;
@@ -70,12 +102,6 @@ export interface Approval {
   contextMd?: string | null;
   optionsJson?: string | null;
   answer?: string | null;
-  // ACP permission asks (qoder provider): origin discriminator, the redacted
-  // display payload (JSON string) and the delivery state of the last decision.
-  // A missing `source` is legacy and renders exactly like before.
-  source?: 'LEGACY_GATE' | 'ACP_PERMISSION';
-  deliveryState?: string | null;
-  displayJson?: string | null;
 }
 
 export interface WorkspaceDiff {
@@ -146,7 +172,16 @@ export interface CreateAgentRequest {
   role?: string;
   model?: string;
   provider?: string;
-  adkProvider?: string;
+  /** Governed core id; omitted values are resolved by the backend admission policy. */
+  adkProvider?: AgentCore;
+  /** Explicit placement; omitted values are resolved to the documented default. */
+  executionMode?: ExecutionMode;
+  /** Host workspace selection; only meaningful with `executionMode: 'HOST'`. */
+  workspaceMode?: WorkspaceMode;
+  /** Admitted repository (worktree) or explicitly selected directory (direct). */
+  workspacePath?: string;
+  /** Optional base ref; only meaningful for a worktree. */
+  workspaceBaseRef?: string;
   config?: Record<string, unknown>;
 }
 
@@ -191,17 +226,11 @@ export interface ApprovalDecision {
  * decision receipt rather than the updated {@link Approval}:
  * `{ approvalId, approved, status: "processed" }`. Read the Approval back from
  * `GET /api/v1/approvals/{id}` for its resulting status.
- *
- * ACP permission asks additionally answer `decision: "APPROVED" | "DENIED"` and
- * a `deliveryState` (`PENDING | DELIVERING | DELIVERED | CANCELLED | FAILED |
- * MISSING`) — the decision is recorded even when its delivery fails.
  */
 export interface ApprovalDecisionReceipt {
   approvalId: string;
   approved: boolean;
   status: string;
-  decision?: string | null;
-  deliveryState?: string | null;
 }
 
 export interface CreateKnowledgeRequest {
@@ -438,7 +467,8 @@ export interface AgentTemplate {
   role: string;
   model: string;
   provider: string;
-  adkProvider?: string;
+  /** Template core; a template from an older backend may still name a removed core. */
+  adkProvider?: AgentCore | (string & {});
   description: string;
 }
 
@@ -461,41 +491,16 @@ export interface AdkProviderInfo {
   displayName: string;
   supportsTaskExecution: boolean;
   isDefault: boolean;
+  /**
+   * Execution modes the backend catalog declares for this core (the same
+   * source of truth the admission policy validates against). Absent on a
+   * backend that does not declare per-core modes yet — absent is "not
+   * declared", never an invented capability.
+   */
+  executionModes?: ExecutionMode[];
 }
 
 export interface AdkProviderHealth {
   providerId: string;
   healthy: boolean;
-}
-
-// === Qoder Runtime Credential (B8 API) ===
-/**
- * `GET|PUT /api/v1/adk/providers/qoder/credential` masked status. Absence of a
- * stored credential is a normal 200 with `configured:false` and nulls; the
- * response never carries the PAT (only the service-produced mask).
- */
-export interface QoderCredentialStatus {
-  providerId: string;
-  configured: boolean;
-  patMasked: string | null;
-  /** ISO-8601 instant string, null when no credential is stored. */
-  updatedAt: string | null;
-  model: string;
-}
-
-/** Credential-state failure codes of the bounded probe (`success:false`). */
-export type QoderCredentialTestReason = 'NOT_CONFIGURED' | 'CIPHER_FAILED';
-
-/**
- * `POST .../credential/test` result: a bounded NON-billable structural probe
- * (configured, decryptable, non-blank). `reason`/`message` are omitted on
- * success; `billable` is always false and `costNote` carries the disclosure.
- */
-export interface QoderCredentialTestResult {
-  success: boolean;
-  reason?: QoderCredentialTestReason;
-  model: string;
-  billable: boolean;
-  costNote: string;
-  message?: string;
 }

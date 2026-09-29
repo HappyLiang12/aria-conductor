@@ -6,9 +6,8 @@ import org.springframework.context.ApplicationEvent;
 import java.util.UUID;
 
 /**
- * Streamed progress fragment published by the OpenCode progress pump
- * (and the langchain SSE forwarding fallback). Persisted to run_progress_events
- * and broadcast over WS.
+ * Streamed progress fragment published by the OpenCode progress pump. Persisted to
+ * run_progress_events and broadcast over WS.
  */
 @Getter
 public class RunProgressEvent extends ApplicationEvent {

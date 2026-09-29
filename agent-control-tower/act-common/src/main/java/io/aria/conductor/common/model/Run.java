@@ -6,6 +6,15 @@ import lombok.*;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * A business run record. Run-level execution metadata (resolved core, mode,
+ * workspace, credential reference, deadline, runtime identity, usage) is
+ * deliberately NOT duplicated here: it lives in the immutable, run-keyed
+ * {@link RunExecutionBinding} recorded before launch, so the running task never
+ * re-resolves the agent's mutable settings. Legacy runs have no binding and
+ * receive no invented historical core snapshot; unknown usage stays unknown and
+ * must not be reported as zero.
+ */
 @Entity
 @Table(name = "runs", indexes = {
         @Index(name = "idx_runs_agent", columnList = "agentId"),

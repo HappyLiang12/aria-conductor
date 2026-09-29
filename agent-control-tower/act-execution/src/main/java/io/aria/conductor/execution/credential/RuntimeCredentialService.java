@@ -1,131 +1,264 @@
 package io.aria.conductor.execution.credential;
 
 import io.aria.conductor.common.model.RuntimeCredential;
-import io.aria.conductor.common.repository.RuntimeCredentialRepository;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import io.aria.conductor.common.security.ActorPrincipal;
+import io.aria.conductor.execution.repository.RuntimeCredentialRepository;
+import io.aria.conductor.execution.runtime.SecretBundle;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.Optional;
-import java.util.UUID;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.time.Clock;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Map;
+import java.util.Objects;
 
 /**
- * DB-backed store for deployment-scoped runtime provider credentials (e.g. the Qoder PAT).
+ * Managed runtime credentials for core launches (spec 6.1).
  *
- * <p>Values are encrypted at rest through {@link PackCredentialCipher}, and this store refuses to
- * operate when no real key is configured: unlike the pack credential resolver it never accepts the
- * cipher's Base64 development fallback and never reads a credential from the host environment (the
- * design's only env channel is the sandbox launch). Plaintext and ciphertext are never logged —
- * only provider ids.
+ * <p>Stored values are AES-256-GCM ciphertext under a <em>required</em>
+ * configured key with a fresh 96-bit nonce per encryption; the core id and
+ * credential reference are authenticated data, so ciphertext moved to another
+ * reference or core fails to decrypt instead of silently resolving. A missing
+ * key fails loudly on first use -- there is no plaintext and no Base64
+ * development fallback (the pack-credential cipher's fallback is deliberately
+ * not copied), and no other component of this class ever returns a stored
+ * secret: management responses carry masked metadata only.
+ *
+ * <p>{@link #resolve(String)} is the single plaintext exit, and it exists only
+ * to build the memory-only {@link SecretBundle} handed to the launch; the
+ * secret reaches the child solely as the recorded environment variable, never
+ * as an argument.
+ *
+ * <p>The service refuses management without an operator {@link ActorPrincipal};
+ * a worker or unauthenticated caller cannot store, read or delete the
+ * credential, and deletion revokes future resolution (already injected
+ * credentials are ended through the normal cancellation path, not here).
  */
-@Slf4j
 @Service
-@RequiredArgsConstructor
 public class RuntimeCredentialService {
 
-    private final RuntimeCredentialRepository credentialRepo;
-    private final PackCredentialCipher cipher;
+    /** Reference of the single Qoder runtime credential, recorded in run bindings. */
+    public static final String QODER_CREDENTIAL_REFERENCE = "qoder:operator";
+    public static final String QODER_CORE_ID = "qoder";
 
-    /** Whether a credential row exists for the provider. Never throws for a missing row. */
-    public boolean configured(String providerId) {
-        return credentialRepo.findByProviderId(providerId).isPresent();
+    /** The exact variable the pinned CLI consumes (capability evidence, qoder/HOST). */
+    public static final String QODER_ENVIRONMENT_VARIABLE = "QODER_PERSONAL_ACCESS_TOKEN";
+
+    /** Fixed, non-reversible display mask; no fragment of the value is ever returned. */
+    public static final String MASKED_SECRET = "********";
+
+    private static final String ALGORITHM = "AES/GCM/NoPadding";
+    private static final int NONCE_LENGTH = 12;
+    private static final int TAG_LENGTH_BITS = 128;
+    private static final int KEY_BITS = 256;
+    private static final byte[] DERIVATION_SALT =
+            "aria-conductor-runtime-credentials".getBytes(StandardCharsets.UTF_8);
+    private static final int DERIVATION_ITERATIONS = 100_000;
+
+    private final RuntimeCredentialRepository credentials;
+    /** Null when no key is configured; {@link #requireKey()} then fails loudly. */
+    private final SecretKeySpec key;
+    private final Clock clock;
+    private final SecureRandom random = new SecureRandom();
+
+    @Autowired
+    public RuntimeCredentialService(RuntimeCredentialRepository credentials,
+            @Value("${aria.runtime-credentials.encryption-key:${ARIA_RUNTIME_CREDENTIAL_KEY:}}")
+            String encryptionKey) {
+        this(credentials, encryptionKey, Clock.systemUTC());
+    }
+
+    /** Test/override seam: explicit key material and clock. */
+    public RuntimeCredentialService(RuntimeCredentialRepository credentials, String encryptionKey, Clock clock) {
+        this.credentials = Objects.requireNonNull(credentials, "Credential repository is required");
+        this.clock = Objects.requireNonNull(clock, "Clock is required");
+        this.key = encryptionKey == null || encryptionKey.isBlank()
+                ? null
+                : new SecretKeySpec(deriveKey(encryptionKey), "AES");
     }
 
     /**
-     * Store (insert or replace) the PAT for a provider, encrypted at rest.
+     * Resolves one configured credential into the memory-only bundle a launch
+     * injects as environment.
      *
-     * @throws IllegalArgumentException   when the pat is null or blank
-     * @throws RuntimeCredentialException with {@code KEY_NOT_CONFIGURED} when encryption is disabled
+     * @throws IllegalArgumentException when no credential is configured for the
+     *         reference (deleted or never stored), so a launch fails admission
+     *         instead of running without its credential
+     * @throws IllegalStateException when the configured key is missing or the
+     *         stored ciphertext cannot be authenticated
      */
-    public void save(String providerId, String pat) {
-        if (pat == null || pat.isBlank()) {
-            throw new IllegalArgumentException("PAT must not be null or blank");
+    public SecretBundle resolve(String credentialRef) {
+        if (credentialRef == null || credentialRef.isBlank()) {
+            throw new IllegalArgumentException("Runtime credential reference is required");
         }
-        if (!cipher.encryptionEnabled()) {
-            throw new RuntimeCredentialException(RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED,
-                    "Cannot store a runtime credential: PACK_CREDENTIAL_KEY is not configured,"
-                            + " and this store does not accept the Base64 development fallback");
+        RuntimeCredential row = credentials.findById(credentialRef)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Runtime credential is not configured: " + credentialRef));
+        String secret = decrypt(row.getEncValue(), binding(row));
+        return new SecretBundle(credentialRef, Map.of(row.getEnvironmentVariable(), secret));
+    }
+
+    /**
+     * Masked metadata of the Qoder credential; never decrypts and never returns
+     * the secret. The stored ciphertext and the configured encryption key are
+     * reported separately, so a stored credential whose key is missing is
+     * visible as unreadable state ({@code configured=true},
+     * {@code encryptionKeyConfigured=false}) instead of a misleading "ready" --
+     * a later resolve of that row still fails loudly.
+     */
+    public MaskedMetadata qoderMetadata() {
+        boolean keyConfigured = key != null;
+        return credentials.findById(QODER_CREDENTIAL_REFERENCE)
+                .map(row -> MaskedMetadata.configured(row, keyConfigured))
+                .orElseGet(() -> MaskedMetadata.notConfigured(keyConfigured));
+    }
+
+    /**
+     * Stores or replaces the Qoder runtime credential, encrypted, and returns
+     * masked metadata. Operator authority is required; the secret is never
+     * echoed back and never logged.
+     */
+    public MaskedMetadata putQoder(String secret, ActorPrincipal actor) {
+        requireOperator(actor);
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalArgumentException("Qoder runtime credential must not be blank");
         }
-        RuntimeCredential credential = credentialRepo.findByProviderId(providerId).orElseGet(() ->
-                RuntimeCredential.builder()
-                        .id(UUID.randomUUID().toString())
-                        .providerId(providerId)
+        // The required key is checked before any persistence interaction, so a
+        // missing key can never be masked by a repository failure.
+        String ciphertext = encrypt(secret,
+                authenticatedData(QODER_CORE_ID, QODER_CREDENTIAL_REFERENCE));
+        Instant now = clock.instant();
+        RuntimeCredential row = credentials.findById(QODER_CREDENTIAL_REFERENCE)
+                .orElseGet(() -> RuntimeCredential.builder()
+                        .credentialRef(QODER_CREDENTIAL_REFERENCE)
+                        .coreId(QODER_CORE_ID)
+                        .environmentVariable(QODER_ENVIRONMENT_VARIABLE)
+                        .createdAt(now)
                         .build());
-        credential.setEncPat(cipher.encrypt(pat));
-        credentialRepo.save(credential);
-        log.info("Stored runtime credential for provider {}", providerId);
+        row.setEncValue(ciphertext);
+        row.setUpdatedAt(now);
+        credentials.save(row);
+        return MaskedMetadata.configured(row, true);
     }
 
     /**
-     * Read the decrypted PAT for a provider — the provider launch path.
-     *
-     * @throws RuntimeCredentialException with {@code KEY_NOT_CONFIGURED} when encryption is
-     *         disabled, {@code NOT_CONFIGURED} when no row exists, or {@code CIPHER_FAILED}
-     *         (cipher exception as cause) when the stored value cannot be decrypted
+     * Deletes the Qoder credential so future launches can no longer resolve it
+     * (spec 6.1). Operator authority is required; a missing row is a no-op.
      */
-    public String read(String providerId) {
-        if (!cipher.encryptionEnabled()) {
-            throw new RuntimeCredentialException(RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED,
-                    "Cannot read runtime credential: PACK_CREDENTIAL_KEY is not configured,"
-                            + " and this store does not accept the Base64 development fallback");
-        }
-        RuntimeCredential credential = credentialRepo.findByProviderId(providerId)
-                .orElseThrow(() -> new RuntimeCredentialException(RuntimeCredentialException.Cause.NOT_CONFIGURED,
-                        "No runtime credential configured for provider " + providerId));
+    public void deleteQoder(ActorPrincipal actor) {
+        requireOperator(actor);
+        credentials.deleteById(QODER_CREDENTIAL_REFERENCE);
+    }
+
+    // ------------------------------------------------------------------ crypto
+
+    private String encrypt(String plaintext, String binding) {
+        requireKey();
         try {
-            return cipher.decrypt(credential.getEncPat());
-        } catch (RuntimeException e) {
-            // Wrap without echoing the ciphertext or the cipher's message into ours.
-            throw new RuntimeCredentialException(RuntimeCredentialException.Cause.CIPHER_FAILED,
-                    "Failed to decrypt the stored runtime credential for provider " + providerId, e);
+            byte[] nonce = new byte[NONCE_LENGTH];
+            random.nextBytes(nonce);
+            Cipher cipher = Cipher.getInstance(ALGORITHM);
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(TAG_LENGTH_BITS, nonce));
+            cipher.updateAAD(binding.getBytes(StandardCharsets.UTF_8));
+            byte[] ciphertext = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+            byte[] combined = new byte[nonce.length + ciphertext.length];
+            System.arraycopy(nonce, 0, combined, 0, nonce.length);
+            System.arraycopy(ciphertext, 0, combined, nonce.length, ciphertext.length);
+            return Base64.getEncoder().encodeToString(combined);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Runtime credential encryption failed", e);
         }
     }
 
-    /** Delete the stored credential for a provider; idempotent (no-op when absent). */
-    public void delete(String providerId) {
-        Optional<RuntimeCredential> existing = credentialRepo.findByProviderId(providerId);
-        if (existing.isPresent()) {
-            credentialRepo.delete(existing.get());
-            log.info("Deleted runtime credential for provider {}", providerId);
+    private String decrypt(String encoded, String binding) {
+        requireKey();
+        try {
+            byte[] combined = Base64.getDecoder().decode(encoded);
+            if (combined.length <= NONCE_LENGTH) {
+                throw new IllegalStateException("Runtime credential decryption failed: truncated ciphertext");
+            }
+            byte[] nonce = new byte[NONCE_LENGTH];
+            System.arraycopy(combined, 0, nonce, 0, NONCE_LENGTH);
+            Cipher cipher = Cipher.getInstance(ALGORITHM);
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_LENGTH_BITS, nonce));
+            cipher.updateAAD(binding.getBytes(StandardCharsets.UTF_8));
+            byte[] plaintext = cipher.doFinal(combined, NONCE_LENGTH, combined.length - NONCE_LENGTH);
+            return new String(plaintext, StandardCharsets.UTF_8);
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            // AEAD tag failure: tampered ciphertext, foreign key or a ciphertext bound
+            // to another core/reference. The message never echoes the value.
+            throw new IllegalStateException(
+                    "Runtime credential decryption failed (tampered, wrong key or wrong binding)", e);
         }
+    }
+
+    private void requireKey() {
+        if (key == null) {
+            throw new IllegalStateException("Runtime credential encryption key is not configured"
+                    + " (aria.runtime-credentials.encryption-key / ARIA_RUNTIME_CREDENTIAL_KEY);"
+                    + " refusing to store or read runtime secrets");
+        }
+    }
+
+    private static byte[] deriveKey(String keyMaterial) {
+        try {
+            PBEKeySpec spec = new PBEKeySpec(keyMaterial.toCharArray(),
+                    DERIVATION_SALT, DERIVATION_ITERATIONS, KEY_BITS);
+            return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Runtime credential key derivation failed", e);
+        }
+    }
+
+    private static String binding(RuntimeCredential row) {
+        return authenticatedData(row.getCoreId(), row.getCredentialRef());
     }
 
     /**
-     * Status safe to surface to callers: presence, masked PAT and last update time. Never exposes
-     * ciphertext or plaintext. A present row with encryption disabled is rejected rather than
-     * masked, because the suffix cannot be produced safely without the key.
-     *
-     * @throws RuntimeCredentialException with {@code KEY_NOT_CONFIGURED} when a row exists but
-     *         encryption is disabled, or {@code CIPHER_FAILED} (cipher exception as cause) when
-     *         the stored value cannot be decrypted
+     * Authenticated data binding one ciphertext to its core id and credential
+     * reference. Both components are length-prefixed: a plain
+     * {@code core + ":" + ref} concatenation would let two different pairs
+     * (e.g. {@code ("a", "b:c")} and {@code ("a:b", "c")}) share one AAD, so a
+     * ciphertext could be rebound between references whose separator moved.
      */
-    public RuntimeCredentialStatus maskedStatus(String providerId) {
-        Optional<RuntimeCredential> existing = credentialRepo.findByProviderId(providerId);
-        if (existing.isEmpty()) {
-            // Absence is reported as-is: no key is needed to know that nothing is stored.
-            return new RuntimeCredentialStatus(false, null, null);
-        }
-        if (!cipher.encryptionEnabled()) {
-            throw new RuntimeCredentialException(RuntimeCredentialException.Cause.KEY_NOT_CONFIGURED,
-                    "Cannot report masked status: PACK_CREDENTIAL_KEY is not configured,"
-                            + " and this store does not accept the Base64 development fallback");
-        }
-        RuntimeCredential credential = existing.get();
-        try {
-            return new RuntimeCredentialStatus(true, mask(cipher.decrypt(credential.getEncPat())),
-                    credential.getUpdatedAt());
-        } catch (RuntimeException e) {
-            // Wrap without echoing the ciphertext or the cipher's message into ours.
-            throw new RuntimeCredentialException(RuntimeCredentialException.Cause.CIPHER_FAILED,
-                    "Failed to decrypt the stored runtime credential for provider " + providerId, e);
-        }
+    static String authenticatedData(String coreId, String credentialRef) {
+        return coreId.length() + ":" + coreId + ":" + credentialRef.length() + ":" + credentialRef;
     }
 
-    /** Mirrors {@code LlmProviderService.maskApiKey}: last four characters only, never more. */
-    private static String mask(String value) {
-        if (value == null || value.length() <= 4) {
-            return "****";
+    private static void requireOperator(ActorPrincipal actor) {
+        if (actor == null) {
+            throw new SecurityException("Operator authority required");
         }
-        return "****" + value.substring(value.length() - 4);
+        actor.requireOperator();
+    }
+
+    /**
+     * Masked credential metadata safe for REST/UI responses: configuration
+     * state, key usability, the exact injected variable and a fixed mask --
+     * never the secret and never a fragment of it.
+     */
+    public record MaskedMetadata(String credentialRef, String coreId, String environmentVariable,
+            boolean configured, boolean encryptionKeyConfigured, String maskedSecret, Instant updatedAt) {
+
+        static MaskedMetadata configured(RuntimeCredential row, boolean encryptionKeyConfigured) {
+            return new MaskedMetadata(row.getCredentialRef(), row.getCoreId(),
+                    row.getEnvironmentVariable(), true, encryptionKeyConfigured,
+                    MASKED_SECRET, row.getUpdatedAt());
+        }
+
+        static MaskedMetadata notConfigured(boolean encryptionKeyConfigured) {
+            return new MaskedMetadata(QODER_CREDENTIAL_REFERENCE, QODER_CORE_ID,
+                    QODER_ENVIRONMENT_VARIABLE, false, encryptionKeyConfigured, null, null);
+        }
     }
 }

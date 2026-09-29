@@ -109,6 +109,13 @@ public class AriaStreamService {
         }
     }
 
+    /**
+     * The turns that precede the current request, in order: the system prompt and the
+     * client's history. The current request itself is the run's prompt seed -- the
+     * engine persists it as the run's first timeline row and passes it to the model,
+     * so including it here as well would duplicate it in both the messages and the
+     * conversation timeline.
+     */
     private List<LlmMessage> buildInitialContext(AriaChatRequest request) {
         List<LlmMessage> messages = new ArrayList<>();
 
@@ -132,7 +139,6 @@ public class AriaStreamService {
             }
         }
 
-        messages.add(LlmMessage.user(request.getMessage()));
         return messages;
     }
 

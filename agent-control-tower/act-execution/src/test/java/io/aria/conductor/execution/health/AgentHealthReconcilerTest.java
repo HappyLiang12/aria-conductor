@@ -6,11 +6,13 @@ import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.runtime.RuntimeActivity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -91,6 +93,46 @@ class AgentHealthReconcilerTest {
     }
 
     @Test
+    void anIdleConfiguredAgentIsNotStampedUnhealthyWithoutARunOwnedRuntime() {
+        // Readiness, not a live-runtime verdict: once runtimes are run-owned, the
+        // normal steady state is "configured, idle, no runtime". An UNREACHABLE probe
+        // for an agent that holds no active run-owned runtime must leave the stamp
+        // exactly as configured -- RunService.createRun and kanban pickup both refuse
+        // an UNHEALTHY agent, so stamping one would break dispatch for an idle agent.
+        RuntimeActivity activity = mock(RuntimeActivity.class);
+        when(activity.activeRuns(AGENT)).thenReturn(Set.of());
+        AgentHealthReconciler idleAware = new AgentHealthReconciler(agentRepository, registry,
+                environment(), activity);
+        when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(agent(HealthStatus.HEALTHY)));
+        when(provider.probeRuntimeHealth(AGENT)).thenReturn(AdkProvider.RuntimeHealth.UNREACHABLE);
+
+        idleAware.reconcile();
+
+        verify(agentRepository, never()).reconcileHealth(any(), any(), any());
+    }
+
+    @Test
+    void anActiveRunOwnedRuntimeThatIsUnreachableIsStampedUnhealthy() {
+        // The probe verdict is honoured for the runtime that exists: an agent with an
+        // active run-owned runtime whose probe is unreachable is stamped UNHEALTHY.
+        RuntimeActivity activity = mock(RuntimeActivity.class);
+        UUID activeRun = UUID.fromString("00000000-0000-0000-0000-0000000000c2");
+        when(activity.activeRuns(AGENT)).thenReturn(Set.of(activeRun));
+        AgentHealthReconciler idleAware = new AgentHealthReconciler(agentRepository, registry,
+                environment(), activity);
+        when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(agent(HealthStatus.HEALTHY)));
+        when(provider.probeRuntimeHealth(AGENT)).thenReturn(AdkProvider.RuntimeHealth.UNREACHABLE);
+
+        idleAware.reconcile();
+
+        verify(agentRepository).reconcileHealth(eq(AGENT), eq(HealthStatus.UNHEALTHY), any());
+    }
+
+    private static org.springframework.core.env.Environment environment() {
+        return new MockEnvironment();
+    }
+
+    @Test
     void aFailingProbeDoesNotAbortTheSweep() {
         Agent second = Agent.builder().id(UUID.randomUUID()).name("other").agentType(AgentType.NATIVE)
                 .healthStatus(HealthStatus.HEALTHY).build();
@@ -103,5 +145,21 @@ class AgentHealthReconcilerTest {
         // The exploded agent is skipped, not stamped UNHEALTHY by default.
         verify(agentRepository, never()).reconcileHealth(eq(AGENT), any(), any());
         verify(agentRepository).reconcileHealth(eq(second.getId()), eq(HealthStatus.HEALTHY), any());
+    }
+
+    @Test
+    void aFirstDeliveryCoreWithoutAProviderBeanIsLeftAsConfigured() {
+        // qoder is a registered production core with no AdkProvider bean: its runtimes
+        // are run-owned, so there is no agent-scoped runtime to judge. The sweep must
+        // not fall into the fail-closed resolve() error path (the per-tick WARN) and
+        // must not stamp a state it cannot observe.
+        Agent qoderAgent = Agent.builder().id(AGENT).name("qoder-worker").agentType(AgentType.NATIVE)
+                .adkProvider("qoder").healthStatus(HealthStatus.HEALTHY).build();
+        when(agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)).thenReturn(List.of(qoderAgent));
+
+        reconciler.reconcile();
+
+        verify(registry, never()).resolve(any());
+        verify(agentRepository, never()).reconcileHealth(any(), any(), any());
     }
 }

@@ -41,6 +41,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -101,8 +102,37 @@ class AriaServiceChatTest {
             r.setId(RUN_ID);
             return r;
         });
-        lenient().when(runRepository.findById(RUN_ID)).thenReturn(Optional.of(completedRun));
-        lenient().when(toolCallRepository.findByRunId(RUN_ID)).thenReturn(List.of());
+        lenient().when(runRepository.findStateById(RUN_ID))
+                .thenAnswer(inv -> Optional.of(committedState()));
+    }
+
+    /** The committed row the projection reads; tests mutate {@code completedRun}. */
+    private RunRepository.RunStateView committedState() {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return completedRun.getStatus();
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return completedRun.getFinalOutput();
+            }
+        };
+    }
+
+    private static RunRepository.RunStateView state(RunStatus status, String finalOutput) {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return status;
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return finalOutput;
+            }
+        };
     }
 
     private AriaChatRequest request(String message) {
@@ -121,6 +151,28 @@ class AriaServiceChatTest {
         assertThat(response.getIntent()).isEqualTo("general");
         assertThat(response.getActionsTaken()).isEmpty();
         assertThat(response.getTimestamp()).isNotNull();
+    }
+
+    /**
+     * Pins the mechanism the sync poll depends on: the request-scoped persistence
+     * context (Open Session In View) serves the instance this request saved
+     * (PENDING) for the whole window, so {@code findById} would never observe the
+     * engine's committed terminal state, and refreshing that instance outside a
+     * transaction is what the E2E caught as a 500. Every poll therefore reads
+     * through the committed-state projection, in order, so the loop sees the
+     * terminal state.
+     */
+    @Test
+    void chat_pollReadsTheCommittedStateProjectionForEveryRead() {
+        when(runRepository.findStateById(RUN_ID))
+                .thenReturn(Optional.of(state(RunStatus.PENDING, null)),
+                        Optional.of(state(RunStatus.COMPLETED, "All done")));
+
+        AriaChatResponse response = ariaService.chat(request("hello"));
+
+        assertThat(response.getMessage()).isEqualTo("All done");
+        verify(runRepository, times(2)).findStateById(RUN_ID);
+        verify(runRepository, never()).findById(RUN_ID);
     }
 
     @Test

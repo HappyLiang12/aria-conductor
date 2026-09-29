@@ -270,7 +270,7 @@ public class SpecReviewCoordinator {
     /**
      * Resolve the spec content for a BA completion: prefer the full spec file the BA
      * wrote to its sandbox ({@code /workspace/spec.md}); fall back to the BA run's
-     * finalOutput when the sandbox file is unavailable (langchain path, or a BA that
+     * finalOutput when the sandbox file is unavailable (or a BA that
      * did not write the file). Either way the content is cleaned before storage.
      */
     private String resolveSpecContent(UUID chainId, BaStepCompletedEvent event) {

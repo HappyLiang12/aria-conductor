@@ -1,25 +1,26 @@
 package io.aria.conductor.execution.controller;
 
-import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
-import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
-import io.aria.conductor.execution.approval.AcpDecisionRejectedException;
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.approval.ApprovalAnswerService;
-import io.aria.conductor.execution.approval.ApprovalDecisionService;
+import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.ApprovalQueryService;
+import io.aria.conductor.execution.approval.PermissionChoice;
+import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
+import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorSessionService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,41 +31,51 @@ import java.util.UUID;
 public class ApprovalController {
 
     private final ApprovalRepository approvalRepository;
-    private final ApprovalDecisionService approvalDecisionService;
+    private final ApprovalGate approvalGate;
     private final ToolCallRepository toolCallRepository;
     private final ToolRiskResolver toolRiskResolver;
-    private final AcpPermissionRequestRepository acpPermissionRequestRepository;
     private final ApprovalQueryService approvalQueryService;
     private final ApprovalAnswerService approvalAnswerService;
+    private final PermissionCoordinator permissionCoordinator;
+    private final OperatorSessionService operatorSessions;
+    private final ActorTokenService actorTokens;
 
-    /** Convenience constructor building its own query service (direct-instantiation tests). */
+    /**
+     * Convenience constructor for direct-instantiation tests: builds its own
+     * query service and takes the permission/identity collaborators explicitly.
+     */
     public ApprovalController(ApprovalRepository approvalRepository,
-                              ApprovalDecisionService approvalDecisionService,
+                              ApprovalGate approvalGate,
                               ToolCallRepository toolCallRepository,
                               ToolRiskResolver toolRiskResolver,
-                              AcpPermissionRequestRepository acpPermissionRequestRepository) {
-        this(approvalRepository, approvalDecisionService, toolCallRepository, toolRiskResolver,
-                acpPermissionRequestRepository,
-                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver,
-                        acpPermissionRequestRepository),
-                new ApprovalAnswerService(approvalRepository));
+                              PermissionCoordinator permissionCoordinator,
+                              OperatorSessionService operatorSessions,
+                              ActorTokenService actorTokens) {
+        this(approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
+                new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver),
+                new ApprovalAnswerService(approvalRepository), permissionCoordinator,
+                operatorSessions, actorTokens);
     }
 
-    @Autowired
+    @org.springframework.beans.factory.annotation.Autowired
     public ApprovalController(ApprovalRepository approvalRepository,
-                              ApprovalDecisionService approvalDecisionService,
+                              ApprovalGate approvalGate,
                               ToolCallRepository toolCallRepository,
                               ToolRiskResolver toolRiskResolver,
-                              AcpPermissionRequestRepository acpPermissionRequestRepository,
                               ApprovalQueryService approvalQueryService,
-                              ApprovalAnswerService approvalAnswerService) {
+                              ApprovalAnswerService approvalAnswerService,
+                              PermissionCoordinator permissionCoordinator,
+                              OperatorSessionService operatorSessions,
+                              ActorTokenService actorTokens) {
         this.approvalRepository = approvalRepository;
-        this.approvalDecisionService = approvalDecisionService;
+        this.approvalGate = approvalGate;
         this.toolCallRepository = toolCallRepository;
         this.toolRiskResolver = toolRiskResolver;
-        this.acpPermissionRequestRepository = acpPermissionRequestRepository;
         this.approvalQueryService = approvalQueryService;
         this.approvalAnswerService = approvalAnswerService;
+        this.permissionCoordinator = permissionCoordinator;
+        this.operatorSessions = operatorSessions;
+        this.actorTokens = actorTokens;
     }
 
     /**
@@ -94,12 +105,7 @@ public class ApprovalController {
             String askType,
             String contextMd,
             String optionsJson,
-            String answer,
-            // V60 provenance: source is never null (LEGACY_GATE for rows without one);
-            // deliveryState/displayJson come from the ACP companion row when it exists.
-            String source,
-            String deliveryState,
-            String displayJson) {}
+            String answer) {}
 
     /**
      * List approvals, optionally filtered by {@link ApprovalStatus} or by the kanban card the
@@ -126,56 +132,97 @@ public class ApprovalController {
                     ToolCall tc = a.getToolCallId() != null
                             ? toolCallRepository.findById(a.getToolCallId()).orElse(null)
                             : null;
-                    AcpPermissionRequest companion =
-                            acpPermissionRequestRepository.findById(a.getId()).orElse(null);
-                    return ResponseEntity.ok(toDetail(a, tc, companion));
+                    return ResponseEntity.ok(toDetail(a, tc));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
 
     /**
-     * Decide an approval through {@link ApprovalDecisionService}, which dispatches by the row's
-     * source: legacy rows keep the three-key ack they always had, while an ACP permission ask
-     * additionally reports its terminal decision and delivery state. An ACP decision that cannot
-     * be applied (expired, already decided, unsupported ask shape) answers 409 with its code; an
-     * unknown approval stays the legacy 400.
+     * Decide an approval. This route is operator-only (spec §6.2): the caller's
+     * operator authority is resolved from the configured operator bearer
+     * credential or the operator session cookie (whose mutations must also pass
+     * Origin/CSRF validation). 401 without a verifiable identity, 403 when a
+     * valid worker credential or a failed CSRF/Origin check is presented.
+     *
+     * <p>A native permission ask is dispatched to the permission coordinator —
+     * which re-checks operator authority, state and expiry inside one
+     * transaction — while every other (gate) approval keeps its existing
+     * decision semantics.
      */
     @PostMapping("/{id}/decide")
     public ResponseEntity<Map<String, Object>> decideApproval(
             @PathVariable UUID id,
-            @RequestBody DecideApprovalRequest request) {
+            @RequestBody DecideApprovalRequest request,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @CookieValue(value = OperatorSessionService.COOKIE_NAME, required = false) String sessionId,
+            @RequestHeader(value = OperatorSessionService.CSRF_HEADER, required = false) String csrfToken,
+            @RequestHeader(value = HttpHeaders.ORIGIN, required = false) String origin) {
         log.info("Approval decision: id={}, approved={}", id, request.approved());
 
+        ActorPrincipal operator;
         try {
-            ApprovalDecisionService.Result result =
-                    approvalDecisionService.decide(id, request.approved(), request.reason());
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("approvalId", result.approvalId());
-            body.put("approved", result.approved());
-            body.put("status", "processed");
-            if (result.decision() != null) {
-                body.put("decision", result.decision());
-                body.put("deliveryState", result.deliveryState());
+            operator = requireOperator(authorization, sessionId, csrfToken, origin);
+        } catch (OperatorSessionService.ForbiddenMutationException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
+        } catch (SecurityException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", e.getMessage()));
+        }
+
+        try {
+            if (permissionCoordinator.isNativePermissionRequest(id)) {
+                permissionCoordinator.decide(id,
+                        request.approved() ? PermissionChoice.ALLOW_ONCE : PermissionChoice.DENY, operator);
+            } else {
+                approvalGate.decideApproval(id, request.approved(), request.reason());
             }
-            return ResponseEntity.ok(body);
-        } catch (AcpDecisionRejectedException e) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
-                    "code", e.code().name(),
-                    "error", e.getMessage()
+            return ResponseEntity.ok(Map.of(
+                    "approvalId", id,
+                    "approved", request.approved(),
+                    "status", "processed"
             ));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of(
                     "error", e.getMessage()
             ));
+        } catch (IllegalStateException e) {
+            // Settled or expired request: the decision is refused, nothing was delivered.
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "error", e.getMessage()
+            ));
+        } catch (SecurityException e) {
+            // The operator identity went stale between resolution and the decision
+            // (e.g. the session TTL crossed): an authorization refusal, not a 500.
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "error", e.getMessage()
+            ));
         }
     }
 
-    private ApprovalDetail toDetail(Approval a, ToolCall tc, AcpPermissionRequest companion) {
-        // ACP asks have no ToolCall row: the companion's tool name is the only identity there is,
-        // and since it is not a registry tool, arguments and riskTier stay null.
-        String toolName = tc != null ? tc.getToolName()
-                : companion != null ? companion.getToolName() : null;
-        String riskTier = tc != null ? toolRiskResolver.resolve(tc.getToolName()).name() : null;
+    /**
+     * The operator boundary of this route. The transport owns the identity: the
+     * configured operator bearer credential, or the operator session cookie with
+     * Origin/CSRF validation. A verified worker credential is authenticated but
+     * never operator-authorized (403); anything unverifiable is 401.
+     */
+    private ActorPrincipal requireOperator(String authorization, String sessionId,
+                                           String csrfToken, String origin) {
+        if (operatorSessions.verifyOperatorCredential(authorization)) {
+            return ActorPrincipal.operator(null);
+        }
+        OperatorSessionService.OperatorSession session = operatorSessions.findSession(sessionId).orElse(null);
+        if (session != null) {
+            operatorSessions.validateMutation(session, csrfToken, origin);
+            return ActorPrincipal.operator(session.expiresAt());
+        }
+        if (actorTokens.resolveBearer(authorization).isPresent()) {
+            throw new OperatorSessionService.ForbiddenMutationException("Operator authority required");
+        }
+        throw new SecurityException("Operator session required");
+    }
+
+    private ApprovalDetail toDetail(Approval a, ToolCall tc) {
+        String toolName = tc != null ? tc.getToolName() : null;
+        String riskTier = toolName != null ? toolRiskResolver.resolve(toolName).name() : null;
         return new ApprovalDetail(
                 a.getId(), a.getRunId(), a.getToolCallId(), a.getStatus(), a.getReason(),
                 a.getRequestedAt(), a.getDecidedAt(), a.getExpiresAt(),
@@ -186,10 +233,7 @@ public class ApprovalController {
                 toolName, tc != null ? tc.getArguments() : null, riskTier,
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
-                a.getContextMd(), a.getOptionsJson(), a.getAnswer(),
-                a.getSource() != null ? a.getSource().name() : "LEGACY_GATE",
-                companion != null ? companion.getDeliveryState() : null,
-                companion != null ? companion.getDisplayJson() : null);
+                a.getContextMd(), a.getOptionsJson(), a.getAnswer());
     }
 
     /**

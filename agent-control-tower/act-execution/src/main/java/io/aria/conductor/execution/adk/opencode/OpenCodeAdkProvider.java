@@ -6,7 +6,6 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.LlmProvider;
 import io.aria.conductor.execution.adk.AbstractAdkProvider;
 import io.aria.conductor.execution.adk.TaskContext;
-import io.aria.conductor.execution.adk.TaskExecutionConstraints;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.llm.LlmMessage;
@@ -47,7 +46,7 @@ import java.util.function.Function;
  * through {@link #executeTask}. The turn-level {@link #call} is unsupported
  * and throws {@link UnsupportedOperationException}.
  *
- * <p>Lifecycle (mirrors the LangChain pattern): each agent gets a sandbox with
+ * <p>Lifecycle: each agent gets a sandbox with
  * {@code opencode serve} bound to {@code OpenCodeProperties#port}; health is
  * probed via {@code GET /global/health}; after
  * {@value #RESTART_AFTER_FAILURES} consecutive failures the sandbox is
@@ -149,16 +148,6 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
         return true;
     }
 
-    /**
-     * The opencode task deadline ({@code opencode.max-task-minutes}) is now resolved
-     * through the provider; the engine's {@link OpenCodeProperties} read remains
-     * only as the fallback for providers that state no constraint.
-     */
-    @Override
-    public TaskExecutionConstraints taskConstraints() {
-        return new TaskExecutionConstraints(Duration.ofMinutes(properties.getMaxTaskMinutes()));
-    }
-
     @Override
     public void prepareAgent(UUID agentId, Agent agent) {
         getOrPrepareInstance(agentId, agent);
@@ -219,7 +208,7 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
                 log.info("OpenCode task {} finished for agent {} ({} input / {} output tokens)",
                         runId, agent.getId(), resp.inputTokens(), resp.outputTokens());
                 return new TaskResult(runId, sessionId, resp.finalOutput(),
-                        resp.inputTokens(), resp.outputTokens(), false, true);
+                        resp.inputTokens(), resp.outputTokens(), false);
             } finally {
                 renewExecutor.shutdownNow();
             }
@@ -392,6 +381,16 @@ public class OpenCodeAdkProvider extends AbstractAdkProvider {
     public void resetAgent(UUID agentId) {
         preparing.remove(agentId);
         shutdownAgent(agentId);
+    }
+
+    /**
+     * The mode-neutral reset the workflow chainer reaches through the provider
+     * registry: identical to {@link #resetAgent(UUID)}, including the cached
+     * preparation future that {@code shutdownAgent} alone does not clear.
+     */
+    @Override
+    public void resetRuntime(UUID agentId) {
+        resetAgent(agentId);
     }
 
     @PreDestroy

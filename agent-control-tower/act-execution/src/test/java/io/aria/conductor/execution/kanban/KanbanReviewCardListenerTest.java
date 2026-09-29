@@ -27,6 +27,11 @@ import static org.mockito.Mockito.when;
  * Unit tests for {@link KanbanReviewCardListener}: every approval must be
  * surfaced as a Review-column card (spec 4.3) — linked to the card already
  * associated with the run, or auto-created for orphan approvals.
+ *
+ * <p>The mirror owns exactly one column: the link is written through the
+ * guarded single-column update ({@code linkKanbanItemIdIfAbsent}) and the
+ * loaded entity is never mutated or saved — the snapshot may predate an
+ * operator decision, so a full-row write would revert it (fix round 3).
  */
 class KanbanReviewCardListenerTest {
 
@@ -79,6 +84,7 @@ class KanbanReviewCardListenerTest {
         listener.onApprovalRequested(event());
 
         verifyNoInteractions(kanbanRepository, kanbanService);
+        verify(approvalRepository, never()).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-1");
         verify(approvalRepository, never()).save(any());
     }
 
@@ -103,8 +109,11 @@ class KanbanReviewCardListenerTest {
 
         listener.onApprovalRequested(event());
 
-        assertThat(approval.getKanbanItemId()).isEqualTo("card-1");
-        verify(approvalRepository).save(approval);
+        // The link goes through the guarded single-column write with the exact
+        // card id; the loaded entity stays untouched and is never saved.
+        assertThat(approval.getKanbanItemId()).isNull();
+        verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-1");
+        verify(approvalRepository, never()).save(approval);
         verify(kanbanService, never()).create(any());
     }
 
@@ -118,8 +127,9 @@ class KanbanReviewCardListenerTest {
         listener.onApprovalRequested(event());
 
         // DONE cards are finished work; the ask must land on an active card.
-        assertThat(approval.getKanbanItemId()).isEqualTo("todo-card");
-        verify(approvalRepository).save(approval);
+        assertThat(approval.getKanbanItemId()).isNull();
+        verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "todo-card");
+        verify(approvalRepository, never()).save(approval);
         verify(kanbanService, never()).create(any());
     }
 
@@ -144,8 +154,11 @@ class KanbanReviewCardListenerTest {
         assertThat(request.getStatus()).isEqualTo(KanbanStatus.REVIEW);
         assertThat(request.getLinkedRunId()).isEqualTo(RUN_ID.toString());
 
-        assertThat(approval.getKanbanItemId()).isEqualTo("card-new");
-        verify(approvalRepository).save(approval);
+        // The auto-created card is backfilled through the same guarded
+        // single-column write; the entity stays untouched and is never saved.
+        assertThat(approval.getKanbanItemId()).isNull();
+        verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-new");
+        verify(approvalRepository, never()).save(approval);
     }
 
     @Test
@@ -168,6 +181,7 @@ class KanbanReviewCardListenerTest {
                 ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
         verify(kanbanService).create(captor.capture());
         assertThat(captor.getValue().getTitle()).isEqualTo("Review: spec review (run 11111111)");
+        verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-new");
     }
 
     @Test
@@ -190,6 +204,7 @@ class KanbanReviewCardListenerTest {
                 ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
         verify(kanbanService).create(captor.capture());
         assertThat(captor.getValue().getTitle()).isEqualTo("Review: approval (run 11111111)");
+        verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-new");
     }
 
     // ---- behavior 4: defensive listener (mirrors RunKanbanAutoCreator) ----

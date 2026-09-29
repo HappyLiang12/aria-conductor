@@ -6,11 +6,15 @@ import { fileURLToPath } from 'url';
 /**
  * Real-LLM E2E scenarios (run against a live stack: backend 8080, OpenSandbox 8090,
  * real DeepSeek LLM). Covers:
- *   rl-01  Providers page renders both provider rows (opencode + langchain ADK).
+ *   rl-01  Providers page renders the production core rows (opencode + qoder).
  *   rl-02  Crew view: create an OpenCode agent (adkProvider=opencode) → write the
  *          workspace opencode.json (DeepSeek, {env:DEEPSEEK_API_KEY}) → start a run
  *          → approve the task-level approval gate (default-on for opencode) → poll
  *          until COMPLETED → verify the final output is displayed in the UI.
+ *
+ * Cutover note (Task 18): the removed LangChain core is gone from the inventory;
+ * rl-02's operator approval flow is covered by T17's ported harness cases and the
+ * operator live matrix (T20) re-pins the real-LLM run.
  *
  * Prerequisites (started outside this spec):
  *   - backend (SPRING_PROFILES_ACTIVE=h2, DEEPSEEK_API_KEY set, OpenSandbox reachable)
@@ -66,7 +70,7 @@ async function navigateTo(page: Page, view: string) {
 test.describe.configure({ mode: 'serial', timeout: 600_000 }); // 10 min total
 
 // ─────────────────────────────────────────────────────────────────────
-test('rl-01 Providers page renders opencode + langchain ADK', async ({ page }) => {
+test('rl-01 Providers page renders the production cores opencode + qoder', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto('/');
   await page.waitForLoadState('networkidle');
@@ -77,12 +81,14 @@ test('rl-01 Providers page renders opencode + langchain ADK', async ({ page }) =
   const providerTable = page.locator('.data-table').first();
   await expect(providerTable).toBeVisible({ timeout: 15_000 });
   await expect(providerTable).toContainText('OpenCode');
-  await expect(providerTable).toContainText('LangChain ADK');
-  await expect(providerTable.locator('tr', { hasText: 'langchain' }).first()).toContainText('Default');
-  await expect(providerTable.locator('tr', { hasText: 'opencode' }).first()).not.toContainText('Default');
+  await expect(providerTable).toContainText('Qoder');
+  // exactly the production cores: no removed LangChain row
+  await expect(providerTable.locator('tr', { hasText: 'langchain' })).toHaveCount(0);
+  await expect(providerTable.locator('tr', { hasText: 'opencode' }).first()).toContainText('Default');
+  await expect(providerTable.locator('tr', { hasText: 'qoder' }).first()).not.toContainText('Default');
 
   await page.screenshot({ path: 'e2e/screenshots/rl-01-providers-page.png' });
-  console.log('✅ rl-01 Providers page renders both providers');
+  console.log('✅ rl-01 Providers page renders the production cores');
 });
 
 // ─────────────────────────────────────────────────────────────────────

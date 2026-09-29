@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  * System-level ADK configuration shared across all providers.
  *
  * <p>Provider-specific settings live in their own properties classes
- * (e.g. {@code LangChainAdkProperties}).
+ * (e.g. {@code OpenCodeProperties}).
  */
 @Data
 @Component
@@ -16,5 +16,5 @@ import org.springframework.stereotype.Component;
 public class AdkSystemProperties {
 
     /** Default provider used when an agent does not specify one. */
-    private String defaultProvider = "langchain";
+    private String defaultProvider = "opencode";
 }

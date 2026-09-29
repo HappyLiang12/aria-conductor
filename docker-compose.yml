@@ -46,10 +46,6 @@ services:
       # Injected into opencode sandboxes via application.yml opencode.sandbox-env
       # (opencode needs LLM credentials inside the sandbox to call models).
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-${LLM_API_KEY:-}}
-      # Compose has no opencode-sandbox image build (langchain-adk only; CI pin d8003a8) — pin langchain to avoid fresh-deploy SANDBOX_UNAVAILABLE.
-      ADK_DEFAULT_PROVIDER: langchain
-      ADK_HOST: langchain-adk
-      ADK_PORT: 9300
       PROJECT_ROOT: /project
       TOOLS_SHELL_WHITELIST: ${TOOLS_SHELL_WHITELIST:-git,ls,cat,find,echo,mvn,npm,pnpm,curl}
       TOOLS_FILE_WORKSPACE_DIR: /workspaces
@@ -83,8 +79,10 @@ services:
     image: opensandbox/server:latest
     container_name: aria-opensandbox
     # The opencode sandbox image (used by the opencode provider at runtime) must be
-    # built before the first run:
-    #   docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox
+    # built before the first run; the context is the repository root because the image
+    # consumes the shared runtime-sandbox launcher/control scripts:
+    #   docker build -t aria-conductor/opencode-sandbox:1.1 \
+    #     -f agent-control-tower/opencode-sandbox/Dockerfile .
     environment:
       SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
       # Required for non-interactive container startup when no server API key is configured;
@@ -105,28 +103,6 @@ services:
       - ./opensandbox-config.toml:/etc/opensandbox/config.toml:ro
       # Persist server-managed metadata (SQLite store at ~/.opensandbox/opensandbox.db)
       - opensandbox_data:/root/.opensandbox
-    networks:
-      - aria-network
-
-  langchain-adk:
-    build:
-      context: ./langchain-adk
-      dockerfile: Dockerfile
-    container_name: aria-adk
-    environment:
-      HOST: "0.0.0.0"
-      PORT: "9300"
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
-      LLM_DEFAULT_MODEL: ${LLM_MODEL:-gpt-4o}
-    ports:
-      - "127.0.0.1:${ADK_PORT:-9300}:9300"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9300/health')\" || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
     networks:
       - aria-network
 

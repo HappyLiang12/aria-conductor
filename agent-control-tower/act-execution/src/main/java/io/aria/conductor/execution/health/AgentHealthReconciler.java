@@ -5,8 +5,11 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.runtime.RuntimeActivity;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
+import org.springframework.lang.Nullable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -24,8 +27,8 @@ import java.util.Set;
  * <p>It probes through {@link AdkProvider#probeRuntimeHealth} rather than
  * {@code isHealthy(UUID)} — the latter counts failures and tears the sandbox down
  * at the threshold, so a per-tick read would let transient blips kill runtimes.
- * It never creates a sandbox either; bringing a runtime up stays the job of
- * {@code AriaDefaultAgentInitializer.recoverDegradedAria()}.
+ * It never creates a sandbox either; a runtime is brought up by the run that owns
+ * it, not by this reconciler.
  */
 @Slf4j
 @Component
@@ -36,13 +39,34 @@ public class AgentHealthReconciler {
     private final AgentRepository agentRepository;
     private final AdkProviderRegistry providerRegistry;
     private final Environment environment;
+    /**
+     * Optional run-quiescence view (Task 13): when present, an UNREACHABLE probe
+     * only stamps UNHEALTHY for an agent that actually holds an active run-owned
+     * runtime. An idle configured agent -- the normal steady state once runtimes
+     * are run-owned -- is never stamped UNHEALTHY merely because no runtime
+     * exists. Absent (legacy wiring), the previous probe-only semantics stay.
+     */
+    private final RuntimeActivity runtimeActivity;
 
+    /**
+     * Production wiring: the Task 18 cutover passes the run coordinator -- the
+     * production {@link RuntimeActivity} view -- into the explicit constructor below.
+     */
+    @Autowired
     public AgentHealthReconciler(AgentRepository agentRepository,
                                  AdkProviderRegistry providerRegistry,
                                  Environment environment) {
+        this(agentRepository, providerRegistry, environment, null);
+    }
+
+    public AgentHealthReconciler(AgentRepository agentRepository,
+                                 AdkProviderRegistry providerRegistry,
+                                 Environment environment,
+                                 @Nullable RuntimeActivity runtimeActivity) {
         this.agentRepository = agentRepository;
         this.providerRegistry = providerRegistry;
         this.environment = environment;
+        this.runtimeActivity = runtimeActivity;
     }
 
     @Scheduled(fixedRateString = "${adk.health.reconcile-interval-ms:60000}")
@@ -52,11 +76,37 @@ public class AgentHealthReconciler {
         }
         for (Agent agent : agentRepository.findByHealthStatusNot(HealthStatus.RETIRED)) {
             try {
-                applyProbe(agent, providerRegistry.resolve(agent).probeRuntimeHealth(agent.getId()));
+                AdkProvider provider = providerFor(agent);
+                if (provider == null) {
+                    // A first-delivery core (e.g. qoder) has no provider bean and no
+                    // agent-scoped runtime: its runs are run-owned and judged through the
+                    // coordinator's quiescence view, so there is nothing to probe here and
+                    // the configured stamp is left untouched. A per-tick WARN would be a
+                    // false failure report, not a health fact.
+                    log.debug("Health reconcile: agent {} selects core '{}', which has no"
+                            + " provider-level runtime to probe", agent.getId(), agent.getAdkProvider());
+                    continue;
+                }
+                applyProbe(agent, provider.probeRuntimeHealth(agent.getId()));
             } catch (Exception e) {
                 log.warn("Health reconcile failed for agent {}: {}", agent.getId(), e.getMessage());
             }
         }
+    }
+
+    /**
+     * The provider bean that serves the agent's core, or {@code null} when no
+     * provider-level runtime exists for it (a first-delivery core such as qoder, or
+     * an unknown/removed core). An agent that stores no core keeps the registry's
+     * documented default resolution.
+     */
+    @Nullable
+    private AdkProvider providerFor(Agent agent) {
+        String coreId = agent.getAdkProvider();
+        if (coreId == null || coreId.isBlank()) {
+            return providerRegistry.resolve(agent);
+        }
+        return providerRegistry.getProvider(coreId);
     }
 
     private void applyProbe(Agent agent, AdkProvider.RuntimeHealth probed) {
@@ -66,6 +116,12 @@ public class AgentHealthReconciler {
             // RunService.createRun and kanban pickup refuse an UNHEALTHY agent — for
             // providers that simply do not implement the probe (the interface default
             // is NOT_STARTED, and a Mockito mock of the interface yields null).
+            return;
+        }
+        if (probed == AdkProvider.RuntimeHealth.UNREACHABLE && runtimeActivity != null
+                && runtimeActivity.activeRuns(agent.getId()).isEmpty()) {
+            // Readiness, not a live-runtime verdict: an idle configured agent has no
+            // run-owned runtime to judge, so its stamp is left as configured.
             return;
         }
         HealthStatus target = probed == AdkProvider.RuntimeHealth.REACHABLE

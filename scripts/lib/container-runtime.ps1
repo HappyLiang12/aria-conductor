@@ -146,8 +146,12 @@ function Ensure-OpencodeSandboxImage {
     & $Runtime image exists $Tag 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { return $false }
 
-    $context = Join-Path $ProjectRoot 'agent-control-tower/opencode-sandbox'
-    & $Runtime build -t $Tag $context | Out-Null
+    # Context = repository root: the image consumes agent-control-tower/runtime-sandbox
+    # (the fixed run-owned launcher and writer-control scripts), so the context must
+    # contain that directory; -f names the Dockerfile explicitly.
+    $context = $ProjectRoot
+    $dockerfile = Join-Path $ProjectRoot 'agent-control-tower/opencode-sandbox/Dockerfile'
+    & $Runtime build -t $Tag -f $dockerfile $context | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to build $Tag (exit $LASTEXITCODE)" }
     return $true
 }

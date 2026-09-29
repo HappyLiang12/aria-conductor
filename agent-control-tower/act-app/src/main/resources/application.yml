@@ -45,6 +45,10 @@ opencode:
   sandbox-api-key: ${OPENSANDBOX_API_KEY:}
   image: aria-conductor/opencode-sandbox:1.1
   port: 4096
+  # Legacy provider-level fallback used only when a caller passes no
+  # TaskContext.maxDuration (OpenCodeAdkProvider.resolveMaxDuration). It no longer
+  # governs the engine/coordinator task path: that run deadline is
+  # aria.tasks.deadline-minutes below.
   max-task-minutes: 45
   # Default repo URL for SDD templates that declare {repoUrl} but the caller omits it (R8-F1).
   repo-url: ${SDD_REPO_URL:}
@@ -64,6 +68,11 @@ qoder:
 
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:
+  # Mode-neutral run deadline of a coordinated execution attempt
+  # (TaskDeadlineProperties; the frozen spec deadline and the engine task path
+  # both read this key). Default 45, same value as the legacy provider knob above.
+  tasks:
+    deadline-minutes: 45
   mcp:
     enabled: ${ARIA_MCP_ENABLED:true}
     auth-mode: ${ARIA_MCP_AUTH_MODE:none}
@@ -75,3 +84,29 @@ aria:
   progress:
     retention-days: ${ARIA_PROGRESS_RETENTION_DAYS:7}
     cleanup-cron: ${ARIA_PROGRESS_CLEANUP_CRON:0 30 3 * * *}
+  # Per-core launch configuration. The Qoder bridge refuses a `--cli` that is not
+  # an absolute existing executable and must be told files that exist, so a
+  # configured value is resolved at launch and an unresolvable one refuses the
+  # run loudly by key name. The opencode keys (`aria.cores.opencode.executable`,
+  # `aria.cores.opencode.model`, `aria.cores.opencode.version`) keep their Java
+  # defaults.
+  cores:
+    qoder:
+      # Reviewed model pin of a qoder run. `efficient` is the operator-set default
+      # (the pinned model of the Qoder acceptance); a paid model must be set here
+      # explicitly by the operator.
+      model: ${ARIA_CORES_QODER_MODEL:efficient}
+      # Absolute path of the pinned Qoder CLI. A bare name is resolved against PATH
+      # at launch; the CLI of this machine is
+      # C:\Users\User\.qoder\bin\qodercli\qodercli.exe.
+      executable: ${ARIA_CORES_QODER_EXECUTABLE:qoder}
+      # Absolute path of the built committed bridge entry
+      # (packages/qoder-acp-bridge/dist/main.js; run `pnpm build` there).
+      bridge-entry: ${ARIA_CORES_QODER_BRIDGE_ENTRY:packages/qoder-acp-bridge/dist/main.js}
+  # Run-owned roots. The start scripts export absolute values derived from the
+  # repository root, so a run's worktree, generated configuration and retained
+  # results never depend on the backend process working directory; a relative
+  # configured value is anchored at that working directory.
+  workspaces:
+    runtime-root: ${ARIA_WORKSPACES_RUNTIME_ROOT:./data/workspaces/runs}
+    result-root: ${ARIA_WORKSPACES_RESULT_ROOT:./data/workspaces/results}

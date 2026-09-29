@@ -276,6 +276,21 @@ IPv4-only server port. Resolving it needs a host networking change (the machine'
 publishing), not a code change: on Linux — where the CI lane
 (`.github/workflows/sandbox-lifecycle.yml`) runs — the relay is not involved.
 
-`opencode/HOST` remains blocked on a run-owned provider credential, and
-`opencode/SANDBOX` on the same credential; both stay NOT VERIFIED with that named
-prerequisite.
+The Linux side of that boundary is now verified: the container lane
+(`.github/workflows/sandbox-lifecycle.yml`) is **green** on run 36530201015 / job
+109281934562 — `# tests 6 / # pass 6 / # fail 0`, re-checkable with
+`gh run view --job 109281934562 --log`. It covers exactly the mechanics the Windows
+round could not reach past the upload: the peer starts from the uploaded manifest with
+the per-run token required on its endpoint, the pause is a verified suspension of the
+writer tree (and the resume is acknowledged), the automatic TTL renewal really calls
+the server, the export is stable before the single destroy (the exported file's sha256
+equals the in-container file's), and destroying one run leaves another run's sandbox
+untouched. The upload's byte fidelity is asserted by a digest computed inside the
+container, not by transported text: the SDK reads a command's output with
+`kotlin.io.TextStreamsKt.lineSequence`, so the exec read-back is line-oriented and can
+never carry a trailing newline even when the file has one.
+
+Scope note: the lane drives the committed mock-peer test image, so it verifies the
+sandbox boundary mechanics, not a model-backed core. `opencode/HOST` remains blocked on
+a run-owned provider credential, and `opencode/SANDBOX` on the same credential plus the
+host relay noted above; both stay NOT VERIFIED with those named prerequisites.

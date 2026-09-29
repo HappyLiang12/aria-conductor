@@ -167,19 +167,47 @@ answers "unknown command", exit 1, for every tag), so the opencode helper above 
 always re-build under docker. `image inspect` is a valid predicate for both runtimes
 (exit 0 when the image is present, non-zero otherwise). The opencode helper is left
 unchanged (out of scope for this task).
+
+The image bakes the pinned proprietary Qoder CLI, so a build needs the operator's
+verified artifact inputs (-CliVersion/-CliArtifactUrl/-CliSha256 for the Linux
+artifact, plus an explicit -LicenseAccepted); without them this helper refuses
+rather than starting a build the Dockerfile can only reject. Context = repository
+root, because the image consumes agent-control-tower/runtime-sandbox and the bridge
+source tree.
+
+A present image is NOT rebuilt: after a change under agent-control-tower/qoder-sandbox
+or agent-control-tower/runtime-sandbox, rebuild explicitly with `podman build` and
+re-run the tests against the rebuilt image.
 #>
 function Ensure-QoderSandboxImage {
     param(
         [Parameter(Mandatory)][string]$Runtime,
         [Parameter(Mandatory)][string]$ProjectRoot,
-        [string]$Tag = 'aria-conductor/qoder-sandbox:0.1'
+        [string]$Tag = 'aria-conductor/qoder-sandbox:1.0',
+        [string]$CliVersion = '',
+        [string]$CliArtifactUrl = '',
+        [string]$CliSha256 = '',
+        [switch]$LicenseAccepted
     )
 
     & $Runtime image inspect $Tag *> $null
     if ($LASTEXITCODE -eq 0) { return $false }
 
-    $context = Join-Path $ProjectRoot 'agent-control-tower/qoder-sandbox'
-    & $Runtime build -t $Tag $context | Out-Null
+    if (-not $CliVersion -or -not $CliArtifactUrl -or -not $CliSha256 -or -not $LicenseAccepted) {
+        throw ("Refusing to build $Tag without the pinned Qoder CLI inputs: pass " +
+            "-CliVersion, -CliArtifactUrl and -CliSha256 (the checksum-verified Linux " +
+            "artifact) and -LicenseAccepted (the CLI is a proprietary Qoder artifact). " +
+            "The image never installs an unpinned binary.")
+    }
+
+    $context = $ProjectRoot
+    $dockerfile = Join-Path $ProjectRoot 'agent-control-tower/qoder-sandbox/Dockerfile'
+    & $Runtime build -t $Tag -f $dockerfile `
+        --build-arg "QODER_CLI_VERSION=$CliVersion" `
+        --build-arg "QODER_CLI_ARTIFACT_URL=$CliArtifactUrl" `
+        --build-arg "QODER_CLI_SHA256=$CliSha256" `
+        --build-arg "QODER_CLI_LICENSE_ACCEPTED=yes" `
+        $context | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to build $Tag (exit $LASTEXITCODE)" }
     return $true
 }

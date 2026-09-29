@@ -64,7 +64,7 @@ opencode:
 qoder:
   sandbox-server-url: http://localhost:8090
   sandbox-api-key: ${OPENSANDBOX_API_KEY:}
-  image: aria-conductor/qoder-sandbox:0.1
+  image: aria-conductor/qoder-sandbox:1.0
 
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:

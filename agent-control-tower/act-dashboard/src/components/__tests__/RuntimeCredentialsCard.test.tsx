@@ -36,6 +36,7 @@ const CONFIGURED: QoderCredentialMetadata = {
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: true,
   encryptionKeyConfigured: true,
+  testSupported: true,
   maskedSecret: 'fixture-secret-value',
   updatedAt: '2026-09-22T12:00:00Z',
 };
@@ -46,6 +47,7 @@ const UNCONFIGURED: QoderCredentialMetadata = {
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: false,
   encryptionKeyConfigured: true,
+  testSupported: true,
   maskedSecret: null,
   updatedAt: null,
 };
@@ -57,6 +59,13 @@ const COST_DISCLOSURE =
 const NOT_WIRED_REASON =
   'The bounded Qoder credential test requires the run-owned core bridge, which is not '
   + 'wired in this component; no model call was made.';
+
+const NO_PROBE_WIRED_REASON =
+  'No credential probe is wired in this build: the bounded test needs the run-owned core '
+  + 'bridge, so the dashboard cannot make that call.';
+
+const NO_STORED_CREDENTIAL_TEST_REASON =
+  'The bounded credential test needs a stored credential — save one first.';
 
 function ui() {
   const qc = new QueryClient({
@@ -185,6 +194,26 @@ describe('RuntimeCredentialsCard', () => {
     expect(
       screen.queryByText('Credential test passed — authenticated with model efficient'),
     ).not.toBeInTheDocument();
+  });
+
+  it('does not offer the bounded test when this build has no probe, and says why', async () => {
+    mockedGet.mockResolvedValue({ ...CONFIGURED, testSupported: false });
+    ui();
+    await screen.findByText('••••••••');
+
+    expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
+    expect(screen.getByText(NO_PROBE_WIRED_REASON)).toBeInTheDocument();
+    expect(mockedTest).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the bounded test before a credential is stored, and says why', async () => {
+    mockedGet.mockResolvedValue(UNCONFIGURED);
+    ui();
+    await screen.findByText('Not configured');
+
+    expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
+    expect(screen.getByText(NO_STORED_CREDENTIAL_TEST_REASON)).toBeInTheDocument();
+    expect(mockedTest).not.toHaveBeenCalled();
   });
 
   it('surfaces the backend operator rejection verbatim', async () => {

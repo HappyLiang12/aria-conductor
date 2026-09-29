@@ -38,7 +38,10 @@ public class OperatorSessionService {
     public static final String COOKIE_NAME = "aria_operator_session";
     public static final String CSRF_HEADER = "X-CSRF-Token";
     public static final Duration DEFAULT_SESSION_TTL = Duration.ofHours(8);
-    public static final String DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:8080";
+    /** Both loopback spellings: a browser may open the dashboard on either one. */
+    public static final String DEFAULT_ALLOWED_ORIGINS =
+            "http://localhost:5173,http://localhost:8080,"
+                    + "http://127.0.0.1:5173,http://127.0.0.1:8080";
 
     private static final String BEARER_PREFIX = "Bearer ";
     private static final int SESSION_BYTES = 32;

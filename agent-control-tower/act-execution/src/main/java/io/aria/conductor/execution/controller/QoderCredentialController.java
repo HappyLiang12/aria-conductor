@@ -67,6 +67,25 @@ public class QoderCredentialController {
     static final String CREDENTIAL_REQUIRED_MESSAGE = "A runtime credential value is required";
 
     /**
+     * Flat view of this surface: the masked metadata plus whether this build can
+     * actually run the bounded test. The test capability is a property of the
+     * wiring -- a {@link CredentialProbe} may simply not exist in the deployed
+     * component -- so the dashboard can state it instead of offering a call that
+     * can only be refused. No credential value is part of the view.
+     */
+    public record CredentialView(String credentialRef, String coreId, String environmentVariable,
+                                 boolean configured, boolean encryptionKeyConfigured,
+                                 String maskedSecret, Instant updatedAt, boolean testSupported) {
+
+        static CredentialView of(RuntimeCredentialService.MaskedMetadata metadata, boolean testSupported) {
+            return new CredentialView(metadata.credentialRef(), metadata.coreId(),
+                    metadata.environmentVariable(), metadata.configured(),
+                    metadata.encryptionKeyConfigured(), metadata.maskedSecret(),
+                    metadata.updatedAt(), testSupported);
+        }
+    }
+
+    /**
      * Payload parser of this route only. Lenient about unknown fields like the
      * production mapper, and never used to raise an exception that carries the
      * body: {@link #requiredSecret(String)} converts parse failures into a
@@ -103,7 +122,7 @@ public class QoderCredentialController {
         if (rejection != null) {
             return rejection;
         }
-        return ResponseEntity.ok(credentials.qoderMetadata());
+        return ResponseEntity.ok(CredentialView.of(credentials.qoderMetadata(), probe != null));
     }
 
     @PutMapping
@@ -124,7 +143,7 @@ public class QoderCredentialController {
         RuntimeCredentialService.MaskedMetadata masked = credentials.putQoder(secret, actor);
         // The secret is intentionally absent from this log line and from the response.
         log.info("Qoder runtime credential replaced by operator");
-        return ResponseEntity.ok(masked);
+        return ResponseEntity.ok(CredentialView.of(masked, probe != null));
     }
 
     @DeleteMapping

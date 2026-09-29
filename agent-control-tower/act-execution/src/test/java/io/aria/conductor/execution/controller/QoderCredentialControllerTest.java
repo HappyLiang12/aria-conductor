@@ -124,6 +124,31 @@ class QoderCredentialControllerTest extends WebMvcTestBase {
     }
 
     @Test
+    void credentialViewReportsWhetherTheBoundedTestIsWired() throws Exception {
+        storedRow();
+        MockMvc noProbeMvc = mockMvcFor(new QoderCredentialController(
+                credentials, operatorSessions, null, QoderCredentialController.TEST_TIMEOUT));
+
+        mvc.perform(get("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.testSupported").value(true));
+
+        noProbeMvc.perform(get("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.testSupported").value(false));
+
+        noProbeMvc.perform(put("/api/v1/adk/providers/qoder/credential")
+                        .requestAttr(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, operator())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"secret\":\"" + SECRET + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.testSupported").value(false));
+        verifyNoInteractions(probe);
+    }
+
+    @Test
     void putStoresEncryptedAndNeverEchoesTheSecret() throws Exception {
         when(repository.findById(REF)).thenReturn(Optional.empty());
 

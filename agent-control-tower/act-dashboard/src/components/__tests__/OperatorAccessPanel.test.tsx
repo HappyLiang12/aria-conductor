@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { OperatorAccessPanel } from '../OperatorAccessPanel';
@@ -73,7 +74,16 @@ afterEach(() => {
 });
 
 function ui() {
-  return render(<OperatorAccessPanel />);
+  // The panel invalidates cached operator-only reads on every authority change,
+  // so it needs the same query client the app provides.
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <OperatorAccessPanel />
+    </QueryClientProvider>,
+  );
 }
 
 describe('OperatorAccessPanel (Task 15 fix rounds 1–2)', () => {

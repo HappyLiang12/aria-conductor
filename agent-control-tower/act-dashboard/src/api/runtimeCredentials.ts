@@ -26,6 +26,13 @@ export interface QoderCredentialMetadata {
   configured: boolean;
   /** False when the store's encryption key is missing: stored values are unreadable. */
   encryptionKeyConfigured: boolean;
+  /**
+   * Whether this backend can run the bounded credential test at all. The probe is
+   * part of the wiring (the run-owned core bridge), so a deployment may not have
+   * one; the card then explains the state instead of offering a call that can only
+   * be refused.
+   */
+  testSupported: boolean;
   /** Backend-provided mask. Deliberately never rendered by the card (see above). */
   maskedSecret: string | null;
   updatedAt: string | null;

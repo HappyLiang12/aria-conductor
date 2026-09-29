@@ -80,12 +80,25 @@ jobs:
           curl -sf http://127.0.0.1:8090/health
       - name: Build the mock-peer sandbox test image
         run: docker build -t aria-conductor/runtime-sandbox-test:1.0 -f agent-control-tower/runtime-sandbox/test.Dockerfile .
+      - name: Build the backend classpath for the lane
+        # The lane drives a real JVM harness; building its classpath here (bounded)
+        # keeps that work out of the lane step, where the first run of this workflow
+        # hung inside a silent Maven build until the job's 45-minute cap.
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          mvn -B -q -f agent-control-tower/pom.xml -pl act-execution -am install -DskipTests
+          mvn -B -q -f agent-control-tower/pom.xml -pl act-execution dependency:build-classpath \
+            -Dmdep.outputFile="$RUNNER_TEMP/lane-classpath.txt"
+          wc -c "$RUNNER_TEMP/lane-classpath.txt"
       - name: Run the real sandbox lifecycle lane
+        timeout-minutes: 20
         env:
           OPEN_SANDBOX_URL: http://127.0.0.1:8090
           SANDBOX_RUNTIME: docker
           SANDBOX_TEST_IMAGE: aria-conductor/runtime-sandbox-test:1.0
-        run: node --test e2e/agent-core/sandbox-lifecycle.test.mjs
+          SANDBOX_LANE_CLASSPATH_FILE: ${{ runner.temp }}/lane-classpath.txt
+        run: timeout 1080 node --test e2e/agent-core/sandbox-lifecycle.test.mjs
       - name: Dump the OpenSandbox server logs (diagnose)
         if: failure()
         run: docker compose logs --tail 300 opensandbox-server || true

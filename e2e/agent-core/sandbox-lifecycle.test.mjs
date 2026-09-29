@@ -29,7 +29,7 @@
 // (docker|podman), SANDBOX_TEST_IMAGE, ARIA_OPEN_SANDBOX_API_KEY (optional).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -120,8 +120,12 @@ function ensureTestImage(state) {
  * invocation through one shell-on-Windows helper is safe — the same reasoning
  * `hasCommand` already applies to its fallback probe.
  */
-function runMaven(args) {
-  return execFileSync(mavenCommand(), args, { stdio: 'inherit', shell: process.platform === 'win32' });
+function runMaven(args, { timeoutMs = 900000 } = {}) {
+  // Bounded: a hung Maven must fail this lane with the command, not hold the job
+  // until its timeout (which is what the first CI run of this lane did).
+  return execFileSync(mavenCommand(), args, {
+    stdio: 'inherit', shell: process.platform === 'win32', timeout: timeoutMs,
+  });
 }
 
 /**
@@ -134,14 +138,22 @@ function runMaven(args) {
  */
 function ensureHarnessClasspath(state) {
   if (state.classpath !== undefined) return state.classpath;
-  const rootPom = join(REPO, 'agent-control-tower/pom.xml');
-  runMaven(['-f', rootPom, '-pl', 'act-execution', '-am', 'install', '-DskipTests', '-q']);
-  const output = join(state.root, 'classpath.txt');
-  runMaven(['-f', rootPom, '-pl', 'act-execution', 'dependency:build-classpath',
-    `-Dmdep.outputFile=${output}`, '-q']);
   const module = join(REPO, 'agent-control-tower/act-execution/target');
-  state.classpath = [join(module, 'classes'), join(module, 'test-classes'),
-    readFileSync(output, 'utf8').trim()].join(delimiter);
+  let dependencies;
+  const provided = process.env.SANDBOX_LANE_CLASSPATH_FILE;
+  if (provided !== undefined && provided.trim() !== '' && existsSync(provided)) {
+    console.log(`[sandbox-lane] harness classpath provided by ${provided}`);
+    dependencies = readFileSync(provided, 'utf8').trim();
+  } else {
+    const rootPom = join(REPO, 'agent-control-tower/pom.xml');
+    console.log('[sandbox-lane] building the harness classpath with Maven (minutes)...');
+    runMaven(['-f', rootPom, '-pl', 'act-execution', '-am', 'install', '-DskipTests', '-q']);
+    const output = join(state.root, 'classpath.txt');
+    runMaven(['-f', rootPom, '-pl', 'act-execution', 'dependency:build-classpath',
+      `-Dmdep.outputFile=${output}`, '-q']);
+    dependencies = readFileSync(output, 'utf8').trim();
+  }
+  state.classpath = [join(module, 'classes'), join(module, 'test-classes'), dependencies].join(delimiter);
   return state.classpath;
 }
 

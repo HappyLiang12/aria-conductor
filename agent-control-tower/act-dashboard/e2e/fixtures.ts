@@ -773,7 +773,10 @@ export const OPTIMISTIC_LOCK_409 = 'Card was modified by another move — refres
  */
 export async function dispatchSeededCard(request: APIRequestContext, cardId: string) {
   const moved = await transitionKanbanSettled(request, cardId, 'IN_PROGRESS');
-  if (moved.status !== 200) {
+  // 200: we moved it. 409 RUN_ALREADY_FINISHED: the board's own auto-dispatch
+  // already ran the card and its run has finished — the linked run the callers
+  // need is on the card either way. Any other status is a real refusal.
+  if (moved.status !== 200 && moved.status !== 409) {
     throw new Error(`dispatch of card ${cardId} failed: HTTP ${moved.status} ${JSON.stringify(moved.data)}`);
   }
   const read = await apiCall(request, 'GET', `/kanban/items/${cardId}`);

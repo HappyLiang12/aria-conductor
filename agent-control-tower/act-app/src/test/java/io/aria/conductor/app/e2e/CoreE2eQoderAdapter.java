@@ -2,6 +2,8 @@ package io.aria.conductor.app.e2e;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.approval.PermissionReply;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
@@ -16,6 +18,7 @@ import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.core.QoderCoreAdapter;
+import io.aria.conductor.execution.security.ActorTokenService;
 
 import java.net.URI;
 import java.nio.file.Files;
@@ -86,10 +89,14 @@ final class CoreE2eQoderAdapter implements CoreAdapter {
         this.bridgeEntry = Objects.requireNonNull(bridgeEntry, "bridgeEntry").toString();
         // The production adapter is the session/behavior authority; its profile
         // carries exactly the reviewed artifacts of the harness (bridge entry,
-        // the mock CLI), never a real credential.
+        // the mock CLI), never a real credential. The platform-MCP wiring is
+        // disabled: this harness never exercises it (it builds its own launch).
+        McpProperties harnessMcp = new McpProperties();
+        harnessMcp.setEnabled(false);
         this.delegate = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
                 nodeExecutable, bridgeEntry.toString(), this.coreExecutable,
-                List.of(peerScript.toString()), Map.of(), Map.of(), FIXTURE_VERSION, FIXTURE_MODEL));
+                List.of(peerScript.toString()), Map.of(), Map.of(), FIXTURE_VERSION, FIXTURE_MODEL),
+                new RunMcpWiring(harnessMcp, new ActorTokenService()));
     }
 
     /**

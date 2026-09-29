@@ -2,6 +2,7 @@ package io.aria.conductor.execution.runtime.core;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
@@ -23,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * OpenCode core adapter (task 11): the reviewed OpenCode profile behind the
@@ -72,8 +74,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * allowances, explicit refusals for every side-effecting surface. Tool names
      * follow the reviewed core's tool ids; an unknown tool is covered by the
      * wildcard refusal and can therefore never be auto-approved.
+     *
+     * <p>The {@code %s} slot carries the platform-MCP block of a wired run; the
+     * empty substitution is the unchanged no-wiring document
+     * ({@link #governedConfigurationJson()}).
      */
-    private static final String GOVERNED_CONFIGURATION_JSON = """
+    private static final String GOVERNED_CONFIGURATION_TEMPLATE = """
             {
               "$schema": "https://opencode.ai/config.json",
               "permission": {
@@ -90,17 +96,22 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "deny"
-              }
+              }%s
             }
             """;
+
+    /** Byte-for-byte the governed document every unwired run receives. */
+    private static final String GOVERNED_CONFIGURATION_JSON = GOVERNED_CONFIGURATION_TEMPLATE.formatted("");
 
     private static final CoreCapabilities UNVERIFIED =
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
 
     private final OpenCodeProfile profile;
+    private final RunMcpWiring runMcp;
 
-    public OpenCodeCoreAdapter(OpenCodeProfile profile) {
+    public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp) {
         this.profile = Objects.requireNonNull(profile, "profile");
+        this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
     }
 
     /**
@@ -178,7 +189,8 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         Path configHome = createDirectory(configurationRoot.resolve(CONFIG_HOME_DIRECTORY));
         Path dataHome = createDirectory(configurationRoot.resolve(DATA_HOME_DIRECTORY));
         Path cacheHome = createDirectory(configurationRoot.resolve(CACHE_HOME_DIRECTORY));
-        writeGovernedConfiguration(configurationRoot);
+        Optional<RunMcpWiring.Endpoint> workerMcp = runMcp.forRun(spec, environment);
+        writeGovernedConfiguration(configurationRoot, workerMcp);
         // A sandbox working directory is already absolute IN THE SANDBOX (e.g.
         // /workspace) and must not be host-absolutized: on Windows that turns it into
         // C:workspace, which the launch manifest rightly refuses.
@@ -211,6 +223,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         serverEnvironment.put("XDG_CONFIG_HOME", configHome.toString());
         serverEnvironment.put("XDG_DATA_HOME", dataHome.toString());
         serverEnvironment.put("XDG_CACHE_HOME", cacheHome.toString());
+        if (workerMcp.isPresent()) {
+            // The run-scoped worker bearer of the platform MCP. The endpoint ignores it
+            // in auth-mode=none and requires exactly this kind of token in auth-mode=actor;
+            // the wiring never materialises for auth-mode=token.
+            serverEnvironment.put("ARIA_MCP_TOKEN", workerMcp.get().token());
+        }
         // The credential bundle is the last writer, exactly as the controlled
         // launch configuration does it; the bundle itself is validated there
         // (task 5) before it reaches this adapter.
@@ -256,15 +274,35 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         return GOVERNED_CONFIGURATION_JSON;
     }
 
-    private void writeGovernedConfiguration(Path configurationRoot) {
+    private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp) {
         Path target = configurationRoot.resolve(CONFIG_HOME_DIRECTORY).resolve("opencode").resolve("opencode.json");
+        String document = workerMcp
+                .map(endpoint -> GOVERNED_CONFIGURATION_TEMPLATE.formatted(platformMcpBlock(endpoint)))
+                .orElse(GOVERNED_CONFIGURATION_JSON);
         try {
             Files.createDirectories(target.getParent());
-            Files.writeString(target, GOVERNED_CONFIGURATION_JSON, StandardCharsets.UTF_8);
+            Files.writeString(target, document, StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to write the governed OpenCode configuration " + target
                     + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * The {@code mcp.aria-conductor} block of a wired run: the same remote
+     * endpoint shape the legacy provider generated, always carrying the run-scoped
+     * bearer (resolved by the server from {@code ARIA_MCP_TOKEN}).
+     */
+    private static String platformMcpBlock(RunMcpWiring.Endpoint endpoint) {
+        return """
+                ,
+                  "mcp": {
+                    "aria-conductor": {
+                      "type": "remote",
+                      "url": "%s",
+                      "Authorization": "Bearer {env:ARIA_MCP_TOKEN}"
+                    }
+                  }""".formatted(endpoint.url());
     }
 
     private static Path createDirectory(Path directory) {

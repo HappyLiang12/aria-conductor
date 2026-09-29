@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime.core;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
@@ -23,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeMap;
 
 /**
@@ -73,6 +75,9 @@ public final class QoderCoreAdapter implements CoreAdapter {
     /** Run-owned file the bridge reads the core credential from. */
     static final String CREDENTIAL_FILE = "credential.secret";
 
+    /** Run-owned file the bridge reads the platform-MCP worker token from. */
+    static final String WORKER_MCP_TOKEN_FILE = "worker-mcp.token";
+
     /**
      * The newline of every run-owned secret file. A fixed LF, never the platform
      * separator: the readers are Node processes started on either side of a
@@ -86,9 +91,11 @@ public final class QoderCoreAdapter implements CoreAdapter {
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
 
     private final QoderProfile profile;
+    private final RunMcpWiring runMcp;
 
-    public QoderCoreAdapter(QoderProfile profile) {
+    public QoderCoreAdapter(QoderProfile profile, RunMcpWiring runMcp) {
         this.profile = Objects.requireNonNull(profile, "profile");
+        this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
     }
 
     /**
@@ -258,6 +265,17 @@ public final class QoderCoreAdapter implements CoreAdapter {
             add(argv, "--host", endpoint.getHost());
             add(argv, "--port", String.valueOf(endpoint.getPort()));
         }
+        Optional<RunMcpWiring.Endpoint> workerMcp = runMcp.forRun(spec, environment);
+        if (workerMcp.isPresent()) {
+            // The bridge reads the token file at startup and refuses one that is
+            // not readable, so the run-owned file is materialized here (the
+            // trusted-launcher side of the contract); the token itself never
+            // reaches the argv.
+            Path tokenFile = writeWorkerMcpTokenFile(environment, workerMcp.get().token());
+            add(argv, "--worker-mcp-name", "aria-conductor");
+            add(argv, "--worker-mcp-url", workerMcp.get().url());
+            add(argv, "--worker-mcp-token-file", tokenFile.toString());
+        }
         return new LaunchProfile(argv, profile.environment(), workingDirectory.toString(),
                 controlSecretFile.toString());
     }
@@ -303,6 +321,12 @@ public final class QoderCoreAdapter implements CoreAdapter {
     public static Path credentialFile(PreparedEnvironment environment) {
         return Path.of(environment.configurationDirectory()).toAbsolutePath().normalize()
                 .resolve(CREDENTIAL_FILE);
+    }
+
+    /** The run-owned file the profile names for the platform-MCP worker token. */
+    public static Path workerMcpTokenFile(PreparedEnvironment environment) {
+        return Path.of(environment.configurationDirectory()).toAbsolutePath().normalize()
+                .resolve(WORKER_MCP_TOKEN_FILE);
     }
 
     // ------------------------------------------------------ launch-time existence gates
@@ -403,6 +427,25 @@ public final class QoderCoreAdapter implements CoreAdapter {
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
         } catch (IOException e) {
             throw new IllegalStateException("Unable to write the run-owned credential file " + target
+                    + "; the bridge would be told to read a file that does not exist", e);
+        }
+        return target;
+    }
+
+    /**
+     * Writes the run-owned platform-MCP worker token file the profile names,
+     * mirroring {@link #writeCredentialFile}: the file lives in the run-owned
+     * configuration directory, ends in the fixed LF, and the value reaches the
+     * bridge only through the file — never the argv.
+     */
+    private static Path writeWorkerMcpTokenFile(PreparedEnvironment environment, String token) {
+        Path target = workerMcpTokenFile(environment);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, token + RUN_OWNED_FILE_NEWLINE, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to write the run-owned platform MCP token file " + target
                     + "; the bridge would be told to read a file that does not exist", e);
         }
         return target;

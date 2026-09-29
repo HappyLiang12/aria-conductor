@@ -2,6 +2,7 @@ package io.aria.conductor.execution.runtime.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceMode;
@@ -9,6 +10,8 @@ import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
 import io.aria.conductor.execution.runtime.ControlStrategy;
@@ -21,6 +24,7 @@ import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -509,6 +513,40 @@ class CoreAdapterContractTest {
         }
     }
 
+    /**
+     * The restored platform-MCP wiring, driven through the committed bridge: the
+     * Aria assistant's launch names the worker-MCP flags, and the run-owned token
+     * file they point at carries the minted run-scoped bearer with the pinned LF.
+     * The bridge itself refuses a token file it cannot read at startup, so the
+     * ready bridge is the proof that the file was there.
+     */
+    @Test
+    void qoderAriaRunCarriesThePlatformMcpWiringIntoTheBridge() throws Exception {
+        try (QoderRun run = new QoderRun("complete", MODEL_PIN, AriaConstants.ARIA_AGENT_ID)) {
+            assertThat(run.readyLine()).as("the bridge must start with the worker-MCP flags").isNotNull();
+            Path tokenFile = QoderCoreAdapter.workerMcpTokenFile(run.environment());
+            assertThat(run.launchProfile().argv()).containsSubsequence(
+                    "--worker-mcp-name", "aria-conductor",
+                    "--worker-mcp-url", "http://127.0.0.1:" + run.mcp().getPort() + "/mcp",
+                    "--worker-mcp-token-file", tokenFile.toString());
+            assertThat(tokenFile)
+                    .as("the token file is run-owned and lives next to the credential file")
+                    .isRegularFile();
+            assertThat(tokenFile.getParent())
+                    .isEqualTo(QoderCoreAdapter.credentialFile(run.environment()).getParent());
+            String token = Files.readString(tokenFile);
+            assertThat(token).as("the bridge reads the LF-framed run-owned file").endsWith("\n");
+            assertThat(run.actorTokens().resolveBearer("Bearer " + token.strip()))
+                    .as("the file carries the run-scoped worker bearer minted for this run")
+                    .get()
+                    .satisfies(actor -> assertThat(actor.runId()).isEqualTo(run.runId()));
+            for (String argument : run.launchProfile().argv()) {
+                assertThat(argument).as("a secret value must never appear in the launch argv")
+                        .doesNotContain(token.strip());
+            }
+        }
+    }
+
     /** The client authenticates exactly as the bridge's contract demands. */
     @Test
     void qoderBridgeClientRefusesAWrongSecretAndAForeignBinding() throws Exception {
@@ -557,7 +595,8 @@ class CoreAdapterContractTest {
             QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
                     nodeExecutable(), bridgeEntry().toString(), nodeExecutable(),
                     List.of(qoderPeerScript().toString()), Map.of(), Map.of(),
-                    QODER_CORE_VERSION, MODEL_PIN));
+                    QODER_CORE_VERSION, MODEL_PIN),
+                    new RunMcpWiring(new McpProperties(), new ActorTokenService()));
             SecretBundle credentials = new SecretBundle("fixture-credential-ref",
                     Map.of(QoderCoreAdapter.CONTROL_SECRET_ENVIRONMENT,
                             "core-adapter-contract-localhost-check"));
@@ -902,11 +941,15 @@ class CoreAdapterContractTest {
     }
 
     private static RunFixture fixture(String coreId) throws IOException {
+        return fixture(coreId, UUID.randomUUID());
+    }
+
+    private static RunFixture fixture(String coreId, UUID agentId) throws IOException {
         Path root = Files.createTempDirectory("core-adapter-contract").toRealPath();
         Path workspace = Files.createDirectories(root.resolve("workspace"));
         Path runtimeRoot = Files.createDirectories(root.resolve("runtime"));
         UUID runId = UUID.randomUUID();
-        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), coreId,
+        ExecutionSpec spec = new ExecutionSpec(runId, agentId, coreId,
                 ExecutionMode.HOST, new AgentExecutionSettings(coreId, ExecutionMode.HOST,
                         WorkspaceMode.DIRECT, workspace.toString(), null),
                 "fixture-credential-ref", "fixture-config-revision",
@@ -923,6 +966,8 @@ class CoreAdapterContractTest {
 
         private final RunFixture fixture;
         private final String secret;
+        private final McpProperties mcp = new McpProperties();
+        private final ActorTokenService actorTokens = new ActorTokenService();
         private final QoderCoreAdapter adapter;
         private final LaunchProfile launchProfile;
         private final Process process;
@@ -936,11 +981,15 @@ class CoreAdapterContractTest {
         private String recordedSessionId;
 
         QoderRun(String scenario) throws IOException, InterruptedException {
-            this(scenario, MODEL_PIN);
+            this(scenario, MODEL_PIN, UUID.randomUUID());
         }
 
         QoderRun(String scenario, String model) throws IOException, InterruptedException {
-            fixture = fixture(QoderCoreAdapter.CORE_ID);
+            this(scenario, model, UUID.randomUUID());
+        }
+
+        QoderRun(String scenario, String model, UUID agentId) throws IOException, InterruptedException {
+            fixture = fixture(QoderCoreAdapter.CORE_ID, agentId);
             secret = "core-adapter-contract-secret-" + UUID.randomUUID();
             adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
                     nodeExecutable(),
@@ -953,7 +1002,8 @@ class CoreAdapterContractTest {
                             "ARIA_PEER_WORKSPACE", fixture.workspace().toString()),
                     Map.of(),
                     QODER_CORE_VERSION,
-                    model));
+                    model),
+                    new RunMcpWiring(mcp, actorTokens));
             SecretBundle credentials = new SecretBundle("fixture-credential-ref", Map.of(
                     QODER_CREDENTIAL_VARIABLE, FIXTURE_CREDENTIAL,
                     QoderCoreAdapter.CONTROL_SECRET_ENVIRONMENT, secret));
@@ -1035,6 +1085,14 @@ class CoreAdapterContractTest {
 
         QoderCoreAdapter adapter() {
             return adapter;
+        }
+
+        McpProperties mcp() {
+            return mcp;
+        }
+
+        ActorTokenService actorTokens() {
+            return actorTokens;
         }
 
         LaunchProfile launchProfile() {
@@ -1173,7 +1231,8 @@ class CoreAdapterContractTest {
                             "ARIA_PEER_SCENARIO", scenario,
                             "ARIA_PEER_WORKSPACE", fixture.workspace().toString()),
                     OPENCODE_CORE_VERSION,
-                    model));
+                    model),
+                    new RunMcpWiring(new McpProperties(), new ActorTokenService()));
             SecretBundle credentials = new SecretBundle("fixture-credential-ref",
                     Map.of("DEEPSEEK_API_KEY", "fixture-provider-key"));
             launchProfile = adapter.launchProfile(fixture.spec(), fixture.environment(), credentials);

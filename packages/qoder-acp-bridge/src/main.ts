@@ -248,7 +248,12 @@ async function main(): Promise<void> {
           name: options.workerMcp.name,
           type: 'http',
           url: options.workerMcp.url,
-          headers: { Authorization: `Bearer ${options.workerMcp.token}` },
+          /**
+           * The ACP contract of the pinned CLI: `headers` is a required ARRAY of
+           * {name, value} pairs. An object map is rejected with -32602 Invalid
+           * params at session/new (probed 2026-09-18, e2e/qoder/slice-a/03-mcp-auth.md).
+           */
+          headers: [{ name: 'Authorization', value: `Bearer ${options.workerMcp.token}` }],
         },
       ]
     : [];

@@ -294,6 +294,10 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `OPENCODE_SANDBOX_SERVER_URL` | `http://localhost:8090` | OpenSandbox server URL |
 | `OPENSANDBOX_API_KEY` | — | OpenSandbox API key (empty = insecure mode) |
 | `DEEPSEEK_API_KEY` | — | Injected into sandbox for opencode agents |
+| `ARIA_OPERATOR_BEARER_TOKEN` | — | Single-operator credential for operator-only surfaces (approval decisions, per-agent core/mode, the Qoder runtime credential). Paste the same value into the dashboard's "Operator access" panel; with it unset every operator route answers 401 |
+| `ARIA_RUNTIME_CREDENTIAL_KEY` | — | AES key encrypting the stored Qoder runtime credential. Must stay stable across restarts, or an already stored credential becomes unreadable |
+| `ARIA_CORES_QODER_EXECUTABLE` | `qoder` (on `PATH`) | Absolute path of the pinned Qoder CLI; Host-mode runs need it |
+| `ARIA_CORES_QODER_MODEL` | `efficient` | Reviewed model pin of a Qoder run |
 | `DB_HOST` | `mariadb` | Database host (Docker) |
 | `DB_PORT` | `3306` | Database port |
 | `DB_NAME` | `aria_conductor` | Database name |

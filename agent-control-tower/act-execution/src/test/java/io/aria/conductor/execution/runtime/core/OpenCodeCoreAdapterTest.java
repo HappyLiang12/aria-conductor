@@ -6,9 +6,11 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
+import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -17,6 +19,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -74,6 +78,40 @@ class OpenCodeCoreAdapterTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    // ---- launch profile: sandbox XDG roots -------------------------------------------
+
+    @Test
+    void launchProfile_sandboxXdgRootsPointIntoTheSandboxControlTree() throws IOException {
+        Path hostConfig = Files.createTempDirectory("oc-config");
+        UUID runId = UUID.randomUUID();
+        RunMcpWiring runMcp = mock(RunMcpWiring.class);
+        when(runMcp.forRun(any(ExecutionSpec.class), any(PreparedEnvironment.class)))
+                .thenReturn(Optional.empty());
+        OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(), Map.of(), "1.14.31", "efficient"),
+                runMcp, Duration.ofSeconds(2), Duration.ofMillis(25));
+        PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.SANDBOX, "env-1",
+                "/workspace", hostConfig.toString(), URI.create("http://127.0.0.1:40369/proxy/4096"));
+        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "opencode", ExecutionMode.SANDBOX,
+                new AgentExecutionSettings("opencode", ExecutionMode.SANDBOX, null, null, null),
+                null, null, Instant.now());
+
+        LaunchProfile profile = adapter.launchProfile(spec, environment, new SecretBundle(null, Map.of()));
+
+        // The XDG roots must be SANDBOX paths inside the run control tree (where
+        // the governed configuration is uploaded), never host paths: a host path
+        // (D:\... on Windows) is not absolute on Linux and would silently disable
+        // the governed permission policy inside the sandbox.
+        String controlRoot = SandboxLifecycle.DEFAULT_CONTROL_ROOT + "/" + runId;
+        assertThat(profile.env())
+                .containsEntry("XDG_CONFIG_HOME", controlRoot + "/config")
+                .containsEntry("XDG_DATA_HOME", controlRoot + "/data")
+                .containsEntry("XDG_CACHE_HOME", controlRoot + "/cache");
+        // The governed configuration is still materialized on the host staging root.
+        assertThat(Files.readString(OpenCodeCoreAdapter.governedConfigurationFile(environment)))
+                .contains("\"*\": \"deny\"");
     }
 
     // ---- helpers ------------------------------------------------------------------

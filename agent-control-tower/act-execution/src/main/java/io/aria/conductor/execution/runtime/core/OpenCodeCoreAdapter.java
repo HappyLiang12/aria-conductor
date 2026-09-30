@@ -12,6 +12,7 @@ import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.sandbox.SandboxBind;
+import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 
@@ -236,9 +237,23 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 : endpoint.getHost());
 
         Map<String, String> serverEnvironment = new LinkedHashMap<>(profile.environment());
-        serverEnvironment.put("XDG_CONFIG_HOME", configHome.toString());
-        serverEnvironment.put("XDG_DATA_HOME", dataHome.toString());
-        serverEnvironment.put("XDG_CACHE_HOME", cacheHome.toString());
+        // SANDBOX: the run-owned XDG roots must be SANDBOX paths. The governed
+        // configuration is uploaded into the sandbox's run control directory
+        // (<controlRoot>/<runId>/config, the same tree the launch manifest lives
+        // in), so the roots reference that tree; a host path (e.g. D:\... on
+        // Windows) is not an absolute path on Linux — opencode resolves it
+        // relative to its cwd and silently loses the governed permission policy.
+        // HOST: the roots are the run-owned host directories created above.
+        if (SandboxBind.isSandboxProxy(environment)) {
+            String controlRoot = SandboxLifecycle.DEFAULT_CONTROL_ROOT + "/" + spec.runId();
+            serverEnvironment.put("XDG_CONFIG_HOME", controlRoot + "/" + CONFIG_HOME_DIRECTORY);
+            serverEnvironment.put("XDG_DATA_HOME", controlRoot + "/" + DATA_HOME_DIRECTORY);
+            serverEnvironment.put("XDG_CACHE_HOME", controlRoot + "/" + CACHE_HOME_DIRECTORY);
+        } else {
+            serverEnvironment.put("XDG_CONFIG_HOME", configHome.toString());
+            serverEnvironment.put("XDG_DATA_HOME", dataHome.toString());
+            serverEnvironment.put("XDG_CACHE_HOME", cacheHome.toString());
+        }
         if (workerMcp.isPresent()) {
             // The run-scoped worker bearer of the platform MCP. The endpoint ignores it
             // in auth-mode=none and requires exactly this kind of token in auth-mode=actor;

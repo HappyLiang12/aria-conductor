@@ -156,6 +156,10 @@ public class SandboxExecutionBackend implements ExecutionBackend {
             // written: the only copy is the run-owned one uploaded into the sandbox
             // control directory (mode 600), which dies with the sandbox.
             lifecycle.uploadSnapshot(environment.runId(), prepared.snapshotRoot(), manifest);
+            // The run-owned governed configuration (written into the host staging
+            // directory by the core adapter) is uploaded into the sandbox run control
+            // directory, where the launch manifest's XDG roots point.
+            lifecycle.uploadRunConfiguration(environment.runId(), prepared.stagingDirectory(), "config");
             lifecycle.launch(environment.runId());
         } catch (RuntimeException e) {
             // The sandbox was created during prepare: a failure before the core is

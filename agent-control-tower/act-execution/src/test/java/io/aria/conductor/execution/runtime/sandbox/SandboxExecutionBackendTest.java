@@ -419,6 +419,27 @@ class SandboxExecutionBackendTest {
                 .contains("create", "kill");
     }
 
+    @Test
+    void launchUploadsTheRunOwnedGovernedConfigurationIntoTheSandboxControlDirectory() throws IOException {
+        Fixture fixture = new Fixture();
+        WorkspaceLease lease = fixture.lease(RUN_ID);
+        Files.writeString(lease.localRoot().resolve("notes.md"), "snapshot bytes\n");
+        PreparedEnvironment environment = fixture.backend.prepare(fixture.spec(RUN_ID), lease);
+        Path stagingConfig = Path.of(lease.runtimeRoot()).resolve("sandbox").resolve("config").resolve("opencode");
+        Files.createDirectories(stagingConfig);
+        Files.writeString(stagingConfig.resolve("opencode.json"), "{\"permission\":{\"*\":\"deny\"}}\n");
+
+        fixture.backend.launch(environment, new LaunchProfile(SERVE_ARGV, Map.of(),
+                SandboxLifecycle.DEFAULT_WORKSPACE_ROOT));
+
+        // The run-owned governed configuration must land in the sandbox run
+        // control directory, where the launch manifest's XDG_CONFIG_HOME points.
+        assertThat(fixture.sdk.uploadedEntries).extracting(WriteEntry::getPath)
+                .contains("/home/aria/run/" + RUN_ID + "/config/opencode/opencode.json");
+        assertThat(fixture.sdk.uploadedEntries).extracting(entry -> String.valueOf(entry.getData()))
+                .anyMatch(data -> data.contains("\"deny\""));
+    }
+
     // ------------------------------------------------------------------ ownership / renewal
 
     @Test

@@ -240,6 +240,31 @@ public class SandboxLifecycle implements AutoCloseable {
         log.info("Uploaded {} entry(ies) into sandbox {} for run {}", entries.size(), run.sandboxId, runId);
     }
 
+    /**
+     * Uploads the run-owned host-side configuration subtree into the sandbox's
+     * run control directory ({@code <controlRoot>/<runId>/<directoryName>}), so
+     * a sandbox launch finds its governed configuration at the XDG paths the
+     * launch manifest references. A host path in the manifest environment would
+     * resolve relative to the container cwd and silently disable the governed
+     * configuration.
+     */
+    public void uploadRunConfiguration(UUID runId, Path hostConfigurationDirectory, String directoryName) {
+        Run run = require(runId);
+        Objects.requireNonNull(directoryName, "directoryName");
+        Path host = hostConfigurationDirectory.resolve(directoryName);
+        if (!Files.isDirectory(host)) {
+            log.info("No host-side '{}' subtree to upload for run {} ({}), skipping", directoryName, runId, host);
+            return;
+        }
+        List<WriteEntry> entries = new ArrayList<>();
+        collectWorkspaceEntries(host, run.runDirectory + "/" + directoryName, entries);
+        if (entries.isEmpty()) {
+            return;
+        }
+        sdk.upload(run.sandboxId, entries);
+        log.info("Uploaded {} run configuration entry(ies) into '{}' of run {}", entries.size(), directoryName, runId);
+    }
+
     /** Starts the fixed image launcher for the run's uploaded manifest. */
     public void launch(UUID runId) {
         Run run = require(runId);

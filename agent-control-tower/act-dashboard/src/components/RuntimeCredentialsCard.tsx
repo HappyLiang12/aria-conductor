@@ -32,6 +32,20 @@ export const MASKED_CREDENTIAL_DISPLAY = '••••••••';
 
 export const CREDENTIAL_QUERY_KEY = ['qoder-runtime-credential'];
 
+/** Why the bounded test cannot run right now; null when it can. */
+function testUnavailableReason(metadata: QoderCredentialMetadata): string | null {
+  if (!metadata.configured) {
+    return 'The bounded credential test needs a stored credential — save one first.';
+  }
+  // `=== false`, not falsy: a backend older than this frontend omits the field,
+  // and a missing capability must not read as "no probe wired".
+  if (metadata.testSupported === false) {
+    return 'No credential probe is wired in this build: the bounded test needs the run-owned core '
+      + 'bridge, so the dashboard cannot make that call.';
+  }
+  return null;
+}
+
 function usageLine(outcome: CredentialTestOutcome): string {
   const usage = outcome.usage;
   const parts: string[] = [];
@@ -108,6 +122,7 @@ export function RuntimeCredentialsCard() {
   };
 
   const metadata = metadataQuery.data;
+  const testUnavailable = metadata ? testUnavailableReason(metadata) : null;
 
   return (
     <div className="card" style={{ marginTop: 24 }} data-testid="runtime-credentials-card">
@@ -133,7 +148,11 @@ export function RuntimeCredentialsCard() {
         </div>
       )}
 
-      {metadata && (
+      {/* A refused read must not keep painting the previously authorized
+          metadata next to the refusal: the mask and timestamp describe a read this
+          surface no longer has the authority to make. Any other failure keeps the
+          last known state and the controls — the error block above still shows it. */}
+      {metadata && !isOperatorRejection(metadataQuery.error) && (
         <>
           <div className="rf-meta" style={{ marginBottom: 10 }}>
             {metadata.configured ? (
@@ -188,7 +207,7 @@ export function RuntimeCredentialsCard() {
               <button
                 type="button"
                 className="btn"
-                disabled={test.isPending || !metadata.configured}
+                disabled={test.isPending || testUnavailable !== null}
                 onClick={() => {
                   setNotice(null);
                   setError(null);
@@ -211,6 +230,12 @@ export function RuntimeCredentialsCard() {
               </button>
             </div>
           </form>
+
+          {testUnavailable && (
+            <div style={{ color: 'var(--text-mute)', fontSize: 11.5, marginTop: 8 }}>
+              {testUnavailable}
+            </div>
+          )}
 
           {notice && <div style={{ marginTop: 8, fontSize: 11.5 }}>{notice}</div>}
           {error && <div style={{ marginTop: 8, color: 'var(--red)', fontSize: 11.5 }}>{error}</div>}

@@ -14,8 +14,11 @@ public class WebConfig implements WebMvcConfigurer {
         // C1: use origin patterns so any localhost dev port (5173, 5174, 5199, ...) is allowed,
         // matching act-common's WebConfig. The previous fixed allowedOrigins list blocked write
         // operations (POST/PUT/DELETE) whenever the frontend ran on a non-standard port.
+        // Both loopback spellings are listed: a browser may open the dashboard as 127.0.0.1,
+        // and the numeric form is the same local operator — refusing it made every write fail
+        // with 403 "Invalid CORS request" while reads still worked.
         registry.addMapping("/**")
-                .allowedOriginPatterns("http://localhost:*")
+                .allowedOriginPatterns("http://localhost:*", "http://127.0.0.1:*")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
                 .allowedHeaders("*")
                 .exposedHeaders(CORRELATION_ID_HEADER)

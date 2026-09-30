@@ -65,7 +65,7 @@ try {
 # tag), so a helper regressed to `image exists` would always build under docker and fail
 # the "present -> no build" case. The stub exits 1 for anything but `image inspect`/`build`,
 # which is how a real docker CLI answers `image exists`.
-function Invoke-QoderImageScenario([bool]$ImagePresent, [string]$Runtime = "podman") {
+function Invoke-QoderImageScenario([bool]$ImagePresent, [string]$Runtime = "podman", [switch]$SkipArtifacts) {
     $dir = Join-Path $StubDir ([guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $dir | Out-Null
     $inspectRc = if ($ImagePresent) { 0 } else { 1 }
@@ -76,11 +76,18 @@ if (`$args.Count -ge 1 -and `$args[0] -eq 'build') { exit 0 }
 exit 1
 "@
     Set-Content -Path (Join-Path $dir "$Runtime.ps1") -Value $stub
+    # The Dockerfile refuses an unpinned/unlicensed CLI, so a build only happens with
+    # these synthetic artifact inputs; -SkipArtifacts exercises the refusal instead.
+    $artifactArgs = if ($SkipArtifacts) { "" } else { " -CliVersion '1.1.61' -CliArtifactUrl 'https://example.invalid/qodercli-1.1.61.tgz' -CliSha256 '0000000000000000000000000000000000000000000000000000000000000000' -LicenseAccepted" }
     $scenario = @"
 `$env:PATH = '$dir'
 . '$LibPath'
-`$built = Ensure-QoderSandboxImage -Runtime '$Runtime' -ProjectRoot '$ProjectRoot'
-Write-Output ("RESULT built={0}" -f `$built)
+try {
+    `$built = Ensure-QoderSandboxImage -Runtime '$Runtime' -ProjectRoot '$ProjectRoot'$artifactArgs
+    Write-Output ("RESULT built={0}" -f `$built)
+} catch {
+    Write-Output ("RESULT error=" + `$_.Exception.Message)
+}
 "@
     $file = Join-Path $dir "scenario.ps1"
     Set-Content -Path $file -Value $scenario
@@ -122,27 +129,35 @@ try {
     $r = Invoke-QoderImageScenario $true
     Assert-True "qoder image present -> no build" `
         (($r.Out -match "RESULT built=False") -and
-        ($r.Calls -match "image inspect aria-conductor/qoder-sandbox:0.1") -and
+        ($r.Calls -match "image inspect aria-conductor/qoder-sandbox:1.0") -and
         ($r.Calls -notmatch "build")) ($r.Out + " | " + $r.Calls)
 
     $r = Invoke-QoderImageScenario $false
-    $qoderContext = Join-Path $ProjectRoot "agent-control-tower/qoder-sandbox"
-    Assert-True "qoder image absent -> build invoked from the qoder-sandbox context" `
+    $qoderContext = $ProjectRoot
+    Assert-True "qoder image absent -> build from the repository-root context with the pinned CLI inputs" `
         (($r.Out -match "RESULT built=True") -and
-        ($r.Calls -match "build -t aria-conductor/qoder-sandbox:0.1") -and
-        ($r.Calls -match [regex]::Escape($qoderContext))) ($r.Out + " | " + $r.Calls)
+        ($r.Calls -match "build -t aria-conductor/qoder-sandbox:1.0") -and
+        ($r.Calls -match [regex]::Escape($qoderContext)) -and
+        ($r.Calls -match "QODER_CLI_VERSION=1.1.61") -and
+        ($r.Calls -match "QODER_CLI_LICENSE_ACCEPTED=yes")) ($r.Out + " | " + $r.Calls)
+
+    $r = Invoke-QoderImageScenario $false "podman" -SkipArtifacts
+    Assert-True "qoder image absent without the pinned CLI inputs -> refused, no build" `
+        (($r.Out -match "RESULT error=.*Refusing to build") -and
+        ($r.Calls -notmatch "build")) ($r.Out + " | " + $r.Calls)
 
     $r = Invoke-QoderImageScenario $true "docker"
     Assert-True "qoder image present (docker) -> no build" `
         (($r.Out -match "RESULT built=False") -and
-        ($r.Calls -match "image inspect aria-conductor/qoder-sandbox:0.1") -and
+        ($r.Calls -match "image inspect aria-conductor/qoder-sandbox:1.0") -and
         ($r.Calls -notmatch "build")) ($r.Out + " | " + $r.Calls)
 
     $r = Invoke-QoderImageScenario $false "docker"
-    Assert-True "qoder image absent (docker) -> build invoked from the qoder-sandbox context" `
+    Assert-True "qoder image absent (docker) -> build from the repository-root context with the pinned CLI inputs" `
         (($r.Out -match "RESULT built=True") -and
-        ($r.Calls -match "build -t aria-conductor/qoder-sandbox:0.1") -and
-        ($r.Calls -match [regex]::Escape($qoderContext))) ($r.Out + " | " + $r.Calls)
+        ($r.Calls -match "build -t aria-conductor/qoder-sandbox:1.0") -and
+        ($r.Calls -match [regex]::Escape($qoderContext)) -and
+        ($r.Calls -match "QODER_CLI_VERSION=1.1.61")) ($r.Out + " | " + $r.Calls)
 
     Write-Host "Load-DotEnv scenarios:" -ForegroundColor Cyan
 

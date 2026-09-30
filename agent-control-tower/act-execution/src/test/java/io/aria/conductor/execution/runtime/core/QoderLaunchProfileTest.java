@@ -1,11 +1,15 @@
 package io.aria.conductor.execution.runtime.core;
 
+import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +18,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,6 +38,10 @@ class QoderLaunchProfileTest {
     private static final String CLI_VARIABLE = "QODER_PERSONAL_ACCESS_TOKEN";
     private static final String CREDENTIAL_VALUE = "test-personal-access-token-value";
 
+    private final McpProperties mcp = new McpProperties();
+    private final ActorTokenService actorTokens = new ActorTokenService();
+    private final RunMcpWiring wiring = new RunMcpWiring(mcp, actorTokens);
+
     private Path root;
 
     @AfterEach
@@ -49,13 +58,17 @@ class QoderLaunchProfileTest {
     }
 
     private Fixture fixture() throws IOException {
+        return fixture(UUID.randomUUID(), null);
+    }
+
+    private Fixture fixture(UUID agentId, Instant deadline) throws IOException {
         root = Files.createTempDirectory("qoder-launch-profile");
         Path workspace = Files.createDirectories(root.resolve("workspace"));
         Path configuration = Files.createDirectories(root.resolve("runtime").resolve("host"));
         UUID runId = UUID.randomUUID();
-        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "qoder", ExecutionMode.HOST,
+        ExecutionSpec spec = new ExecutionSpec(runId, agentId, "qoder", ExecutionMode.HOST,
                 new AgentExecutionSettings("qoder", ExecutionMode.HOST, null, null, null),
-                "qoder:operator", "rev-1", null);
+                "qoder:operator", "rev-1", deadline);
         PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.HOST, "host-" + runId,
                 workspace.toString(), configuration.toString(), URI.create("http://127.0.0.1:46321/"));
         return new Fixture(root, workspace, configuration, runId, spec, environment);
@@ -88,7 +101,7 @@ class QoderLaunchProfileTest {
         Path cli = executable(fixture.root().resolve("bin"), "qodercli.exe");
         Path bridge = bridgeEntry(fixture.root().resolve("bridge"));
         QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
-                "node", bridge.toString(), cli.toString(), List.of(), Map.of(), Map.of(), "1.1.61", "efficient"));
+                "node", bridge.toString(), cli.toString(), List.of(), Map.of(), Map.of(), "1.1.61", "efficient"), wiring);
 
         LaunchProfile profile = adapter.launchProfile(fixture.spec(), fixture.environment(),
                 new SecretBundle("qoder:operator", Map.of(CLI_VARIABLE, CREDENTIAL_VALUE)));
@@ -111,9 +124,54 @@ class QoderLaunchProfileTest {
                 .as("the placement writes the minted control secret into exactly this file")
                 .isEqualTo(controlSecretFile.toString());
         assertThat(credentialFile).as("every file the bridge is told must exist at launch time").isRegularFile();
-        assertThat(Files.readString(credentialFile)).isEqualTo(CREDENTIAL_VALUE + System.lineSeparator());
+        // The framing byte is the protocol: the bridge reads newline-delimited JSON, so the
+        // credential file must end in "\n" on every platform -- pinned literally here (the
+        // production constant is what the writer uses; this is what it must be).
+        assertThat(Files.readString(credentialFile)).isEqualTo(CREDENTIAL_VALUE + "\n");
         for (Path path : List.of(credentialFile, controlSecretFile)) {
             assertThat(path.getParent()).isEqualTo(fixture.configuration());
+        }
+    }
+
+    /**
+     * The restored platform-MCP wiring: only the Aria assistant's run carries
+     * the bridge's worker-MCP flags, and the run-owned token file they name is
+     * materialized next to the credential file with the fixed LF framing.
+     */
+    @Test
+    void theAriaProfileCarriesThePlatformMcpFlagsAndWritesTheTokenFile() throws Exception {
+        Fixture fixture = fixture(AriaConstants.ARIA_AGENT_ID, Instant.now().plusSeconds(2700));
+        mcp.setPort(4711);
+        Path cli = executable(fixture.root().resolve("bin"), "qodercli.exe");
+        Path bridge = bridgeEntry(fixture.root().resolve("bridge"));
+        QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
+                "node", bridge.toString(), cli.toString(), List.of(), Map.of(), Map.of(), "1.1.61", "efficient"),
+                wiring);
+
+        LaunchProfile profile = adapter.launchProfile(fixture.spec(), fixture.environment(),
+                new SecretBundle("qoder:operator", Map.of(CLI_VARIABLE, CREDENTIAL_VALUE)));
+
+        Path tokenFile = QoderCoreAdapter.workerMcpTokenFile(fixture.environment());
+        assertThat(profile.argv()).containsSubsequence(
+                "--worker-mcp-name", "aria-conductor",
+                "--worker-mcp-url", "http://127.0.0.1:4711/mcp",
+                "--worker-mcp-token-file", tokenFile.toString());
+        assertThat(tokenFile)
+                .as("the bridge reads the token file at startup, so it must exist at launch time")
+                .isRegularFile();
+        assertThat(tokenFile.getParent()).isEqualTo(fixture.configuration());
+        String token = Files.readString(tokenFile);
+        // Same framing byte as the credential file: the bridge trims the file,
+        // but the LF is the pinned run-owned-file contract on every platform.
+        assertThat(token).endsWith("\n");
+        assertThat(actorTokens.resolveBearer("Bearer " + token.strip()))
+                .as("the file carries the run-scoped worker bearer minted for this run")
+                .get()
+                .satisfies(actor -> assertThat(actor.runId()).isEqualTo(fixture.runId()));
+        for (String argument : profile.argv()) {
+            assertThat(argument)
+                    .as("a token value must never appear in the launch argv")
+                    .doesNotContain(token.strip());
         }
     }
 
@@ -125,7 +183,7 @@ class QoderLaunchProfileTest {
         Path bridge = bridgeEntry(fixture.root().resolve("bridge"));
         QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
                 "node", bridge.toString(), cli.toString(), List.of(), Map.of(), Map.of(), "1.1.61",
-                "operator-pinned-model"));
+                "operator-pinned-model"), wiring);
 
         LaunchProfile profile = adapter.launchProfile(fixture.spec(), fixture.environment(),
                 new SecretBundle(null, Map.of()));
@@ -172,7 +230,7 @@ class QoderLaunchProfileTest {
         Path bridge = bridgeEntry(fixture.root().resolve("bridge"));
         QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
                 "node", bridge.toString(), "no-such-qoder-cli-executable-xyz", List.of(), Map.of(), Map.of(),
-                "1.1.61", "efficient"));
+                "1.1.61", "efficient"), wiring);
 
         assertThatThrownBy(() -> adapter.launchProfile(fixture.spec(), fixture.environment(),
                 new SecretBundle(null, Map.of())))
@@ -188,7 +246,8 @@ class QoderLaunchProfileTest {
         Path cli = executable(fixture.root().resolve("bin"), "qodercli.exe");
         Path missing = fixture.root().resolve("not-built").resolve("main.js");
         QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
-                "node", missing.toString(), cli.toString(), List.of(), Map.of(), Map.of(), "1.1.61", "efficient"));
+                "node", missing.toString(), cli.toString(), List.of(), Map.of(), Map.of(), "1.1.61", "efficient"),
+                wiring);
 
         assertThatThrownBy(() -> adapter.launchProfile(fixture.spec(), fixture.environment(),
                 new SecretBundle(null, Map.of())))
@@ -209,7 +268,7 @@ class QoderLaunchProfileTest {
         Path bridge = bridgeEntry(fixture.root().resolve("bridge"));
         QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
                 "node", bridge.toString(), cli.toString(), List.of("--acp"), Map.of(), Map.of(), "1.1.61",
-                "efficient"));
+                "efficient"), wiring);
 
         LaunchProfile profile = adapter.launchProfile(fixture.spec(), fixture.environment(),
                 new SecretBundle(null, Map.of()));

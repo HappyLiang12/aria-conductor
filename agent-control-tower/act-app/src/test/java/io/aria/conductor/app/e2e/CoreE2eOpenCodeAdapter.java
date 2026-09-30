@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
@@ -20,6 +22,7 @@ import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreSession;
+import io.aria.conductor.execution.security.ActorTokenService;
 
 import java.io.IOException;
 import java.net.URI;
@@ -143,9 +146,14 @@ final class CoreE2eOpenCodeAdapter implements CoreAdapter {
         // same way for its bridge).
         CoreE2eEndpointReadiness.awaitOpenCodePeer(handle.endpoint(), scenarios.peerControlToken());
         // The production adapter opens the native session (single-shot create) on
-        // the endpoint the peer launch produced; only the executable differs.
+        // the endpoint the peer launch produced; only the executable differs. Its
+        // platform-MCP wiring is disabled: this harness never exercises it (it
+        // builds its own launch).
+        McpProperties harnessMcp = new McpProperties();
+        harnessMcp.setEnabled(false);
         OpenCodeCoreAdapter delegate = new OpenCodeCoreAdapter(new OpenCodeCoreAdapter.OpenCodeProfile(
-                nodeExecutable, List.of(peerScript.toString()), Map.of(), FIXTURE_VERSION, FIXTURE_MODEL));
+                nodeExecutable, List.of(peerScript.toString()), Map.of(), FIXTURE_VERSION, FIXTURE_MODEL),
+                new RunMcpWiring(harnessMcp, new ActorTokenService()));
         CoreSession nativeSession = delegate.open(handle, spec, credentials);
         return new PeerSession(spec, nativeSession, handle.endpoint(), scenarios.peerControlToken(), peers);
     }

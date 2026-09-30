@@ -38,7 +38,14 @@ public class OperatorSessionService {
     public static final String COOKIE_NAME = "aria_operator_session";
     public static final String CSRF_HEADER = "X-CSRF-Token";
     public static final Duration DEFAULT_SESSION_TTL = Duration.ofHours(8);
-    public static final String DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:8080";
+    /**
+     * Loopback spellings, any port: the dashboard may be opened on localhost or
+     * 127.0.0.1 (the same local operator), and Vite picks the next free port when
+     * the configured one is taken. Entries are exact origins, or
+     * {@code http://host:*} to accept any port of that host -- the same shape the
+     * dev CORS policies use. An operator-supplied exact list stays exact.
+     */
+    public static final String DEFAULT_ALLOWED_ORIGINS = "http://localhost:*,http://127.0.0.1:*";
 
     private static final String BEARER_PREFIX = "Bearer ";
     private static final int SESSION_BYTES = 32;
@@ -145,12 +152,39 @@ public class OperatorSessionService {
      * @throws ForbiddenMutationException when either check fails (HTTP 403 at the boundary)
      */
     public void validateMutation(OperatorSession session, String csrfHeader, String origin) {
-        if (origin == null || !allowedOrigins.contains(origin.trim())) {
+        if (!isAllowedOrigin(origin)) {
             throw new ForbiddenMutationException("Cross-origin operator mutation rejected");
         }
         if (!constantTimeEquals(csrfHeader, session.csrfToken())) {
             throw new ForbiddenMutationException("CSRF validation failed");
         }
+    }
+
+    /**
+     * Exact match, or a configured {@code http://host:*} entry whose host matches
+     * and whose port is numeric — a suffix that merely looks like a port (or a host
+     * that merely starts with the pattern's host) is not a match.
+     */
+    private boolean isAllowedOrigin(String origin) {
+        if (origin == null) {
+            return false;
+        }
+        String candidate = origin.trim();
+        return allowedOrigins.contains(candidate)
+                || allowedOrigins.stream().anyMatch(pattern -> matchesPortPattern(pattern, candidate));
+    }
+
+    private static boolean matchesPortPattern(String pattern, String origin) {
+        int star = pattern.lastIndexOf(":*");
+        if (star != pattern.length() - 2 || star < 0) {
+            return false;
+        }
+        String prefix = pattern.substring(0, star + 1);
+        if (!origin.startsWith(prefix)) {
+            return false;
+        }
+        String port = origin.substring(prefix.length());
+        return !port.isEmpty() && port.length() <= 5 && port.chars().allMatch(Character::isDigit);
     }
 
     public boolean isCookieSecure() {

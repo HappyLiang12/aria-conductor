@@ -32,8 +32,10 @@ deployment to untrusted networks or the public internet.
   your database accordingly; encryption at rest is on the roadmap.
 - **Change all default credentials.** `.env.example` ships placeholder DB passwords
   (`change-me*`). Set strong values in `.env` before any non-local use.
-- **CORS** defaults to a localhost allow-list (`app.cors.allowed-origins`) and does
-  not allow credentials. Configure it for your deployment.
+- **CORS** defaults to the loopback dev origins (`http://localhost:*` and
+  `http://127.0.0.1:*`) and does not allow credentials. Cookie-authenticated operator
+  mutations are gated separately by `aria.operator.allowed-origins` (default: the same
+  loopback hosts on any port) plus a CSRF token. Configure both for your deployment.
 - **H2 console and dev SQL endpoints** are restricted to the `h2` dev profile and are
   not loaded in the production (`mariadb`) profile.
 - **MCP endpoint ships open by default** (`aria.mcp.auth-mode=none`), mirroring the

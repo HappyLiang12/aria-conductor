@@ -1345,7 +1345,9 @@ test(
           name: 'aria-worker',
           type: 'http',
           url: 'http://127.0.0.1:9411/mcp',
-          headers: { Authorization: `Bearer ${REDACTED}` },
+          // The pinned CLI's ACP schema requires an ARRAY of {name, value} pairs;
+          // an object map is rejected with -32602 (e2e/qoder/slice-a/03-mcp-auth.md).
+          headers: [{ name: 'Authorization', value: `Bearer ${REDACTED}` }],
         },
       ],
     });

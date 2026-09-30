@@ -183,7 +183,7 @@ export default function KanbanBoard() {
       setConfirmCancelId(null);
       setError(null);
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, variables: { id: string; status: KanbanStatus; feedback?: string }) => {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       // Task 10: the confirmed action is over (it failed) — never leave the
       // confirmation stuck open on a rejection.
@@ -196,7 +196,15 @@ export default function KanbanBoard() {
       const excluded = data?.details?.excluded
         ?.map((e) => `${e.name} (${e.reasons.join(', ')})`)
         .join('; ');
-      const reason = [data?.code, data?.message ?? data?.error, excluded]
+      // A Done refused because the linked run is still active is not fixed by
+      // retrying the move: the card's pending asks are what keep that run alive,
+      // so name them instead of leaving the operator with "complete or cancel".
+      const pendingAsks = (items ?? []).find((i) => i.id === variables.id)?.pendingAskCount;
+      const askHint = data?.code === 'LINKED_RUN_ACTIVE' && pendingAsks
+        ? `Decide the ${pendingAsks} pending ask${pendingAsks === 1 ? '' : 's'} first`
+          + " — open the card's decision panel."
+        : null;
+      const reason = [data?.code, data?.message ?? data?.error, excluded, askHint]
         .filter(Boolean)
         .join(' — ');
       setError(reason || 'Move rejected — the card is back in its column.');
@@ -418,9 +426,11 @@ export default function KanbanBoard() {
                             <>
                               <button
                                 className="cap-btn ok"
-                                title="Approve (complete task)"
+                                title={item.pendingAskCount
+                                  ? `Decide the ${item.pendingAskCount} pending ask${item.pendingAskCount === 1 ? '' : 's'} first`
+                                  : 'Approve (complete task)'}
                                 aria-label="Quick approve"
-                                disabled={transitionMutation.isPending}
+                                disabled={transitionMutation.isPending || !!item.pendingAskCount}
                                 onClick={() => transitionMutation.mutate({ id: item.id, status: 'DONE' })}
                               >
                                 ✓ Approve

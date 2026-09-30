@@ -36,6 +36,7 @@ const CONFIGURED: QoderCredentialMetadata = {
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: true,
   encryptionKeyConfigured: true,
+  testSupported: true,
   maskedSecret: 'fixture-secret-value',
   updatedAt: '2026-09-22T12:00:00Z',
 };
@@ -46,6 +47,7 @@ const UNCONFIGURED: QoderCredentialMetadata = {
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: false,
   encryptionKeyConfigured: true,
+  testSupported: true,
   maskedSecret: null,
   updatedAt: null,
 };
@@ -57,6 +59,13 @@ const COST_DISCLOSURE =
 const NOT_WIRED_REASON =
   'The bounded Qoder credential test requires the run-owned core bridge, which is not '
   + 'wired in this component; no model call was made.';
+
+const NO_PROBE_WIRED_REASON =
+  'No credential probe is wired in this build: the bounded test needs the run-owned core '
+  + 'bridge, so the dashboard cannot make that call.';
+
+const NO_STORED_CREDENTIAL_TEST_REASON =
+  'The bounded credential test needs a stored credential — save one first.';
 
 function ui() {
   const qc = new QueryClient({
@@ -187,6 +196,26 @@ describe('RuntimeCredentialsCard', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('does not offer the bounded test when this build has no probe, and says why', async () => {
+    mockedGet.mockResolvedValue({ ...CONFIGURED, testSupported: false });
+    ui();
+    await screen.findByText('••••••••');
+
+    expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
+    expect(screen.getByText(NO_PROBE_WIRED_REASON)).toBeInTheDocument();
+    expect(mockedTest).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the bounded test before a credential is stored, and says why', async () => {
+    mockedGet.mockResolvedValue(UNCONFIGURED);
+    ui();
+    await screen.findByText('Not configured');
+
+    expect(screen.getByRole('button', { name: 'Test credential' })).toBeDisabled();
+    expect(screen.getByText(NO_STORED_CREDENTIAL_TEST_REASON)).toBeInTheDocument();
+    expect(mockedTest).not.toHaveBeenCalled();
+  });
+
   it('surfaces the backend operator rejection verbatim', async () => {
     mockedGet.mockRejectedValue({
       response: { status: 401, data: { error: 'Operator credential required' } },
@@ -206,6 +235,33 @@ describe('RuntimeCredentialsCard', () => {
     });
     ui();
     expect(await screen.findByText('Credential store unavailable')).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Operator-only surface — establish the operator session in the Operator access panel first.',
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the retained metadata and controls when a background refetch fails', async () => {
+    // Only a refusal hides the last known state: any other failure (503, network)
+    // must leave the mask and the controls usable instead of emptying the card,
+    // because nothing refetches it back on its own.
+    mockedGet
+      .mockResolvedValueOnce(CONFIGURED)
+      .mockRejectedValueOnce({ response: { status: 503, data: {} } });
+    mockedPut.mockResolvedValue(CONFIGURED);
+    ui();
+    await screen.findByText('••••••••');
+
+    await userEvent.type(screen.getByLabelText('Runtime credential'), 'replacement-value');
+    await userEvent.click(screen.getByRole('button', { name: 'Save credential' }));
+
+    expect(
+      await screen.findByText('Failed to load the Qoder runtime credential.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('••••••••')).toBeInTheDocument();
+    expect(screen.getByLabelText('Runtime credential')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove credential' })).toBeInTheDocument();
     expect(
       screen.queryByText(
         'Operator-only surface — establish the operator session in the Operator access panel first.',

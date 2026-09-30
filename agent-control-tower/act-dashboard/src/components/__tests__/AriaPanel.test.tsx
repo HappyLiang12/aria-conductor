@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, beforeAll, vi, type Mock } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AriaPanel from '../AriaPanel';
 import type { StreamCallbacks } from '../../api/aria';
+import type { Approval } from '../../types';
 
 // jsdom does not implement element scrolling — the auto-scroll effect needs it.
 beforeAll(() => {
@@ -21,15 +22,18 @@ vi.mock('../../api/ariaConversations', () => ({
 }));
 vi.mock('../../api/runs', () => ({ cancelRun: vi.fn() }));
 vi.mock('../../api/skills', () => ({ listSkills: vi.fn() }));
+vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn() }));
 
 import { streamMessage } from '../../api/aria';
 import { getLatestConversation, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
+import { listApprovals } from '../../api/approvals';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
 const mockDeleteConversation = deleteConversation as Mock;
 const mockListSkills = listSkills as Mock;
+const mockListApprovals = listApprovals as Mock;
 
 type StreamArgs = [
   string, // conversationId
@@ -73,18 +77,19 @@ function lastOptions(call: number) {
   return mockStream.mock.calls[call][5] as { skillId?: string } | undefined;
 }
 
-describe('AriaPanel slash-command skill handling', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    vi.clearAllMocks();
-    mockGetLatest.mockResolvedValue(null);
-    mockDeleteConversation.mockResolvedValue(undefined);
-    mockListSkills.mockResolvedValue(SKILLS);
-    mockStream.mockImplementation(async (...args: StreamArgs) => {
-      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: 'chat' });
-    });
+beforeEach(() => {
+  localStorage.clear();
+  vi.clearAllMocks();
+  mockGetLatest.mockResolvedValue(null);
+  mockDeleteConversation.mockResolvedValue(undefined);
+  mockListSkills.mockResolvedValue(SKILLS);
+  mockListApprovals.mockResolvedValue([]);
+  mockStream.mockImplementation(async (...args: StreamArgs) => {
+    args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: 'chat' });
   });
+});
 
+describe('AriaPanel slash-command skill handling', () => {
   it('keyboard selection clears the input and the sent message carries the skillId', async () => {
     renderPanel();
     const ta = await openPanel();
@@ -143,7 +148,10 @@ describe('AriaPanel slash-command skill handling', () => {
     await userEvent.click(await screen.findByRole('option', { name: /dev-workflow/ }));
     await userEvent.type(ta, 'do the thing');
     await userEvent.type(ta, '{Enter}');
-    expect(await screen.findByText(/Streaming failed|boom/)).toBeInTheDocument();
+    // The raw error text is replaced by the honest, retry-free report; the retry
+    // affordance stays for a failure that is not an approval wait.
+    expect(await screen.findByText(/no approval is pending/)).toBeInTheDocument();
+    expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
     expect(mockStream.mock.calls[1][1]).toBe('do the thing');
@@ -162,5 +170,120 @@ describe('AriaPanel slash-command skill handling', () => {
     await userEvent.type(ta, '{Enter}');
     expect(mockStream).toHaveBeenCalledTimes(1);
     expect(lastOptions(0)?.skillId).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The panel used to tell the operator "the request may have timed out. Please
+// try again." — harmful now that a run waiting on a governed tool approval is a
+// normal state (the platform MCP is wired into the Aria run and mutating tools
+// stay per-call approved). A timeout / dropped stream must instead report what
+// the operator-only review queue actually knows, and must never invite a resend
+// while the run may still be alive.
+// ---------------------------------------------------------------------------
+
+function pendingAsk(id: string): Approval {
+  return {
+    id,
+    runId: 'run-1',
+    toolCallId: null,
+    status: 'PENDING',
+    reason: 'write_file on the workspace',
+    requestedAt: '2026-09-30T10:00:00Z',
+    decidedAt: null,
+    expiresAt: '2026-09-30T10:10:00Z',
+  };
+}
+
+/** Sends one suggestion against a stream that never answers, then fires the panel's timeout. */
+async function sendThenTimeOut() {
+  mockStream.mockImplementation(async (...args: StreamArgs) => {
+    args[3]?.onThinking?.('run-1');
+    return new Promise<void>(() => {}); // never settles — the panel's own timer reports
+  });
+  renderPanel();
+  await act(async () => {}); // flush the conversation load so the id line is bound
+  fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000); // CLIENT_TIMEOUT_MS, module-private
+  });
+  await act(async () => {}); // let the pending-approval probe's state update land
+}
+
+describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
+  it('a client timeout with pending asks names the count, points at the Review Queue and offers no retry', async () => {
+    vi.useFakeTimers();
+    try {
+      mockListApprovals.mockResolvedValue([pendingAsk('a1'), pendingAsk('a2')]);
+      await sendThenTimeOut();
+
+      expect(screen.getByText(/2 pending asks in the Review Queue/)).toBeInTheDocument();
+      expect(mockListApprovals).toHaveBeenCalledTimes(1);
+      expect(mockListApprovals).toHaveBeenCalledWith('PENDING');
+      expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(screen.getByText(/Conversation ID/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refused pending-approval check (401, operator-only) reports honestly and keeps the conversation id', async () => {
+    vi.useFakeTimers();
+    try {
+      mockListApprovals.mockRejectedValue({ response: { status: 401 } });
+      await sendThenTimeOut();
+
+      expect(screen.getByText(/may be waiting for your approval/)).toBeInTheDocument();
+      expect(screen.getByText(/open the Review Queue to check/)).toBeInTheDocument();
+      expect(screen.getByText(/refused \(operator-only\)/)).toBeInTheDocument();
+      expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(screen.getByText(/Conversation ID/)).toBeInTheDocument();
+      expect(screen.getByText(/include this when reporting issues/)).toBeInTheDocument();
+      // The id line must still carry the real conversation id, not an empty anchor.
+      expect(
+        screen.getByText(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a stream that errors before done reports the pending-approval wait, not the raw retry text', async () => {
+    mockListApprovals.mockResolvedValue([pendingAsk('a1')]);
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      // exactly what streamMessage emits when the SSE connection drops
+      args[3]?.onError?.('Connection closed unexpectedly. Please try again.');
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(screen.getByText(/1 pending ask in the Review Queue/)).toBeInTheDocument();
+    expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/connection closed unexpectedly/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Conversation ID/)).toBeInTheDocument();
+  });
+
+  it('an ordinary successful stream neither consults the approvals API nor adds a wait message', async () => {
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onMessage?.('All systems nominal.');
+      args[3]?.onDone?.({ runId: 'r1', conversationId: 'conv-x', intent: 'chat' });
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(screen.getByText('All systems nominal.')).toBeInTheDocument();
+    expect(mockListApprovals).not.toHaveBeenCalled();
+    expect(screen.queryByText(/waiting for your approval/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Conversation ID/)).not.toBeInTheDocument();
   });
 });

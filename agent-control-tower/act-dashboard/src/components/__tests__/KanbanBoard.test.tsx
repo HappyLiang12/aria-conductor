@@ -548,6 +548,50 @@ describe('KanbanBoard status board + DnD (Task 12)', () => {
     await renderBoard([baseItem()]); // TODO card
     expect(screen.queryByLabelText('Quick approve')).not.toBeInTheDocument();
   });
+
+  // A card whose asks are still pending belongs to a run that a bulk Done cannot
+  // close (the backend refuses DONE while the linked run is active). Offering the
+  // bulk approve anyway is a dead end that decides nothing (spec 7.1: no bulk
+  // approval for ACP entries), so it is disabled and names the asks instead.
+  it('disables the bulk approve of a card whose asks are still pending', async () => {
+    await renderBoard([baseItem({ status: 'REVIEW', pendingAskCount: 2 })]);
+
+    const approve = screen.getByLabelText('Quick approve');
+    expect(approve).toBeDisabled();
+    expect(approve).toHaveAttribute('title', 'Decide the 2 pending asks first');
+  });
+
+  it('names the pending asks when a Done move is refused for a live run', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    // 409 shape from GlobalExceptionHandler: code + message + structured details.
+    vi.mocked(transitionKanbanItem).mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: {
+          status: 409,
+          message: 'Cannot move to Done: linked run run-1 is still RUNNING.'
+            + ' Complete or cancel the run first.',
+          code: 'LINKED_RUN_ACTIVE',
+          details: { runId: 'run-1', runStatus: 'RUNNING' },
+        },
+      },
+    });
+    const { container } = await renderBoard([
+      baseItem({ status: 'REVIEW', pendingAskCount: 2, linkedRunId: 'run-1' }),
+    ]);
+
+    // The disabled bulk approve cannot be clicked, so the drag path is the one
+    // that still reaches the guarded transition.
+    const card = container.querySelector('[data-card="k-1"]') as HTMLElement;
+    await dropOn(card, screen.getByTestId('lane-DONE'));
+
+    expect(await screen.findByText(/still RUNNING/)).toBeVisible();
+    expect(
+      screen.getByText(/Decide the 2 pending asks first — open the card's decision panel\./),
+    ).toBeVisible();
+    expect(screen.getByLabelText('Quick approve')).toBeDisabled();
+  });
 });
 
 describe('KanbanBoard destructive cancel confirmation (Task 10)', () => {

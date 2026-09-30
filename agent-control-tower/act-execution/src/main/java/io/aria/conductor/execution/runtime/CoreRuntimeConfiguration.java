@@ -6,6 +6,7 @@ import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReplySink;
 import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
@@ -188,12 +189,12 @@ public class CoreRuntimeConfiguration {
     }
 
     @Bean
-    public OpenCodeCoreAdapter openCodeCoreAdapter(
+    public OpenCodeCoreAdapter openCodeCoreAdapter(RunMcpWiring runMcp,
             @Value("${aria.cores.opencode.executable:opencode}") String executable,
             @Value("${aria.cores.opencode.version:1.14.31}") String version,
             @Value("${aria.cores.opencode.model:gpt-4o}") String model) {
         return new OpenCodeCoreAdapter(new OpenCodeCoreAdapter.OpenCodeProfile(executable, List.of(),
-                Map.of(), version, model));
+                Map.of(), version, model), runMcp);
     }
 
     /**
@@ -206,7 +207,7 @@ public class CoreRuntimeConfiguration {
      * else before it binds its endpoint.
      */
     @Bean
-    public QoderCoreAdapter qoderCoreAdapter(
+    public QoderCoreAdapter qoderCoreAdapter(RunMcpWiring runMcp,
             @Value("${aria.cores.qoder.node-executable:node}") String nodeExecutable,
             @Value("${aria.cores.qoder.bridge-entry:packages/qoder-acp-bridge/dist/main.js}") String bridgeEntry,
             @Value("${aria.cores.qoder.executable:qoder}") String coreExecutable,
@@ -222,7 +223,7 @@ public class CoreRuntimeConfiguration {
                 .filter(argument -> !argument.isBlank())
                 .toList();
         return new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(nodeExecutable, bridgeEntry,
-                coreExecutable, coreArguments, Map.of(), Map.of(), version, model));
+                coreExecutable, coreArguments, Map.of(), Map.of(), version, model), runMcp);
     }
 
     @Bean

@@ -157,17 +157,31 @@ test('Error message on silent stream close', async ({ page }) => {
   await page.waitForLoadState('networkidle');
   await openAriaPanel(page);
 
+  // Pin the pending-approval check the panel makes on the failure path only —
+  // registered after the shell has loaded so no other surface sees the stub.
+  await page.route('**/api/v1/approvals**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{ id: 'e2e-ask-1', status: 'PENDING' }]),
+    });
+  });
+
   // Send a message — the intercepted stream will close silently.
   await typeAndSend(page, 'Test silent close');
 
-  // The error message "Connection closed unexpectedly" should appear.
-  await expect(page.getByText(/Connection closed unexpectedly/)).toBeVisible({ timeout: 15_000 });
+  // The panel reports the run as waiting for the operator instead of claiming a
+  // timeout: the run may still be alive behind the ask, so the raw stream text
+  // ("Connection closed unexpectedly. Please try again.") must not be echoed.
+  await expect(page.getByText(/Aria may be waiting for your approval/)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/1 pending ask in the Review Queue/)).toBeVisible();
+  await expect(page.getByText(/Connection closed unexpectedly/)).toHaveCount(0);
+  await expect(page.getByText(/Conversation ID:/)).toBeVisible();
   await page.screenshot({ path: `${SCREENSHOT_DIR}/05-silent-close-error.png` });
 
-  // The Retry button should be shown alongside the error message.
-  const retryBtn = page.locator('.ai-retry');
-  await expect(retryBtn).toBeVisible({ timeout: 10_000 });
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/06-retry-button-shown.png` });
+  // A blind retry is not offered while the run may still be alive.
+  await expect(page.locator('.ai-retry')).toHaveCount(0);
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/06-retry-withheld.png` });
 
   // Busy state should be cleared (no spinner stuck).
   const cancelBtn = page.locator('.ai-cancel-btn');
@@ -175,6 +189,7 @@ test('Error message on silent stream close', async ({ page }) => {
 
   // Unroute to avoid interfering with other tests.
   await page.unroute('**/api/v1/aria/chat/stream');
+  await page.unroute('**/api/v1/approvals**');
 
-  console.log('✓ Silent stream close shows error message and Retry button');
+  console.log('✓ Silent stream close reports the pending approval and withholds a blind retry');
 });

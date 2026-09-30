@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   apiErrorMessage,
   applyOperatorHeaders,
@@ -26,6 +27,7 @@ import { formatTimestamp } from '../utils/formatTime';
  * treated as authority and never confused with a first run.
  */
 export function OperatorAccessPanel() {
+  const queryClient = useQueryClient();
   const [credential, setCredential] = useState('');
   const [session, setSession] = useState<OperatorSessionState>({
     established: false,
@@ -61,6 +63,11 @@ export function OperatorAccessPanel() {
       const info = await establishOperatorSession(value);
       setSession({ established: true, expiresAt: info.expiresAt, expired: false });
       setExpiredNotice(false);
+      // The authority just changed, so every cached read may have been refused
+      // under the previous one (the Qoder credential card caches its 401). Refetch
+      // them under the new session instead of leaving the stale refusal on screen
+      // until a manual reload.
+      queryClient.invalidateQueries();
     } catch (err) {
       setError(apiErrorMessage(err, 'Could not establish the operator session.'));
       setSession({ established: false, expiresAt: null, expired: false });
@@ -84,6 +91,11 @@ export function OperatorAccessPanel() {
     } finally {
       setSession({ established: false, expiresAt: null, expired: false });
       setBusy(false);
+      // The local record is gone, so operator-only reads are re-evaluated against
+      // the server as it now stands: a revoked session refetches into the refused
+      // state, while a revoke that failed against a still-live cookie may still be
+      // authorized — that is the server's state, not a cached claim.
+      queryClient.invalidateQueries();
     }
   };
 

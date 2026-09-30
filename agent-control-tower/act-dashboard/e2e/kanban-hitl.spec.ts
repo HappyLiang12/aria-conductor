@@ -8,6 +8,7 @@ import {
   seedKanbanItem,
   setScenario,
   transitionKanban,
+  transitionKanbanSettled,
   uniqueName,
 } from './fixtures';
 
@@ -188,7 +189,10 @@ test.describe('kanban HITL board', () => {
       title: `hitl-ask-${uniqueName('card')}`,
       agentTemplateId: agent.name,
     });
-    const dispatched = await transitionKanban(request, askItem.id, 'IN_PROGRESS');
+    // The card carries an eligible agent, so the board's own auto-dispatch is a
+    // concurrent writer of this row: the operator-driven move may lose the version
+    // race (disclosed 409) and is retried, exactly as the tear-down below does.
+    const dispatched = await transitionKanbanSettled(request, askItem.id, 'IN_PROGRESS');
     expect(dispatched.status, JSON.stringify(dispatched.data)).toBe(200);
     expect(dispatched.data?.status).toBe('IN_PROGRESS');
 
@@ -208,7 +212,7 @@ test.describe('kanban HITL board', () => {
       { optionId: 'cancel', choice: 'DENY' },
     ]);
 
-    const moved = await transitionKanban(request, askItem.id, 'REVIEW');
+    const moved = await transitionKanbanSettled(request, askItem.id, 'REVIEW');
     expect(moved.status, JSON.stringify(moved.data)).toBe(200);
     expect(moved.data?.status).toBe('REVIEW');
 

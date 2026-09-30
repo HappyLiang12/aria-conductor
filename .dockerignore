@@ -20,4 +20,7 @@ docs
 e2e/screenshots
 agent-control-tower/act-dashboard
 agent-control-tower/opencode-sandbox/README.md
+# The dev H2 database lives under the app's data dir and is locked by a running
+# backend; the repository-root sandbox image builds must never send it.
+agent-control-tower/act-app/data
 *.md

@@ -210,7 +210,11 @@ public class OpenCodeHttpClient implements AutoCloseable {
     public MessageResult sendPrompt(String sessionId, String model, String systemPrompt,
             List<String> textParts, Duration timeout) {
         ObjectNode body = objectMapper.createObjectNode();
-        body.put("model", model);
+        // opencode >= 1.18 rejects a string model member on /session/:id/message
+        // ("Expected object | null, got \"...\" at [\"model\"]") and this client
+        // has no model-object spec to send, so the member is omitted and the
+        // server uses its configured/default model; the pin stays a session-level
+        // record for reporting, never a payload member.
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             body.put("system", systemPrompt);
         }
@@ -293,12 +297,17 @@ public class OpenCodeHttpClient implements AutoCloseable {
     private TaskExecutionException refusalError(String path, int status, String body) {
         String detail = null;
         try {
-            JsonNode error = objectMapper.readTree(body).path("error");
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode error = root.path("error");
             if (error.isObject()) {
                 detail = error.path("data").path("message").asText(null);
                 if (detail == null) {
                     detail = error.path("message").asText(null);
                 }
+            } else if (root.path("data").isObject() && root.path("data").path("message").isTextual()) {
+                // The native envelope of the pinned core:
+                // {"name":"BadRequest","data":{"message":"...","kind":"Payload"}}
+                detail = root.path("data").path("message").asText();
             }
         } catch (Exception e) {
             log.debug("Could not parse the OpenCode refusal body: {}", body);

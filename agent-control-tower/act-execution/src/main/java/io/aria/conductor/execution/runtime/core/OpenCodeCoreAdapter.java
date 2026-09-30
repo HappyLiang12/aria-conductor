@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime.core;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
@@ -19,6 +20,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -106,12 +108,26 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     private static final CoreCapabilities UNVERIFIED =
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
 
+    /** Budget for polling the launched server's health before a session opens. */
+    static final Duration SERVE_READY_BUDGET = Duration.ofSeconds(90);
+    /** Poll interval of the serve readiness wait. */
+    static final Duration SERVE_READY_POLL = Duration.ofMillis(500);
+
     private final OpenCodeProfile profile;
     private final RunMcpWiring runMcp;
+    private final Duration serveReadyBudget;
+    private final Duration serveReadyPoll;
 
     public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp) {
+        this(profile, runMcp, SERVE_READY_BUDGET, SERVE_READY_POLL);
+    }
+
+    OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
+            Duration serveReadyBudget, Duration serveReadyPoll) {
         this.profile = Objects.requireNonNull(profile, "profile");
         this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
+        this.serveReadyBudget = Objects.requireNonNull(serveReadyBudget, "serveReadyBudget");
+        this.serveReadyPoll = Objects.requireNonNull(serveReadyPoll, "serveReadyPoll");
     }
 
     /**
@@ -253,12 +269,47 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         }
         OpenCodeHttpClient client = new OpenCodeHttpClient(handle.endpoint().toString());
         try {
+            // The launch and the session open are separate hops, and the freshly
+            // started server needs warm-up before it answers: in SANDBOX mode the
+            // execd proxy returns 502 until `serve` listens, and in HOST mode the
+            // spawned process takes a moment to bind. openSession never retries a
+            // non-2xx (a retried creation could leave a second native session
+            // behind), so the open is gated on the health endpoint instead.
+            awaitServeReady(client, spec);
             String sessionId = client.openSession(spec.runId().toString());
             return new OpenCodeCoreSession(spec, client, sessionId, profile.model());
         } catch (RuntimeException e) {
             client.close();
             throw e;
         }
+    }
+
+    /**
+     * Polls the launched server's {@code GET /global/health} until healthy or the
+     * wall-clock budget elapses. Budget is enforced on the wall clock because each
+     * probe may itself block for the client's HTTP timeout (mirrors the legacy
+     * provider's {@code waitForHealth}).
+     */
+    private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec) {
+        long deadlineNanos = System.nanoTime() + serveReadyBudget.toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            if (client.isHealthy()) {
+                return;
+            }
+            long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000;
+            if (remainingMillis <= 0) {
+                break;
+            }
+            try {
+                Thread.sleep(Math.min(serveReadyPoll.toMillis(), remainingMillis));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "opencode serve did not become ready within " + serveReadyBudget.toSeconds()
+                        + "s for run " + spec.runId());
     }
 
     /** The governed configuration file of one run. */

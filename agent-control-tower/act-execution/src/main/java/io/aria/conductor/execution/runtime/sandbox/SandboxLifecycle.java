@@ -711,6 +711,10 @@ public class SandboxLifecycle implements AutoCloseable {
         private static final int MAX_SANDBOX_CREATE_ATTEMPTS = 3;
         /** Base backoff (ms) between sandbox creation retries; doubles each attempt (2s, then 4s). */
         private static final long SANDBOX_CREATE_BACKOFF_BASE_MS = 2000L;
+        /** Max attempts of one workspace upload against a transient execd connectivity failure. */
+        static final int MAX_UPLOAD_ATTEMPTS = 5;
+        /** Base backoff (ms) between upload attempts; doubles each attempt (0.5s, 1s, 2s, 4s). */
+        static final long UPLOAD_RETRY_BACKOFF_BASE_MS = 500L;
         /** Export bounds: a runaway tree must fail the export, never exhaust the backend. */
         private static final int MAX_EXPORT_DEPTH = 12;
         private static final int MAX_EXPORT_FILES = 4096;
@@ -743,12 +747,28 @@ public class SandboxLifecycle implements AutoCloseable {
                 return;
             }
             Sandbox sandbox = requireSandbox(sandboxId);
-            try {
-                sandbox.files().write(entries);
-            } catch (Exception e) {
-                throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                        "Workspace upload failed for sandbox " + sandboxId + ": " + e.getMessage(), e);
+            Exception lastFailure = null;
+            for (int attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+                try {
+                    sandbox.files().write(entries);
+                    return;
+                } catch (Exception e) {
+                    lastFailure = e;
+                    boolean transientError = isTransientUploadError(e);
+                    boolean lastAttempt = attempt == MAX_UPLOAD_ATTEMPTS;
+                    if (!transientError || lastAttempt) {
+                        throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                                "Workspace upload failed for sandbox " + sandboxId + ": " + e.getMessage(), e);
+                    }
+                    long backoffMs = UPLOAD_RETRY_BACKOFF_BASE_MS << (attempt - 1);
+                    log.warn("Workspace upload attempt {}/{} for sandbox {} failed with transient execd error '{}'; "
+                                    + "retrying in {}ms",
+                            attempt, MAX_UPLOAD_ATTEMPTS, sandboxId, e.getMessage(), backoffMs);
+                    sleepQuietly(backoffMs);
+                }
             }
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Workspace upload failed for sandbox " + sandboxId + ": " + lastFailure.getMessage(), lastFailure);
         }
 
         @Override
@@ -1116,6 +1136,27 @@ public class SandboxLifecycle implements AutoCloseable {
             return message.contains("sandbox_start_failed")
                     || message.contains("excluded port")
                     || message.contains("port");
+        }
+
+        /**
+         * True when the upload failure is connection-level and worth retrying:
+         * the sandbox's execd is still warming up (create returns with
+         * {@code skipHealthCheck=true}, so the execd listener may not exist yet
+         * and the direct endpoint answers EOF / connection reset). Permanent
+         * failures (size caps, invalid paths, ...) never match and fail
+         * immediately.
+         */
+        private static boolean isTransientUploadError(Exception e) {
+            if (e == null || e.getMessage() == null) {
+                return false;
+            }
+            String message = e.getMessage().toLowerCase(Locale.ROOT);
+            return message.contains("unexpected end of stream")
+                    || message.contains("end of stream")
+                    || message.contains("connection refused")
+                    || message.contains("connection reset")
+                    || message.contains("failed to connect")
+                    || message.contains("eof");
         }
 
         private static void sleepQuietly(long millis) {

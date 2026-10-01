@@ -2,7 +2,8 @@
 
 Date: 2026-10-01
 Scope: the run-owned OpenCode core in SANDBOX mode, on the PR head (round 1 at `a808167a`,
-round 2 at `2f3230ec` after the operator-provider wiring).
+round 2 at `2f3230ec` after the operator-provider wiring, round 3 after the provider account
+was funded).
 Host: Windows dev machine, podman 5.8.3 (WSL machine), local-dev topology (backend +
 dashboard on the host, OpenSandbox server in a container), image
 `localhost/aria-conductor/opencode-sandbox:1.1` (opencode 1.18.15, `/opt/aria/launch.mjs`
@@ -207,12 +208,38 @@ on the same stack succeeded immediately. Recorded as a warm-up-lag observation o
 Windows/WSL published-port relay - the run fails loudly instead of hanging, and a re-run
 succeeds, but the budget may deserve a review if this recurs.
 
+## Round 3: the first green run (provider funded)
+
+With the account funded (the same key now answers `200` with a completion), run
+`c0783e96-35a0-430d-9992-512be4974868` completed end to end:
+
+```
+21:48:13.632 CoreRunLauncher : Froze run c0783e96-... to core opencode/SANDBOX
+21:48:14.7   SandboxLifecycle : Sandbox 36f5733a-... created for run c0783e96-... from image aria-conductor/opencode-sandbox:1.1
+21:48:15.326 SandboxLifecycle : Uploaded 1 entry(ies) into sandbox 36f5733a-... for run c0783e96-...
+21:48:15.370 SandboxLifecycle : Uploaded 1 run configuration entry(ies) into 'config' of run c0783e96-...
+21:48:15.371 OpenSandboxSdk : Launching the run-owned core ... via the fixed image launcher
+21:48:30.661 OpenSandboxSdk : Writer control 'stop' ... {"writersStopped":true,"terminated":[29],"remaining":[]}
+21:48:31.699 AgentLoopEngine : Completing run: runId=c0783e96-..., status=COMPLETED, iterations=1, tokens=188
+
+GET /api/v1/runs/c0783e96-35a0-430d-9992-512be4974868
+{"status":"COMPLETED","iterationCount":1,"totalTokensUsed":188,"errorMessage":null,
+ "finalOutput":"README.md not found (workspace is empty)."}
+```
+
+The answer is the model's own observation of the run workspace: the SANDBOX engine provisions a
+per-run workspace (`agent-control-tower/act-app/data/workspaces/<runId>`, seen in round 1's log)
+rather than snapshotting the agent's `workspacePath` directory, so the workspace was empty and the
+model reported it. The model turn itself - the point of this round - is complete: the governed
+sandbox served a real `deepseek-flash` turn (1 iteration, 188 tokens) and the run finished
+CLEAN with the answer recorded. The model's `read` tool call also executed through the governed
+policy (read is allowed by design), i.e. the allowed tool path works in the sandbox.
+
 ## NOT VERIFIED
 
-- A successful model turn against the operator's gateway: every hop is proven (stub provider
-  completes the turn; the real endpoint answers), but the account returns
-  `402 Insufficient Balance`, so no agent answer, tool call or `finalOutput` was produced.
-- The deny policy blocking a real tool call: no model turn completed, so no tool was invoked.
+- A *denied* tool call: the model only read, which the policy allows; no side-effecting tool
+  was attempted, so the deny path is unverified live (covered by the configuration assertions
+  and the peer contract tests).
 - Approval-gated runs: the verification agent was created with
   `"config":{"taskApprovalRequired":false}`; the approval path was not exercised.
 - A non-default `SandboxLifecycle` control root (the cross-hop test covers the production
@@ -221,6 +248,6 @@ succeeds, but the budget may deserve a review if this recurs.
 ## Teardown
 
 The stack is still running after this report (`pwsh -NoProfile -File scripts/stop.ps1`
-stops the backend/dashboard/OpenSandbox container started by `start.ps1`). Seven runs (all
-FAILED, each for the reason recorded above) and the agent `sbx-live-check` remain in the
-local H2 database.
+stops the backend/dashboard/OpenSandbox container started by `start.ps1`). Eight runs (one
+COMPLETED, the rest FAILED for the reasons recorded above) and the agent `sbx-live-check`
+remain in the local H2 database.

@@ -12,6 +12,7 @@ import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -45,6 +46,9 @@ class OpenCodeCoreAdapterTest {
 
     private static final UUID RUN_ID = UUID.randomUUID();
     private static final UUID AGENT_ID = UUID.randomUUID();
+
+    @TempDir
+    Path hostConfig;
 
     @Test
     void open_waitsForServeHealth_thenOpensSession() throws IOException {
@@ -80,11 +84,35 @@ class OpenCodeCoreAdapterTest {
         }
     }
 
+    /**
+     * The serve-ready wait never outlives the run: a launch whose run deadline is
+     * about to elapse waits the remaining run budget, not the full serve budget.
+     */
+    @Test
+    void open_boundsTheServeWaitByTheRunDeadline() throws IOException {
+        AtomicInteger healthHits = new AtomicInteger();
+        HttpServer server = serveHealthyAfter(Integer.MAX_VALUE, healthHits);
+        try {
+            OpenCodeCoreAdapter adapter = adapter(server, Duration.ofSeconds(30), Duration.ofMillis(25));
+            ExecutionSpec expiring = spec(Instant.now().plusMillis(200));
+            Instant started = Instant.now();
+
+            assertThatThrownBy(() -> adapter.open(handle(server), expiring, new SecretBundle(null, Map.of())))
+                    .isInstanceOf(TaskExecutionException.class)
+                    .hasMessageContaining("did not become ready");
+
+            assertThat(Duration.between(started, Instant.now()))
+                    .as("the wait must end with the run deadline, not the 30s serve budget")
+                    .isLessThan(Duration.ofSeconds(10));
+        } finally {
+            server.stop(0);
+        }
+    }
+
     // ---- launch profile: sandbox XDG roots -------------------------------------------
 
     @Test
     void launchProfile_sandboxXdgRootsPointIntoTheSandboxControlTree() throws IOException {
-        Path hostConfig = Files.createTempDirectory("oc-config");
         UUID runId = UUID.randomUUID();
         RunMcpWiring runMcp = mock(RunMcpWiring.class);
         when(runMcp.forRun(any(ExecutionSpec.class), any(PreparedEnvironment.class)))
@@ -96,7 +124,7 @@ class OpenCodeCoreAdapterTest {
                 "/workspace", hostConfig.toString(), URI.create("http://127.0.0.1:40369/proxy/4096"));
         ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "opencode", ExecutionMode.SANDBOX,
                 new AgentExecutionSettings("opencode", ExecutionMode.SANDBOX, null, null, null),
-                null, null, Instant.now());
+                null, null, Instant.now().plusSeconds(30));
 
         LaunchProfile profile = adapter.launchProfile(spec, environment, new SecretBundle(null, Map.of()));
 
@@ -126,9 +154,13 @@ class OpenCodeCoreAdapterTest {
     }
 
     private static ExecutionSpec spec() {
+        return spec(Instant.now().plusSeconds(30));
+    }
+
+    private static ExecutionSpec spec(Instant deadline) {
         return new ExecutionSpec(RUN_ID, AGENT_ID, "opencode", ExecutionMode.SANDBOX,
                 new AgentExecutionSettings("opencode", ExecutionMode.SANDBOX, null, null, null),
-                null, null, Instant.now());
+                null, null, deadline);
     }
 
     private static RuntimeHandle handle(HttpServer server) {

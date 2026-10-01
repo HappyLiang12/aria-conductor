@@ -192,11 +192,14 @@ public class OpenCodeHttpClient implements AutoCloseable {
     }
 
     /**
-     * The governed prompt path (task 11): one user message with the reviewed
-     * model, optional system material and the ordered text parts of the
-     * translated prompt. Single-shot on purpose -- a retried non-idempotent
-     * message POST could execute the same core action twice, and the native
-     * subset carries no idempotency key.
+     * The governed prompt path (task 11): one user message with optional system
+     * material and the ordered text parts of the translated prompt. The reviewed
+     * model pin is a session-level record, never a payload member: opencode >=
+     * 1.18 refuses a string model member ("Expected object | null, got ... at
+     * [\"model\"]"), so the server serves the prompt with its configured model.
+     * Single-shot on purpose -- a retried non-idempotent message POST could
+     * execute the same core action twice, and the native subset carries no
+     * idempotency key.
      *
      * <p>The native envelope members an OpenCode server may omit stay absent in
      * the result: a message whose {@code info.tokens} is missing reports unknown
@@ -207,14 +210,11 @@ public class OpenCodeHttpClient implements AutoCloseable {
      * @throws TaskExecutionException {@code PROVIDER_ERROR} for a refusal or a
      *         provider error envelope, {@code TIMEOUT} when the deadline elapses
      */
-    public MessageResult sendPrompt(String sessionId, String model, String systemPrompt,
+    public MessageResult sendPrompt(String sessionId, String systemPrompt,
             List<String> textParts, Duration timeout) {
         ObjectNode body = objectMapper.createObjectNode();
-        // opencode >= 1.18 rejects a string model member on /session/:id/message
-        // ("Expected object | null, got \"...\" at [\"model\"]") and this client
-        // has no model-object spec to send, so the member is omitted and the
-        // server uses its configured/default model; the pin stays a session-level
-        // record for reporting, never a payload member.
+        // No model member: the pin is a session-level record and this client has
+        // no model-object spec to send, so the server's configured model serves.
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             body.put("system", systemPrompt);
         }

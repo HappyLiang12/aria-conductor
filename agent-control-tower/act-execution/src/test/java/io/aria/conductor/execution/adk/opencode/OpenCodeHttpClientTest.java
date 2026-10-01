@@ -136,7 +136,7 @@ class OpenCodeHttpClientTest {
                                 """)));
 
         OpenCodeHttpClient.MessageResult result =
-                client.sendPrompt("sess-abc", "gpt-4o", "sys", List.of("do the task"), Duration.ofSeconds(5));
+                client.sendPrompt("sess-abc", "sys", List.of("do the task"), Duration.ofSeconds(5));
 
         assertThat(result.finalOutput()).isEqualTo("ok");
         assertThat(result.messageId()).isEqualTo("m9");
@@ -145,8 +145,9 @@ class OpenCodeHttpClientTest {
 
     @Test
     void sendPrompt_surfaces400ModelPayloadRefusalWithDetail() {
-        // The pre-fix payload (string model) is refused with a native BadRequest
-        // envelope; the client folds the detail into the refusal.
+        // A model-payload refusal (the shape opencode served for the pre-fix
+        // payload) carries a native BadRequest envelope; the client folds the
+        // detail into the refusal instead of reporting the bare status.
         stubFor(post(urlEqualTo("/session/sess-abc/message"))
                 .willReturn(aResponse()
                         .withStatus(400)
@@ -155,7 +156,7 @@ class OpenCodeHttpClientTest {
                                 {"name":"BadRequest","data":{"message":"Expected object | null, got \\"gpt-4o\\" at [\\"model\\"]","kind":"Payload"}}
                                 """)));
 
-        assertThatThrownBy(() -> client.sendPrompt("sess-abc", "gpt-4o", "sys",
+        assertThatThrownBy(() -> client.sendPrompt("sess-abc", "sys",
                 List.of("do the task"), Duration.ofSeconds(5)))
                 .isInstanceOf(TaskExecutionException.class)
                 .hasMessageContaining("Expected object | null");

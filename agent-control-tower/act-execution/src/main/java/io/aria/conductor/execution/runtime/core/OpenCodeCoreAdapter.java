@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -303,10 +304,19 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * Polls the launched server's {@code GET /global/health} until healthy or the
      * wall-clock budget elapses. Budget is enforced on the wall clock because each
      * probe may itself block for the client's HTTP timeout (mirrors the legacy
-     * provider's {@code waitForHealth}).
+     * provider's {@code waitForHealth}). The wait is also bounded by the run's
+     * frozen deadline, so a launch that starts near expiry cannot sit out the
+     * full budget past the point the run must end.
      */
     private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec) {
-        long deadlineNanos = System.nanoTime() + serveReadyBudget.toNanos();
+        long budgetNanos = serveReadyBudget.toNanos();
+        if (spec.deadline() != null) {
+            long runBudgetNanos = Math.max(0L,
+                    Duration.between(Instant.now(), spec.deadline()).toNanos());
+            budgetNanos = Math.min(budgetNanos, runBudgetNanos);
+        }
+        long budgetMillis = budgetNanos / 1_000_000;
+        long deadlineNanos = System.nanoTime() + budgetNanos;
         while (System.nanoTime() < deadlineNanos) {
             if (client.isHealthy()) {
                 return;
@@ -323,8 +333,8 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
             }
         }
         throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                "opencode serve did not become ready within " + serveReadyBudget.toSeconds()
-                        + "s for run " + spec.runId());
+                "opencode serve did not become ready within " + budgetMillis
+                        + "ms for run " + spec.runId());
     }
 
     /** The governed configuration file of one run. */

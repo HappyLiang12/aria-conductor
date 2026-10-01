@@ -30,10 +30,12 @@ import java.util.function.Consumer;
  * invented:
  * <ul>
  *   <li>The session identity is the native session id the server returned.</li>
- *   <li>A prompt is one message envelope: the reviewed model pin, the task's
- *       system material in the native {@code system} member and the ordered
- *       text parts (the history transcript followed by the current user
- *       request). History is context material, never a replayed native message,
+ *   <li>A prompt is one message envelope: the task's system material in the
+ *       native {@code system} member and the ordered text parts (the history
+ *       transcript followed by the current user request). The reviewed model pin
+ *       is a session-level record and never a payload member -- opencode >= 1.18
+ *       refuses a string model member, so the server's configured model serves.
+ *       History is context material, never a replayed native message,
  *       so an earlier tool action is not executed again.</li>
  *   <li>Usage is what the message envelope reported: a missing {@code tokens}
  *       member means unknown counters, not zero, and the observed model is the
@@ -77,7 +79,11 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
         return sessionId;
     }
 
-    /** The reviewed model pin every message envelope carries (the requested model). */
+    /**
+     * The reviewed model pin of this session: the model the run requested. It is
+     * reported alongside the observed model; the native message envelope never
+     * carries it (the server serves with its configured model).
+     */
     String requestedModel() {
         return model;
     }
@@ -113,7 +119,7 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
         Thread.ofVirtual().name("opencode-prompt-" + spec.runId()).start(() -> {
             try {
                 OpenCodeHttpClient.MessageResult message =
-                        client.sendPrompt(sessionId, model, systemPrompt, parts, timeout);
+                        client.sendPrompt(sessionId, systemPrompt, parts, timeout);
                 events.accept(new CoreEvent("opencode.message", spec.runId(), sessionId, null,
                         message.rawJson()));
                 future.complete(new CoreResult(sessionId, message.finalOutput(),

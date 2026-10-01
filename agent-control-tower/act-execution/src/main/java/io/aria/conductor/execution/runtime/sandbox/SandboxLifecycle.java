@@ -250,7 +250,7 @@ public class SandboxLifecycle implements AutoCloseable {
      */
     public void uploadRunConfiguration(UUID runId, Path hostConfigurationDirectory, String directoryName) {
         Run run = require(runId);
-        Objects.requireNonNull(directoryName, "directoryName");
+        requireDirectoryName(Objects.requireNonNull(directoryName, "directoryName"), "directoryName");
         Path host = hostConfigurationDirectory.resolve(directoryName);
         if (!Files.isDirectory(host)) {
             log.info("No host-side '{}' subtree to upload for run {} ({}), skipping", directoryName, runId, host);
@@ -512,6 +512,19 @@ public class SandboxLifecycle implements AutoCloseable {
      */
     static boolean isSandboxAbsolutePath(String value) {
         return value != null && value.length() > 1 && value.startsWith("/") && !value.startsWith("//");
+    }
+
+    /**
+     * The name of an uploaded subtree inside the run control directory: one plain
+     * directory name, never a path. It is interpolated into a sandbox path, so a
+     * separator, a traversal segment or an absolute path is refused instead of
+     * being resolved.
+     */
+    private static String requireDirectoryName(String value, String name) {
+        if (!value.matches("[A-Za-z0-9_-]+")) {
+            throw new IllegalArgumentException(name + " must be a plain directory name, got: " + value);
+        }
+        return value;
     }
 
     private static ThreadFactory daemonFactory() {
@@ -1176,12 +1189,15 @@ public class SandboxLifecycle implements AutoCloseable {
                 return false;
             }
             String message = e.getMessage().toLowerCase(Locale.ROOT);
+            // EOF markers are matched in their observed forms, never as a bare
+            // substring, so a permanent diagnostic that happens to contain "eof"
+            // is not retried.
             return message.contains("unexpected end of stream")
-                    || message.contains("end of stream")
+                    || message.contains("unexpected eof")
+                    || message.contains("eofexception")
                     || message.contains("connection refused")
                     || message.contains("connection reset")
-                    || message.contains("failed to connect")
-                    || message.contains("eof");
+                    || message.contains("failed to connect");
         }
 
         private static void sleepQuietly(long millis) {

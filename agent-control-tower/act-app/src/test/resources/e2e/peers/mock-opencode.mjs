@@ -6,6 +6,12 @@
 // --hostname 127.0.0.1 --port <n>` argv, `GET /global/health`,
 // `POST /session` -> {id}, `POST /session/:id/message` -> {info, parts},
 // `GET /session/:id/message` -> [{info, parts}] and `POST /session/:id/abort`.
+// The served surface is the recorded 1.14.31 one: a payload `model` member wins
+// and an unavailable one is refused. The governed client targets opencode >=
+// 1.18 (which refuses a string member) and therefore sends none, so the peer's
+// configured model (ARIA_PEER_MODEL, defaulting to the manifest default)
+// decides -- this fixture deliberately does not emulate 1.18's structural
+// rejection of a string member.
 // The recorded message envelope (assistant info with modelID/providerID/path/
 // cost/tokens/time, plus an info.error object with name+statusCode+isRetryable
 // for the scripted provider failure) is reproduced; message texts are

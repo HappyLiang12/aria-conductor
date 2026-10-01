@@ -1,7 +1,8 @@
 # Sandbox live verification - PR #94 (`fix/sandbox-execd-readiness-race`)
 
 Date: 2026-10-01
-Scope: the run-owned OpenCode core in SANDBOX mode, on the PR head `a808167a`.
+Scope: the run-owned OpenCode core in SANDBOX mode, on the PR head (round 1 at `a808167a`,
+round 2 at `2f3230ec` after the operator-provider wiring).
 Host: Windows dev machine, podman 5.8.3 (WSL machine), local-dev topology (backend +
 dashboard on the host, OpenSandbox server in a container), image
 `localhost/aria-conductor/opencode-sandbox:1.1` (opencode 1.18.15, `/opt/aria/launch.mjs`
@@ -135,13 +136,83 @@ Claims this confirms:
    `XDG_DATA_HOME/opencode/...`, so the manifest environment reached the core process.
 3. The core ran from the fixed image launcher (`opencode` present next to `execd`).
 
+## Round 2: the operator's model provider (`2f3230ec`)
+
+Round 1 left the run without a served model: the governed document had no `model`/`provider`
+member and the provider credential never reached the sandbox, so opencode fell back to its
+own default and the free tier refused the consumer. `2f3230ec` wires the operator's active
+`LlmProvider` into the governed document and injects `opencode.sandbox-env` into the launch
+environment. Re-verified live with DeepSeek as the operator provider.
+
+### Observed: the delivered document and the launch environment (live sandbox)
+
+```
+"model": "deepseek/deepseek-flash",
+"provider": { "deepseek": { "npm": "@ai-sdk/openai-compatible",
+                            "options": { "apiKey": "{env:LLM_API_KEY}",
+                                         "baseURL": "https://api.deepseek.com" },
+                            "models": { "deepseek-flash": {} } } }
+...
+--- provider key present in a sandbox process env? ---
+LLM_API_KEY: yes
+```
+
+The permission policy is unchanged; the key is an env reference, never a literal in the file.
+
+### Observed: opencode really calls the configured provider (stub proof)
+
+A stub OpenAI-compatible endpoint inside the image received, from the governed document:
+
+```
+REQUEST POST /v1/chat/completions
+AUTHORIZATION Bearer <LLM_API_KEY from the serve environment>
+BODY {"model":"deepseek-flash","max_tokens":32000, ...}
+```
+
+and opencode completed the turn (`llm.provider=deepseek llm.model=deepseek-flash`). The
+wiring - provider block, env reference, model id - is therefore proven end to end.
+
+### Observed: the real provider answers (and what it answers)
+
+Run `d695e31f-d75d-42df-bbda-1e2bd5c22b13` FAILED with the provider's own diagnosis:
+
+```
+APIError: Insufficient Balance (request_id: a55b2926-656b-407f-9cd0-4e028dc79432)
+```
+
+The chain reaches the model endpoint with the operator's key and model; the endpoint refuses
+on account balance.
+
+### Findings for the operator
+
+- `LLM_MODEL=deepseek-v4-flash` (`.env`, and therefore the auto-created `LlmProvider` row)
+  is not a model the endpoint serves. `GET https://api.deepseek.com/v1/models` lists
+  `deepseek-flash` and `deepseek-v4-pro`; opencode fails the run with
+  `ProviderModelNotFoundError: Model not found: deepseek/deepseek-v4-flash. Did you mean:
+  deepseek-flash, deepseek-v4-pro?`. The local provider row was updated to `deepseek-flash`
+  for this verification; the `.env` value still needs the operator's decision (it also feeds
+  the backend's own LLM client).
+- The DeepSeek account behind the provided key has no balance: both
+  `https://api.deepseek.com/chat/completions` and `.../v1/chat/completions` answer
+  `402 Insufficient Balance` for `deepseek-flash` and `deepseek-v4-flash` alike.
+
+### Observed: one cold-start upload failure that exhausted both retry budgets
+
+Run `e3e55e63-319a-4ea7-b092-7e09d3536724` failed before the core started:
+`Workspace upload failed ...: Network connectivity error: Failed to connect to
+localhost/127.0.0.1:59115`. The SDK's transport retried 4 attempts (~2 s total) and the
+bounded upload retry consumed all 5 attempts (~18 s wall clock) before failing, i.e. the
+freshly published endpoint was unreachable for ~18 s right after a stack restart; later runs
+on the same stack succeeded immediately. Recorded as a warm-up-lag observation on the
+Windows/WSL published-port relay - the run fails loudly instead of hanging, and a re-run
+succeeds, but the budget may deserve a review if this recurs.
+
 ## NOT VERIFIED
 
-- A successful model turn: opencode's built-in default model refuses this consumer
-  (`OpenCode's free tier can only be used from within OpenCode`), which is the follow-up
-  named in the PR description ("wiring the operator's OpenAI-compatible gateway as the run
-  provider"). No agent answer, tool call or `finalOutput` was produced in either run.
-- The deny policy blocking a real tool call: no model turn happened, so no tool was invoked.
+- A successful model turn against the operator's gateway: every hop is proven (stub provider
+  completes the turn; the real endpoint answers), but the account returns
+  `402 Insufficient Balance`, so no agent answer, tool call or `finalOutput` was produced.
+- The deny policy blocking a real tool call: no model turn completed, so no tool was invoked.
 - Approval-gated runs: the verification agent was created with
   `"config":{"taskApprovalRequired":false}`; the approval path was not exercised.
 - A non-default `SandboxLifecycle` control root (the cross-hop test covers the production
@@ -150,5 +221,6 @@ Claims this confirms:
 ## Teardown
 
 The stack is still running after this report (`pwsh -NoProfile -File scripts/stop.ps1`
-stops the backend/dashboard/OpenSandbox container started by `start.ps1`). Two FAILED runs
-and the agent `sbx-live-check` remain in the local H2 database.
+stops the backend/dashboard/OpenSandbox container started by `start.ps1`). Seven runs (all
+FAILED, each for the reason recorded above) and the agent `sbx-live-check` remain in the
+local H2 database.

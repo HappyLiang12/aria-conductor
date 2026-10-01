@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime.core;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
@@ -11,6 +12,7 @@ import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.sandbox.SandboxBind;
+import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 
@@ -19,6 +21,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,14 +74,17 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     static final String CACHE_HOME_DIRECTORY = "cache";
 
     /**
-     * The governed permission policy. Deny by default, explicit read-only
-     * allowances, explicit refusals for every side-effecting surface. Tool names
-     * follow the reviewed core's tool ids; an unknown tool is covered by the
-     * wildcard refusal and can therefore never be auto-approved.
+     * The governed permission policy plus the operator's model provider: the run
+     * may only read, and it serves with the provider the operator activated
+     * (never opencode's own default, whose free tier refuses this consumer).
+     * Deny by default, explicit read-only allowances, explicit refusals for every
+     * side-effecting surface. Tool names follow the reviewed core's tool ids; an
+     * unknown tool is covered by the wildcard refusal and can therefore never be
+     * auto-approved.
      *
-     * <p>The {@code %s} slot carries the platform-MCP block of a wired run; the
-     * empty substitution is the unchanged no-wiring document
-     * ({@link #governedConfigurationJson()}).
+     * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
+     * the remaining slots carry the provider id, the model, the provider id
+     * again, the base URL and the model again.
      */
     private static final String GOVERNED_CONFIGURATION_TEMPLATE = """
             {
@@ -96,22 +103,132 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "deny"
-              }%s
+              }%s,
+              "model": "%s/%s",
+              "provider": {
+                "%s": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "options": {
+                    "apiKey": "{env:LLM_API_KEY}",
+                    "baseURL": "%s"
+                  },
+                  "models": {
+                    "%s": {}
+                  }
+                }
+              }
             }
             """;
-
-    /** Byte-for-byte the governed document every unwired run receives. */
-    private static final String GOVERNED_CONFIGURATION_JSON = GOVERNED_CONFIGURATION_TEMPLATE.formatted("");
 
     private static final CoreCapabilities UNVERIFIED =
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
 
+    /** Budget for polling the launched server's health before a session opens. */
+    static final Duration SERVE_READY_BUDGET = Duration.ofSeconds(90);
+    /** Poll interval of the serve readiness wait. */
+    static final Duration SERVE_READY_POLL = Duration.ofMillis(500);
+
     private final OpenCodeProfile profile;
     private final RunMcpWiring runMcp;
+    private final ModelProviderResolver modelProviders;
+    private final Duration serveReadyBudget;
+    private final Duration serveReadyPoll;
 
     public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp) {
+        this(profile, runMcp, ModelProviderResolver.fallback(), SERVE_READY_BUDGET, SERVE_READY_POLL);
+    }
+
+    /** A launch against an explicit provider resolution (production reads the operator's row). */
+    public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
+            ModelProviderResolver modelProviders) {
+        this(profile, runMcp, modelProviders, SERVE_READY_BUDGET, SERVE_READY_POLL);
+    }
+
+    OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
+            Duration serveReadyBudget, Duration serveReadyPoll) {
+        this(profile, runMcp, ModelProviderResolver.fallback(), serveReadyBudget, serveReadyPoll);
+    }
+
+    OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp, ModelProviderResolver modelProviders,
+            Duration serveReadyBudget, Duration serveReadyPoll) {
         this.profile = Objects.requireNonNull(profile, "profile");
         this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
+        this.modelProviders = Objects.requireNonNull(modelProviders, "modelProviders");
+        this.serveReadyBudget = Objects.requireNonNull(serveReadyBudget, "serveReadyBudget");
+        this.serveReadyPoll = Objects.requireNonNull(serveReadyPoll, "serveReadyPoll");
+    }
+
+    /**
+     * The model provider a governed launch points opencode at: the operator's
+     * active provider, resolved per launch so activating one takes effect on the
+     * next run. The run's own model pin stays a session-level record -- the
+     * provider block is what actually serves.
+     */
+    @FunctionalInterface
+    public interface ModelProviderResolver {
+
+        ModelProvider resolve();
+
+        /** The documented deepseek fallback used when no provider is configured. */
+        static ModelProviderResolver fallback() {
+            return ModelProvider::deepseekFallback;
+        }
+    }
+
+    /**
+     * The openai-compatible provider the governed configuration serves with.
+     *
+     * <p>The provider id, base URL and model are interpolated into the governed
+     * JSON document, so each is validated here and a value that could break the
+     * document refuses the launch instead of being written.
+     *
+     * @param providerId the provider key of the document (e.g. {@code deepseek})
+     * @param model      the served model id, never carrying a {@code /} (the
+     *                   document's {@code model} member is {@code id/model})
+     * @param baseUrl    the openai-compatible endpoint
+     */
+    public record ModelProvider(String providerId, String model, String baseUrl) {
+
+        public ModelProvider {
+            providerId = requireJsonMember(providerId, "providerId");
+            if (!providerId.matches("[a-z0-9][a-z0-9-]*")) {
+                throw new IllegalArgumentException(
+                        "The model provider id must be a lowercase [a-z0-9-] token, got: " + providerId);
+            }
+            model = requireJsonMember(model, "model");
+            if (model.contains("/")) {
+                throw new IllegalArgumentException(
+                        "The model id must not carry a '/', got: " + model);
+            }
+            baseUrl = requireJsonMember(baseUrl, "baseUrl");
+            if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+                throw new IllegalArgumentException(
+                        "The model provider base URL must be http(s), got: " + baseUrl);
+            }
+        }
+
+        /**
+         * The documented fallback: what the platform has always generated when no
+         * provider row is active. The served model may not exist on that endpoint;
+         * an active operator provider is the supported configuration.
+         */
+        public static ModelProvider deepseekFallback() {
+            return new ModelProvider("deepseek", "deepseek-chat", "https://api.deepseek.com/v1");
+        }
+
+        private static String requireJsonMember(String value, String name) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException("The model provider requires a " + name);
+            }
+            for (char c : value.toCharArray()) {
+                if (c == '"' || c == '\\' || c < 0x20) {
+                    throw new IllegalArgumentException(
+                            "The model provider " + name + " must not carry quotes, backslashes or control"
+                                    + " characters, got: " + value);
+                }
+            }
+            return value;
+        }
     }
 
     /**
@@ -152,7 +269,11 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         return CORE_ID;
     }
 
-    /** The reviewed model pin, i.e. the requested model of every message envelope. */
+    /**
+     * The reviewed model pin of every run of this adapter. It is a session-level
+     * record: the governed prompt carries no model member, and the served model is
+     * the one the resolved {@link ModelProvider} names.
+     */
     public String model() {
         return profile.model();
     }
@@ -220,9 +341,23 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 : endpoint.getHost());
 
         Map<String, String> serverEnvironment = new LinkedHashMap<>(profile.environment());
-        serverEnvironment.put("XDG_CONFIG_HOME", configHome.toString());
-        serverEnvironment.put("XDG_DATA_HOME", dataHome.toString());
-        serverEnvironment.put("XDG_CACHE_HOME", cacheHome.toString());
+        // SANDBOX: the run-owned XDG roots must be SANDBOX paths. The governed
+        // configuration is uploaded into the sandbox's run control directory
+        // (<controlRoot>/<runId>/config, the same tree the launch manifest lives
+        // in), so the roots reference that tree; a host path (e.g. D:\... on
+        // Windows) is not an absolute path on Linux — opencode resolves it
+        // relative to its cwd and silently loses the governed permission policy.
+        // HOST: the roots are the run-owned host directories created above.
+        if (SandboxBind.isSandboxProxy(environment)) {
+            String controlRoot = SandboxLifecycle.DEFAULT_CONTROL_ROOT + "/" + spec.runId();
+            serverEnvironment.put("XDG_CONFIG_HOME", controlRoot + "/" + CONFIG_HOME_DIRECTORY);
+            serverEnvironment.put("XDG_DATA_HOME", controlRoot + "/" + DATA_HOME_DIRECTORY);
+            serverEnvironment.put("XDG_CACHE_HOME", controlRoot + "/" + CACHE_HOME_DIRECTORY);
+        } else {
+            serverEnvironment.put("XDG_CONFIG_HOME", configHome.toString());
+            serverEnvironment.put("XDG_DATA_HOME", dataHome.toString());
+            serverEnvironment.put("XDG_CACHE_HOME", cacheHome.toString());
+        }
         if (workerMcp.isPresent()) {
             // The run-scoped worker bearer of the platform MCP. The endpoint ignores it
             // in auth-mode=none and requires exactly this kind of token in auth-mode=actor;
@@ -253,12 +388,56 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         }
         OpenCodeHttpClient client = new OpenCodeHttpClient(handle.endpoint().toString());
         try {
+            // The launch and the session open are separate hops, and the freshly
+            // started server needs warm-up before it answers: in SANDBOX mode the
+            // execd proxy returns 502 until `serve` listens, and in HOST mode the
+            // spawned process takes a moment to bind. openSession never retries a
+            // non-2xx (a retried creation could leave a second native session
+            // behind), so the open is gated on the health endpoint instead.
+            awaitServeReady(client, spec);
             String sessionId = client.openSession(spec.runId().toString());
             return new OpenCodeCoreSession(spec, client, sessionId, profile.model());
         } catch (RuntimeException e) {
             client.close();
             throw e;
         }
+    }
+
+    /**
+     * Polls the launched server's {@code GET /global/health} until healthy or the
+     * wall-clock budget elapses. Budget is enforced on the wall clock because each
+     * probe may itself block for the client's HTTP timeout (mirrors the legacy
+     * provider's {@code waitForHealth}). The wait is also bounded by the run's
+     * frozen deadline, so a launch that starts near expiry cannot sit out the
+     * full budget past the point the run must end.
+     */
+    private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec) {
+        long budgetNanos = serveReadyBudget.toNanos();
+        if (spec.deadline() != null) {
+            long runBudgetNanos = Math.max(0L,
+                    Duration.between(Instant.now(), spec.deadline()).toNanos());
+            budgetNanos = Math.min(budgetNanos, runBudgetNanos);
+        }
+        long budgetMillis = budgetNanos / 1_000_000;
+        long deadlineNanos = System.nanoTime() + budgetNanos;
+        while (System.nanoTime() < deadlineNanos) {
+            if (client.isHealthy()) {
+                return;
+            }
+            long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000;
+            if (remainingMillis <= 0) {
+                break;
+            }
+            try {
+                Thread.sleep(Math.min(serveReadyPoll.toMillis(), remainingMillis));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "opencode serve did not become ready within " + budgetMillis
+                        + "ms for run " + spec.runId());
     }
 
     /** The governed configuration file of one run. */
@@ -269,16 +448,29 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 .resolve("opencode.json");
     }
 
-    /** The exact governed permission policy written for every run. */
+    /** The governed configuration a launch pointing at {@code provider} writes. */
+    public static String governedConfigurationJson(ModelProvider provider) {
+        Objects.requireNonNull(provider, "provider");
+        return governedConfiguration(provider, "");
+    }
+
+    /** The governed configuration of the documented fallback provider. */
     public static String governedConfigurationJson() {
-        return GOVERNED_CONFIGURATION_JSON;
+        return governedConfigurationJson(ModelProvider.deepseekFallback());
+    }
+
+    private static String governedConfiguration(ModelProvider provider, String mcpBlock) {
+        return GOVERNED_CONFIGURATION_TEMPLATE.formatted(mcpBlock,
+                provider.providerId(), provider.model(),
+                provider.providerId(), provider.baseUrl(), provider.model());
     }
 
     private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp) {
         Path target = configurationRoot.resolve(CONFIG_HOME_DIRECTORY).resolve("opencode").resolve("opencode.json");
+        ModelProvider provider = modelProviders.resolve();
         String document = workerMcp
-                .map(endpoint -> GOVERNED_CONFIGURATION_TEMPLATE.formatted(platformMcpBlock(endpoint)))
-                .orElse(GOVERNED_CONFIGURATION_JSON);
+                .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint)))
+                .orElseGet(() -> governedConfiguration(provider, ""));
         try {
             Files.createDirectories(target.getParent());
             Files.writeString(target, document, StandardCharsets.UTF_8);

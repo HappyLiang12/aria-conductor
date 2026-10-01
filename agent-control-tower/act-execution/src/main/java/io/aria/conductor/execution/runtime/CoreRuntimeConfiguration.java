@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.runtime;
 
+import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
@@ -29,6 +30,7 @@ import java.time.Clock;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -189,12 +191,61 @@ public class CoreRuntimeConfiguration {
     }
 
     @Bean
-    public OpenCodeCoreAdapter openCodeCoreAdapter(RunMcpWiring runMcp,
+    public OpenCodeCoreAdapter openCodeCoreAdapter(RunMcpWiring runMcp, OpenCodeProperties openCodeProperties,
+            LlmProviderRepository llmProviders,
             @Value("${aria.cores.opencode.executable:opencode}") String executable,
             @Value("${aria.cores.opencode.version:1.14.31}") String version,
             @Value("${aria.cores.opencode.model:gpt-4o}") String model) {
         return new OpenCodeCoreAdapter(new OpenCodeCoreAdapter.OpenCodeProfile(executable, List.of(),
-                Map.of(), version, model), runMcp);
+                openCodeModelProviderEnvironment(openCodeProperties.getSandboxEnv()), version, model),
+                runMcp, () -> openCodeModelProvider(llmProviders));
+    }
+
+    /**
+     * The model-provider environment of every opencode launch: the existing
+     * {@code opencode.sandbox-env} resolution (never duplicated), which carries
+     * the provider credential the governed configuration references as
+     * {@code {env:LLM_API_KEY}}. Blank values are dropped, so an unset key is
+     * absent from the launch environment instead of present and empty.
+     */
+    static Map<String, String> openCodeModelProviderEnvironment(Map<String, String> sandboxEnv) {
+        Map<String, String> environment = new LinkedHashMap<>();
+        sandboxEnv.forEach((name, value) -> {
+            if (value != null && !value.isBlank()) {
+                environment.put(name, value);
+            }
+        });
+        return Map.copyOf(environment);
+    }
+
+    /**
+     * The model provider of a governed opencode launch: the active operator
+     * provider (the same source the legacy provider's config generator reads), or
+     * the documented deepseek fallback when none is active. Resolved per launch,
+     * so activating a provider takes effect on the next run. A row that leaves a
+     * member blank falls back for that member only.
+     */
+    static OpenCodeCoreAdapter.ModelProvider openCodeModelProvider(LlmProviderRepository llmProviders) {
+        OpenCodeCoreAdapter.ModelProvider fallback = OpenCodeCoreAdapter.ModelProvider.deepseekFallback();
+        return llmProviders.findByActiveTrue()
+                .map(provider -> new OpenCodeCoreAdapter.ModelProvider(
+                        orFallback(providerId(provider.getName()), fallback.providerId()),
+                        orFallback(provider.getDefaultModel(), fallback.model()),
+                        orFallback(provider.getBaseUrl(), fallback.baseUrl())))
+                .orElse(fallback);
+    }
+
+    /** The document key of a provider name: the legacy generator's sanitization, kept identical. */
+    private static String providerId(String name) {
+        if (name == null || name.isBlank()) {
+            return "";
+        }
+        String id = name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9-]", "-").replaceAll("^-+|-+$", "");
+        return id.matches("[a-z0-9][a-z0-9-]*") ? id : "";
+    }
+
+    private static String orFallback(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     /**

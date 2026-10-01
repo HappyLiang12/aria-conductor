@@ -192,11 +192,14 @@ public class OpenCodeHttpClient implements AutoCloseable {
     }
 
     /**
-     * The governed prompt path (task 11): one user message with the reviewed
-     * model, optional system material and the ordered text parts of the
-     * translated prompt. Single-shot on purpose -- a retried non-idempotent
-     * message POST could execute the same core action twice, and the native
-     * subset carries no idempotency key.
+     * The governed prompt path (task 11): one user message with optional system
+     * material and the ordered text parts of the translated prompt. The reviewed
+     * model pin is a session-level record, never a payload member: opencode >=
+     * 1.18 refuses a string model member ("Expected object | null, got ... at
+     * [\"model\"]"), so the server serves the prompt with its configured model.
+     * Single-shot on purpose -- a retried non-idempotent message POST could
+     * execute the same core action twice, and the native subset carries no
+     * idempotency key.
      *
      * <p>The native envelope members an OpenCode server may omit stay absent in
      * the result: a message whose {@code info.tokens} is missing reports unknown
@@ -207,10 +210,11 @@ public class OpenCodeHttpClient implements AutoCloseable {
      * @throws TaskExecutionException {@code PROVIDER_ERROR} for a refusal or a
      *         provider error envelope, {@code TIMEOUT} when the deadline elapses
      */
-    public MessageResult sendPrompt(String sessionId, String model, String systemPrompt,
+    public MessageResult sendPrompt(String sessionId, String systemPrompt,
             List<String> textParts, Duration timeout) {
         ObjectNode body = objectMapper.createObjectNode();
-        body.put("model", model);
+        // No model member: the pin is a session-level record and this client has
+        // no model-object spec to send, so the server's configured model serves.
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             body.put("system", systemPrompt);
         }
@@ -293,12 +297,17 @@ public class OpenCodeHttpClient implements AutoCloseable {
     private TaskExecutionException refusalError(String path, int status, String body) {
         String detail = null;
         try {
-            JsonNode error = objectMapper.readTree(body).path("error");
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode error = root.path("error");
             if (error.isObject()) {
                 detail = error.path("data").path("message").asText(null);
                 if (detail == null) {
                     detail = error.path("message").asText(null);
                 }
+            } else if (root.path("data").isObject() && root.path("data").path("message").isTextual()) {
+                // The native envelope of the pinned core:
+                // {"name":"BadRequest","data":{"message":"...","kind":"Payload"}}
+                detail = root.path("data").path("message").asText();
             }
         } catch (Exception e) {
             log.debug("Could not parse the OpenCode refusal body: {}", body);

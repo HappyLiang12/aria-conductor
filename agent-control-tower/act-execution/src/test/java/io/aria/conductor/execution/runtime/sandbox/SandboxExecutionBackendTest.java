@@ -12,8 +12,11 @@ import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
+import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
+import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -27,6 +30,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -35,6 +39,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests of the run-owned Sandbox backend and its SDK lifecycle.
@@ -417,6 +424,87 @@ class SandboxExecutionBackendTest {
         assertThat(fixture.sdk.operations)
                 .as("the created sandbox never survives a failed launch")
                 .contains("create", "kill");
+    }
+
+    @Test
+    void launchUploadsTheRunOwnedGovernedConfigurationIntoTheSandboxControlDirectory() throws IOException {
+        Fixture fixture = new Fixture();
+        WorkspaceLease lease = fixture.lease(RUN_ID);
+        Files.writeString(lease.localRoot().resolve("notes.md"), "snapshot bytes\n");
+        PreparedEnvironment environment = fixture.backend.prepare(fixture.spec(RUN_ID), lease);
+        Path stagingConfig = Path.of(lease.runtimeRoot()).resolve("sandbox").resolve("config").resolve("opencode");
+        Files.createDirectories(stagingConfig);
+        Files.writeString(stagingConfig.resolve("opencode.json"), "{\"permission\":{\"*\":\"deny\"}}\n");
+
+        fixture.backend.launch(environment, new LaunchProfile(SERVE_ARGV, Map.of(),
+                SandboxLifecycle.DEFAULT_WORKSPACE_ROOT));
+
+        // The run-owned governed configuration must land in the sandbox run
+        // control directory, where the launch manifest's XDG_CONFIG_HOME points.
+        assertThat(fixture.sdk.uploadedEntries).extracting(WriteEntry::getPath)
+                .contains("/home/aria/run/" + RUN_ID + "/config/opencode/opencode.json");
+        assertThat(fixture.sdk.uploadedEntries).extracting(entry -> String.valueOf(entry.getData()))
+                .anyMatch(data -> data.contains("\"deny\""));
+    }
+
+    /**
+     * The governed SANDBOX configuration is delivered over two hops -- the launch
+     * profile exports the XDG roots and the backend uploads the staging subtree
+     * into the paths those roots name. Each hop has its own test, so this one
+     * binds them with the profile the opencode adapter really builds for the
+     * sandbox environment: the governed file must exist exactly where the
+     * exported {@code XDG_CONFIG_HOME} points, and the upload must be the only
+     * copy. A drift between the two paths is "opencode starts without the
+     * governed policy", the failure the control tree exists to prevent.
+     */
+    @Test
+    void theProfileXdgRootsAndTheUploadedGovernedConfigurationNameTheSameSandboxPath() throws IOException {
+        Fixture fixture = new Fixture();
+        WorkspaceLease lease = fixture.lease(RUN_ID);
+        Files.writeString(lease.localRoot().resolve("notes.md"), "snapshot bytes\n");
+        PreparedEnvironment environment = fixture.backend.prepare(fixture.spec(RUN_ID), lease);
+
+        RunMcpWiring runMcp = mock(RunMcpWiring.class);
+        when(runMcp.forRun(any(ExecutionSpec.class), any(PreparedEnvironment.class)))
+                .thenReturn(Optional.empty());
+        OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(), Map.of(), "1.14.31", "efficient"),
+                runMcp);
+        LaunchProfile profile = adapter.launchProfile(fixture.spec(RUN_ID), environment,
+                new SecretBundle(null, Map.of()));
+
+        fixture.backend.launch(environment, profile);
+
+        String configHome = profile.env().get("XDG_CONFIG_HOME");
+        assertThat(configHome).isNotBlank();
+        String governed = configHome + "/opencode/opencode.json";
+        List<String> uploaded = fixture.sdk.uploadedEntries.stream().map(WriteEntry::getPath).toList();
+        assertThat(uploaded)
+                .as("the governed configuration opencode is pointed at is the uploaded one")
+                .contains(governed);
+        assertThat(uploaded)
+                .filteredOn(path -> path.endsWith("/opencode/opencode.json"))
+                .as("the governed configuration exists exactly once, at the exported XDG_CONFIG_HOME")
+                .containsExactly(governed);
+    }
+
+    /** The uploaded subtree name is a plain directory name, never a path fragment. */
+    @Test
+    void uploadingARunConfigurationRefusesAPathShapedDirectoryName() throws IOException {
+        Fixture fixture = new Fixture();
+        WorkspaceLease lease = fixture.lease(RUN_ID);
+        fixture.backend.prepare(fixture.spec(RUN_ID), lease);
+
+        for (String name : List.of("", "..", "a/b", "/etc", "a\\b")) {
+            assertThatThrownBy(() -> fixture.lifecycle.uploadRunConfiguration(
+                    RUN_ID, Path.of(lease.runtimeRoot()), name))
+                    .as("a path-shaped subtree name must be refused: '%s'", name)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("plain directory name");
+        }
+        assertThat(fixture.sdk.operations)
+                .as("a refused name must never reach the upload")
+                .containsExactly("create");
     }
 
     // ------------------------------------------------------------------ ownership / renewal

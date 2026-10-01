@@ -240,6 +240,31 @@ public class SandboxLifecycle implements AutoCloseable {
         log.info("Uploaded {} entry(ies) into sandbox {} for run {}", entries.size(), run.sandboxId, runId);
     }
 
+    /**
+     * Uploads the run-owned host-side configuration subtree into the sandbox's
+     * run control directory ({@code <controlRoot>/<runId>/<directoryName>}), so
+     * a sandbox launch finds its governed configuration at the XDG paths the
+     * launch manifest references. A host path in the manifest environment would
+     * resolve relative to the container cwd and silently disable the governed
+     * configuration.
+     */
+    public void uploadRunConfiguration(UUID runId, Path hostConfigurationDirectory, String directoryName) {
+        Run run = require(runId);
+        requireDirectoryName(Objects.requireNonNull(directoryName, "directoryName"), "directoryName");
+        Path host = hostConfigurationDirectory.resolve(directoryName);
+        if (!Files.isDirectory(host)) {
+            log.info("No host-side '{}' subtree to upload for run {} ({}), skipping", directoryName, runId, host);
+            return;
+        }
+        List<WriteEntry> entries = new ArrayList<>();
+        collectWorkspaceEntries(host, run.runDirectory + "/" + directoryName, entries);
+        if (entries.isEmpty()) {
+            return;
+        }
+        sdk.upload(run.sandboxId, entries);
+        log.info("Uploaded {} run configuration entry(ies) into '{}' of run {}", entries.size(), directoryName, runId);
+    }
+
     /** Starts the fixed image launcher for the run's uploaded manifest. */
     public void launch(UUID runId) {
         Run run = require(runId);
@@ -489,6 +514,19 @@ public class SandboxLifecycle implements AutoCloseable {
         return value != null && value.length() > 1 && value.startsWith("/") && !value.startsWith("//");
     }
 
+    /**
+     * The name of an uploaded subtree inside the run control directory: one plain
+     * directory name, never a path. It is interpolated into a sandbox path, so a
+     * separator, a traversal segment or an absolute path is refused instead of
+     * being resolved.
+     */
+    private static String requireDirectoryName(String value, String name) {
+        if (!value.matches("[A-Za-z0-9_-]+")) {
+            throw new IllegalArgumentException(name + " must be a plain directory name, got: " + value);
+        }
+        return value;
+    }
+
     private static ThreadFactory daemonFactory() {
         return runnable -> {
             Thread thread = new Thread(runnable, "sandbox-renewal");
@@ -711,6 +749,10 @@ public class SandboxLifecycle implements AutoCloseable {
         private static final int MAX_SANDBOX_CREATE_ATTEMPTS = 3;
         /** Base backoff (ms) between sandbox creation retries; doubles each attempt (2s, then 4s). */
         private static final long SANDBOX_CREATE_BACKOFF_BASE_MS = 2000L;
+        /** Max attempts of one workspace upload against a transient execd connectivity failure. */
+        static final int MAX_UPLOAD_ATTEMPTS = 5;
+        /** Base backoff (ms) between upload attempts; doubles each attempt (0.5s, 1s, 2s, 4s). */
+        static final long UPLOAD_RETRY_BACKOFF_BASE_MS = 500L;
         /** Export bounds: a runaway tree must fail the export, never exhaust the backend. */
         private static final int MAX_EXPORT_DEPTH = 12;
         private static final int MAX_EXPORT_FILES = 4096;
@@ -743,12 +785,28 @@ public class SandboxLifecycle implements AutoCloseable {
                 return;
             }
             Sandbox sandbox = requireSandbox(sandboxId);
-            try {
-                sandbox.files().write(entries);
-            } catch (Exception e) {
-                throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                        "Workspace upload failed for sandbox " + sandboxId + ": " + e.getMessage(), e);
+            Exception lastFailure = null;
+            for (int attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+                try {
+                    sandbox.files().write(entries);
+                    return;
+                } catch (Exception e) {
+                    lastFailure = e;
+                    boolean transientError = isTransientUploadError(e);
+                    boolean lastAttempt = attempt == MAX_UPLOAD_ATTEMPTS;
+                    if (!transientError || lastAttempt) {
+                        throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                                "Workspace upload failed for sandbox " + sandboxId + ": " + e.getMessage(), e);
+                    }
+                    long backoffMs = UPLOAD_RETRY_BACKOFF_BASE_MS << (attempt - 1);
+                    log.warn("Workspace upload attempt {}/{} for sandbox {} failed with transient execd error '{}'; "
+                                    + "retrying in {}ms",
+                            attempt, MAX_UPLOAD_ATTEMPTS, sandboxId, e.getMessage(), backoffMs);
+                    sleepQuietly(backoffMs);
+                }
             }
+            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                    "Workspace upload failed for sandbox " + sandboxId + ": " + lastFailure.getMessage(), lastFailure);
         }
 
         @Override
@@ -1116,6 +1174,30 @@ public class SandboxLifecycle implements AutoCloseable {
             return message.contains("sandbox_start_failed")
                     || message.contains("excluded port")
                     || message.contains("port");
+        }
+
+        /**
+         * True when the upload failure is connection-level and worth retrying:
+         * the sandbox's execd is still warming up (create returns with
+         * {@code skipHealthCheck=true}, so the execd listener may not exist yet
+         * and the direct endpoint answers EOF / connection reset). Permanent
+         * failures (size caps, invalid paths, ...) never match and fail
+         * immediately.
+         */
+        private static boolean isTransientUploadError(Exception e) {
+            if (e == null || e.getMessage() == null) {
+                return false;
+            }
+            String message = e.getMessage().toLowerCase(Locale.ROOT);
+            // EOF markers are matched in their observed forms, never as a bare
+            // substring, so a permanent diagnostic that happens to contain "eof"
+            // is not retried.
+            return message.contains("unexpected end of stream")
+                    || message.contains("unexpected eof")
+                    || message.contains("eofexception")
+                    || message.contains("connection refused")
+                    || message.contains("connection reset")
+                    || message.contains("failed to connect");
         }
 
         private static void sleepQuietly(long millis) {

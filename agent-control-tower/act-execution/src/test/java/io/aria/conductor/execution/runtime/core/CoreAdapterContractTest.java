@@ -687,7 +687,9 @@ class CoreAdapterContractTest {
     /**
      * The exact request bodies of both turns: the system material reaches the
      * native {@code system} member, the ordered history is a leading text part
-     * and the current user request is the last part.
+     * and the current user request is the last part. Neither body carries a model
+     * member -- opencode >= 1.18 refuses a string one and the server then uses its
+     * configured model, so the pin stays a session-level record.
      */
     @Test
     void openCodeSecondTurnCarriesTheExactPriorMessagesAsContext() throws Exception {
@@ -712,10 +714,8 @@ class CoreAdapterContractTest {
             List<JsonNode> requests = run.messageRequests();
             assertThat(requests).hasSize(2);
             assertThat(requests.get(0)).isEqualTo(JSON.valueToTree(Map.of(
-                    "model", MODEL_PIN,
                     "parts", List.of(Map.of("type", "text", "text", nonceFirst)))));
             assertThat(requests.get(1)).isEqualTo(JSON.valueToTree(Map.of(
-                    "model", MODEL_PIN,
                     "system", system,
                     "parts", List.of(
                             Map.of("type", "text", "text", expectedHistory),
@@ -817,7 +817,12 @@ class CoreAdapterContractTest {
         }
     }
 
-    /** A provider refusal and a truncated response are explicit failures, never silent successes. */
+    /**
+     * A provider refusal and a truncated response are explicit failures, never
+     * silent successes. The model refusal is the server's own: the governed
+     * prompt carries no model member, so the fixture server is configured with
+     * the run's pin and refuses the message it cannot serve.
+     */
     @Test
     void openCodeRefusalsAreExplicitAndNeverASilentSuccess() throws Exception {
         try (OpenCodeRun run = new OpenCodeRun("unsupported-model", "fixture-unknown-model")) {
@@ -831,6 +836,11 @@ class CoreAdapterContractTest {
             assertThat(refused.cause()).isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR);
             assertThat(refused.getMessage()).isEqualTo("OpenCode refused POST /session/"
                     + run.recordedSessionId() + "/message (status 400): Unsupported model id: fixture-unknown-model");
+
+            JsonNode refusal = run.awaitRecord("peer.model_refused", 30_000);
+            assertThat(refusal.path("modelId").asText())
+                    .as("the peer's own record of the configured model it cannot serve")
+                    .isEqualTo("fixture-unknown-model");
         }
 
         try (OpenCodeRun run = new OpenCodeRun("malformed-frame")) {
@@ -922,6 +932,7 @@ class CoreAdapterContractTest {
             expectedEnvironment.put("ARIA_PEER_CONTROL_TOKEN", PEER_CONTROL_TOKEN);
             expectedEnvironment.put("ARIA_PEER_SCENARIO", "reported-usage");
             expectedEnvironment.put("ARIA_PEER_WORKSPACE", run.workspace().toString());
+            expectedEnvironment.put("ARIA_PEER_MODEL", MODEL_PIN);
             expectedEnvironment.put("XDG_CONFIG_HOME", Path.of(run.environment().configurationDirectory())
                     .resolve("config").toString());
             expectedEnvironment.put("XDG_DATA_HOME", Path.of(run.environment().configurationDirectory())
@@ -1229,7 +1240,11 @@ class CoreAdapterContractTest {
                     Map.of(
                             "ARIA_PEER_CONTROL_TOKEN", PEER_CONTROL_TOKEN,
                             "ARIA_PEER_SCENARIO", scenario,
-                            "ARIA_PEER_WORKSPACE", fixture.workspace().toString()),
+                            "ARIA_PEER_WORKSPACE", fixture.workspace().toString(),
+                            // The governed prompt carries no model member, so the
+                            // fixture server is configured with the run's model pin
+                            // and refuses a message it cannot serve.
+                            "ARIA_PEER_MODEL", model),
                     OPENCODE_CORE_VERSION,
                     model),
                     new RunMcpWiring(new McpProperties(), new ActorTokenService()));

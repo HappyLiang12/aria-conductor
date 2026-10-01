@@ -46,6 +46,12 @@ const TOKEN = boot.token;
 const fixtures = loadScenarioManifest().fixtures;
 const AVAILABLE_MODELS = fixtures.models.available;
 const DEFAULT_MODEL = fixtures.models.default;
+// The model this server is configured with. The governed client sends no model
+// member on /session/:id/message (opencode >= 1.18 refuses a string member and
+// the member is omitted so the server uses its configured/default model), so a
+// message without the member resolves to this value; the harness overrides it to
+// make an unservable model explicit.
+const CONFIGURED_MODEL = process.env.ARIA_PEER_MODEL ?? DEFAULT_MODEL;
 const WRITER_LOG = fixtures.writer.logName;
 const WRITER_COMMAND = fixtures.writer.command;
 const VERSION = '1.14.31';
@@ -315,13 +321,9 @@ async function startDecisionFlow(body) {
     case 'two-turn-nonce':
       // The exact request the core received is both recorded (harness evidence)
       // and echoed, so the adapter's context translation is directly observable.
-      record('peer.message_request', {
-        body: {
-          model: body?.model ?? null,
-          ...(body?.system === undefined ? {} : { system: body.system }),
-          parts: Array.isArray(body?.parts) ? body.parts : [],
-        },
-      });
+      // The record is the raw body: a member the client no longer sends (the
+      // model pin) must stay absent instead of being normalized in.
+      record('peer.message_request', { body: body ?? {} });
       return assistantMessage({ text: requestText(body) });
     case 'write-twice':
       return writeTwiceChain();
@@ -492,8 +494,12 @@ const server = createServer(async (request, response) => {
         return;
       }
       const body = await readBody(request);
-      const requestedModel = body?.model ?? DEFAULT_MODEL;
+      // A payload model wins when a client still sends one (the recorded 1.14.31
+      // surface); the governed client sends none, so the server's configured
+      // model decides -- and an unservable one is refused, never substituted.
+      const requestedModel = body?.model ?? CONFIGURED_MODEL;
       if (!AVAILABLE_MODELS.includes(requestedModel)) {
+        record('peer.model_refused', { modelId: requestedModel, available: AVAILABLE_MODELS });
         json(response, 400, {
           error: {
             name: 'APIError',

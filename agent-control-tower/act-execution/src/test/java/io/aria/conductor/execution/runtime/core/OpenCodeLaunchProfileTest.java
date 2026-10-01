@@ -30,15 +30,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The OpenCode launch profile's governed configuration with and without the
  * restored platform-MCP wiring: the unwired document is byte-identical to the
- * policy the core adapter always wrote, and a wired Aria run adds exactly the
+ * document the core adapter ships (the permission policy plus the resolved
+ * provider block), and a wired Aria run adds exactly the
  * {@code mcp.aria-conductor} block with the run-scoped bearer.
  */
 class OpenCodeLaunchProfileTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    /** The governed policy as it shipped before the platform-MCP wiring was restored. */
-    private static final String GOVERNED_CONFIGURATION_BEFORE_THE_MCP_WIRING = """
+    /** The governed document every unwired run ships: the permission policy plus the provider block. */
+    private static final String SHIPPED_GOVERNED_CONFIGURATION = """
             {
               "$schema": "https://opencode.ai/config.json",
               "permission": {
@@ -55,6 +56,19 @@ class OpenCodeLaunchProfileTest {
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "deny"
+              },
+              "model": "deepseek/deepseek-chat",
+              "provider": {
+                "deepseek": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "options": {
+                    "apiKey": "{env:LLM_API_KEY}",
+                    "baseURL": "https://api.deepseek.com/v1"
+                  },
+                  "models": {
+                    "deepseek-chat": {}
+                  }
+                }
               }
             }
             """;
@@ -109,8 +123,8 @@ class OpenCodeLaunchProfileTest {
 
     /**
      * A run without wiring (here: a non-Aria agent) writes exactly the bytes the
-     * governed policy shipped with -- the wiring must not drift this document --
-     * and no token rides the server environment.
+     * governed document ships with -- neither the MCP wiring nor the resolved
+     * provider may drift it -- and no token rides the server environment.
      */
     @Test
     void anUnwiredRunWritesTheUnchangedGovernedConfigurationByteForByte() throws Exception {
@@ -119,10 +133,10 @@ class OpenCodeLaunchProfileTest {
         LaunchProfile profile = launch(fixture, new OpenCodeCoreAdapter(profile(), wiring));
 
         assertThat(Files.readString(OpenCodeCoreAdapter.governedConfigurationFile(fixture.environment())))
-                .isEqualTo(GOVERNED_CONFIGURATION_BEFORE_THE_MCP_WIRING);
+                .isEqualTo(SHIPPED_GOVERNED_CONFIGURATION);
         assertThat(OpenCodeCoreAdapter.governedConfigurationJson())
-                .as("the production no-wiring document is the pre-wiring policy, byte for byte")
-                .isEqualTo(GOVERNED_CONFIGURATION_BEFORE_THE_MCP_WIRING);
+                .as("the production no-wiring document is the shipped one, byte for byte")
+                .isEqualTo(SHIPPED_GOVERNED_CONFIGURATION);
         assertThat(profile.env()).doesNotContainKey("ARIA_MCP_TOKEN");
     }
 

@@ -112,6 +112,58 @@ class OpenCodeCoreAdapterTest {
     // ---- launch profile: sandbox XDG roots -------------------------------------------
 
     @Test
+    void launchProfile_governedConfigurationPointsAtTheResolvedProvider() throws IOException {
+        UUID runId = UUID.randomUUID();
+        OpenCodeCoreAdapter.ModelProvider provider = new OpenCodeCoreAdapter.ModelProvider(
+                "acme-gateway", "acme-flash", "https://gw.example.com/v1");
+        OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(), Map.of(), "1.18.15", "efficient"),
+                runMcp(), () -> provider);
+        PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.SANDBOX, "env-1",
+                "/workspace", hostConfig.toString(), URI.create("http://127.0.0.1:40369/proxy/4096"));
+        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), "opencode", ExecutionMode.SANDBOX,
+                new AgentExecutionSettings("opencode", ExecutionMode.SANDBOX, null, null, null),
+                null, null, Instant.now().plusSeconds(30));
+
+        adapter.launchProfile(spec, environment, new SecretBundle(null, Map.of()));
+
+        // The served model comes from the operator's provider block, never from
+        // opencode's own default (whose free tier refuses this consumer); the
+        // credential stays an env reference, so no secret is written into the file.
+        String document = Files.readString(OpenCodeCoreAdapter.governedConfigurationFile(environment));
+        assertThat(document).isEqualTo(OpenCodeCoreAdapter.governedConfigurationJson(provider));
+        assertThat(document)
+                .contains("\"model\": \"acme-gateway/acme-flash\"")
+                .contains("\"acme-gateway\": {")
+                .contains("\"npm\": \"@ai-sdk/openai-compatible\"")
+                .contains("\"apiKey\": \"{env:LLM_API_KEY}\"")
+                .contains("\"baseURL\": \"https://gw.example.com/v1\"")
+                .contains("\"acme-flash\": {}");
+        // The permission policy is unchanged: pointing at a provider never widens it.
+        assertThat(document)
+                .contains("\"*\": \"deny\"")
+                .contains("\"bash\": \"deny\"")
+                .doesNotContain("\"*\": \"allow\"");
+    }
+
+    @Test
+    void modelProviderRefusesValuesThatCouldBreakTheGovernedDocument() {
+        assertThatThrownBy(() -> new OpenCodeCoreAdapter.ModelProvider("Acme", "m", "https://x/v1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("lowercase");
+        assertThatThrownBy(() -> new OpenCodeCoreAdapter.ModelProvider("acme", "a/b", "https://x/v1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not carry a '/'");
+        assertThatThrownBy(() -> new OpenCodeCoreAdapter.ModelProvider("acme", "m", "ftp://x/v1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("http(s)");
+        assertThatThrownBy(() -> new OpenCodeCoreAdapter.ModelProvider("acme", "m\"x", "https://x/v1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quotes");
+        assertThat(OpenCodeCoreAdapter.ModelProvider.deepseekFallback().providerId()).isEqualTo("deepseek");
+    }
+
+    @Test
     void launchProfile_sandboxXdgRootsPointIntoTheSandboxControlTree() throws IOException {
         UUID runId = UUID.randomUUID();
         RunMcpWiring runMcp = mock(RunMcpWiring.class);
@@ -151,6 +203,14 @@ class OpenCodeCoreAdapterTest {
         OpenCodeCoreAdapter.OpenCodeProfile profile = new OpenCodeCoreAdapter.OpenCodeProfile(
                 "opencode", List.of(), Map.of(), "1.14.31", "efficient");
         return new OpenCodeCoreAdapter(profile, runMcp, budget, poll);
+    }
+
+    /** The wiring of a run without platform MCP: no endpoint is materialised. */
+    private static RunMcpWiring runMcp() {
+        RunMcpWiring runMcp = mock(RunMcpWiring.class);
+        when(runMcp.forRun(any(ExecutionSpec.class), any(PreparedEnvironment.class)))
+                .thenReturn(Optional.empty());
+        return runMcp;
     }
 
     private static ExecutionSpec spec() {

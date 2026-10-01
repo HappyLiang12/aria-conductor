@@ -74,14 +74,17 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     static final String CACHE_HOME_DIRECTORY = "cache";
 
     /**
-     * The governed permission policy. Deny by default, explicit read-only
-     * allowances, explicit refusals for every side-effecting surface. Tool names
-     * follow the reviewed core's tool ids; an unknown tool is covered by the
-     * wildcard refusal and can therefore never be auto-approved.
+     * The governed permission policy plus the operator's model provider: the run
+     * may only read, and it serves with the provider the operator activated
+     * (never opencode's own default, whose free tier refuses this consumer).
+     * Deny by default, explicit read-only allowances, explicit refusals for every
+     * side-effecting surface. Tool names follow the reviewed core's tool ids; an
+     * unknown tool is covered by the wildcard refusal and can therefore never be
+     * auto-approved.
      *
-     * <p>The {@code %s} slot carries the platform-MCP block of a wired run; the
-     * empty substitution is the unchanged no-wiring document
-     * ({@link #governedConfigurationJson()}).
+     * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
+     * the remaining slots carry the provider id, the model, the provider id
+     * again, the base URL and the model again.
      */
     private static final String GOVERNED_CONFIGURATION_TEMPLATE = """
             {
@@ -100,12 +103,22 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "deny"
-              }%s
+              }%s,
+              "model": "%s/%s",
+              "provider": {
+                "%s": {
+                  "npm": "@ai-sdk/openai-compatible",
+                  "options": {
+                    "apiKey": "{env:LLM_API_KEY}",
+                    "baseURL": "%s"
+                  },
+                  "models": {
+                    "%s": {}
+                  }
+                }
+              }
             }
             """;
-
-    /** Byte-for-byte the governed document every unwired run receives. */
-    private static final String GOVERNED_CONFIGURATION_JSON = GOVERNED_CONFIGURATION_TEMPLATE.formatted("");
 
     private static final CoreCapabilities UNVERIFIED =
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
@@ -117,19 +130,105 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
 
     private final OpenCodeProfile profile;
     private final RunMcpWiring runMcp;
+    private final ModelProviderResolver modelProviders;
     private final Duration serveReadyBudget;
     private final Duration serveReadyPoll;
 
     public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp) {
-        this(profile, runMcp, SERVE_READY_BUDGET, SERVE_READY_POLL);
+        this(profile, runMcp, ModelProviderResolver.fallback(), SERVE_READY_BUDGET, SERVE_READY_POLL);
+    }
+
+    /** A launch against an explicit provider resolution (production reads the operator's row). */
+    public OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
+            ModelProviderResolver modelProviders) {
+        this(profile, runMcp, modelProviders, SERVE_READY_BUDGET, SERVE_READY_POLL);
     }
 
     OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp,
             Duration serveReadyBudget, Duration serveReadyPoll) {
+        this(profile, runMcp, ModelProviderResolver.fallback(), serveReadyBudget, serveReadyPoll);
+    }
+
+    OpenCodeCoreAdapter(OpenCodeProfile profile, RunMcpWiring runMcp, ModelProviderResolver modelProviders,
+            Duration serveReadyBudget, Duration serveReadyPoll) {
         this.profile = Objects.requireNonNull(profile, "profile");
         this.runMcp = Objects.requireNonNull(runMcp, "runMcp");
+        this.modelProviders = Objects.requireNonNull(modelProviders, "modelProviders");
         this.serveReadyBudget = Objects.requireNonNull(serveReadyBudget, "serveReadyBudget");
         this.serveReadyPoll = Objects.requireNonNull(serveReadyPoll, "serveReadyPoll");
+    }
+
+    /**
+     * The model provider a governed launch points opencode at: the operator's
+     * active provider, resolved per launch so activating one takes effect on the
+     * next run. The run's own model pin stays a session-level record -- the
+     * provider block is what actually serves.
+     */
+    @FunctionalInterface
+    public interface ModelProviderResolver {
+
+        ModelProvider resolve();
+
+        /** The documented deepseek fallback used when no provider is configured. */
+        static ModelProviderResolver fallback() {
+            return ModelProvider::deepseekFallback;
+        }
+    }
+
+    /**
+     * The openai-compatible provider the governed configuration serves with.
+     *
+     * <p>The provider id, base URL and model are interpolated into the governed
+     * JSON document, so each is validated here and a value that could break the
+     * document refuses the launch instead of being written.
+     *
+     * @param providerId the provider key of the document (e.g. {@code deepseek})
+     * @param model      the served model id, never carrying a {@code /} (the
+     *                   document's {@code model} member is {@code id/model})
+     * @param baseUrl    the openai-compatible endpoint
+     */
+    public record ModelProvider(String providerId, String model, String baseUrl) {
+
+        public ModelProvider {
+            providerId = requireJsonMember(providerId, "providerId");
+            if (!providerId.matches("[a-z0-9][a-z0-9-]*")) {
+                throw new IllegalArgumentException(
+                        "The model provider id must be a lowercase [a-z0-9-] token, got: " + providerId);
+            }
+            model = requireJsonMember(model, "model");
+            if (model.contains("/")) {
+                throw new IllegalArgumentException(
+                        "The model id must not carry a '/', got: " + model);
+            }
+            baseUrl = requireJsonMember(baseUrl, "baseUrl");
+            if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+                throw new IllegalArgumentException(
+                        "The model provider base URL must be http(s), got: " + baseUrl);
+            }
+        }
+
+        /**
+         * The documented fallback: what the platform has always generated when no
+         * provider row is active. The served model may not exist on that endpoint;
+         * an active operator provider is the supported configuration.
+         */
+        public static ModelProvider deepseekFallback() {
+            return new ModelProvider("deepseek", "deepseek-chat", "https://api.deepseek.com/v1");
+        }
+
+        private static String requireJsonMember(String value, String name) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException("The model provider requires a " + name);
+            }
+            for (char c : value.toCharArray()) {
+                if (c == '"' || c == '\\' || c < 0x20) {
+                    throw new IllegalArgumentException(
+                            "The model provider " + name + " must not carry quotes, backslashes or control"
+                                    + " characters, got: " + value);
+                }
+            }
+            return value;
+        }
     }
 
     /**
@@ -170,7 +269,11 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         return CORE_ID;
     }
 
-    /** The reviewed model pin, i.e. the requested model of every message envelope. */
+    /**
+     * The reviewed model pin of every run of this adapter. It is a session-level
+     * record: the governed prompt carries no model member, and the served model is
+     * the one the resolved {@link ModelProvider} names.
+     */
     public String model() {
         return profile.model();
     }
@@ -345,16 +448,29 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 .resolve("opencode.json");
     }
 
-    /** The exact governed permission policy written for every run. */
+    /** The governed configuration a launch pointing at {@code provider} writes. */
+    public static String governedConfigurationJson(ModelProvider provider) {
+        Objects.requireNonNull(provider, "provider");
+        return governedConfiguration(provider, "");
+    }
+
+    /** The governed configuration of the documented fallback provider. */
     public static String governedConfigurationJson() {
-        return GOVERNED_CONFIGURATION_JSON;
+        return governedConfigurationJson(ModelProvider.deepseekFallback());
+    }
+
+    private static String governedConfiguration(ModelProvider provider, String mcpBlock) {
+        return GOVERNED_CONFIGURATION_TEMPLATE.formatted(mcpBlock,
+                provider.providerId(), provider.model(),
+                provider.providerId(), provider.baseUrl(), provider.model());
     }
 
     private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp) {
         Path target = configurationRoot.resolve(CONFIG_HOME_DIRECTORY).resolve("opencode").resolve("opencode.json");
+        ModelProvider provider = modelProviders.resolve();
         String document = workerMcp
-                .map(endpoint -> GOVERNED_CONFIGURATION_TEMPLATE.formatted(platformMcpBlock(endpoint)))
-                .orElse(GOVERNED_CONFIGURATION_JSON);
+                .map(endpoint -> governedConfiguration(provider, platformMcpBlock(endpoint)))
+                .orElseGet(() -> governedConfiguration(provider, ""));
         try {
             Files.createDirectories(target.getParent());
             Files.writeString(target, document, StandardCharsets.UTF_8);

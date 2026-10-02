@@ -814,7 +814,7 @@ public class SandboxLifecycle implements AutoCloseable {
             Sandbox sandbox = requireSandbox(sandboxId);
             try {
                 SandboxEndpoint endpoint = sandbox.getEndpoint(port);
-                return endpoint.getEndpoint();
+                return ipv4Loopback(endpoint.getEndpoint());
             } catch (Exception e) {
                 throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                         "Could not resolve endpoint for sandbox " + sandboxId + " port " + port + ": "
@@ -1209,12 +1209,9 @@ public class SandboxLifecycle implements AutoCloseable {
         }
 
         private static ConnectionConfig buildConnectionConfig(String serverUrl, String apiKey) {
-            URI uri = URI.create(serverUrl == null ? "http://localhost:8080" : serverUrl);
-            String protocol = uri.getScheme() != null ? uri.getScheme() : "http";
-            String domain = uri.getAuthority() != null ? uri.getAuthority() : uri.getHost();
             ConnectionConfig.Builder builder = ConnectionConfig.builder()
-                    .protocol(protocol)
-                    .domain(domain);
+                    .protocol("http")
+                    .domain(loopbackDomainOf(serverUrl));
             // The SDK rejects blank keys ("API key cannot be blank"); a null key falls back
             // to the OPEN_SANDBOX_API_KEY env var, which matches the "optional key" contract.
             if (apiKey != null && !apiKey.isBlank()) {
@@ -1223,6 +1220,52 @@ public class SandboxLifecycle implements AutoCloseable {
             // Direct execd endpoints ({@code <host_ip>:{mapped}/proxy/<port>}) are the only
             // reliable path when sandboxes run on the default bridge; keep useServerProxy off.
             return builder.build();
+        }
+
+        /**
+         * The connection domain of the sandbox server URL, with any loopback host
+         * pinned to the IPv4 literal. "localhost" resolves to the IPv6 loopback
+         * ([::1]) on this host and the JDK client connects to the first resolved
+         * address, so a localhost-based direct execd URL intermittently fails with
+         * {@code Failed to connect to localhost/[0:0:0:0:0:0:0:1]:<port>} (observed
+         * on real sandbox uploads regardless of the configured yml value). The
+         * execd endpoints listen on IPv4, so the loopback is always dialed as
+         * 127.0.0.1.
+         */
+        static String loopbackDomainOf(String serverUrl) {
+            URI uri = URI.create(serverUrl != null && !serverUrl.isBlank() ? serverUrl : "http://localhost:8080");
+            String authority = uri.getAuthority() != null ? uri.getAuthority() : uri.getHost();
+            return ipv4Loopback(authority);
+        }
+
+        /**
+         * Rewrites a leading loopback name of a host[:port][/path] address to the
+         * IPv4 literal; every other address is returned unchanged.
+         */
+        static String ipv4Loopback(String address) {
+            if (address == null) {
+                return null;
+            }
+            String scheme = "";
+            String rest = address;
+            int schemeIndex = address.indexOf("://");
+            if (schemeIndex > 0) {
+                scheme = address.substring(0, schemeIndex + 3);
+                rest = address.substring(schemeIndex + 3);
+            }
+            if (rest.regionMatches(true, 0, "localhost", 0, "localhost".length())) {
+                return scheme + "127.0.0.1" + rest.substring("localhost".length());
+            }
+            if (rest.startsWith("[::1]")) {
+                return scheme + "127.0.0.1" + rest.substring("[::1]".length());
+            }
+            if (rest.startsWith("::1")) {
+                return scheme + "127.0.0.1" + rest.substring("::1".length());
+            }
+            if (rest.startsWith("0:0:0:0:0:0:0:1")) {
+                return scheme + "127.0.0.1" + rest.substring("0:0:0:0:0:0:0:1".length());
+            }
+            return address;
         }
     }
 }

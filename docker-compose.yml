@@ -60,6 +60,11 @@ services:
       # NOTE: env var name MUST carry the `opencode` prefix (OPENCODE_SANDBOX_SERVER_URL);
       # OPENSANDBOX_SERVER_URL does not bind to opencode.sandbox-server-url (prefix mismatch).
       OPENCODE_SANDBOX_SERVER_URL: http://opensandbox-server:8080
+      # "localhost" resolves to the IPv6 loopback ([::1]) on some hosts while the
+      # JDK client dials the first resolved address; the sandbox execd endpoints
+      # are IPv4-only, so pin the stack to IPv4 to avoid intermittent connect
+      # failures on direct execd URLs.
+      JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:

@@ -55,7 +55,8 @@ class OpenCodeLaunchProfileTest {
                 "webfetch": "deny",
                 "task": "deny",
                 "question": "deny",
-                "external_directory": "deny"
+                "external_directory": "deny",
+                "aria-conductor*": "allow"
               },
               "model": "deepseek/deepseek-chat",
               "provider": {
@@ -158,10 +159,15 @@ class OpenCodeLaunchProfileTest {
         JsonNode mcpBlock = document.path("mcp").path("aria-conductor");
         assertThat(mcpBlock.path("type").asText()).isEqualTo("remote");
         assertThat(mcpBlock.path("url").asText()).isEqualTo("http://127.0.0.1:4815/mcp");
-        assertThat(mcpBlock.path("Authorization").asText()).isEqualTo("Bearer {env:ARIA_MCP_TOKEN}");
+        assertThat(mcpBlock.path("enabled").asBoolean()).isTrue();
+        assertThat(mcpBlock.path("headers").path("Authorization").asText())
+                .isEqualTo("Bearer {env:ARIA_MCP_TOKEN}");
         assertThat(document.path("permission").path("*").asText())
                 .as("the governed policy survives the wiring")
                 .isEqualTo("deny");
+        assertThat(document.path("permission").path("aria-conductor*").asText())
+                .as("the sanctioned Conductor surface stays visible to the run")
+                .isEqualTo("allow");
 
         String token = profile.env().get("ARIA_MCP_TOKEN");
         assertThat(token).isNotNull();
@@ -185,7 +191,9 @@ class OpenCodeLaunchProfileTest {
 
         JsonNode mcpBlock = governedConfig(fixture).path("mcp").path("aria-conductor");
         assertThat(mcpBlock.path("url").asText()).isEqualTo("http://127.0.0.1:4815/mcp");
-        assertThat(mcpBlock.path("Authorization").asText()).isEqualTo("Bearer {env:ARIA_MCP_TOKEN}");
+        assertThat(mcpBlock.path("enabled").asBoolean()).isTrue();
+        assertThat(mcpBlock.path("headers").path("Authorization").asText())
+                .isEqualTo("Bearer {env:ARIA_MCP_TOKEN}");
         String token = profile.env().get("ARIA_MCP_TOKEN");
         assertThat(token).isNotNull();
         assertThat(actorTokens.resolveBearer("Bearer " + token)).isPresent();

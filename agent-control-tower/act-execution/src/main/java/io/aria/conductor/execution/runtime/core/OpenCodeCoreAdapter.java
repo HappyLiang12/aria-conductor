@@ -82,6 +82,14 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * unknown tool is covered by the wildcard refusal and can therefore never be
      * auto-approved.
      *
+     * <p>{@code aria-conductor*} is the run's sanctioned Conductor surface: the
+     * wired platform-MCP tools (run dispatch, reports, kanban, knowledge, ...)
+     * behind the run-scoped bearer. opencode hides permission-denied tools from
+     * the model, so without this allowance the wired platform tools would be
+     * invisible to the assistant (observed: an Aria sandbox run answered "the
+     * Conductor tools are not available in this session" while the endpoint was
+     * connected).
+     *
      * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
      * the remaining slots carry the provider id, the model, the provider id
      * again, the base URL and the model again.
@@ -102,7 +110,8 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "webfetch": "deny",
                 "task": "deny",
                 "question": "deny",
-                "external_directory": "deny"
+                "external_directory": "deny",
+                "aria-conductor*": "allow"
               }%s,
               "model": "%s/%s",
               "provider": {
@@ -486,13 +495,18 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * bearer (resolved by the server from {@code ARIA_MCP_TOKEN}).
      */
     private static String platformMcpBlock(RunMcpWiring.Endpoint endpoint) {
+        // The opencode 1.18 remote-MCP shape: the auth header is a dedicated
+        // headers map (a top-level Authorization key is not part of the schema).
         return """
                 ,
                   "mcp": {
                     "aria-conductor": {
                       "type": "remote",
                       "url": "%s",
-                      "Authorization": "Bearer {env:ARIA_MCP_TOKEN}"
+                      "enabled": true,
+                      "headers": {
+                        "Authorization": "Bearer {env:ARIA_MCP_TOKEN}"
+                      }
                     }
                   }""".formatted(endpoint.url());
     }

@@ -43,6 +43,8 @@ import io.aria.conductor.execution.runtime.DefaultAgentExecutionPolicy;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
+import io.aria.conductor.execution.runtime.RunAdmissionProperties;
+import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
@@ -218,7 +220,19 @@ class AgentLoopEngineCoreDispatchTest {
                 workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
-                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider);
+                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
+                unlimitedAdmission());
+    }
+
+    /**
+     * Admission disabled (both pools 0 = unlimited) so this suite's behavior is
+     * unchanged by the engine's admission gate.
+     */
+    private static RunAdmissionQueue unlimitedAdmission() {
+        RunAdmissionProperties properties = new RunAdmissionProperties();
+        properties.setMaxActive(0);
+        properties.setAriaReserved(0);
+        return new RunAdmissionQueue(properties);
     }
 
     /** No provider-level execution was started: every entry point of the bean double stays untouched. */

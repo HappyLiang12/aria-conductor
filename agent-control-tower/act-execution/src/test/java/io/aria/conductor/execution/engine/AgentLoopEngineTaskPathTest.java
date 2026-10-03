@@ -25,6 +25,8 @@ import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
+import io.aria.conductor.execution.runtime.RunAdmissionProperties;
+import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
@@ -177,7 +179,19 @@ class AgentLoopEngineTaskPathTest {
                 workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
-                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider);
+                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
+                unlimitedAdmission());
+    }
+
+    /**
+     * Admission disabled (both pools 0 = unlimited) so this suite's behavior is
+     * unchanged by the engine's admission gate.
+     */
+    private static RunAdmissionQueue unlimitedAdmission() {
+        RunAdmissionProperties properties = new RunAdmissionProperties();
+        properties.setMaxActive(0);
+        properties.setAriaReserved(0);
+        return new RunAdmissionQueue(properties);
     }
 
     @Test

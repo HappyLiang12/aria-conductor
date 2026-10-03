@@ -25,6 +25,7 @@ import io.aria.conductor.execution.runtime.CoreExecutionService;
 import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.CoreTask;
+import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
@@ -119,6 +120,12 @@ public class AgentLoopEngine {
      * loop against provider doubles.
      */
     private final ObjectProvider<CoreRunLauncher> coreRunLauncherProvider;
+    /**
+     * The run admission gate of the cutover wiring: a launcher-owned run must
+     * hold an admission slot before it leaves PENDING, so over-limit runs park
+     * in the queue (card in TODO) until a slot frees.
+     */
+    private final RunAdmissionQueue admission;
     private final DoDService dodService;
     private final KanbanService kanbanService;
 
@@ -150,7 +157,8 @@ public class AgentLoopEngine {
                            ObjectProvider<CoreExecutionService> coreExecutionServiceProvider,
                            DoDService dodService,
                            KanbanService kanbanService,
-                           ObjectProvider<CoreRunLauncher> coreRunLauncherProvider) {
+                           ObjectProvider<CoreRunLauncher> coreRunLauncherProvider,
+                           RunAdmissionQueue admission) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -175,6 +183,7 @@ public class AgentLoopEngine {
         this.taskDeadlineProperties = taskDeadlineProperties;
         this.coreExecutionServiceProvider = coreExecutionServiceProvider;
         this.coreRunLauncherProvider = coreRunLauncherProvider;
+        this.admission = admission;
         this.dodService = dodService;
         this.kanbanService = kanbanService;
     }
@@ -249,6 +258,27 @@ public class AgentLoopEngine {
         }
         if (run.getMaxIterations() != maxIterations) {
             run.setMaxIterations(maxIterations);
+        }
+
+        // Run-owned cores pass the admission gate while the run is still PENDING:
+        // over-limit runs park here (card in TODO) until a slot frees; the slot
+        // then starts the run and only now does the mirror card move IN_PROGRESS.
+        CoreRunLauncher coreLauncher = runCoreLauncher();
+        if (coreLauncher != null && coreLauncher.owns(agent)) {
+            admission.acquire(run.getId(), run.getAgentId(), run.getCreatedAt());
+            // The cancel can land before this waiter was even parked: settle()
+            // no-ops, then admission grants the slot. Re-read after admission —
+            // a run that left PENDING while queued must give its slot back and
+            // never start (the stale INITIALIZING write would resurrect it).
+            RunStatus afterAdmission = runRepository.findById(run.getId())
+                    .map(Run::getStatus).orElse(null);
+            if (afterAdmission != RunStatus.PENDING && afterAdmission != RunStatus.PAUSED) {
+                admission.settle(run.getId());
+                throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                        "Run " + run.getId() + " left PENDING while queued (" + afterAdmission + "); start aborted");
+            }
+            eventPublisher.publishEvent(new RunIterationEvent(this, run.getId(), run.getAgentId(),
+                    1, run.getMaxIterations()));
         }
 
         // Update run status to INITIALIZING

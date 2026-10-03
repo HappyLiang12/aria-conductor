@@ -74,6 +74,7 @@ export function ReportsPage() {
   const queryClient = useQueryClient();
   const { lastMessage } = useWebSocketContext();
   const [showCreate, setShowCreate] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [form, setForm] = useState<NewReportForm>(EMPTY_FORM);
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -89,16 +90,29 @@ export function ReportsPage() {
     refetchInterval: 15000,
   });
 
-  const sortedReports = useMemo(() => reports ?? [], [reports]);
+  const totalReports = reports?.length ?? 0;
+
+  // Delete soft-archives (status ARCHIVED). Archived rows stay out of the list
+  // until the operator opts in via the "Show archived" toggle.
+  const sortedReports = useMemo(
+    () => (reports ?? []).filter((r) => showArchived || r.status !== 'ARCHIVED'),
+    [reports, showArchived]
+  );
 
   const selected = useMemo(
     () => sortedReports.find((r) => r.id === selectedId) ?? null,
     [sortedReports, selectedId]
   );
 
-  // Auto-select first report when list loads
+  // Auto-select the first VISIBLE report. When the current selection is hidden
+  // (archived, or filtered out by the toggle), fall back to the first visible
+  // report — or clear the selection when nothing is visible.
   useEffect(() => {
-    if (!selectedId && sortedReports.length > 0) {
+    if (sortedReports.length === 0) {
+      if (selectedId !== null) setSelectedId(null);
+      return;
+    }
+    if (!sortedReports.some((r) => r.id === selectedId)) {
       setSelectedId(sortedReports[0].id);
     }
   }, [sortedReports, selectedId]);
@@ -266,7 +280,7 @@ export function ReportsPage() {
         </section>
       )}
 
-      {!isLoading && !error && sortedReports.length === 0 && (
+      {!isLoading && !error && totalReports === 0 && (
         <section className="panel">
           <h2>Reports <span className="accent">· no dossiers yet</span></h2>
           <div style={{ padding: '24px 18px', color: 'var(--text-dim)', fontSize: 13, lineHeight: 1.55 }}>
@@ -281,14 +295,39 @@ export function ReportsPage() {
         </section>
       )}
 
-      {sortedReports.length > 0 && (
+      {totalReports > 0 && (
         <section className="panel">
           <h2>
             Reports <span className="accent">· sandboxed render · amend on demand</span>
           </h2>
+          {/* Delete soft-archives: archived dossiers are hidden unless revealed. */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 14px 0' }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 11,
+                color: 'var(--text-dim)',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+              />
+              Show archived
+            </label>
+          </div>
           <div className="report-grid" style={{ padding: 14 }}>
             {/* ============== LEFT: TABS + METRICS ============== */}
             <aside>
+              {sortedReports.length === 0 && (
+                <div style={{ padding: '2px 2px 8px', color: 'var(--text-dim)', fontSize: 12, lineHeight: 1.5 }}>
+                  No active dossiers — archived reports are hidden.
+                </div>
+              )}
               <div className="report-tabs" style={{ padding: 0 }}>
                 {sortedReports.map((r) => {
                   const isActive = r.id === selectedId;
@@ -297,6 +336,7 @@ export function ReportsPage() {
                       key={r.id}
                       type="button"
                       className={`report-tab ${isActive ? 'active' : ''}`}
+                      style={r.status === 'ARCHIVED' ? { opacity: 0.65 } : undefined}
                       onClick={() => setSelectedId(r.id)}
                     >
                       <div className="ttl">{r.title}</div>

@@ -77,6 +77,12 @@ aria:
   # both read this key). Default 45, same value as the legacy provider knob above.
   tasks:
     deadline-minutes: 45
+  # Concurrent run execution (run admission queue): the rest wait PENDING with
+  # their kanban cards in TODO. 0 disables a limit. Workers never consume the
+  # Aria reservation (default 6 + 1).
+  runs:
+    max-active: ${ARIA_RUNS_MAX_ACTIVE:6}
+    aria-reserved: ${ARIA_RUNS_ARIA_RESERVED:1}
   mcp:
     enabled: ${ARIA_MCP_ENABLED:true}
     auth-mode: ${ARIA_MCP_AUTH_MODE:none}

@@ -10,8 +10,6 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanItem;
 import io.aria.conductor.execution.kanban.KanbanRepository;
@@ -19,14 +17,15 @@ import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.kanban.KanbanStatus;
 import io.aria.conductor.execution.kanban.KanbanTransitionService;
 import io.aria.conductor.execution.kanban.TransitionRequest;
-import io.aria.conductor.execution.llm.LlmResponse;
+import io.aria.conductor.execution.runtime.CoreExecutionService;
+import io.aria.conductor.execution.runtime.CoreResult;
+import io.aria.conductor.execution.runtime.UsageSnapshot;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -40,22 +39,41 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 
 /**
  * Phase 2 of the kanban pickup-eligibility plan: a card must not be able to
  * enter a state that contradicts reality. Each gesture is driven against
  * the real install layout (the class carries its own in-memory database, no
- * cleanup script, so Flyway runs V1..V57 on an empty schema and
+ * cleanup script, so Flyway runs V1..V64 on an empty schema and
  * {@code AriaDefaultAgentInitializer} creates the Aria row) — the same wiring
  * {@link KanbanPickupEligibilityIntegrationTest} explains.
  *
- * <p>Only the ADK provider is mocked, held inside the LLM call, so each
- * dispatched run stays at {@code RUNNING} for the duration of the test instead
- * of racing to a terminal state behind the assertions. That is what makes
- * "the parked card's run is actually stopped" observable rather than a timing
- * coincidence; the agent pool, the picker, the run service and the listeners
- * are the real beans.
+ * <p>The dispatched agent carries the post-cutover core ({@code opencode} — the
+ * V64 repair of the V42 SDD seeds), so the run is owned by the run coordinator:
+ * {@code AgentLoopEngine} routes it through the real {@code CoreRunLauncher}
+ * (admission, frozen binding) into {@code CoreExecutionService.execute}, and a
+ * {@code @SpyBean CoreExecutionService} answers that call by blocking on a latch
+ * until the test releases it, returning a canned {@link CoreResult}. The hold
+ * replaces the run-owned attempt exactly where it would open the runtime and
+ * create the sandbox — the Failsafe lane has no sandbox endpoint — so no launch
+ * races the assertions and the run stays at {@code RUNNING} for the duration of
+ * the test, the same way the now-retired ADK provider double (the pre-cutover
+ * seam the V64 repair obsoleted) used to hold it inside the LLM call.
+ *
+ * <p>No existing act-app IT stubs a coordinated run (the closest patterns are
+ * the observe-only {@code @SpyBean CoreRunLauncher} of
+ * {@code AgentLoopInjectionIntegrationTest} / {@code OpenCodeTaskExecutionIntegrationTest}
+ * and the object-level recording doubles of {@code CoreBindingPersistIntegrationTest}),
+ * so this seam is test-local and documented here. Because the held attempt never
+ * registers a run-owned runtime, the park's pause takes
+ * {@code RunService.pauseRun}'s documented "no runtime owns it -> plain recorded
+ * transition" branch deterministically. The verified pause of a coordinated run
+ * with an open session is covered by {@code RunServiceTest} and
+ * {@code CoordinatedRunRuntimeControlTest} in the unit lanes and end to end by
+ * the Playwright kanban spec ({@code act-dashboard/e2e/kanban-board.spec.ts},
+ * which waits for the recorded {@code RUNNING/BACKEND_SUSPEND} runtime state
+ * before parking).
  *
  * <p>Runs in the Failsafe lane (the class name ends in IntegrationTest, which
  * Surefire excludes).
@@ -80,22 +98,25 @@ class KanbanTransitionIntegrityIntegrationTest {
     @Autowired
     ApplicationEventPublisher eventPublisher;
 
-    @MockBean
-    AdkProviderRegistry adkProviderRegistry;
+    @SpyBean
+    CoreExecutionService coreExecutionService;
 
     private CountDownLatch holdExecution;
 
+    /**
+     * Hold every coordinated attempt the class dispatches at the coordinator's
+     * {@code execute} boundary: the engine thread blocks there (the attempt
+     * would open the runtime and create the sandbox inside it) while the run
+     * stays {@code RUNNING}, and no runtime is registered, so the park's pause
+     * deterministically takes the recorded-transition branch.
+     */
     @BeforeEach
     void holdRunExecution() {
-        AdkProvider adkProvider = Mockito.mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(adkProvider);
-        when(adkProvider.isHealthy(any())).thenReturn(true);
-        when(adkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
         holdExecution = new CountDownLatch(1);
-        when(adkProvider.call(any(), any(), any(), any())).thenAnswer(inv -> {
+        doAnswer(inv -> {
             holdExecution.await(30, TimeUnit.SECONDS);
-            return new LlmResponse("done", 10, 5, "stop", null);
-        });
+            return new CoreResult("held-in-process", "done", new UsageSnapshot(10L, 5L, null, "held"), false);
+        }).when(coreExecutionService).execute(any(), any(), any());
     }
 
     @AfterEach

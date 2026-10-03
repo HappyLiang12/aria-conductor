@@ -928,7 +928,6 @@ body.afterhours .flow-svg path { stroke: rgba(138,107,255,.35); }
   background: linear-gradient(135deg, var(--brand), var(--accent));
   display: inline-flex; align-items: center; justify-content: center; font-size: 12px;
 }
-.skill-cat header .ico.langchain { background: linear-gradient(135deg, #ff7a45, #c8425a); }
 .skill-cat header .ico.dev  { background: linear-gradient(135deg, #5b8cff, #355fd6); }
 .skill-cat header .ico.know { background: linear-gradient(135deg, #b9a4ff, #6b4dd6); }
 .skill-cat header .ico.comm { background: linear-gradient(135deg, #3fd0e0, #2a8aa6); }

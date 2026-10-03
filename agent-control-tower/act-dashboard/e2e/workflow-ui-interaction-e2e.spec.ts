@@ -17,7 +17,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 // Real-LLM (opencode) chains execute against a live sandbox on local stacks and
-// can take minutes to reach a terminal state; CI's langchain path fails fast.
+// can take minutes to reach a terminal state; a stack without a live core fails fast.
 // Override the wait budget with E2E_RUN_TIMEOUT_MS if the runtime is slower.
 const RUN_TIMEOUT_MS = Number(process.env.E2E_RUN_TIMEOUT_MS ?? 180_000);
 

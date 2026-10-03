@@ -11,7 +11,7 @@
 #
 # Prerequisites (start these first, e.g. via e2e/run-backend-e2e.ps1):
 #   - Backend up on http://localhost:8080 (h2 profile, V37 harness profiles seeded)
-#   - LangChain ADK runtime up (remote mode) for the worker model
+#   - OpenCode core available for the worker model (the default provider)
 #   - .env populated with the DeepSeek LLM provider + GITHUB_TOKEN
 #
 # Usage:

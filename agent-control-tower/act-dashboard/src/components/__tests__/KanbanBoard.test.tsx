@@ -20,7 +20,7 @@ vi.mock('../../api/agents', () => ({
     { id: 'a-1', name: 'DEV Agent', role: 'dev', agentType: 'ADK', healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode', createdAt: '2026-01-01T00:00:00Z' },
   ]),
   listAgentTemplates: vi.fn().mockResolvedValue([
-    { id: 'ba-agent', label: 'BA Agent', role: 'BA', agentType: 'ADK', model: '', provider: 'langchain', adkProvider: null, description: null },
+    { id: 'ba-agent', label: 'BA Agent', role: 'BA', agentType: 'ADK', model: '', provider: 'opencode', adkProvider: null, description: null },
   ]),
 }));
 

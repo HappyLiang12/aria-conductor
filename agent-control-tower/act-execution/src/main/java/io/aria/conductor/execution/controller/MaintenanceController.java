@@ -1,10 +1,7 @@
 package io.aria.conductor.execution.controller;
 
 import io.aria.conductor.common.security.ActorPrincipal;
-import io.aria.conductor.execution.maintenance.LegacyRetirementService;
 import io.aria.conductor.execution.maintenance.LegacySetupService;
-import io.aria.conductor.execution.maintenance.RetirementManifest;
-import io.aria.conductor.execution.maintenance.RetirementReceipt;
 import io.aria.conductor.execution.security.ActorAuthenticationFilter;
 import io.aria.conductor.execution.security.OperatorSessionService;
 import jakarta.servlet.http.Cookie;
@@ -13,29 +10,22 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Operator-only maintenance surface (plan section 2.2):
  *
  * <ul>
- *   <li>{@code POST /api/v1/maintenance/langchain/preview} — read-only exact
- *       target preview of the legacy scope.</li>
- *   <li>{@code POST /api/v1/maintenance/langchain/execute} —
- *       {@code {previewId, expectedDigest}}; the explicit, unchanged-manifest
- *       hard deletion.</li>
- *   <li>{@code POST /api/v1/maintenance/initialize-builtins} — explicit setup
- *       after cleanup; idempotent and create-only.</li>
+ *   <li>{@code POST /api/v1/maintenance/initialize-builtins} — explicit setup;
+ *       idempotent and create-only.</li>
  * </ul>
  *
- * <p>There is no startup hook, scheduler or health-path trigger for any of
- * these: each route executes only for an authenticated operator that calls it.
+ * <p>There is no startup hook, scheduler or health-path trigger for this
+ * route: it executes only for an authenticated operator that calls it.
  * Identity comes from the transport (the {@code aria.actor} attribute, the
  * operator bearer credential or a mutually validated operator session cookie);
  * a valid worker principal is rejected with 403 before any maintenance work
@@ -46,46 +36,13 @@ import java.util.UUID;
 @RequestMapping("/api/v1/maintenance")
 public class MaintenanceController {
 
-    private final LegacyRetirementService retirement;
     private final LegacySetupService setup;
     private final OperatorSessionService operatorSessions;
 
-    public MaintenanceController(LegacyRetirementService retirement, LegacySetupService setup,
+    public MaintenanceController(LegacySetupService setup,
                                  OperatorSessionService operatorSessions) {
-        this.retirement = retirement;
         this.setup = setup;
         this.operatorSessions = operatorSessions;
-    }
-
-    /** Explicit execute payload: the reviewed preview and its digest, nothing else. */
-    public record RetirementExecuteRequest(UUID previewId, String expectedDigest) {
-    }
-
-    @PostMapping("/langchain/preview")
-    public ResponseEntity<Object> preview(HttpServletRequest request) {
-        ResponseEntity<Object> rejection = rejectNonOperator(request, true);
-        if (rejection != null) {
-            return rejection;
-        }
-        RetirementManifest manifest = retirement.preview(ActorPrincipal.operator(null));
-        return ResponseEntity.ok(manifest);
-    }
-
-    @PostMapping("/langchain/execute")
-    public ResponseEntity<Object> execute(@RequestBody(required = false) RetirementExecuteRequest body,
-                                          HttpServletRequest request) {
-        ResponseEntity<Object> rejection = rejectNonOperator(request, true);
-        if (rejection != null) {
-            return rejection;
-        }
-        if (body == null || body.previewId() == null || body.expectedDigest() == null
-                || body.expectedDigest().isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "previewId and expectedDigest are required"));
-        }
-        RetirementReceipt receipt = retirement.execute(body.previewId(), body.expectedDigest(),
-                ActorPrincipal.operator(null));
-        return ResponseEntity.ok(receipt);
     }
 
     @PostMapping("/initialize-builtins")

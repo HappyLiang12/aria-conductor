@@ -199,8 +199,8 @@ test('the harness artifact is built, verified with tests enabled and downloaded 
   for (const variable of ['ARIA_OPERATOR_BEARER_TOKEN', 'ARIA_PEER_CONTROL_TOKEN', 'ARIA_RUNTIME_CREDENTIAL_KEY']) {
     assert.ok(START_STACK.includes(variable), `start-stack must supply ${variable}`);
   }
-  assert.match(START_STACK, /CoreE2eSetup[\s\S]{0,300}?--confirm-retire-historical-seeds/,
-    'start-stack must run the explicit CoreE2eSetup retirement');
+  assert.match(START_STACK, /CoreE2eSetup[\s\S]{0,300}?--base-url=/,
+    'start-stack must run the explicit CoreE2eSetup harness setup');
   assert.match(START_STACK, /ARIA_E2E_QODER_CREDENTIAL/,
     'start-stack must hand CoreE2eSetup the harness-scoped Qoder credential');
   // Java and Node are provisioned even for backend-only stacks (the harness

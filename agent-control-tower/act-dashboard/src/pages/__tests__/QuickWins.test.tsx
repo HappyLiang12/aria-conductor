@@ -40,10 +40,10 @@ const agent = (id: string, name: string) => ({
   id,
   name,
   description: '',
-  agentType: 'LANGCHAIN',
+  agentType: 'NATIVE',
   role: 'dev',
   model: 'test-model',
-  provider: 'langchain',
+  provider: 'opencode',
   healthStatus: 'HEALTHY',
 });
 

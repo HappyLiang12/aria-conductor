@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test';
  *
  * No approval is asserted here on purpose: the catalog deploys from
  * POST /agents/from-template/{name}, whose templates (AgentTemplateService) are
- * ADK/langchain roles that are not guaranteed to be task-capable, so a PENDING
+ * opencode-core roles that are not guaranteed to be task-capable, so a PENDING
  * gate approval is not deterministically reachable from this path. The
  * decision-zone half is covered by review-decision-zone.spec.ts.
  */

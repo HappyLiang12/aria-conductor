@@ -25,12 +25,13 @@ vi.mock('../../api/skills', () => ({ listSkills: vi.fn() }));
 vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn() }));
 
 import { streamMessage } from '../../api/aria';
-import { getLatestConversation, deleteConversation } from '../../api/ariaConversations';
+import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
 import { listApprovals } from '../../api/approvals';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
+const mockGetTimeline = getConversationTimeline as Mock;
 const mockDeleteConversation = deleteConversation as Mock;
 const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
@@ -81,6 +82,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   mockGetLatest.mockResolvedValue(null);
+  mockGetTimeline.mockResolvedValue([]);
   mockDeleteConversation.mockResolvedValue(undefined);
   mockListSkills.mockResolvedValue(SKILLS);
   mockListApprovals.mockResolvedValue([]);
@@ -285,5 +287,57 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
     expect(mockListApprovals).not.toHaveBeenCalled();
     expect(screen.queryByText(/waiting for your approval/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Conversation ID/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A failed TURN reports the actual failure reason and offers a retry that
+// resends the turn's own prompt — from the timeline (A1 synthetic entries) and
+// from the enriched stream error payload (A4). The pending-ask copy stays the
+// fallback for a run whose state is unknown.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel failed-turn reporting (timeline + stream)', () => {
+  it('a failed turn from the timeline renders its reason and offers retry using its own prompt', async () => {
+    mockGetLatest.mockResolvedValue({ conversationId: 'conv-1', lastMessageAt: '2026-09-30T10:01:00Z', runCount: 2 });
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'what next', timestamp: '2026-09-30T10:00:00Z', runId: 'r0' },
+      {
+        role: 'assistant',
+        content: '回合執行失敗：relay dead',
+        timestamp: '2026-09-30T10:01:00Z',
+        runId: 'r1',
+        error: true,
+        retryPrompt: 'what next',
+      },
+    ]);
+    renderPanel();
+    await act(async () => {}); // flush the conversation load
+
+    await openPanel();
+    expect(await screen.findByText(/relay dead/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('what next');
+  });
+
+  it('a stream turn failure shows the reason instead of the pending-ask copy', async () => {
+    mockListApprovals.mockResolvedValue(
+      Array.from({ length: 14 }, (_, i) => pendingAsk(`a${i}`)),
+    );
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      // the enriched error payload streamMessage emits for a failed turn (A4)
+      args[3]?.onError?.({ turnFailed: true, reason: 'relay dead' });
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(screen.getByText(/relay dead/)).toBeInTheDocument();
+    expect(screen.getByText(/上一回合失敗/)).toBeInTheDocument();
+    expect(screen.queryByText(/pending ask/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });

@@ -28,13 +28,28 @@ export async function sendMessage(
   } as AriaMessage;
 }
 
+/**
+ * Enriched terminal error payload of a failed turn (A4): the backend adds
+ * `turnFailed`/`runId`/`reason` next to the legacy `message` key. Transport
+ * errors (timeouts, dropped connections) stay plain strings.
+ */
+export interface StreamErrorDetail {
+  message?: string;
+  turnFailed?: boolean;
+  runId?: string;
+  reason?: string;
+}
+
+/** Terminal stream error: a plain message, or the enriched failed-turn payload. */
+export type StreamError = string | StreamErrorDetail;
+
 export interface StreamCallbacks {
   onThinking?: (runId?: string) => void;
   onToolCall?: (name: string) => void;
   onToolResult?: (name: string, result: string) => void;
   onMessage?: (content: string) => void;
   onDone?: (data: { runId: string; conversationId: string; intent: string }) => void;
-  onError?: (msg: string) => void;
+  onError?: (error: StreamError) => void;
 }
 
 interface ParsedSseEvent {
@@ -100,7 +115,7 @@ export async function streamMessage(
   const wrappedCallbacks: StreamCallbacks = {
     ...callbacks,
     onDone: (data) => { resolved = true; callbacks.onDone?.(data); },
-    onError: (msg) => { resolved = true; callbacks.onError?.(msg); },
+    onError: (errorDetail) => { resolved = true; callbacks.onError?.(errorDetail); },
   };
 
   try {
@@ -169,9 +184,24 @@ function dispatchEvent(evt: ParsedSseEvent, cb: StreamCallbacks): void {
       });
       break;
     case 'error':
-      cb.onError?.(String(p.message ?? 'unknown error'));
+      cb.onError?.(streamErrorDetail(p));
       break;
     default:
       break;
   }
+}
+
+/**
+ * Terminal `error` event detail: a failed turn carries the enriched payload
+ * (`turnFailed`/`runId`/`reason`); anything else keeps the legacy plain message.
+ */
+function streamErrorDetail(p: Record<string, unknown>): StreamError {
+  const message = String(p.message ?? 'unknown error');
+  if (p.turnFailed !== true) return message;
+  return {
+    message,
+    turnFailed: true,
+    runId: String(p.runId ?? ''),
+    reason: String(p.reason ?? message),
+  };
 }

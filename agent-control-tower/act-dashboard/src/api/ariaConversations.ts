@@ -11,6 +11,10 @@ export interface TimelineEntry {
   content: string;
   timestamp: string;
   runId: string;
+  /** True when this entry marks a failed turn; the entry is synthetic, not a trajectory row. */
+  error?: boolean;
+  /** Prompt that re-runs the failed turn; absent unless `error`. */
+  retryPrompt?: string;
 }
 
 export async function getLatestConversation(): Promise<ConversationSummary | null> {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
+import type { StreamError } from '../api/aria';
 import { listApprovals } from '../api/approvals';
 import { isOperatorRejection } from '../api/operatorSession';
 import { cancelRun } from '../api/runs';
@@ -27,11 +28,28 @@ interface PanelMessage extends AriaMessage {
   /** Optional UI-only error tag so we can render a retry affordance per-bubble. */
   error?: boolean;
   /**
+   * UI-only: the prompt Retry resends. A failed-turn timeline entry carries its
+   * own prompt, so retry works even when nothing was sent from this tab.
+   */
+  retryText?: string;
+  /**
    * UI-only: the run may still be alive in the background (the client gave up on
    * a slow stream or a governed tool ask is waiting), so a blind resend of the
    * prompt must not be offered next to the message.
    */
   noRetry?: boolean;
+}
+
+/**
+ * The failure reason of a turn the backend marked FAILED — the only error detail
+ * allowed to claim a turn failed (A4 enriched SSE payload). Everything else
+ * (plain strings, legacy payloads) reports an unknown run state.
+ */
+function turnFailureReason(errorDetail?: StreamError): string | null {
+  if (typeof errorDetail !== 'object' || errorDetail === null || errorDetail.turnFailed !== true) {
+    return null;
+  }
+  return errorDetail.reason || errorDetail.message || 'unknown error';
 }
 
 function loadOpenState(): boolean {
@@ -177,9 +195,14 @@ export function AriaPanel() {
           if (cancelled) return;
           setMessages(timeline.map((t) => ({
             id: crypto.randomUUID(),
-            role: (t.role === 'user' || t.role === 'assistant') ? t.role : 'assistant' as const,
+            // A failed-turn entry (A1) is a synthetic assistant bubble; it carries
+            // the prompt that re-runs the turn so Retry can resend it.
+            role: t.error
+              ? 'assistant' as const
+              : (t.role === 'user' || t.role === 'assistant') ? t.role : 'assistant' as const,
             content: t.content,
             timestamp: t.timestamp,
+            ...(t.error ? { error: true, retryText: t.retryPrompt } : {}),
           })));
         } else {
           const fresh = crypto.randomUUID();
@@ -235,17 +258,36 @@ export function AriaPanel() {
 
   /**
    * Replaces the old "the request may have timed out. Please try again." text
-   * after the client gave up or the stream died before `done`. The run may be
-   * alive and waiting on a governed tool approval (the platform MCP is wired
-   * into the Aria run, mutating tools stay per-call approved), so the panel asks
+   * after the client gave up or the stream died before `done`. A turn the backend
+   * marked FAILED is the known case: its enriched error payload (A4) pinpoints
+   * the failure, so the panel reports that actual reason and re-offers Retry
+   * (the run is provably dead). For a run whose state is unknown the panel asks
    * the review queue once and reports what it actually knows: a pending-ask
    * count, "no approval pending", or — when the operator-only queue refuses the
-   * read (401/403) or the probe fails — that it could not verify. Never a retry
-   * prompt: resending would pile a second prompt onto a possibly live run.
+   * read (401/403) or the probe fails — that it could not verify. In that unknown
+   * case never a retry prompt: resending would pile a second prompt onto a
+   * possibly live run.
    */
   const reportRunUncertain = useCallback(
-    async (eventConversationId: string, origin: 'timeout' | 'stream-error', errorDetail?: string) => {
+    async (eventConversationId: string, origin: 'timeout' | 'stream-error', errorDetail?: StreamError) => {
       if (errorDetail) console.warn('[Aria] stream ended before done:', errorDetail);
+
+      const failureReason = turnFailureReason(errorDetail);
+      if (failureReason !== null) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `⚠ 上一回合失敗：${failureReason}`,
+            timestamp: new Date().toISOString(),
+            error: true,
+            // The turn is provably dead — a resend of its prompt is safe to offer.
+            noRetry: false,
+          },
+        ]);
+        return;
+      }
 
       let pendingCount: number | null = null; // null until the queue actually answers
       let checkRefused = false;
@@ -358,12 +400,12 @@ export function AriaPanel() {
             setBusy(false);
             setActiveTool(null);
           },
-          onError: (msg) => {
+          onError: (errorDetail) => {
             if (cancelledRef.current) return; // M1: user cancelled — don't show an error bubble
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             setBusy(false);
             setActiveTool(null);
-            void reportRunUncertain(conversationId, 'stream-error', msg);
+            void reportRunUncertain(conversationId, 'stream-error', errorDetail);
           },
         },
         ctrl.signal,
@@ -387,14 +429,18 @@ export function AriaPanel() {
   }, [input, sendStreamed]);
 
   const handleRetry = useCallback(() => {
-    if (busy || !lastSentMessage) return;
+    if (busy) return;
+    // A failed-turn timeline entry knows its own prompt; a stream-sourced failure
+    // resends the prompt this tab last sent.
+    const retryText = messages[messages.length - 1]?.retryText ?? lastSentMessage;
+    if (!retryText) return;
     // Drop the trailing error bubble so the retry doesn't pile up duplicates.
     setMessages((prev) => {
       if (prev.length === 0 || !prev[prev.length - 1].error) return prev;
       return prev.slice(0, -1);
     });
-    sendStreamed(lastSentMessage, lastSentSkillIdRef.current);
-  }, [busy, lastSentMessage, sendStreamed]);
+    sendStreamed(retryText, lastSentSkillIdRef.current);
+  }, [busy, lastSentMessage, messages, sendStreamed]);
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true; // M1: suppress the false close-error bubble

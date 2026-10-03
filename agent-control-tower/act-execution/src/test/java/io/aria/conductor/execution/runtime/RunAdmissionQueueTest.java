@@ -202,4 +202,67 @@ class RunAdmissionQueueTest {
         queue.settle(UUID.randomUUID());
         assertThat(queue.activeWorkerCount()).isZero();
     }
+
+    @Test
+    void oldestCreatedAtWinsEvenWhenArrivingLater() throws Exception {
+        RunAdmissionQueue queue = queue(1, 0);
+        List<Throwable> failures = new ArrayList<>();
+
+        CountDownLatch holderAdmitted = new CountDownLatch(1);
+        UUID holder = UUID.randomUUID();
+        acquiring(queue, holder, WORKER, Instant.parse("2026-10-03T00:00:00Z"), holderAdmitted, failures);
+        assertThat(holderAdmitted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // B arrives first but carries the newer createdAt.
+        CountDownLatch bAdmitted = new CountDownLatch(1);
+        UUID newer = UUID.randomUUID();
+        acquiring(queue, newer, WORKER, Instant.parse("2026-10-03T00:00:02Z"), bAdmitted, failures);
+        Thread.sleep(200); // let it park
+
+        // A arrives after B but is older: it must take the freed slot first.
+        CountDownLatch aAdmitted = new CountDownLatch(1);
+        UUID older = UUID.randomUUID();
+        acquiring(queue, older, WORKER, Instant.parse("2026-10-03T00:00:01Z"), aAdmitted, failures);
+        Thread.sleep(200); // let it park
+
+        queue.release(holder);
+        assertThat(aAdmitted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(bAdmitted.await(300, TimeUnit.MILLISECONDS)).isFalse();
+
+        queue.release(older);
+        assertThat(bAdmitted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(failures).isEmpty();
+    }
+
+    @Test
+    void equalCreatedAtTiesBreakOnRunIdString() throws Exception {
+        RunAdmissionQueue queue = queue(1, 0);
+        List<Throwable> failures = new ArrayList<>();
+
+        CountDownLatch holderAdmitted = new CountDownLatch(1);
+        UUID holder = UUID.randomUUID();
+        acquiring(queue, holder, WORKER, Instant.parse("2026-10-03T00:00:00Z"), holderAdmitted, failures);
+        assertThat(holderAdmitted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        Instant tiedAt = Instant.parse("2026-10-03T00:00:01Z");
+        UUID largerId = UUID.fromString("00000000-0000-0000-0000-00000000000b");
+        UUID smallerId = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+
+        // The larger runId arrives first; on equal createdAt the smaller string must win.
+        CountDownLatch largerAdmitted = new CountDownLatch(1);
+        acquiring(queue, largerId, WORKER, tiedAt, largerAdmitted, failures);
+        Thread.sleep(200); // let it park
+
+        CountDownLatch smallerAdmitted = new CountDownLatch(1);
+        acquiring(queue, smallerId, WORKER, tiedAt, smallerAdmitted, failures);
+        Thread.sleep(200); // let it park
+
+        queue.release(holder);
+        assertThat(smallerAdmitted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(largerAdmitted.await(300, TimeUnit.MILLISECONDS)).isFalse();
+
+        queue.release(smallerId);
+        assertThat(largerAdmitted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(failures).isEmpty();
+    }
 }

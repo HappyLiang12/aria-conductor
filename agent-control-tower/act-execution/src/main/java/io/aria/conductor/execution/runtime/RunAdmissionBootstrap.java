@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.util.Comparator;
@@ -31,6 +32,14 @@ public class RunAdmissionBootstrap {
         this.engine = Objects.requireNonNull(engine, "engine");
     }
 
+    /**
+     * Re-enqueues on the async executor: with a deep backlog this loop may park
+     * on admission and must not hold the ApplicationReady thread. Ordering vs
+     * the orphan reaper is unaffected — this task is only submitted after the
+     * HIGHEST_PRECEDENCE reaper listener has already returned — and per-run FIFO
+     * still comes from the admission queue's (createdAt, runId) sort.
+     */
+    @Async
     @Order(Ordered.LOWEST_PRECEDENCE)
     @EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
     public void onApplicationReady() {
@@ -41,7 +50,7 @@ public class RunAdmissionBootstrap {
                     try {
                         engine.startRun(run.getId());
                     } catch (RuntimeException e) {
-                        log.warn("Could not re-start queued run {} after boot: {}", run.getId(), e.getMessage());
+                        log.warn("Could not re-start queued run {} after boot", run.getId(), e);
                     }
                 });
     }

@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -97,9 +98,34 @@ public class AriaConversationController {
                         .timestamp(t.getCreatedAt())
                         .runId(t.getRunId().toString())
                         .build())
-                .toList();
+                .collect(Collectors.toCollection(ArrayList::new));
+
+        // A failed run that died before producing any trajectory would otherwise be
+        // invisible in the timeline; append one synthetic error entry per FAILED run.
+        for (Run run : runs) {
+            if (run.getStatus() != RunStatus.FAILED) {
+                continue;
+            }
+            timeline.add(TimelineEntry.builder()
+                    .role("assistant")
+                    .content("回合執行失敗：" + clipError(run.getErrorMessage()))
+                    .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
+                    .runId(run.getId().toString())
+                    .error(true)
+                    .retryPrompt(run.getPromptSeed())
+                    .build());
+        }
 
         return ResponseEntity.ok(timeline);
+    }
+
+    private static final int MAX_ERROR_CHARS = 300;
+
+    private static String clipError(String message) {
+        if (message == null || message.isBlank()) {
+            return "原因不明";
+        }
+        return message.length() > MAX_ERROR_CHARS ? message.substring(0, MAX_ERROR_CHARS) : message;
     }
 
     /**

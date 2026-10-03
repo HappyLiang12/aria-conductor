@@ -1,7 +1,11 @@
 package io.aria.conductor.aria.controller;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.aria.dto.TimelineEntry;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -123,6 +127,91 @@ class AriaConversationControllerTest {
     }
 
     @Test
+    void timeline_appendsSyntheticErrorEntryForFailedRun() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run completedRun = run("conv-1", RunStatus.COMPLETED, base);
+        Run failedRun = Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId("conv-1")
+                .status(RunStatus.FAILED)
+                .createdAt(base.plusSeconds(60))
+                .completedAt(base.plusSeconds(90))
+                .errorMessage("Workspace upload failed for sandbox x: Failed to connect")
+                .promptSeed("what next")
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
+                .thenReturn(List.of(completedRun, failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(
+                List.of(completedRun.getId(), failedRun.getId())))
+                .thenReturn(List.of(
+                        trajectory(completedRun.getId(), 1, "user", "first question"),
+                        trajectory(completedRun.getId(), 2, "assistant", "first answer"),
+                        trajectory(failedRun.getId(), 1, "user", "second question")));
+
+        String body = mockMvc.perform(get("/api/v1/aria/conversations/conv-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].content").value("first question"))
+                .andExpect(jsonPath("$[1].content").value("first answer"))
+                .andExpect(jsonPath("$[2].content").value("second question"))
+                .andExpect(jsonPath("$[3].role").value("assistant"))
+                .andExpect(jsonPath("$[3].content").value(
+                        "回合執行失敗：Workspace upload failed for sandbox x: Failed to connect"))
+                .andExpect(jsonPath("$[3].error").value(true))
+                .andExpect(jsonPath("$[3].retryPrompt").value("what next"))
+                .andExpect(jsonPath("$[3].runId").value(failedRun.getId().toString()))
+                .andReturn().getResponse().getContentAsString();
+
+        List<TimelineEntry> timeline = timelineFrom(body);
+        assertThat(timeline.get(3).getTimestamp()).isEqualTo(base.plusSeconds(90));
+    }
+
+    @Test
+    void timeline_usesFallbackContentWhenFailedRunHasNoErrorMessage() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run failedRun = Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId("conv-2")
+                .status(RunStatus.FAILED)
+                .createdAt(base)
+                .updatedAt(base.plusSeconds(30))
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-2"))
+                .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRun.getId())))
+                .thenReturn(List.of());
+
+        String body = mockMvc.perform(get("/api/v1/aria/conversations/conv-2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].role").value("assistant"))
+                .andExpect(jsonPath("$[0].content").value("回合執行失敗：原因不明"))
+                .andExpect(jsonPath("$[0].error").value(true))
+                .andReturn().getResponse().getContentAsString();
+
+        List<TimelineEntry> timeline = timelineFrom(body);
+        assertThat(timeline.get(0).getTimestamp()).isEqualTo(base.plusSeconds(30));
+    }
+
+    @Test
+    void timeline_addsNoSyntheticEntryForCompletedRun() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run completedRun = run("conv-3", RunStatus.COMPLETED, base);
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-3"))
+                .thenReturn(List.of(completedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(completedRun.getId())))
+                .thenReturn(List.of(
+                        trajectory(completedRun.getId(), 1, "user", "hello"),
+                        trajectory(completedRun.getId(), 2, "assistant", "hi")));
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].error").value(false))
+                .andExpect(jsonPath("$[1].error").value(false));
+    }
+
+    @Test
     void delete_returns404WhenConversationHasNoRuns() throws Exception {
         when(runRepository.findByConversationIdOrderByCreatedAtAsc("ghost")).thenReturn(List.of());
 
@@ -164,5 +253,11 @@ class AriaConversationControllerTest {
                 .id(UUID.randomUUID()).runId(runId).turnNumber(turn)
                 .role(role).content(content).createdAt(Instant.now())
                 .build();
+    }
+
+    /** Deserialize the timeline response; standalone MockMvc writes Instants as epoch seconds. */
+    private List<TimelineEntry> timelineFrom(String body) throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        return objectMapper.readValue(body, new TypeReference<List<TimelineEntry>>() {});
     }
 }

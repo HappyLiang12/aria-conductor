@@ -16,4 +16,8 @@ public class TimelineEntry {
     private String content;
     private Instant timestamp;
     private String runId;
+    /** True when this entry marks a failed turn; the entry is synthetic, not a trajectory row. */
+    private boolean error;
+    /** Prompt that re-runs the failed turn; null unless {@link #error}. */
+    private String retryPrompt;
 }

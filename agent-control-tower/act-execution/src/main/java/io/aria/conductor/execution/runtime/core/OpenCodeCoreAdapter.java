@@ -44,12 +44,12 @@ import java.util.Optional;
  * receives a deny-by-default permission policy ({@link #governedConfigurationJson()}).
  * The legacy provider's default ({@code "permission": {"*": "allow"}}) is
  * exactly what must not survive into this profile: an unknown operation is
- * denied rather than auto-approved, only the classified read-only tools are
- * automatic, and every side-effecting tool -- file edits, shell execution,
- * network fetches, sub-agents, questions and directories outside the workspace --
- * is refused in the core itself. A run-bound approve-once decision is delivered
- * by the run policy and the permission coordinator (task 12) and is never
- * implemented by relaxing this file back into allow-all.
+ * denied rather than auto-approved, only the classified read-only tools and the
+ * governed web research tools are automatic, and every side-effecting tool --
+ * file edits, shell execution, sub-agents, questions and directories outside
+ * the workspace -- is refused in the core itself. A run-bound approve-once
+ * decision is delivered by the run policy and the permission coordinator
+ * (task 12) and is never implemented by relaxing this file back into allow-all.
  *
  * <p>Capabilities come from the committed capability matrix
  * ({@code e2e/agent-core/fixtures/capability-matrix.json}): both recorded
@@ -74,13 +74,19 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     static final String CACHE_HOME_DIRECTORY = "cache";
 
     /**
-     * The governed permission policy plus the operator's model provider: the run
-     * may only read, and it serves with the provider the operator activated
-     * (never opencode's own default, whose free tier refuses this consumer).
-     * Deny by default, explicit read-only allowances, explicit refusals for every
+     * The governed permission policy plus the operator's model provider: the
+     * filesystem stays read-only, the two web research tools are allowed, and
+     * the run serves with the provider the operator activated (never opencode's
+     * own default, whose free tier refuses this consumer). Deny by default,
+     * explicit read-only allowances, explicit refusals for every remaining
      * side-effecting surface. Tool names follow the reviewed core's tool ids; an
      * unknown tool is covered by the wildcard refusal and can therefore never be
      * auto-approved.
+     *
+     * <p>{@code webfetch} and {@code websearch} are allowed (operator decision
+     * 2026-10-03): sandboxed research runs must be able to verify current facts,
+     * and the sandbox already carries the LLM streaming egress, so the web tools
+     * widen no egress surface that was not already materialized.
      *
      * <p>{@code aria-conductor*} is the run's sanctioned Conductor surface: the
      * wired platform-MCP tools (run dispatch, reports, kanban, knowledge, ...)
@@ -108,11 +114,12 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 "list": "allow",
                 "glob": "allow",
                 "grep": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
                 "edit": "deny",
                 "write": "deny",
                 "patch": "deny",
                 "bash": "deny",
-                "webfetch": "deny",
                 "task": "deny",
                 "question": "deny",
                 "external_directory": "deny",

@@ -5,6 +5,7 @@ import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.runtime.ArtifactBundle;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
@@ -31,7 +32,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -426,6 +429,108 @@ class SandboxExecutionBackendTest {
                 .contains("create", "kill");
     }
 
+    /**
+     * A relay-dead sandbox cannot be healed by waiting: when the upload window
+     * exhausts with the relay-never-established classification
+     * ({@link SandboxLifecycle#isRelayNeverEstablished(Throwable)}), the sandbox
+     * is destroyed and ONE fresh sandbox is created and re-uploaded against, so
+     * a published-port relay that never accepted a connection does not fail the
+     * run.
+     */
+    @Test
+    void aRelayDeadUploadRecreatesTheSandboxOnceAndReuploads() throws IOException {
+        Fixture fixture = new Fixture();
+        fixture.sdk.uploadFailures.add(relayDeadUploadFailure("sandbox-1"));
+
+        RuntimeHandle handle = fixture.prepareAndLaunch(RUN_ID);
+
+        // The relay-dead sandbox is destroyed, a fresh one is created and the
+        // whole upload sequence runs again against it before the launch.
+        assertThat(fixture.sdk.operations).containsExactly(
+                "create", "upload", "kill", "create", "upload", "launch");
+        assertThat(fixture.sdk.createdImages)
+                .as("the recreate uses the same configured image")
+                .containsExactly(IMAGE, IMAGE);
+        assertThat(fixture.sdk.lookups)
+                .as("the endpoint of the fresh sandbox is re-resolved like prepare does")
+                .containsExactly("endpoint", "endpoint");
+        assertThat(fixture.sdk.killedSandboxIds)
+                .as("only the relay-dead sandbox is destroyed")
+                .containsExactly("sandbox-1");
+        assertThat(fixture.sdk.uploadSandboxIds)
+                .as("the re-upload targets the fresh sandbox")
+                .containsExactly("sandbox-1", "sandbox-2");
+        assertThat(handle.environmentId())
+                .as("the run's environment references the new sandbox id")
+                .isEqualTo("sandbox-2");
+        assertThat(handle.ownershipIdentity()).isEqualTo("sandbox:" + RUN_ID + ":sandbox-2");
+        assertThat(fixture.lifecycle.sandboxId(RUN_ID)).contains("sandbox-2");
+        // The re-upload carried the workspace snapshot and the trusted manifest again.
+        assertThat(fixture.sdk.uploadedEntries).extracting(WriteEntry::getPath)
+                .contains(SandboxLifecycle.DEFAULT_WORKSPACE_ROOT + "/notes.md",
+                        SandboxLifecycle.DEFAULT_CONTROL_ROOT + "/" + RUN_ID + "/launch-manifest.json");
+    }
+
+    /**
+     * Only the relay-never-established class earns a recreate: any other upload
+     * failure fails the run exactly as before -- one create, no second upload,
+     * and the sandbox is destroyed by the unchanged failure path.
+     */
+    @Test
+    void aNonRelayUploadFailureNeverRecreatesTheSandbox() throws IOException {
+        Fixture fixture = new Fixture();
+        fixture.sdk.uploadFailures.add(new TaskExecutionException(
+                TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox sandbox-1: unexpected end of stream",
+                new RuntimeException("unexpected end of stream")));
+
+        assertThatThrownBy(() -> fixture.prepareAndLaunch(RUN_ID))
+                .isInstanceOf(TaskExecutionException.class)
+                .hasMessageContaining("unexpected end of stream");
+
+        assertThat(fixture.sdk.operations)
+                .as("a non-relay failure never recreates: exactly one create, no second upload")
+                .containsExactly("create", "upload", "kill");
+        assertThat(fixture.sdk.createdImages).containsExactly(IMAGE);
+        assertThat(fixture.sdk.lookups).containsExactly("endpoint");
+        assertThat(fixture.sdk.killedSandboxIds).containsExactly("sandbox-1");
+        assertThat(fixture.lifecycle.owns(RUN_ID)).isFalse();
+    }
+
+    /**
+     * The recreate is bounded to exactly ONE fresh sandbox: when the fresh
+     * sandbox is relay-dead as well, the run fails instead of recreating
+     * forever, and the unchanged failure path destroys the fresh sandbox too.
+     */
+    @Test
+    void aSecondRelayDeadSandboxFailsTheRunAfterExactlyOneRecreate() throws IOException {
+        Fixture fixture = new Fixture();
+        fixture.sdk.uploadFailures.add(relayDeadUploadFailure("sandbox-1"));
+        fixture.sdk.uploadFailures.add(relayDeadUploadFailure("sandbox-2"));
+
+        assertThatThrownBy(() -> fixture.prepareAndLaunch(RUN_ID))
+                .isInstanceOf(TaskExecutionException.class)
+                .hasMessageContaining("Failed to connect to localhost/127.0.0.1:59217");
+
+        assertThat(fixture.sdk.operations)
+                .as("one recreate only: the second relay-dead upload fails the run")
+                .containsExactly("create", "upload", "kill", "create", "upload", "kill");
+        assertThat(fixture.sdk.createdImages).containsExactly(IMAGE, IMAGE);
+        assertThat(fixture.sdk.killedSandboxIds)
+                .as("both the relay-dead sandbox and its relay-dead replacement are destroyed")
+                .containsExactly("sandbox-1", "sandbox-2");
+        assertThat(fixture.sdk.lookups).containsExactly("endpoint", "endpoint");
+        assertThat(fixture.lifecycle.owns(RUN_ID)).isFalse();
+    }
+
+    /** The upload-exhaustion failure shape the real SDK throws for a relay that never accepted a connection. */
+    private static TaskExecutionException relayDeadUploadFailure(String sandboxId) {
+        String cause = "Failed to connect to localhost/127.0.0.1:59217";
+        return new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox " + sandboxId + ": Network connectivity error: " + cause,
+                new RuntimeException(cause));
+    }
+
     @Test
     void launchUploadsTheRunOwnedGovernedConfigurationIntoTheSandboxControlDirectory() throws IOException {
         Fixture fixture = new Fixture();
@@ -639,10 +744,13 @@ class SandboxExecutionBackendTest {
         final List<String> lookups = new CopyOnWriteArrayList<>();
         final List<String> createdImages = new CopyOnWriteArrayList<>();
         final List<String> killedSandboxIds = new CopyOnWriteArrayList<>();
+        final List<String> uploadSandboxIds = new CopyOnWriteArrayList<>();
         final CountDownLatch renewalLatch = new CountDownLatch(1);
         final AtomicInteger renewed = new AtomicInteger();
         final AtomicInteger created = new AtomicInteger();
         volatile List<WriteEntry> uploadedEntries = List.of();
+        /** Injected upload failures: every upload call consumes the next one and throws it, then succeeds. */
+        final Queue<RuntimeException> uploadFailures = new ConcurrentLinkedQueue<>();
         volatile String stopWritersOutput = "{\"action\":\"stop\",\"writersStopped\":true,\"remaining\":[]}\n";
         volatile String pauseWritersOutput = "{\"action\":\"suspend\",\"suspended\":true}\n";
         volatile String resumeWritersOutput = "{\"action\":\"resume\",\"resumed\":true}\n";
@@ -658,6 +766,11 @@ class SandboxExecutionBackendTest {
         @Override
         public void upload(String sandboxId, List<WriteEntry> entries) {
             operations.add("upload");
+            uploadSandboxIds.add(sandboxId);
+            RuntimeException failure = uploadFailures.poll();
+            if (failure != null) {
+                throw failure;
+            }
             this.uploadedEntries = new ArrayList<>(entries);
         }
 

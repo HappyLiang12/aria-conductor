@@ -28,9 +28,18 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
  * command-line or environment value always wins): the approval gate window is
  * shortened to {@value #DEFAULT_APPROVALS_TIMEOUT_MS} ms so the SDD resubmit
  * case can observe exactly {@code EXPIRED} within a spec's budget (the
- * production default is 30 minutes), and the mock-peer control token is left to
- * the environment ({@code ARIA_PEER_CONTROL_TOKEN}, required by the harness
- * configuration and by the peers themselves).
+ * production default is 30 minutes), the run admission limit is disabled
+ * (see below), and the mock-peer control token is left to the environment
+ * ({@code ARIA_PEER_CONTROL_TOKEN}, required by the harness configuration and
+ * by the peers themselves).
+ *
+ * <p>The admission limit ({@code aria.runs.max-active}/{@code aria-reserved})
+ * is unlimited here because the suite's pause/approval specs intentionally
+ * leave PAUSED runs behind, and PAUSED holds a slot by design -- with the
+ * production cap (6+1) a long shard saturates its worker slots and later specs'
+ * runs stay PENDING and time out. The harness runs a stub bridge with no
+ * sandbox daemons (nothing the cap protects against), and the cap has its own
+ * dedicated unit + integration coverage.
  */
 public final class CoreE2eApplication {
 
@@ -43,7 +52,13 @@ public final class CoreE2eApplication {
     public static void main(String[] args) {
         new SpringApplicationBuilder(ActApplication.class, CoreE2eConfiguration.class)
                 .profiles("h2", "core-e2e")
-                .properties("approvals.timeout-ms=" + DEFAULT_APPROVALS_TIMEOUT_MS)
+                .properties(
+                        "approvals.timeout-ms=" + DEFAULT_APPROVALS_TIMEOUT_MS,
+                        // Paused-holder saturation: the suite leaves PAUSED runs across specs
+                        // (kanban pause/approval journeys) and each holds a slot by design, so
+                        // the production cap would starve later specs in a serial shard.
+                        "aria.runs.max-active=0",
+                        "aria.runs.aria-reserved=0")
                 .run(args);
     }
 }

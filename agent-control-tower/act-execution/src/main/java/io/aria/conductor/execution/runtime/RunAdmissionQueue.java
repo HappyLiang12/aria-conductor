@@ -68,6 +68,9 @@ public class RunAdmissionQueue {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                // The thread is walking away: drop its waiter and any permit a
+                // racing grant already handed it, or a dead thread holds a slot.
+                removeAndPromote(runId);
                 throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
                         "Run " + runId + " was interrupted while waiting for an admission slot", e);
             }
@@ -80,6 +83,20 @@ public class RunAdmissionQueue {
             active.remove(runId);
             promote();
             monitor.notifyAll();
+        }
+    }
+
+    /**
+     * Settles a run that reached a terminal state: atomically drops any permit it
+     * holds and removes it from both wait deques, then admits the next waiters.
+     * {@code release()} + {@code dequeue()} in sequence is NOT equivalent — a
+     * grant landing between the two would admit an already-terminal run — so the
+     * terminal-event listener and the engine's post-admission revalidation use
+     * this instead. Idempotent.
+     */
+    public void settle(UUID runId) {
+        synchronized (monitor) {
+            removeAndPromote(runId);
         }
     }
 
@@ -107,14 +124,25 @@ public class RunAdmissionQueue {
     }
 
     boolean isWaiting(UUID runId) {
-        return workersWaiting.stream().anyMatch(w -> w.runId().equals(runId))
-                || ariaWaiting.stream().anyMatch(w -> w.runId().equals(runId));
+        synchronized (monitor) {
+            return workersWaiting.stream().anyMatch(w -> w.runId().equals(runId))
+                    || ariaWaiting.stream().anyMatch(w -> w.runId().equals(runId));
+        }
     }
 
     Set<UUID> activeRunIds() {
         synchronized (monitor) {
             return new HashSet<>(active.keySet());
         }
+    }
+
+    /** Removes a run from both wait deques and the active map, then promotes (must hold the monitor). */
+    private void removeAndPromote(UUID runId) {
+        workersWaiting.removeIf(w -> w.runId().equals(runId));
+        ariaWaiting.removeIf(w -> w.runId().equals(runId));
+        active.remove(runId);
+        promote();
+        monitor.notifyAll();
     }
 
     /** Admits head waiters while their pool has capacity (called under monitor). */

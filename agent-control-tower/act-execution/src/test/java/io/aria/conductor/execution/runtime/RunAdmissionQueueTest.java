@@ -141,4 +141,65 @@ class RunAdmissionQueueTest {
         assertThat(((TaskExecutionException) queuedFailures.get(0)).cause())
                 .isEqualTo(TaskExecutionException.Cause.ABORTED);
     }
+
+    @Test
+    void interruptedWaiterLeavesNoPhantomPermit() throws Exception {
+        RunAdmissionQueue queue = queue(1, 1);
+        CountDownLatch admitted = new CountDownLatch(1);
+        List<Throwable> failures = new ArrayList<>();
+        acquiring(queue, UUID.randomUUID(), WORKER, Instant.parse("2026-10-03T00:00:00Z"), admitted, failures);
+        assertThat(admitted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        UUID parked = UUID.randomUUID();
+        List<Throwable> parkedFailures = new ArrayList<>();
+        Thread parkedThread = acquiring(queue, parked, WORKER, Instant.parse("2026-10-03T00:00:01Z"),
+                new CountDownLatch(1), parkedFailures);
+        Thread.sleep(200); // let it park
+
+        parkedThread.interrupt();
+        parkedThread.join(5000);
+        assertThat(parkedThread.isAlive()).isFalse();
+        assertThat(parkedFailures).hasSize(1);
+        assertThat(parkedFailures.get(0)).isInstanceOf(TaskExecutionException.class);
+
+        // The interrupted thread is gone: releasing the holder must NOT hand its
+        // slot to the dead waiter's phantom permit.
+        for (UUID runId : queue.activeRunIds()) {
+            queue.release(runId);
+            break;
+        }
+        assertThat(queue.activeWorkerCount()).isZero();
+        assertThat(queue.isWaiting(parked)).isFalse();
+        assertThat(failures).isEmpty();
+    }
+
+    @Test
+    void settleAtomicallyRemovesWaiterAndPermit() throws Exception {
+        RunAdmissionQueue queue = queue(1, 1);
+        CountDownLatch admitted = new CountDownLatch(1);
+        List<Throwable> failures = new ArrayList<>();
+        UUID holder = UUID.randomUUID();
+        acquiring(queue, holder, WORKER, Instant.parse("2026-10-03T00:00:00Z"), admitted, failures);
+        assertThat(admitted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        UUID parked = UUID.randomUUID();
+        List<Throwable> parkedFailures = new ArrayList<>();
+        acquiring(queue, parked, WORKER, Instant.parse("2026-10-03T00:00:01Z"), new CountDownLatch(1), parkedFailures);
+        Thread.sleep(200); // let it park
+
+        queue.settle(parked);
+        long deadline = System.currentTimeMillis() + 5000;
+        while (parkedFailures.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(parkedFailures).hasSize(1);
+        assertThat(parkedFailures.get(0)).isInstanceOf(TaskExecutionException.class);
+        assertThat(failures).isEmpty();
+
+        queue.settle(holder);
+        assertThat(queue.activeWorkerCount()).isZero();
+        queue.settle(holder); // idempotent
+        queue.settle(UUID.randomUUID());
+        assertThat(queue.activeWorkerCount()).isZero();
+    }
 }

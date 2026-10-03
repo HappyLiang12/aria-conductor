@@ -1,9 +1,12 @@
 package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.common.AriaConstants;
+import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -98,6 +101,17 @@ public class RunAdmissionQueue {
         synchronized (monitor) {
             removeAndPromote(runId);
         }
+    }
+
+    /**
+     * The single terminal source of truth: a completed/cancelled/failed/aborted
+     * run releases its permit and leaves the queue if it never got one — in one
+     * atomic step, so a grant can never land between the two and admit a run
+     * that is already terminal.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onRunCompleted(RunCompletedEvent event) {
+        settle(event.getRunId());
     }
 
     /** Removes a run that is still waiting; its acquire() throws ABORTED. */

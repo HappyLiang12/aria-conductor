@@ -280,7 +280,7 @@ class RunAdmissionQueueTest {
         assertThat(queuedFailures.get(0))
                 .isInstanceOf(TaskExecutionException.class)
                 .hasMessageContaining("left the admission queue");
-        assertThat(((TaskExecutionException) queuedFailures.get(0)).getCause())
+        assertThat(((TaskExecutionException) queuedFailures.get(0)).cause())
                 .isEqualTo(TaskExecutionException.Cause.ABORTED);
     }
 }

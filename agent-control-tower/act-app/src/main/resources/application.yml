@@ -43,6 +43,10 @@ tools:
 opencode:
   sandbox-server-url: http://127.0.0.1:8090
   sandbox-api-key: ${OPENSANDBOX_API_KEY:}
+  # Total window (ms) one run-owned workspace upload may spend absorbing transient
+  # execd connectivity failures (Windows/WSL published-port relay warm-up observed
+  # to exceed the former ~18s budget). The run still fails loudly after the window.
+  sandbox-upload-window-ms: ${OPENCODE_SANDBOX_UPLOAD_WINDOW_MS:90000}
   image: aria-conductor/opencode-sandbox:1.1
   port: 4096
   # Legacy provider-level fallback used only when a caller passes no

@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -24,22 +25,57 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * Tests for {@link SandboxLifecycle.OpenSandboxSdk#upload}: the sandbox core is
  * created with {@code skipHealthCheck=true}, so its execd may still be warming
  * up when the workspace is uploaded and the direct endpoint answers EOF /
- * connection-reset. The upload must absorb those transient failures with a
- * bounded retry instead of failing the run outright (observed: "unexpected end
- * of stream on http://localhost:.../proxy/..." 69ms after create).
+ * connection-reset. The upload must absorb those transient failures within its
+ * wall-clock window (default {@link SandboxLifecycle.OpenSandboxSdk#DEFAULT_UPLOAD_WINDOW_MS},
+ * covering the observed Windows/WSL published-port relay warm-up) instead of
+ * failing the run outright (observed: "unexpected end of stream on
+ * http://localhost:.../proxy/..." 69ms after create), and an exhausted window
+ * must still fail as loudly as the former fixed attempt budget did.
  */
 class OpenSandboxSdkTest {
 
     private static final String SANDBOX_ID = "sb-1";
+    private static final String EXEC_NOT_READY_MESSAGE =
+            "Network connectivity error: unexpected end of stream on http://localhost:47279/proxy/1/...";
 
     private SandboxLifecycle.OpenSandboxSdk newSdk() {
         return new SandboxLifecycle.OpenSandboxSdk("http://localhost:8080", null);
+    }
+
+    /**
+     * The SDK over the deterministic upload-window seam: the fake clock advances
+     * only by the recorded sleeps, so the window is exercised without real waiting
+     * and every backoff is assertable.
+     */
+    private SandboxLifecycle.OpenSandboxSdk seamSdk(FakeTime fake, long windowMs) {
+        return new SandboxLifecycle.OpenSandboxSdk("http://localhost:8080", null, windowMs,
+                fake::getAsLong, fake::sleep);
+    }
+
+    /** Monotonic-clock stand-in of the upload seam: time passes only when it sleeps. */
+    private static final class FakeTime {
+        private long elapsedNanos;
+        private final List<Long> sleepsMs = new ArrayList<>();
+
+        long getAsLong() {
+            return elapsedNanos;
+        }
+
+        void sleep(long millis) {
+            sleepsMs.add(millis);
+            elapsedNanos += Duration.ofMillis(millis).toNanos();
+        }
+
+        List<Long> sleeps() {
+            return sleepsMs;
+        }
     }
 
     private Sandbox createTrackedSandbox(SandboxLifecycle.OpenSandboxSdk sdk) {
@@ -73,13 +109,13 @@ class OpenSandboxSdkTest {
     }
 
     private static RuntimeException execdNotReady() {
-        return new RuntimeException(
-                "Network connectivity error: unexpected end of stream on http://localhost:47279/proxy/1/...");
+        return new RuntimeException(EXEC_NOT_READY_MESSAGE);
     }
 
     @Test
     void upload_retriesTransientExecdFailure_thenSucceeds() {
-        SandboxLifecycle.OpenSandboxSdk sdk = newSdk();
+        FakeTime fake = new FakeTime();
+        SandboxLifecycle.OpenSandboxSdk sdk = seamSdk(fake, SandboxLifecycle.OpenSandboxSdk.DEFAULT_UPLOAD_WINDOW_MS);
         Sandbox sandbox = createTrackedSandbox(sdk);
         Filesystem files = mock(Filesystem.class);
         when(sandbox.files()).thenReturn(files);
@@ -91,11 +127,52 @@ class OpenSandboxSdkTest {
         sdk.upload(SANDBOX_ID, entries());
 
         verify(files, times(3)).write(any());
+        verifyNoMoreInteractions(files);
+        assertThat(fake.sleeps()).containsExactly(500L, 1000L);
     }
 
+    /**
+     * The recurrence this window exists for: a relay warm-up that outlives the
+     * former five-attempt (~18s) budget. Eight transient failures spend 27.5s of
+     * backoff before the ninth attempt succeeds; the old budget failed live runs
+     * 969ee0f0 / 4d2b6768 / d39d8625 in exactly this shape.
+     */
     @Test
-    void upload_surfacesFailureAfterRetryBudget() {
-        SandboxLifecycle.OpenSandboxSdk sdk = newSdk();
+    void upload_absorbsALateSuccessWithinTheExtendedWindow() {
+        FakeTime fake = new FakeTime();
+        SandboxLifecycle.OpenSandboxSdk sdk = seamSdk(fake, SandboxLifecycle.OpenSandboxSdk.DEFAULT_UPLOAD_WINDOW_MS);
+        Sandbox sandbox = createTrackedSandbox(sdk);
+        Filesystem files = mock(Filesystem.class);
+        when(sandbox.files()).thenReturn(files);
+        doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doThrow(execdNotReady())
+                .doNothing()
+                .when(files).write(any());
+
+        sdk.upload(SANDBOX_ID, entries());
+
+        verify(files, times(9)).write(any());
+        verifyNoMoreInteractions(files);
+        assertThat(fake.sleeps())
+                .containsExactly(500L, 1000L, 2000L, 4000L, 5000L, 5000L, 5000L, 5000L);
+    }
+
+    /**
+     * The window is a budget, not a target: once spent, exhaustion still throws
+     * the same loud SANDBOX_UNAVAILABLE naming the last observed cause, so a
+     * genuinely unreachable relay keeps failing the run (nothing invented, no
+     * silent success).
+     */
+    @Test
+    void upload_surfacesFailureAfterTheWindowIsSpent() {
+        FakeTime fake = new FakeTime();
+        SandboxLifecycle.OpenSandboxSdk sdk = seamSdk(fake, 20_000L);
         Sandbox sandbox = createTrackedSandbox(sdk);
         Filesystem files = mock(Filesystem.class);
         when(sandbox.files()).thenReturn(files);
@@ -103,11 +180,30 @@ class OpenSandboxSdkTest {
 
         assertThatThrownBy(() -> sdk.upload(SANDBOX_ID, entries()))
                 .isInstanceOf(TaskExecutionException.class)
+                .hasMessage("Workspace upload failed for sandbox sb-1: " + EXEC_NOT_READY_MESSAGE)
                 .satisfies(e -> org.assertj.core.api.Assertions.assertThat(
                         ((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
 
-        verify(files, times(SandboxLifecycle.OpenSandboxSdk.MAX_UPLOAD_ATTEMPTS)).write(any());
+        verify(files, times(8)).write(any());
+        verifyNoMoreInteractions(files);
+        assertThat(fake.sleeps()).containsExactly(500L, 1000L, 2000L, 4000L, 5000L, 5000L, 5000L);
+    }
+
+    /** The success path uploads once, never backs off and never repeats the write. */
+    @Test
+    void upload_successPath_writesOnceAndNeverBacksOff() {
+        FakeTime fake = new FakeTime();
+        SandboxLifecycle.OpenSandboxSdk sdk = seamSdk(fake, SandboxLifecycle.OpenSandboxSdk.DEFAULT_UPLOAD_WINDOW_MS);
+        Sandbox sandbox = createTrackedSandbox(sdk);
+        Filesystem files = mock(Filesystem.class);
+        when(sandbox.files()).thenReturn(files);
+
+        sdk.upload(SANDBOX_ID, entries());
+
+        verify(files, times(1)).write(any());
+        verifyNoMoreInteractions(files);
+        assertThat(fake.sleeps()).isEmpty();
     }
 
     @Test

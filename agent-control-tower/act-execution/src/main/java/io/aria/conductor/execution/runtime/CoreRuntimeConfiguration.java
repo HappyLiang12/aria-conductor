@@ -135,7 +135,7 @@ public class CoreRuntimeConfiguration {
             default -> null;
         };
         return SandboxExecutionBackend.usingOpenSandbox(openCodeProperties.getSandboxServerUrl(),
-                openCodeProperties.getSandboxApiKey(), images);
+                openCodeProperties.getSandboxApiKey(), openCodeProperties.getSandboxUploadWindowMs(), images);
     }
 
     @Bean

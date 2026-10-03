@@ -111,8 +111,8 @@ if [ "$ADK_PROVIDER" = "opencode" ] && [ "$SKIP_SANDBOX" != "true" ]; then
         sleep 3
     fi
 
-    # Default OpenSandbox URL for local dev (host port 8090)
-    export OPENCODE_SANDBOX_SERVER_URL="${OPENCODE_SANDBOX_SERVER_URL:-http://localhost:8090}"
+    # Default OpenSandbox URL for local dev (host port 8090). The IPv4 loopback, never "localhost": the direct execd endpoints the SDK dials carry the server-advertised host, so a "localhost" base exposes the IPv6-loopback resolution flake.
+    export OPENCODE_SANDBOX_SERVER_URL="${OPENCODE_SANDBOX_SERVER_URL:-http://127.0.0.1:8090}"
 fi
 
 # ── LLM credentials (injected into sandbox env for opencode provider) ──
@@ -129,7 +129,7 @@ echo "  Profile: $PROFILE"
 echo "  ADK Provider: $ADK_PROVIDER"
 echo "  Port: 8080"
 if [ "$ADK_PROVIDER" = "opencode" ]; then
-    echo "  OpenSandbox: ${OPENCODE_SANDBOX_SERVER_URL:-http://localhost:8090}"
+    echo "  OpenSandbox: ${OPENCODE_SANDBOX_SERVER_URL:-http://127.0.0.1:8090}"
 fi
 
 cd "$BACKEND_DIR"
@@ -144,7 +144,10 @@ echo "Launching Spring Boot..."
 # The default keepalive.timeout (1200s = 20min) is below the 15-31min opencode task window,
 # so idle connections get dropped mid-task; raising it (plus a larger connection pool) reduces
 # those drops. NOTE: this cannot fix opencode serve's own timeout on the sandbox side.
+# java.net.preferIPv4Stack: "localhost" resolves to the IPv6 loopback ([::1]) and the JDK client
+# dials the first resolved address, so the direct execd endpoints intermittently fail at connect
+# time ("Failed to connect to localhost/[0:0:0:0:0:0:0:1]:<port>"); pinning IPv4 kills that flake.
 mvn spring-boot:run -pl act-app \
     -Dspring-boot.run.profiles="$PROFILE" \
-    -Dspring-boot.run.jvmArguments="--enable-preview -Djdk.httpclient.keepalive.timeout=3600 -Djdk.httpclient.connectionPoolSize=8" \
+    -Dspring-boot.run.jvmArguments="--enable-preview -Djdk.httpclient.keepalive.timeout=3600 -Djdk.httpclient.connectionPoolSize=8 -Djava.net.preferIPv4Stack=true" \
     -Dspring-boot.run.arguments="--adk.default-provider=$ADK_PROVIDER"

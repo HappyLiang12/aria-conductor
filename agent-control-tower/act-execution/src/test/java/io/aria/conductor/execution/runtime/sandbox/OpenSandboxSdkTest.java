@@ -1,16 +1,19 @@
 package io.aria.conductor.execution.runtime.sandbox;
 
 import com.alibaba.opensandbox.sandbox.Sandbox;
+import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.services.Filesystem;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -123,5 +126,87 @@ class OpenSandboxSdkTest {
                 .hasMessageContaining("Workspace upload failed for sandbox sb-1");
 
         verify(files, times(1)).write(any());
+    }
+
+    // ---- IPv4 loopback normalization ----------------------------------------------
+
+    /**
+     * The direct execd connection domain must never carry a "localhost" host: it
+     * resolves to the IPv6 loopback on this host, and the JDK client dials the
+     * first resolved address -- an intermittent
+     * "Failed to connect to localhost/[0:0:0:0:0:0:0:1]:<port>" observed on real
+     * uploads regardless of the configured yml value. Any loopback name is pinned
+     * to the IPv4 literal; a 127.x domain is unchanged.
+     */
+    @Test
+    void loopbackConnectionDomainNormalizesToTheIpv4Literal() {
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf("http://localhost:8090"))
+                .isEqualTo("127.0.0.1:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf("http://localhost"))
+                .isEqualTo("127.0.0.1");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf("http://[::1]:8090"))
+                .isEqualTo("127.0.0.1:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf("http://[0:0:0:0:0:0:0:1]:8090"))
+                .isEqualTo("127.0.0.1:8090");
+        // Regression: a name merely starting with "localhost" is not the loopback host.
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf("http://localhost.localdomain:8090"))
+                .isEqualTo("localhost.localdomain:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf("http://127.0.0.1:8090"))
+                .isEqualTo("127.0.0.1:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.loopbackDomainOf(null))
+                .isEqualTo("127.0.0.1:8080");
+    }
+
+    /** A server-reported endpoint host is normalized the same way. */
+    @Test
+    void reportedEndpointLoopbackNormalizesToTheIpv4Literal() {
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("localhost:59948/proxy/4096"))
+                .isEqualTo("127.0.0.1:59948/proxy/4096");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("localhost"))
+                .isEqualTo("127.0.0.1");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("localhost.localdomain:8090"))
+                .isEqualTo("localhost.localdomain:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("http://localhost:47279/proxy/1/..."))
+                .isEqualTo("http://127.0.0.1:47279/proxy/1/...");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("[::1]:8090"))
+                .isEqualTo("127.0.0.1:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("[0:0:0:0:0:0:0:1]:8090"))
+                .isEqualTo("127.0.0.1:8090");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback("127.0.0.1:47279/proxy/4096"))
+                .isEqualTo("127.0.0.1:47279/proxy/4096");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.ipv4Loopback(null)).isNull();
+    }
+
+    // ---- Server URL scheme ---------------------------------------------------------
+
+    /**
+     * Regression: the connection config hardcoded "http" and silently downgraded a
+     * configured https server URL (TLS-fronted sandbox deployment) on the wire.
+     */
+    @Test
+    void connectionConfigKeepsTheConfiguredHttpsScheme() {
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = stubBuilder(sandboxStatic);
+            Sandbox sandbox = mock(Sandbox.class);
+            when(builder.build()).thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn(SANDBOX_ID);
+
+            new SandboxLifecycle.OpenSandboxSdk("https://opensandbox.example.com:443", null)
+                    .create("test-image", Map.of());
+
+            ArgumentCaptor<ConnectionConfig> captor = ArgumentCaptor.forClass(ConnectionConfig.class);
+            verify(builder).connectionConfig(captor.capture());
+            assertThat(captor.getValue().getProtocol()).isEqualTo("https");
+            assertThat(captor.getValue().getDomain()).isEqualTo("opensandbox.example.com:443");
+        }
+    }
+
+    @Test
+    void protocolFollowsTheConfiguredScheme() {
+        assertThat(SandboxLifecycle.OpenSandboxSdk.protocolOf("https://opensandbox.example.com:443"))
+                .isEqualTo("https");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.protocolOf("http://localhost:8090")).isEqualTo("http");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.protocolOf(null)).isEqualTo("http");
+        assertThat(SandboxLifecycle.OpenSandboxSdk.protocolOf("")).isEqualTo("http");
     }
 }

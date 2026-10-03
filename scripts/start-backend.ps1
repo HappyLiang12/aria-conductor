@@ -137,9 +137,13 @@ if ($sandboxMode) {
         Start-Sleep -Seconds 3
     }
 
-    # Default OpenSandbox URL for local dev (host port 8090)
+    # Default OpenSandbox URL for local dev (host port 8090). The IPv4 loopback,
+    # never "localhost": an OPENCODE_SANDBOX_SERVER_URL env var overrides the yml,
+    # and the direct execd endpoints the SDK dials carry the server-advertised
+    # host, so a "localhost" base exposes the IPv6-loopback resolution flake
+    # ("Failed to connect to localhost/[0:0:0:0:0:0:0:1]:<port>").
     if (-not $env:OPENCODE_SANDBOX_SERVER_URL) {
-        $env:OPENCODE_SANDBOX_SERVER_URL = "http://localhost:8090"
+        $env:OPENCODE_SANDBOX_SERVER_URL = "http://127.0.0.1:8090"
     }
 }
 
@@ -169,4 +173,9 @@ Write-Host "Launching Spring Boot..." -ForegroundColor Green
 # The default keepalive.timeout (1200s = 20min) is below the 15-31min opencode task window,
 # so idle connections get dropped mid-task; raising it (plus a larger connection pool) reduces
 # those drops. NOTE: this cannot fix opencode serve's own timeout on the sandbox side.
-mvn spring-boot:run -pl act-app "-Dspring-boot.run.profiles=$Profile" "-Dspring-boot.run.jvmArguments=--enable-preview -Djdk.httpclient.keepalive.timeout=3600 -Djdk.httpclient.connectionPoolSize=8" "-Dspring-boot.run.arguments=--adk.default-provider=$AdkProvider"
+# java.net.preferIPv4Stack: "localhost" resolves to the IPv6 loopback ([::1]) on this host and
+# the JDK client dials the first resolved address, so the direct execd endpoints (host
+# "localhost" as advertised by the OpenSandbox server) intermittently fail at connect time
+# ("Failed to connect to localhost/[0:0:0:0:0:0:0:1]:<port>"). Pinning IPv4 makes the loopback
+# resolution deterministic and kills that flake for every dialed URL.
+mvn spring-boot:run -pl act-app "-Dspring-boot.run.profiles=$Profile" "-Dspring-boot.run.jvmArguments=--enable-preview -Djdk.httpclient.keepalive.timeout=3600 -Djdk.httpclient.connectionPoolSize=8 -Djava.net.preferIPv4Stack=true" "-Dspring-boot.run.arguments=--adk.default-provider=$AdkProvider"

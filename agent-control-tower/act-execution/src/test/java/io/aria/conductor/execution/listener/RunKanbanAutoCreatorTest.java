@@ -21,6 +21,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -35,17 +36,20 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * State-transition tests for {@link RunKanbanAutoCreator}: run lifecycle events
  * must create/move linked Kanban items with the exact field values expected by
  * the board (title derivation from the prompt seed, MEDIUM default priority,
- * TODO → IN_PROGRESS → DONE/CANCELLED transitions, terminal items untouched).
+ * IN_PROGRESS birth, settlement to REVIEW/CANCELLED — including a card that
+ * never left TODO — and terminal items untouched).
  */
 @ExtendWith(MockitoExtension.class)
 class RunKanbanAutoCreatorTest {
@@ -73,7 +77,7 @@ class RunKanbanAutoCreatorTest {
     // ---- onRunStarted ----
 
     @Test
-    void onRunStarted_createsTodoItemTitledWithPromptSeed() {
+    void onRunStarted_createsInProgressItemTitledWithPromptSeed() {
         Run run = TestDataBuilder.aRun()
                 .withId(runId).withAgentId(agentId)
                 .withPromptSeed("Fix the flaky nightly build")
@@ -87,6 +91,10 @@ class RunKanbanAutoCreatorTest {
         verify(kanbanService).create(captor.capture());
         CreateKanbanItemRequest request = captor.getValue();
         assertThat(request.getTitle()).isEqualTo("Fix the flaky nightly build");
+        // The run is dispatched the moment it is created: the mirror card is
+        // born in the live column, never in TODO (which would read as an
+        // undispatched card and settle illegally on completion).
+        assertThat(request.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
         assertThat(request.getPriority()).isEqualTo(KanbanPriority.MEDIUM);
         assertThat(request.getLinkedRunId()).isEqualTo(runId.toString());
         assertThat(request.getLinkedAgentId()).isEqualTo(agentId.toString());
@@ -167,6 +175,9 @@ class RunKanbanAutoCreatorTest {
 
     @Test
     void onRunIteration_movesOnlyTodoItemsToInProgress() {
+        // Defensive path: mirror cards are born IN_PROGRESS, so only a linked
+        // card still sitting in TODO (e.g. created by a pre-fix version) is
+        // dragged to the live column by an iteration signal.
         KanbanItem todoItem = kanbanItem("item-todo", KanbanStatus.TODO);
         KanbanItem inProgressItem = kanbanItem("item-wip", KanbanStatus.IN_PROGRESS);
         when(kanbanRepository.findByLinkedRunId(runId.toString()))
@@ -224,6 +235,38 @@ class RunKanbanAutoCreatorTest {
                 statusCaptor.capture(), commentCaptor.capture());
         assertThat(statusCaptor.getValue()).isEqualTo(expected);
         assertThat(commentCaptor.getValue()).isEqualTo("Run " + runStatus);
+    }
+
+    @Test
+    void onRunCompleted_settlesTodoCardThroughInProgressToReview() {
+        // The live regression: a mirror card that never left TODO (run-owned
+        // runs never publish RunIterationEvent) made the settlement fail on the
+        // illegal TODO -> REVIEW move and the card stayed in TODO forever.
+        // The settlement now steps it through IN_PROGRESS first.
+        KanbanItem todoItem = kanbanItem("item-todo", KanbanStatus.TODO);
+        when(kanbanRepository.findByLinkedRunId(runId.toString())).thenReturn(List.of(todoItem));
+
+        creator.onRunCompleted(new RunCompletedEvent(this, runId, agentId, RunStatus.COMPLETED));
+
+        InOrder ordered = inOrder(kanbanService);
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.IN_PROGRESS,
+                "Run COMPLETED (settling from Todo)");
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.REVIEW, "Run COMPLETED");
+        verifyNoMoreInteractions(kanbanService);
+    }
+
+    @Test
+    void onRunCompleted_settlesTodoCardThroughInProgressToCancelled() {
+        KanbanItem todoItem = kanbanItem("item-todo", KanbanStatus.TODO);
+        when(kanbanRepository.findByLinkedRunId(runId.toString())).thenReturn(List.of(todoItem));
+
+        creator.onRunCompleted(new RunCompletedEvent(this, runId, agentId, RunStatus.ABORTED));
+
+        InOrder ordered = inOrder(kanbanService);
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.IN_PROGRESS,
+                "Run ABORTED (settling from Todo)");
+        ordered.verify(kanbanService).transition("item-todo", KanbanStatus.CANCELLED, "Run ABORTED");
+        verifyNoMoreInteractions(kanbanService);
     }
 
     @Test

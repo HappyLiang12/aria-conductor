@@ -831,7 +831,7 @@ Expected: FAIL (request status is IN_PROGRESS).
 
 - [ ] **Step 3: Implement the birth change**
 
-In `RunKanbanAutoCreator.createCardFor`, delete the `.status(KanbanStatus.IN_PROGRESS)` builder line and replace the comment block above it with:
+In `RunKanbanAutoCreator.createCardFor`, replace the `.status(KanbanStatus.IN_PROGRESS)` builder line with `.status(KanbanStatus.TODO)` and replace the comment block above it with:
 
 ```java
                 // The mirror card is born TODO and waits there honestly while the
@@ -847,6 +847,8 @@ In `RunKanbanAutoCreator.createCardFor`, delete the `.status(KanbanStatus.IN_PRO
 Run: `cd agent-control-tower && mvn -B test -pl act-execution -Dtest="RunKanbanAutoCreatorTest,KanbanListenerNonTransactionalPublishTest" -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true`
 Run: `cd agent-control-tower && mvn -B verify -pl act-app -am -Dskip.unit.tests=true -Dit.test="KanbanAutoDispatchIntegrationTest,KanbanTransitionIntegrityIntegrationTest" -Dsurefire.failIfNoSpecifiedTests=false -Dfailsafe.failIfNoSpecifiedTests=false -Djacoco.skip=true`
 Expected: PASS. Contingency (only if `KanbanAutoDispatchIntegrationTest`'s first test flakes on its mid-flight assertion): replace the `.isIn(KanbanStatus.IN_PROGRESS, KanbanStatus.REVIEW)` mid-assertion with a single await on the final `REVIEW` state (the second await already present) and delete the now-redundant first await; do not weaken the guard test.
+
+Second contingency (controller ruling 2026-10-03; mandatory): `KanbanAutoDispatchIntegrationTest.runLinkedTodoCardIsNeverAutoDispatched`'s "stays TODO" window is incompatible with the admission start signal (it legitimately moves run-linked TODO cards to IN_PROGRESS, then the card settles). Amend the SCENARIO, not the assertions: await the run reaching terminal (`RunStatus.FAILED`; the test profile fails fast against the closed sandbox port) BEFORE creating the linked TODO card, so no further start signal can touch it. Keep the `during(2s)` predicate unchanged (card remains TODO AND the agent still owns exactly one run) and keep both observables — the status window stays a truthful discriminator of the auto-dispatch guard.
 
 - [ ] **Step 5: Commit**
 

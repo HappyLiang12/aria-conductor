@@ -424,6 +424,21 @@ export function AriaPanel() {
     [busy, messages, conversationId, pendingSkillId, reportRunUncertain],
   );
 
+  // One-click synthesis (Feature B2): the batch-completion notification composes
+  // the prompt and hands it over as an `aria:compose` window event; the panel
+  // owns the SSE path, so the event goes through sendStreamed like a typed
+  // message. Removing the listener on unmount keeps a stale panel from sending.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      if (typeof prompt === 'string' && prompt.trim()) {
+        sendStreamed(prompt);
+      }
+    };
+    window.addEventListener('aria:compose', handler);
+    return () => window.removeEventListener('aria:compose', handler);
+  }, [sendStreamed]);
+
   const handleSend = useCallback(() => {
     sendStreamed(input);
   }, [input, sendStreamed]);

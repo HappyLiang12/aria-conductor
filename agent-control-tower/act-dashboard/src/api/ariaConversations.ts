@@ -38,3 +38,16 @@ export async function deleteConversation(conversationId: string): Promise<void> 
     throw new Error(`Failed to delete conversation: ${res.statusText}`);
   }
 }
+
+/**
+ * One-click synthesis (Feature B2): composes the aggregated prompt for the
+ * latest dispatch batch of the conversation. No body — an optional
+ * `dispatchedByRunId` targets a specific batch, the default is the latest one.
+ */
+export async function composeSynthesis(conversationId: string): Promise<{ prompt: string }> {
+  const res = await fetch(`/api/v1/aria/conversations/${encodeURIComponent(conversationId)}/synthesize`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to compose synthesis prompt: ${res.statusText}`);
+  return res.json();
+}

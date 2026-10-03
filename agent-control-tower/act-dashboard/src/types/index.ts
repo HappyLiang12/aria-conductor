@@ -381,7 +381,8 @@ export type NotificationType =
   | 'report.generated'
   | 'reminder'
   | 'monitor'
-  | 'brief';
+  | 'brief'
+  | 'run.batch.completed';
 
 export interface Notification {
   id: string;

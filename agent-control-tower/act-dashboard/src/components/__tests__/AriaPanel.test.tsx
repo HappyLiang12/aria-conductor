@@ -341,3 +341,36 @@ describe('AriaPanel failed-turn reporting (timeline + stream)', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// One-click synthesis (Feature B2): the batch-completion notification composes
+// the prompt and hands it over through the `aria:compose` window event. The
+// panel owns the SSE path, so the event must go through sendStreamed exactly
+// like a typed message — and the listener must not survive unmount.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel aria:compose handling', () => {
+  it('an aria:compose event sends the prompt through the stream path', async () => {
+    renderPanel();
+    await act(async () => {}); // flush the conversation load
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt: 'summarize the batch' } }));
+    });
+
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('summarize the batch');
+  });
+
+  it('stops listening for aria:compose on unmount', async () => {
+    const { unmount } = renderPanel();
+    await act(async () => {});
+    unmount();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt: 'late prompt' } }));
+    });
+
+    expect(mockStream).not.toHaveBeenCalled();
+  });
+});

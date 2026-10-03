@@ -13,6 +13,9 @@ public interface AriaNotificationRepository extends JpaRepository<AriaNotificati
 
     Page<AriaNotificationEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
+    /** Dedupe guard for the dispatch-batch completion wake (type + resource pair). */
+    boolean existsByTypeAndResourceId(String type, String resourceId);
+
     @Query("SELECT COUNT(n) FROM AriaNotificationEntity n WHERE n.isRead = false")
     long countUnread();
 

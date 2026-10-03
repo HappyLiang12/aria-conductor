@@ -4,6 +4,7 @@ import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.ConversationSummary;
 import io.aria.conductor.aria.dto.TimelineEntry;
+import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -30,15 +31,18 @@ public class AriaConversationController {
     private final SessionTrajectoryRepository trajectoryRepository;
     private final AuditEventRepository auditEventRepository;
     private final ToolCallRepository toolCallRepository;
+    private final AriaService ariaService;
 
     public AriaConversationController(RunRepository runRepository,
                                        SessionTrajectoryRepository trajectoryRepository,
                                        AuditEventRepository auditEventRepository,
-                                       ToolCallRepository toolCallRepository) {
+                                       ToolCallRepository toolCallRepository,
+                                       AriaService ariaService) {
         this.runRepository = runRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.auditEventRepository = auditEventRepository;
         this.toolCallRepository = toolCallRepository;
+        this.ariaService = ariaService;
     }
 
     /**
@@ -159,5 +163,31 @@ public class AriaConversationController {
                 conversationId, runs.size(), runIds.size());
 
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Compose (but never run) the one-click synthesis prompt for a completed dispatch
+     * batch (Feature B4). With no body — or no {@code dispatchedByRunId} in it — the
+     * conversation's latest dispatch group is used; an explicit id selects that group
+     * directly. Returns 404 when nothing resolves (unknown conversation, or a group id
+     * without children), 400 for a malformed UUID. The client sends the returned prompt
+     * through the normal chat path.
+     */
+    @PostMapping("/{conversationId}/synthesize")
+    public ResponseEntity<Map<String, String>> synthesize(
+            @PathVariable String conversationId,
+            @RequestBody(required = false) Map<String, String> body) {
+        String rawDispatchedByRunId = body != null ? body.get("dispatchedByRunId") : null;
+        UUID dispatchedByRunId = null;
+        if (rawDispatchedByRunId != null && !rawDispatchedByRunId.isBlank()) {
+            try {
+                dispatchedByRunId = UUID.fromString(rawDispatchedByRunId.trim());
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().build();
+            }
+        }
+        return ariaService.composeSynthesisPrompt(conversationId, dispatchedByRunId)
+                .map(prompt -> ResponseEntity.ok(Map.of("prompt", prompt)))
+                .orElse(ResponseEntity.notFound().build());
     }
 }

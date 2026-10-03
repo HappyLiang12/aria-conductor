@@ -6,6 +6,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.TimelineEntry;
+import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -14,11 +15,13 @@ import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,6 +32,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,11 +44,13 @@ class AriaConversationControllerTest {
     private final SessionTrajectoryRepository trajectoryRepository = mock(SessionTrajectoryRepository.class);
     private final AuditEventRepository auditEventRepository = mock(AuditEventRepository.class);
     private final ToolCallRepository toolCallRepository = mock(ToolCallRepository.class);
+    private final AriaService ariaService = mock(AriaService.class);
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new AriaConversationController(
-                runRepository, trajectoryRepository, auditEventRepository, toolCallRepository)).build();
+                runRepository, trajectoryRepository, auditEventRepository, toolCallRepository,
+                ariaService)).build();
     }
 
     private Run run(String conversationId, RunStatus status, Instant createdAt) {
@@ -349,6 +355,65 @@ class AriaConversationControllerTest {
         verify(toolCallRepository).deleteByRunIdIn(allIds);
         verify(trajectoryRepository).deleteByRunIdIn(allIds);
         verify(auditEventRepository).deleteByConversationId("conv-1");
+    }
+
+    @Test
+    void synthesize_returnsComposedPromptForTheLatestGroupWhenBodyIsAbsent() throws Exception {
+        when(ariaService.composeSynthesisPrompt("conv-1", null))
+                .thenReturn(Optional.of("COMPOSED PROMPT"));
+
+        mockMvc.perform(post("/api/v1/aria/conversations/conv-1/synthesize"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.prompt").value("COMPOSED PROMPT"));
+
+        verify(ariaService).composeSynthesisPrompt("conv-1", null);
+    }
+
+    @Test
+    void synthesize_treatsAnEmptyObjectBodyAsNoExplicitGroup() throws Exception {
+        when(ariaService.composeSynthesisPrompt("conv-1", null))
+                .thenReturn(Optional.of("COMPOSED PROMPT"));
+
+        mockMvc.perform(post("/api/v1/aria/conversations/conv-1/synthesize")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.prompt").value("COMPOSED PROMPT"));
+
+        verify(ariaService).composeSynthesisPrompt("conv-1", null);
+    }
+
+    @Test
+    void synthesize_passesTheExplicitDispatchedByRunIdFromTheBody() throws Exception {
+        UUID groupId = UUID.randomUUID();
+        when(ariaService.composeSynthesisPrompt("conv-1", groupId))
+                .thenReturn(Optional.of("COMPOSED PROMPT"));
+
+        mockMvc.perform(post("/api/v1/aria/conversations/conv-1/synthesize")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"dispatchedByRunId\":\"" + groupId + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.prompt").value("COMPOSED PROMPT"));
+
+        verify(ariaService).composeSynthesisPrompt("conv-1", groupId);
+    }
+
+    @Test
+    void synthesize_returns404WhenNoDispatchGroupResolves() throws Exception {
+        when(ariaService.composeSynthesisPrompt("ghost", null)).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/api/v1/aria/conversations/ghost/synthesize"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void synthesize_returns400WhenDispatchedByRunIdIsNotAUuid() throws Exception {
+        mockMvc.perform(post("/api/v1/aria/conversations/conv-1/synthesize")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"dispatchedByRunId\":\"not-a-uuid\"}"))
+                .andExpect(status().isBadRequest());
+
+        verify(ariaService, never()).composeSynthesisPrompt(any(), any());
     }
 
     private SessionTrajectory trajectory(UUID runId, int turn, String role, String content) {

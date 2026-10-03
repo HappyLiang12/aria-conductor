@@ -47,6 +47,16 @@
     }
 
     @Test
+    void relayNeverEstablished_matchesTheIpv6RelayPatternInTheCause() {
+        TaskExecutionException exhaustion = new TaskExecutionException(
+                TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox abc: transport error",
+                new RuntimeException("Network connectivity error: "
+                        + "Failed to connect to localhost/[0:0:0:0:0:0:0:1]:59217"));
+        assertThat(SandboxLifecycle.isRelayNeverEstablished(exhaustion)).isTrue();
+    }
+
+    @Test
     void relayNeverEstablished_rejectsTheDistributionFaultAndPlainTimeouts() {
         TaskExecutionException distribution = new TaskExecutionException(
                 TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
@@ -79,14 +89,15 @@ Expected: FAIL — `isRelayNeverEstablished` does not exist (compile error).
      */
     static boolean isRelayNeverEstablished(Throwable exhaustionCause) {
         for (Throwable t = exhaustionCause; t != null; t = t.getCause()) {
+            if (t.getCause() == t) break;
             String message = t.getMessage();
             if (message == null) continue;
             String lower = message.toLowerCase(Locale.ROOT);
             if (lower.contains("failed to connect to localhost/127.0.0.1:")
-                    || lower.contains("failed to connect to 127.0.0.1:")) {
+                    || lower.contains("failed to connect to 127.0.0.1:")
+                    || lower.contains("failed to connect to localhost/[0:0:0:0:0:0:0:1]:")) {
                 return true;
             }
-            if (t.getCause() == t) break;
         }
         return false;
     }

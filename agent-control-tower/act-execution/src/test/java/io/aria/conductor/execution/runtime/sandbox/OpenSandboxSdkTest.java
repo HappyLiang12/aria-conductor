@@ -432,6 +432,16 @@ class OpenSandboxSdkTest {
     }
 
     @Test
+    void relayNeverEstablished_matchesTheIpv6RelayPatternInTheCause() {
+        TaskExecutionException exhaustion = new TaskExecutionException(
+                TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox abc: transport error",
+                new RuntimeException("Network connectivity error: "
+                        + "Failed to connect to localhost/[0:0:0:0:0:0:0:1]:59217"));
+        assertThat(SandboxLifecycle.isRelayNeverEstablished(exhaustion)).isTrue();
+    }
+
+    @Test
     void relayNeverEstablished_rejectsTheDistributionFaultAndPlainTimeouts() {
         TaskExecutionException distribution = new TaskExecutionException(
                 TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,

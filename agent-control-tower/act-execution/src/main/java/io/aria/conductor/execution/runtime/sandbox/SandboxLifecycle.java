@@ -1362,14 +1362,15 @@ public class SandboxLifecycle implements AutoCloseable {
      */
     static boolean isRelayNeverEstablished(Throwable exhaustionCause) {
         for (Throwable t = exhaustionCause; t != null; t = t.getCause()) {
+            if (t.getCause() == t) break;
             String message = t.getMessage();
             if (message == null) continue;
             String lower = message.toLowerCase(Locale.ROOT);
             if (lower.contains("failed to connect to localhost/127.0.0.1:")
-                    || lower.contains("failed to connect to 127.0.0.1:")) {
+                    || lower.contains("failed to connect to 127.0.0.1:")
+                    || lower.contains("failed to connect to localhost/[0:0:0:0:0:0:0:1]:")) {
                 return true;
             }
-            if (t.getCause() == t) break;
         }
         return false;
     }

@@ -1,5 +1,6 @@
 package io.aria.conductor.aria.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
@@ -19,8 +20,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -35,6 +36,7 @@ import java.util.UUID;
 public class AriaStreamService {
 
     private static final UUID ARIA_AGENT_ID = AriaConstants.ARIA_AGENT_ID;
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AgentLoopEngine agentLoopEngine;
     private final AgentRepository agentRepository;
@@ -42,7 +44,6 @@ public class AriaStreamService {
     private final IntentClassifier intentClassifier;
     private final AriaService ariaService;
     private final SkillContextProvider skillContextProvider;
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AriaStreamService(AgentLoopEngine agentLoopEngine,
                              AgentRepository agentRepository,
@@ -61,7 +62,7 @@ public class AriaStreamService {
     public void streamChat(AriaChatRequest request, SseEmitter emitter) {
         emitter.onTimeout(() -> {
             log.warn("Aria SSE stream timed out");
-            sendErrorSilent(emitter, "stream timed out");
+            sendErrorSilent(emitter, errorPayloadJson("stream timed out", null, null));
             emitter.complete();
         });
         emitter.onError(t -> log.warn("Aria SSE stream error: {}", t.getMessage()));
@@ -104,7 +105,10 @@ public class AriaStreamService {
                     runRepository.save(run);
                 } catch (Exception ignored) { /* best-effort */ }
             }
-            sendErrorSilent(emitter, "Aria streaming failed: " + ex.getMessage());
+            // A persisted run makes this a failed TURN: the error event carries the run
+            // id and reason so the client can tell it apart from a transport error.
+            sendErrorSilent(emitter, errorPayloadJson(
+                    "Aria streaming failed: " + ex.getMessage(), run, ex.getMessage()));
             try { emitter.complete(); } catch (Exception ignored) {}
         }
     }
@@ -163,10 +167,52 @@ public class AriaStreamService {
         }
     }
 
-    private void sendErrorSilent(SseEmitter emitter, String message) {
+    /**
+     * JSON payload of the terminal SSE {@code error} event.
+     *
+     * <p>When {@code failedRun} is a persisted run the error reports a failed TURN: the
+     * legacy {@code message} key is kept and {@code turnFailed}/{@code runId}/{@code reason}
+     * are added so the client can distinguish a turn failure from a transport error.
+     * Otherwise the payload keeps the legacy {@code {"message": ...}} shape.
+     *
+     * <p>{@code reason} is the run's error message, falling back to {@code causeMessage}
+     * when the run recorded none, clipped to {@link #MAX_ERROR_REASON_CHARS}.
+     */
+    static String errorPayloadJson(String message, Run failedRun, String causeMessage) {
+        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+        payload.put("message", message == null ? "unknown error" : message);
+        if (failedRun != null && failedRun.getId() != null) {
+            String source = failedRun.getErrorMessage();
+            if (source == null || source.isBlank()) {
+                source = causeMessage;
+            }
+            payload.put("turnFailed", true);
+            payload.put("runId", failedRun.getId().toString());
+            payload.put("reason", clipReason(source));
+        }
         try {
-            String json = objectMapper.writeValueAsString(Map.of(
-                    "message", message == null ? "unknown error" : message));
+            return OBJECT_MAPPER.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            // Serializing plain strings cannot realistically fail; fall back to the legacy
+            // literal rather than dropping the terminal error event.
+            return "{\"message\":\"unknown error\"}";
+        }
+    }
+
+    /** Max characters of a failed run's error carried in the terminal SSE error payload. */
+    private static final int MAX_ERROR_REASON_CHARS = 300;
+
+    private static String clipReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "unknown error";
+        }
+        return reason.length() > MAX_ERROR_REASON_CHARS
+                ? reason.substring(0, MAX_ERROR_REASON_CHARS)
+                : reason;
+    }
+
+    private void sendErrorSilent(SseEmitter emitter, String json) {
+        try {
             emitter.send(SseEmitter.event().name("error").data(json));
         } catch (Exception ignored) {
             // best-effort

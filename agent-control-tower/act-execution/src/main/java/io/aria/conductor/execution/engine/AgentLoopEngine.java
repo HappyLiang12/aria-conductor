@@ -58,6 +58,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
@@ -565,6 +567,7 @@ public class AgentLoopEngine {
      * leaving chains/boards stuck. Runs are saved individually so one failure cannot roll
      * back the recovery of the others.
      */
+    @Order(Ordered.HIGHEST_PRECEDENCE)
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         recoverOrphanedRuns();

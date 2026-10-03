@@ -26,14 +26,13 @@ import java.util.concurrent.Executor;
 /**
  * Automatically manages Kanban items in response to run lifecycle events:
  * <ul>
- *   <li>{@link RunStartedEvent}     → creates an IN_PROGRESS mirror item. The
- *       event is published for a run that has already been accepted and is
- *       dispatched for execution the moment it is created, so the mirror card is
- *       born in the column the run is already in — and TODO stays reserved for
- *       real dispatch intents (linked cards are never auto-dispatched).</li>
- *   <li>{@link RunIterationEvent}   → transitions TODO → IN_PROGRESS (defensive:
- *       only the legacy turn loop publishes it, so a linked card still sitting in
- *       TODO is dragged to the live column when an iteration does arrive)</li>
+ *   <li>{@link RunStartedEvent}     → creates a TODO mirror item. The card waits
+ *       there honestly while the run queues for an admission slot, and — still
+ *       carrying a linkedRunId — it never auto-dispatches (TODO stays reserved
+ *       for real dispatch intents).</li>
+ *   <li>{@link RunIterationEvent}   → transitions TODO → IN_PROGRESS: the engine
+ *       publishes the admission start signal the moment the run actually
+ *       starts, so the queued card flips to the live column with it</li>
  *   <li>{@link RunCompletedEvent}   → settles the card to REVIEW / CANCELLED,
  *       stepping a card that never left TODO through IN_PROGRESS first</li>
  * </ul>
@@ -120,15 +119,13 @@ public class RunKanbanAutoCreator {
 
         CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
                 .title(title)
-                // The mirror card is born IN_PROGRESS: the run is already
-                // dispatched for execution when RunStartedEvent fires, and only
-                // the legacy turn loop ever publishes RunIterationEvent — a TODO
-                // birth left run-owned runs (opencode/qoder) in TODO forever and
-                // the completion settlement then failed on the illegal
-                // TODO -> REVIEW move. TODO remains the status of real dispatch
-                // intents; this card already carries a linkedRunId, so the
-                // auto-dispatch listener still never dispatches it.
-                .status(KanbanStatus.IN_PROGRESS)
+                // The mirror card is born TODO and waits there honestly while the
+                // run queues for an admission slot; the engine's admission start
+                // signal (RunIterationEvent) moves it to IN_PROGRESS the moment
+                // the run actually starts, and the completion settlement below
+                // covers every terminal state (including a card that never left
+                // TODO). A linkedRunId still never auto-dispatches.
+                .status(KanbanStatus.TODO)
                 .priority(KanbanPriority.MEDIUM)
                 .linkedRunId(event.getRunId().toString())
                 .linkedAgentId(event.getAgentId().toString())

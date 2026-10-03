@@ -48,8 +48,9 @@ import static org.mockito.Mockito.when;
  * State-transition tests for {@link RunKanbanAutoCreator}: run lifecycle events
  * must create/move linked Kanban items with the exact field values expected by
  * the board (title derivation from the prompt seed, MEDIUM default priority,
- * IN_PROGRESS birth, settlement to REVIEW/CANCELLED — including a card that
- * never left TODO — and terminal items untouched).
+ * TODO birth (moved IN_PROGRESS by the admission start signal), settlement to
+ * REVIEW/CANCELLED — including a card that never left TODO — and terminal items
+ * untouched).
  */
 @ExtendWith(MockitoExtension.class)
 class RunKanbanAutoCreatorTest {
@@ -77,7 +78,7 @@ class RunKanbanAutoCreatorTest {
     // ---- onRunStarted ----
 
     @Test
-    void onRunStarted_createsInProgressItemTitledWithPromptSeed() {
+    void onRunStarted_createsTodoItemTitledWithPromptSeed() {
         Run run = TestDataBuilder.aRun()
                 .withId(runId).withAgentId(agentId)
                 .withPromptSeed("Fix the flaky nightly build")
@@ -91,10 +92,9 @@ class RunKanbanAutoCreatorTest {
         verify(kanbanService).create(captor.capture());
         CreateKanbanItemRequest request = captor.getValue();
         assertThat(request.getTitle()).isEqualTo("Fix the flaky nightly build");
-        // The run is dispatched the moment it is created: the mirror card is
-        // born in the live column, never in TODO (which would read as an
-        // undispatched card and settle illegally on completion).
-        assertThat(request.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
+        // The card is born TODO; the admission start signal (onRunIteration)
+        // moves it to IN_PROGRESS — a queued run stays TODO until its slot frees.
+        assertThat(request.getStatus()).isEqualTo(KanbanStatus.TODO);
         assertThat(request.getPriority()).isEqualTo(KanbanPriority.MEDIUM);
         assertThat(request.getLinkedRunId()).isEqualTo(runId.toString());
         assertThat(request.getLinkedAgentId()).isEqualTo(agentId.toString());
@@ -175,9 +175,10 @@ class RunKanbanAutoCreatorTest {
 
     @Test
     void onRunIteration_movesOnlyTodoItemsToInProgress() {
-        // Defensive path: mirror cards are born IN_PROGRESS, so only a linked
-        // card still sitting in TODO (e.g. created by a pre-fix version) is
-        // dragged to the live column by an iteration signal.
+        // The admission start signal: mirror cards are born TODO, and the engine
+        // publishes RunIterationEvent at admission, so this transition is what
+        // moves a queued card's TODO birth to the live column. Only cards still
+        // in TODO move — one already IN_PROGRESS stays put.
         KanbanItem todoItem = kanbanItem("item-todo", KanbanStatus.TODO);
         KanbanItem inProgressItem = kanbanItem("item-wip", KanbanStatus.IN_PROGRESS);
         when(kanbanRepository.findByLinkedRunId(runId.toString()))

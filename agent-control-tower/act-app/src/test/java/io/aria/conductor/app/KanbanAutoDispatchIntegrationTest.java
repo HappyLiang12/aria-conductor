@@ -10,6 +10,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.kanban.CreateKanbanItemRequest;
 import io.aria.conductor.execution.kanban.KanbanItem;
 import io.aria.conductor.execution.kanban.KanbanRepository;
@@ -124,6 +125,16 @@ class KanbanAutoDispatchIntegrationTest {
                 .promptSeed("guard the run link")
                 .build());
 
+        // Bring the run to terminal FIRST: the admission start signal (published
+        // at admission) legitimately moves every run-linked TODO card to
+        // IN_PROGRESS while the run is live, so the only mover that could touch
+        // the card below is the auto-dispatch path this guard exists to stop.
+        // The test profile points the sandbox core at a closed port, so the
+        // attempt fails fast.
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(
+                runRepository.findById(run.getId()).orElseThrow().getStatus())
+                .isEqualTo(RunStatus.FAILED));
+
         // A TODO card naming the existing run — the shape every mirror card had
         // before the IN_PROGRESS birth, and a shape a future regression could
         // reintroduce. The creation publishes KanbanItemCreatedEvent, which the
@@ -136,14 +147,15 @@ class KanbanAutoDispatchIntegrationTest {
                 .build());
         assertThat(linkedTodo.getStatus()).isEqualTo(KanbanStatus.TODO);
 
-        // Hold that observation for a settle window: the card must stay in TODO
-        // and the agent must still own exactly the one run the caller created.
+        // Hold that observation for a settle window: with the run terminal and
+        // the guard working, the card must stay in TODO and the agent must still
+        // own exactly the one run the caller created.
         await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(10)).until(() ->
                 kanbanRepository.findById(linkedTodo.getId())
                         .map(item -> item.getStatus() == KanbanStatus.TODO)
                         .orElse(false)
                         && runRepository.findAll().stream()
-                                .filter(r -> agent.getId().equals(r.getAgentId()))
+                                .filter(r -> r.getAgentId().equals(agent.getId()))
                                 .count() == 1);
     }
 }

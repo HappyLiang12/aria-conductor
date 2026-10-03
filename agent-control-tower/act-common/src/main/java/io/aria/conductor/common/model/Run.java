@@ -44,6 +44,15 @@ public class Run {
     @Column(name = "conversation_id", length = 36)
     private String conversationId;
 
+    /**
+     * The Aria turn's run that dispatched this run, when this run is a child of a
+     * dispatch group. Dispatched children deliberately never carry
+     * {@link #conversationId}: the timeline/context select by it, so stamping it
+     * here would pollute the Aria chat. NULL for every legacy and non-child run.
+     */
+    @Column(name = "dispatched_by_run_id", columnDefinition = "UUID")
+    private UUID dispatchedByRunId;
+
     @Builder.Default
     private int maxIterations = 50;
 

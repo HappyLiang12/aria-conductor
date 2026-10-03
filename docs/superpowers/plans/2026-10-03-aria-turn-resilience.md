@@ -493,7 +493,7 @@ git commit -m "feat(aria): stamp dispatched_by_run_id on tool-dispatched runs"
 
 **Files:**
 - Create: `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/listener/RunBatchCompletionListener.java`
-- Modify: `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/persistence/` notification repository (add derived finder, e.g. `boolean existsByTypeAndResourceId(String type, String resourceId)` — match the real repo interface name)
+- Modify: `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/persistence/` notification repository (add derived finder `boolean existsByTypeAndResourceIdAndBodyContaining(String type, String resourceId, String fragment)` — match the real repo interface name)
 - Test: `agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/listener/RunBatchCompletionListenerTest.java`
 
 **Interfaces:**
@@ -501,17 +501,18 @@ git commit -m "feat(aria): stamp dispatched_by_run_id on tool-dispatched runs"
 - Produces: when the completed run has a `dispatchedByRunId` and ALL its siblings (same `dispatchedByRunId`) are terminal, exactly one notification:
   - type `run.batch.completed`
   - title `子任務批次完成（N 個：成功 X／失敗 Y）` (N=group size; X=COMPLETED count; Y=terminal-but-not-COMPLETED count)
-  - body `Runs: <id:status>, <id:status>, ...` (group order by createdAt, 5 max, `…` if more)
+  - body `Batch <dispatchedByRunId>: Runs: <id:status>, <id:status>, ...` (the dispatch-group id marker verbatim first, then the list in createdAt order, 5 max, `…` if more)
   - `resourceType "CONVERSATION"`, `resourceId = parent.conversationId` (parent = `findById(dispatchedByRunId)`; if the parent or its conversationId is missing, skip with a warn).
-  - Dedupe: skip when the notification already exists (finder check); a residual simultaneous-completion race is accepted.
+  - Dedupe is PER dispatch group: skip when a notification of this type already exists on this conversation whose body contains the current group's id — `existsByTypeAndResourceIdAndBodyContaining("run.batch.completed", conversationId, dispatchedByRunId.toString())`. A later batch in the same conversation notifies again; a replayed completion of an already-notified group stays suppressed. A residual simultaneous-completion race is accepted.
 - Listener annotation: `@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)` (house pattern).
 
 - [ ] **Step 1: Write the failing tests** (mock repos + notification service; call the listener method directly)
 
 1. Child completes but a sibling is RUNNING → no notification.
-2. Last child completes → one notification with the exact title for 3 children (2 COMPLETED, 1 FAILED) and resourceId = parent conversationId.
-3. Same completion replayed / another completion after group done → the existing-notification check suppresses a second create (stub `existsByTypeAndResourceId` true).
+2. Last child completes → one notification with the exact title for 3 children (2 COMPLETED, 1 FAILED), body headed by `Batch <dispatchedByRunId>:`, and resourceId = parent conversationId.
+3. Same completion replayed for an already-notified group → the per-group dedupe check suppresses a second create (stub `existsByTypeAndResourceIdAndBodyContaining` true for this group's id).
 4. Run without `dispatchedByRunId` → no notification.
+5. REGRESSION (R-ATR3): a SECOND batch (different `dispatchedByRunId`) completing in the SAME conversation notifies again — pin its own `Batch <dispatchedByRunId>: Runs: ...` body and title (a conversation-scoped dedupe would have suppressed every later batch forever).
 
 - [ ] **Step 2: Run to verify it fails**
 

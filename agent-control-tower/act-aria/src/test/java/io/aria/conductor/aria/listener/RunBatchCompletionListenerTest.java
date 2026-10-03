@@ -18,6 +18,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -27,7 +28,10 @@ import static org.mockito.Mockito.when;
 /**
  * Completion wake (T9): when the LAST child of a dispatch group reaches a
  * terminal state, exactly one notification lands on the parent's conversation.
- * All scenarios call the listener method directly with mocked repositories.
+ * Dedupe is scoped PER dispatch group (the group id heads the body as the
+ * {@code Batch <dispatchedByRunId>:} marker), so a later batch in the same
+ * conversation notifies again. All scenarios call the listener method directly
+ * with mocked repositories.
  */
 @ExtendWith(MockitoExtension.class)
 class RunBatchCompletionListenerTest {
@@ -84,8 +88,8 @@ class RunBatchCompletionListenerTest {
         // Deliberately out of createdAt order: the listener must order the body itself.
         when(runRepository.findByDispatchedByRunId(parentId)).thenReturn(List.of(c2, c3, c1));
         when(runRepository.findById(parentId)).thenReturn(Optional.of(parent(parentId)));
-        when(notificationRepository.existsByTypeAndResourceId("run.batch.completed", CONVERSATION_ID))
-                .thenReturn(false);
+        when(notificationRepository.existsByTypeAndResourceIdAndBodyContaining(
+                "run.batch.completed", CONVERSATION_ID, parentId.toString())).thenReturn(false);
 
         listener.onRunCompleted(new RunCompletedEvent(
                 this, c1.getId(), c1.getAgentId(), RunStatus.COMPLETED));
@@ -93,7 +97,8 @@ class RunBatchCompletionListenerTest {
         verify(notificationService, times(1)).create(
                 "run.batch.completed",
                 "子任務批次完成（3 個：成功 2／失敗 1）",
-                "Runs: " + c1.getId() + ":COMPLETED, " + c2.getId() + ":COMPLETED, " + c3.getId() + ":FAILED",
+                "Batch " + parentId + ": Runs: " + c1.getId() + ":COMPLETED, "
+                        + c2.getId() + ":COMPLETED, " + c3.getId() + ":FAILED",
                 "CONVERSATION", CONVERSATION_ID);
     }
 
@@ -106,16 +111,47 @@ class RunBatchCompletionListenerTest {
         when(runRepository.findById(c3.getId())).thenReturn(Optional.of(c3));
         when(runRepository.findByDispatchedByRunId(parentId)).thenReturn(List.of(c1, c2, c3));
         when(runRepository.findById(parentId)).thenReturn(Optional.of(parent(parentId)));
-        when(notificationRepository.existsByTypeAndResourceId("run.batch.completed", CONVERSATION_ID))
-                .thenReturn(true);
+        when(notificationRepository.existsByTypeAndResourceIdAndBodyContaining(
+                "run.batch.completed", CONVERSATION_ID, parentId.toString())).thenReturn(true);
 
         // Replay of a completion for an already-notified group must not create a second one.
         listener.onRunCompleted(new RunCompletedEvent(
                 this, c3.getId(), c3.getAgentId(), RunStatus.FAILED));
 
-        verify(notificationRepository).existsByTypeAndResourceId("run.batch.completed", CONVERSATION_ID);
+        verify(notificationRepository).existsByTypeAndResourceIdAndBodyContaining(
+                "run.batch.completed", CONVERSATION_ID, parentId.toString());
         verify(notificationService, never()).create(
                 anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void secondBatchInTheSameConversation_notifiesAgainWithItsOwnGroupMarker() {
+        // REGRESSION (R-ATR3): batch 1 (firstParentId) was already notified earlier, so its
+        // "Batch <firstParentId>:" marker sits in the store — the old conversation-scoped dedupe
+        // would suppress the operator's rerun batch (secondParentId) forever. The finder stub
+        // simulates the real store: only the first group's marker exists.
+        UUID firstParentId = UUID.randomUUID();
+        UUID secondParentId = UUID.randomUUID();
+        Run d1 = child(UUID.randomUUID(), secondParentId, RunStatus.COMPLETED, T0);
+        Run d2 = child(UUID.randomUUID(), secondParentId, RunStatus.FAILED, T0.plusSeconds(1));
+        when(runRepository.findById(d2.getId())).thenReturn(Optional.of(d2));
+        when(runRepository.findByDispatchedByRunId(secondParentId)).thenReturn(List.of(d1, d2));
+        when(runRepository.findById(secondParentId)).thenReturn(Optional.of(parent(secondParentId)));
+        when(notificationRepository.existsByTypeAndResourceIdAndBodyContaining(
+                eq("run.batch.completed"), eq(CONVERSATION_ID), anyString()))
+                .thenAnswer(invocation -> firstParentId.toString().equals(invocation.getArgument(2)));
+
+        listener.onRunCompleted(new RunCompletedEvent(
+                this, d2.getId(), d2.getAgentId(), RunStatus.FAILED));
+
+        verify(notificationRepository).existsByTypeAndResourceIdAndBodyContaining(
+                "run.batch.completed", CONVERSATION_ID, secondParentId.toString());
+        verify(notificationService, times(1)).create(
+                "run.batch.completed",
+                "子任務批次完成（2 個：成功 1／失敗 1）",
+                "Batch " + secondParentId + ": Runs: " + d1.getId() + ":COMPLETED, "
+                        + d2.getId() + ":FAILED",
+                "CONVERSATION", CONVERSATION_ID);
     }
 
     @Test
@@ -148,8 +184,8 @@ class RunBatchCompletionListenerTest {
         when(runRepository.findByDispatchedByRunId(parentId))
                 .thenReturn(List.of(c1, c2, c3, c4, c5, c6));
         when(runRepository.findById(parentId)).thenReturn(Optional.of(parent(parentId)));
-        when(notificationRepository.existsByTypeAndResourceId("run.batch.completed", CONVERSATION_ID))
-                .thenReturn(false);
+        when(notificationRepository.existsByTypeAndResourceIdAndBodyContaining(
+                "run.batch.completed", CONVERSATION_ID, parentId.toString())).thenReturn(false);
 
         listener.onRunCompleted(new RunCompletedEvent(
                 this, c6.getId(), c6.getAgentId(), RunStatus.COMPLETED));
@@ -157,9 +193,9 @@ class RunBatchCompletionListenerTest {
         verify(notificationService, times(1)).create(
                 "run.batch.completed",
                 "子任務批次完成（6 個：成功 3／失敗 3）",
-                "Runs: " + c1.getId() + ":COMPLETED, " + c2.getId() + ":COMPLETED, "
-                        + c3.getId() + ":FAILED, " + c4.getId() + ":ABORTED, "
-                        + c5.getId() + ":CANCELLED, …",
+                "Batch " + parentId + ": Runs: " + c1.getId() + ":COMPLETED, "
+                        + c2.getId() + ":COMPLETED, " + c3.getId() + ":FAILED, "
+                        + c4.getId() + ":ABORTED, " + c5.getId() + ":CANCELLED, …",
                 "CONVERSATION", CONVERSATION_ID);
     }
 }

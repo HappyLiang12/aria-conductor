@@ -27,9 +27,13 @@ import java.util.stream.Collectors;
  * <p>The group is the set of runs stamped with the same
  * {@code dispatchedByRunId} (the dispatching turn's runId); the conversation is
  * resolved through the parent run, never from the children (children carry no
- * conversationId by design). Dedupe is a check-then-insert on the notification
- * (type + conversation); the residual simultaneous-completion race — two last
- * children committing at once both passing the check — is accepted.
+ * conversationId by design). Dedupe is a check-then-insert scoped PER dispatch
+ * group: the group id heads the body verbatim as {@code Batch <group-id>:}, and
+ * the existence check looks for that marker, so a later batch in the same
+ * conversation notifies again while a replayed completion of an
+ * already-notified group stays suppressed. The residual simultaneous-completion
+ * race — two last children committing at once both passing the check — is
+ * accepted.
  */
 @Slf4j
 @Component
@@ -86,15 +90,16 @@ public class RunBatchCompletionListener {
             return;
         }
         String conversationId = parent.getConversationId();
-        if (notificationRepository.existsByTypeAndResourceId(NOTIFICATION_TYPE, conversationId)) {
-            return; // already notified for this conversation
+        if (notificationRepository.existsByTypeAndResourceIdAndBodyContaining(
+                NOTIFICATION_TYPE, conversationId, dispatchedByRunId.toString())) {
+            return; // this dispatch group was already notified
         }
         List<Run> ordered = group.stream()
                 .sorted(Comparator.comparing(Run::getCreatedAt,
                         Comparator.nullsLast(Comparator.naturalOrder())))
                 .toList();
-        notificationService.create(NOTIFICATION_TYPE, buildTitle(ordered), buildBody(ordered),
-                RESOURCE_TYPE_CONVERSATION, conversationId);
+        notificationService.create(NOTIFICATION_TYPE, buildTitle(ordered),
+                buildBody(dispatchedByRunId, ordered), RESOURCE_TYPE_CONVERSATION, conversationId);
     }
 
     /** {@code 子任務批次完成（N 個：成功 X／失敗 Y）} — Y counts every terminal-but-not-COMPLETED child. */
@@ -104,12 +109,17 @@ public class RunBatchCompletionListener {
         return String.format("子任務批次完成（%d 個：成功 %d／失敗 %d）", group.size(), completed, failed);
     }
 
-    /** {@code Runs: <id:status>, ...} in createdAt order, clipped to five entries with a trailing "…". */
-    private static String buildBody(List<Run> ordered) {
+    /**
+     * {@code Batch <dispatchedByRunId>: Runs: <id:status>, ...} in createdAt order, clipped to
+     * five entries with a trailing "…". The leading group-id marker is what the dedupe finder
+     * matches on, scoping the guard per dispatch group.
+     */
+    private static String buildBody(UUID dispatchedByRunId, List<Run> ordered) {
         String entries = ordered.stream()
                 .limit(MAX_BODY_ENTRIES)
                 .map(r -> r.getId() + ":" + r.getStatus())
                 .collect(Collectors.joining(", "));
-        return "Runs: " + entries + (ordered.size() > MAX_BODY_ENTRIES ? ", …" : "");
+        return "Batch " + dispatchedByRunId + ": Runs: " + entries
+                + (ordered.size() > MAX_BODY_ENTRIES ? ", …" : "");
     }
 }

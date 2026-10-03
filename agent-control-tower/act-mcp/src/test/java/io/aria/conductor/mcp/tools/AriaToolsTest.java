@@ -7,6 +7,7 @@ import io.aria.conductor.aria.dto.ScheduledJobDto;
 import io.aria.conductor.aria.service.NotificationService;
 import io.aria.conductor.aria.service.ScheduledJobService;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
@@ -227,5 +228,66 @@ class AriaToolsTest {
         String json = tools.getConversationTimeline("unknown");
 
         assertThat(json).contains("\"ok\":true").contains("\"data\":[]");
+    }
+
+    @Test
+    void getConversationTimeline_interleavesSyntheticErrorEntryBeforeLaterRunsEntries() {
+        UUID failedRunId = UUID.randomUUID();
+        UUID laterRunId = UUID.randomUUID();
+        Run failedRun = Run.builder()
+                .id(failedRunId).conversationId("conv-2").status(RunStatus.FAILED)
+                .createdAt(NOW).completedAt(NOW.plusSeconds(30))
+                .errorMessage("boom").promptSeed("try again")
+                .build();
+        Run laterRun = Run.builder()
+                .id(laterRunId).conversationId("conv-2").status(RunStatus.COMPLETED)
+                .createdAt(NOW.plusSeconds(600))
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-2"))
+                .thenReturn(List.of(failedRun, laterRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId, laterRunId)))
+                .thenReturn(List.of(
+                        trajectory(failedRunId, 1, "user", "question that failed"),
+                        trajectory(laterRunId, 1, "user", "new question"),
+                        trajectory(laterRunId, 2, "assistant", "new answer")));
+
+        String json = tools.getConversationTimeline("conv-2");
+
+        int failedTrajectory = json.indexOf("question that failed");
+        int synthetic = json.indexOf("回合執行失敗：boom");
+        int newQuestion = json.indexOf("new question");
+        assertThat(failedTrajectory).isGreaterThanOrEqualTo(0);
+        assertThat(synthetic).isGreaterThan(failedTrajectory);
+        assertThat(newQuestion).isGreaterThan(synthetic);
+        assertThat(json).contains("\"error\":true")
+                .contains("\"retryPrompt\":\"try again\"")
+                .contains("\"timestamp\":\"2024-05-01T10:00:30Z\"")
+                .contains(failedRunId.toString());
+    }
+
+    @Test
+    void getConversationTimeline_usesFallbackContentWhenFailedRunErrorMessageIsBlank() {
+        UUID runId = UUID.randomUUID();
+        Run failedRun = Run.builder()
+                .id(runId).conversationId("conv-3").status(RunStatus.FAILED)
+                .createdAt(NOW).updatedAt(NOW.plusSeconds(5))
+                .errorMessage("   ")
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-3"))
+                .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(runId)))
+                .thenReturn(List.of());
+
+        String json = tools.getConversationTimeline("conv-3");
+
+        assertThat(json).contains("回合執行失敗：原因不明")
+                .contains("\"error\":true")
+                .contains("\"timestamp\":\"2024-05-01T10:00:05Z\"");
+    }
+
+    private static SessionTrajectory trajectory(UUID runId, int turn, String role, String content) {
+        return SessionTrajectory.builder()
+                .id(UUID.randomUUID()).runId(runId).turnNumber(turn)
+                .role(role).content(content).createdAt(NOW).build();
     }
 }

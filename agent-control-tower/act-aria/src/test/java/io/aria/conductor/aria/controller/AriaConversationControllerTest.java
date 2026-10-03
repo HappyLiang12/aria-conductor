@@ -212,6 +212,109 @@ class AriaConversationControllerTest {
     }
 
     @Test
+    void timeline_placesSyntheticErrorEntryBeforeLaterRunsEntries() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run failedRun = Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId("conv-order")
+                .status(RunStatus.FAILED)
+                .createdAt(base)
+                .completedAt(base.plusSeconds(30))
+                .errorMessage("boom")
+                .promptSeed("try again")
+                .build();
+        Run laterRun = run("conv-order", RunStatus.COMPLETED, base.plusSeconds(600));
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-order"))
+                .thenReturn(List.of(failedRun, laterRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(
+                List.of(failedRun.getId(), laterRun.getId())))
+                .thenReturn(List.of(
+                        trajectory(failedRun.getId(), 1, "user", "question that killed the run"),
+                        trajectory(laterRun.getId(), 1, "user", "new question"),
+                        trajectory(laterRun.getId(), 2, "assistant", "new answer")));
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-order"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4))
+                .andExpect(jsonPath("$[0].content").value("question that killed the run"))
+                .andExpect(jsonPath("$[1].content").value("回合執行失敗：boom"))
+                .andExpect(jsonPath("$[1].error").value(true))
+                .andExpect(jsonPath("$[1].retryPrompt").value("try again"))
+                .andExpect(jsonPath("$[1].runId").value(failedRun.getId().toString()))
+                .andExpect(jsonPath("$[2].content").value("new question"))
+                .andExpect(jsonPath("$[3].content").value("new answer"));
+    }
+
+    @Test
+    void timeline_keepsErrorMessageOfExactly300CharsUnchanged() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        String message = "x".repeat(300);
+        Run failedRun = Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId("conv-300")
+                .status(RunStatus.FAILED)
+                .createdAt(base)
+                .completedAt(base.plusSeconds(10))
+                .errorMessage(message)
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-300"))
+                .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRun.getId())))
+                .thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-300"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].content").value("回合執行失敗：" + message));
+    }
+
+    @Test
+    void timeline_clipsErrorMessageLongerThan300Chars() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        String message = "y".repeat(301);
+        Run failedRun = Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId("conv-301")
+                .status(RunStatus.FAILED)
+                .createdAt(base)
+                .completedAt(base.plusSeconds(10))
+                .errorMessage(message)
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-301"))
+                .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRun.getId())))
+                .thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-301"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].content").value("回合執行失敗：" + message.substring(0, 300)));
+    }
+
+    @Test
+    void timeline_usesFallbackContentWhenFailedRunHasBlankErrorMessage() throws Exception {
+        Instant base = Instant.parse("2026-01-10T10:00:00Z");
+        Run failedRun = Run.builder()
+                .id(UUID.randomUUID())
+                .conversationId("conv-blank")
+                .status(RunStatus.FAILED)
+                .createdAt(base)
+                .completedAt(base.plusSeconds(10))
+                .errorMessage("   ")
+                .build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-blank"))
+                .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRun.getId())))
+                .thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/aria/conversations/conv-blank"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].content").value("回合執行失敗：原因不明"))
+                .andExpect(jsonPath("$[0].error").value(true));
+    }
+
+    @Test
     void delete_returns404WhenConversationHasNoRuns() throws Exception {
         when(runRepository.findByConversationIdOrderByCreatedAtAsc("ghost")).thenReturn(List.of());
 

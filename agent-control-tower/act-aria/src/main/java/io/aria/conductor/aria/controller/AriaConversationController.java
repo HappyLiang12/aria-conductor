@@ -14,7 +14,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -84,36 +83,35 @@ public class AriaConversationController {
         List<SessionTrajectory> trajectories = trajectoryRepository
                 .findByRunIdInOrderByTurnNumberAsc(runIds);
 
-        // Pre-build runId → createdAt map for O(1) sort lookup
-        Map<UUID, Instant> runCreated = runs.stream()
-                .collect(Collectors.toMap(Run::getId, Run::getCreatedAt));
+        // The repository returns trajectories globally ordered by turnNumber; grouping
+        // preserves that within-run order for each run.
+        Map<UUID, List<SessionTrajectory>> trajectoriesByRun = trajectories.stream()
+                .collect(Collectors.groupingBy(SessionTrajectory::getRunId));
 
-        // Sort globally by run creation time, then by turnNumber within each run
-        List<TimelineEntry> timeline = trajectories.stream()
-                .sorted(Comparator.comparing(
-                        t -> runCreated.getOrDefault(t.getRunId(), t.getCreatedAt())))
-                .map(t -> TimelineEntry.builder()
+        // Assemble per run, in runs order (createdAt asc): a FAILED run's synthetic
+        // error entry lands directly after that run's messages, never after a later run's.
+        List<TimelineEntry> timeline = new ArrayList<>();
+        for (Run run : runs) {
+            for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
+                timeline.add(TimelineEntry.builder()
                         .role(t.getRole())
                         .content(t.getContent())
                         .timestamp(t.getCreatedAt())
                         .runId(t.getRunId().toString())
-                        .build())
-                .collect(Collectors.toCollection(ArrayList::new));
-
-        // A failed run that died before producing any trajectory would otherwise be
-        // invisible in the timeline; append one synthetic error entry per FAILED run.
-        for (Run run : runs) {
-            if (run.getStatus() != RunStatus.FAILED) {
-                continue;
+                        .build());
             }
-            timeline.add(TimelineEntry.builder()
-                    .role("assistant")
-                    .content("回合執行失敗：" + clipError(run.getErrorMessage()))
-                    .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
-                    .runId(run.getId().toString())
-                    .error(true)
-                    .retryPrompt(run.getPromptSeed())
-                    .build());
+            // A failed run that died before producing any trajectory would otherwise be
+            // invisible in the timeline; add one synthetic error entry per FAILED run.
+            if (run.getStatus() == RunStatus.FAILED) {
+                timeline.add(TimelineEntry.builder()
+                        .role("assistant")
+                        .content("回合執行失敗：" + clipError(run.getErrorMessage()))
+                        .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
+                        .runId(run.getId().toString())
+                        .error(true)
+                        .retryPrompt(run.getPromptSeed())
+                        .build());
+            }
         }
 
         return ResponseEntity.ok(timeline);

@@ -48,6 +48,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 
 /**
  * Run-owned Sandbox lifecycle (spec 4.1, 5.1): every sandbox operation is keyed
@@ -749,10 +751,20 @@ public class SandboxLifecycle implements AutoCloseable {
         private static final int MAX_SANDBOX_CREATE_ATTEMPTS = 3;
         /** Base backoff (ms) between sandbox creation retries; doubles each attempt (2s, then 4s). */
         private static final long SANDBOX_CREATE_BACKOFF_BASE_MS = 2000L;
-        /** Max attempts of one workspace upload against a transient execd connectivity failure. */
-        static final int MAX_UPLOAD_ATTEMPTS = 5;
-        /** Base backoff (ms) between upload attempts; doubles each attempt (0.5s, 1s, 2s, 4s). */
+        /**
+         * Default total window (ms) one workspace upload may spend absorbing transient
+         * execd connectivity failures. The Windows/WSL published-port relay can leave a
+         * fresh sandbox's published execd port unreachable for tens of seconds (observed
+         * 20s+ after a stack restart on 2026-10-01 and repeatedly on 2026-10-03), which
+         * the former five-attempt (~18s) budget did not survive; runs interleaved before
+         * and after failed this way. The failure after the window is unchanged: a loud
+         * SANDBOX_UNAVAILABLE naming the last observed cause.
+         */
+        static final long DEFAULT_UPLOAD_WINDOW_MS = 90_000L;
+        /** Base backoff (ms) between upload attempts; doubles until capped. */
         static final long UPLOAD_RETRY_BACKOFF_BASE_MS = 500L;
+        /** Cap (ms) on one upload backoff so a long relay warm-up gets steady retries, not exponentially sparse ones. */
+        static final long UPLOAD_RETRY_BACKOFF_CAP_MS = 5_000L;
         /** Export bounds: a runaway tree must fail the export, never exhaust the backend. */
         private static final int MAX_EXPORT_DEPTH = 12;
         private static final int MAX_EXPORT_FILES = 4096;
@@ -764,10 +776,30 @@ public class SandboxLifecycle implements AutoCloseable {
         private final String serverUrl;
         /** sandboxId → live sandbox instance. */
         private final Map<String, Sandbox> sandboxes = new ConcurrentHashMap<>();
+        /** Total window (ms) one upload may spend absorbing transient execd failures. */
+        private final long uploadWindowMs;
+        /** Monotonic clock of the upload window; the test seam replaces it. */
+        private final LongSupplier nanoClock;
+        /** Sleeper of one upload backoff; the test seam replaces it. */
+        private final LongConsumer uploadSleeper;
 
         public OpenSandboxSdk(String serverUrl, String apiKey) {
+            this(serverUrl, apiKey, DEFAULT_UPLOAD_WINDOW_MS);
+        }
+
+        /** Production constructor with the operator-configured window ({@code opencode.sandbox-upload-window-ms}). */
+        public OpenSandboxSdk(String serverUrl, String apiKey, long uploadWindowMs) {
+            this(serverUrl, apiKey, uploadWindowMs, System::nanoTime, OpenSandboxSdk::sleepQuietly);
+        }
+
+        /** Test seam: a deterministic clock and sleeper make the upload window independent of wall time. */
+        OpenSandboxSdk(String serverUrl, String apiKey, long uploadWindowMs,
+                LongSupplier nanoClock, LongConsumer uploadSleeper) {
             this.serverUrl = serverUrl != null && !serverUrl.isBlank() ? serverUrl : "http://localhost:8080";
             this.connectionConfig = buildConnectionConfig(serverUrl, apiKey);
+            this.uploadWindowMs = uploadWindowMs;
+            this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
+            this.uploadSleeper = Objects.requireNonNull(uploadSleeper, "uploadSleeper");
         }
 
         @Override
@@ -785,28 +817,27 @@ public class SandboxLifecycle implements AutoCloseable {
                 return;
             }
             Sandbox sandbox = requireSandbox(sandboxId);
-            Exception lastFailure = null;
-            for (int attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+            long deadline = nanoClock.getAsLong() + Duration.ofMillis(uploadWindowMs).toNanos();
+            long backoffMs = UPLOAD_RETRY_BACKOFF_BASE_MS;
+            for (int attempt = 1; ; attempt++) {
                 try {
                     sandbox.files().write(entries);
                     return;
                 } catch (Exception e) {
-                    lastFailure = e;
                     boolean transientError = isTransientUploadError(e);
-                    boolean lastAttempt = attempt == MAX_UPLOAD_ATTEMPTS;
-                    if (!transientError || lastAttempt) {
+                    // The window absorbs a warming-up published-port relay; a permanent
+                    // failure or one past the window fails immediately, as loudly as before.
+                    if (!transientError || nanoClock.getAsLong() >= deadline) {
                         throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                                 "Workspace upload failed for sandbox " + sandboxId + ": " + e.getMessage(), e);
                     }
-                    long backoffMs = UPLOAD_RETRY_BACKOFF_BASE_MS << (attempt - 1);
-                    log.warn("Workspace upload attempt {}/{} for sandbox {} failed with transient execd error '{}'; "
-                                    + "retrying in {}ms",
-                            attempt, MAX_UPLOAD_ATTEMPTS, sandboxId, e.getMessage(), backoffMs);
-                    sleepQuietly(backoffMs);
+                    log.warn("Workspace upload attempt {} for sandbox {} failed with transient execd error '{}'; "
+                                    + "retrying in {}ms within the {}ms upload window",
+                            attempt, sandboxId, e.getMessage(), backoffMs, uploadWindowMs);
+                    uploadSleeper.accept(backoffMs);
+                    backoffMs = Math.min(UPLOAD_RETRY_BACKOFF_CAP_MS, backoffMs * 2);
                 }
             }
-            throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
-                    "Workspace upload failed for sandbox " + sandboxId + ": " + lastFailure.getMessage(), lastFailure);
         }
 
         @Override

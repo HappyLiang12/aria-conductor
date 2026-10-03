@@ -78,10 +78,14 @@ public class SandboxExecutionBackend implements ExecutionBackend {
         this.images = Objects.requireNonNull(images, "images");
     }
 
-    /** Production wiring: the pinned OpenSandbox SDK with the given server URL and API key. */
-    public static SandboxExecutionBackend usingOpenSandbox(String serverUrl, String apiKey, SandboxImages images) {
+    /**
+     * Production wiring: the pinned OpenSandbox SDK with the given server URL, API key
+     * and workspace-upload window ({@code opencode.sandbox-upload-window-ms}).
+     */
+    public static SandboxExecutionBackend usingOpenSandbox(String serverUrl, String apiKey, long uploadWindowMs,
+            SandboxImages images) {
         return new SandboxExecutionBackend(
-                new SandboxLifecycle(new SandboxLifecycle.OpenSandboxSdk(serverUrl, apiKey)), images);
+                new SandboxLifecycle(new SandboxLifecycle.OpenSandboxSdk(serverUrl, apiKey, uploadWindowMs)), images);
     }
 
     @Override

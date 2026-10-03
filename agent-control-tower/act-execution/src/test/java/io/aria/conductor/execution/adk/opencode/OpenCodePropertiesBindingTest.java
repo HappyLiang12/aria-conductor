@@ -66,6 +66,23 @@ class OpenCodePropertiesBindingTest {
     }
 
     @Test
+    void envOpenCodeSandboxUploadWindowMs_bindsToSandboxUploadWindowMs() {
+        Map<String, Object> env = new HashMap<>();
+        env.put("OPENCODE_SANDBOX_UPLOAD_WINDOW_MS", "120000");
+
+        OpenCodeProperties props = bind(env);
+
+        assertThat(props.getSandboxUploadWindowMs()).isEqualTo(120000L);
+    }
+
+    @Test
+    void sandboxUploadWindowMs_defaultsTo90s() {
+        OpenCodeProperties props = bind(Map.of());
+
+        assertThat(props.getSandboxUploadWindowMs()).isEqualTo(90_000L);
+    }
+
+    @Test
     void envOpenSandboxServerUrl_doesNotBind_keepsDefault() {
         // Prefix mismatch: OPENSANDBOX_SERVER_URL belongs to opensandbox.*, not opencode.*
         Map<String, Object> env = new HashMap<>();

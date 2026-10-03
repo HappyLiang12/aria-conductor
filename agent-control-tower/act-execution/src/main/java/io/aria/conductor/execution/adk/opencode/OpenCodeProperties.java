@@ -26,6 +26,16 @@ public class OpenCodeProperties {
     /** Optional API key for the OpenSandbox server (env: OPENSANDBOX_API_KEY). */
     private String sandboxApiKey = "";
 
+    /**
+     * Total window (ms) one run-owned workspace upload may spend absorbing transient
+     * execd connectivity failures before the run fails loudly. The Windows/WSL
+     * published-port relay has left a fresh sandbox's published execd port
+     * unreachable for 20s+ (observed 2026-10-01 and repeatedly 2026-10-03 while
+     * interleaved runs succeeded immediately), which exhausted the former
+     * five-attempt (~18s) budget. Fresh installs should keep the 90s default.
+     */
+    private long sandboxUploadWindowMs = 90_000L;
+
     /** Template image with opencode pre-installed. */
     private String image = "aria-conductor/opencode-sandbox:1.0";
 

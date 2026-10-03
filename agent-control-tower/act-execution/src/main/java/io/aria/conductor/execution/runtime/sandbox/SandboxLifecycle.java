@@ -1195,16 +1195,39 @@ public class SandboxLifecycle implements AutoCloseable {
 
         /**
          * True when the failure looks like a transient sandbox start / port-bind
-         * error (e.g. {@code DOCKER::SANDBOX_START_FAILED} or an excluded port range).
+         * error ({@code DOCKER::SANDBOX_START_FAILED} or an excluded port range),
+         * or an OpenSandbox server-side fault that clears on a fresh placement:
+         * a 5xx carrying a {@code DOCKER::*} code (observed live:
+         * {@code DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED} — the server's own
+         * execd distribution lost its docker subprocess on a broken pipe while
+         * creating {@code /opt/opensandbox} in the new sandbox) and that same
+         * broken-pipe / lost-subprocess wording when it arrives without the code
+         * prefix. A 4xx — the server refusing the request itself, surfaced as
+         * {@code Client error : <status> ...} — is permanent (a bad image, an
+         * invalid request) and keeps failing fast. Package-private as the
+         * deterministic seam for the classification tests.
          */
-        private static boolean isTransientStartError(Exception e) {
+        static boolean isTransientStartError(Exception e) {
             if (e == null || e.getMessage() == null) {
                 return false;
             }
             String message = e.getMessage().toLowerCase(Locale.ROOT);
+            // The 4xx wrapper wins over every keyword below: a request the server
+            // refused never turns retryable, whatever wording its body carries.
+            if (message.contains("client error :")) {
+                return false;
+            }
             return message.contains("sandbox_start_failed")
                     || message.contains("excluded port")
-                    || message.contains("port");
+                    || message.contains("port")
+                    // OpenSandbox answers a server-side placement fault with a 5xx
+                    // ("Server error : 500 ...") whose body carries the DOCKER::*
+                    // code; the next attempt gets a fresh server-side placement.
+                    || (message.contains("docker::") && message.contains("server error"))
+                    || message.contains("sandbox_execd_distribution_failed")
+                    // The same server-side fault's wording, without the code prefix.
+                    || message.contains("broken pipe")
+                    || message.contains("passing bulk input to subprocess");
         }
 
         /**

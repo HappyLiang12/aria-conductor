@@ -73,27 +73,33 @@ FAILED run's trajectory entries, one synthetic `TimelineEntry`:
   keep it and get the entry appended (partial outputs are not hidden).
 
 **A2. LLM context note (backend, act-aria).**
-`AriaService.loadConversationHistory`: FAILED runs are no longer dropped wholesale. Instead each
-contributes two entries: the user seed (as a user message, so context is not broken) and one
-synthetic assistant line from a fixed template, e.g.
+`AriaService.loadConversationHistory`: stop excluding FAILED runs; their recorded trajectories
+(the user seed and any partial assistant content) stay in context, and each FAILED run
+contributes one appended synthetic assistant line from a fixed template, e.g.
 `（系統註記：上一回合因「<clip(errorMessage, 200)>」失敗，未產生回覆。）`.
 The fixed template keeps the note injection-safe; length caps bound the pollution the original
 filter feared. Non-FAILED handling unchanged.
 
-**A3. Panel warning state machine (frontend, AriaPanel.tsx).**
-Derive the panel state from the conversation timeline + the latest entry's run status
-(the failed entry carries `runId`; `GET /runs/{id}` gives status):
+**A3. Panel warning state machine (frontend, AriaPanel.tsx; planning review 2026-10-03).**
+The panel already renders `error:true` bubbles and offers Retry (`reportRunUncertain` /
+`handleRetry`); the defects are (i) the copy keys off pending asks even when the turn itself
+failed, and (ii) Retry is suppressed (`noRetry`) in that case. Fix: when the failure detail
+identifies a failed turn, prefer the actual reason and allow retry; only fall back to the
+pending-ask copy when the failure is NOT a turn failure:
 
-1. Latest entry is the synthetic failure → "上一回合失敗（原因摘要）" + 「重試」button
-   (sends `retryPrompt` through the normal chat path, same conversation).
-2. Pending asks exist → existing approval copy.
+1. Failure detail is a turn failure (from A4) **or** the latest timeline entry is the synthetic
+   failure (A1) → "上一回合失敗：<reason 摘要>" + Retry (resends the failed turn's promptSeed).
+2. Pending asks exist (and no turn failure) → existing approval copy.
 3. Latest entry is a user message whose run is RUNNING/PENDING → "正在處理" copy.
 4. Else → no warning.
+Timeline-sourced failure bubbles carry `retryPrompt` (A1); stream-sourced bubbles carry the
+reason from A4. `handleRetry` prefers the bubble's own `retryText` over the last sent message.
 
-**A4. Streaming failure event (backend, act-aria).**
-`AriaStreamService` emits a terminal SSE `error` event carrying the clipped `errorMessage` when
-the turn's run ends FAILED, so the live chat shows the failure without a reload (the plan pins the
-exact emission point; the A1 timeline entry appears on any reload regardless).
+**A4. Streaming failure event (backend, act-aria; planning review 2026-10-03).**
+The error SSE event already exists (`AriaStreamService.sendErrorSilent` emits name `error` with
+`{"message": ...}` and completes). The change is additive: the payload for a failed turn also
+carries `runId` and a `turnFailed: true` flag + the clipped run `errorMessage`, so the panel can
+branch as in A3 without extra lookups (the plan pins the exact payload shape).
 
 **Acceptance (A):** unit/IT — timeline entry appended for a failed pre-iteration run and absent
 for completed runs; context assembly contains the seed + one-line note (bounded length);
@@ -105,10 +111,17 @@ Aria references it on retry.
 **B1. Linkage (schema + stamping).**
 - Flyway `V65__run_dispatch_group.sql`: `ALTER TABLE runs ADD COLUMN dispatched_by_run_id UUID
   NULL` + index `idx_runs_dispatched_by`.
-- `Run` entity field; `RunToolHandler` stamps BOTH `conversationId` (existing field, indexed) and
-  `dispatched_by_run_id = <the dispatching Aria turn's runId>` on every child run it creates.
-  Every dispatch — including a re-dispatch — forms its own group keyed by that turn's runId.
-- Exact seam for reading the current turn's run inside the tool handler is pinned in the plan.
+- `Run` entity field; `RunToolHandler` stamps `dispatched_by_run_id = <the dispatching Aria
+  turn's runId>` on every child run it creates (the handler sees it via the engine-injected
+  `_runContext`). Every dispatch — including a re-dispatch — forms its own group keyed by that
+  turn's runId.
+- **Children MUST NOT be stamped with `conversationId`** (planning review 2026-10-03): the
+  conversation timeline and the LLM context both select runs by `conversationId`, so stamping it
+  on children would merge the researchers' whole transcripts into the Aria chat and its context.
+  The conversation is resolved through the PARENT run (`dispatchedByRunId` → parent →
+  `parent.conversationId`), which already carries it.
+- Exact seam: `ToolExecutionEngine` injects `_runId` / `_runContext` into tool arguments
+  (precedent: `GitPackHandler` reads `_runId`); the plan pins it.
 
 **B2. Group watcher (backend, act-aria).**
 Listener on `RunCompletedEvent` (AFTER_COMMIT, fallbackExecution): if the completed run has a
@@ -125,9 +138,10 @@ Type `run.batch.completed`; title `子任務批次完成（N 個：成功 X／�
   returns the composed prompt (server-side template: list children with statuses, instruct Aria
   to read the reports it needs via its run tools and deliver the synthesis + next step). It does
   NOT run the turn itself.
-- Frontend: the notification drawer renders a 「彙整」button for this type; it calls the endpoint
-  and posts the returned prompt through the normal chat path in that conversation (stream or sync
-  per existing chat UI).
+- Frontend: the notification drawer renders a 「彙整」button for this type (`NotificationBell`
+  row, gated on the notification type); it calls the endpoint and hands the prompt to the Aria
+  panel through a small `window` CustomEvent (`aria:compose`) that the panel listens for, opens,
+  and sends through its normal `streamMessage` path.
 
 **Acceptance (B):** IT — a dispatch of N children stamps the group; last completion creates one
 notification; duplicate completions do not double-notify; synthesize composes a prompt listing

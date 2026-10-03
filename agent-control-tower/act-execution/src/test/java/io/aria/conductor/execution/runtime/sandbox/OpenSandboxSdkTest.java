@@ -420,4 +420,30 @@ class OpenSandboxSdkTest {
         assertThat(SandboxLifecycle.OpenSandboxSdk.protocolOf(null)).isEqualTo("http");
         assertThat(SandboxLifecycle.OpenSandboxSdk.protocolOf("")).isEqualTo("http");
     }
+
+    @Test
+    void relayNeverEstablished_matchesTheConnectRefusedRelayPattern() {
+        Exception attempt = new RuntimeException(
+                "Network connectivity error: Failed to connect to localhost/127.0.0.1:59217");
+        TaskExecutionException exhaustion = new TaskExecutionException(
+                TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox abc: " + attempt.getMessage(), attempt);
+        assertThat(SandboxLifecycle.isRelayNeverEstablished(exhaustion)).isTrue();
+    }
+
+    @Test
+    void relayNeverEstablished_rejectsTheDistributionFaultAndPlainTimeouts() {
+        TaskExecutionException distribution = new TaskExecutionException(
+                TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox abc: Server error : 500 Internal Server Error "
+                        + "{\"code\":\"DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED\"}",
+                new RuntimeException("broken pipe"));
+        assertThat(SandboxLifecycle.isRelayNeverEstablished(distribution)).isFalse();
+
+        TaskExecutionException eof = new TaskExecutionException(
+                TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "Workspace upload failed for sandbox abc: unexpected end of stream",
+                new RuntimeException("unexpected end of stream"));
+        assertThat(SandboxLifecycle.isRelayNeverEstablished(eof)).isFalse();
+    }
 }

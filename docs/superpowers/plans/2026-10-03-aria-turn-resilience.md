@@ -453,7 +453,10 @@ git commit -m "feat(runs): dispatched_by_run_id column and finder (V65)"
 - Modify: `agent-control-tower/act-agent/src/main/java/io/aria/conductor/agent/dto/CreateRunRequest.java` (add `UUID dispatchedByRunId`)
 - Modify: `agent-control-tower/act-agent/src/main/java/io/aria/conductor/agent/service/RunService.java` (`createRun` builder, L89-94 — set it when present)
 - Modify: `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/tools/handlers/RunToolHandler.java` (`startRun`, L57-71)
+- Modify: `agent-control-tower/act-mcp/src/main/java/io/aria/conductor/mcp/tools/RunTools.java` (SANDBOX `run_agent` surface — stamps `dispatchedByRunId` from the transport actor's runId)
 - Test: `agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/tools/handlers/RunToolHandlerDispatchStampTest.java`
+
+> T12 drill finding (live): the SANDBOX/opencode surface dispatches through the MCP `run_agent` tool (`RunTools`, `runService.createRun`), not `RunToolHandler` — it stamps `dispatchedByRunId` from the transport actor's runId (the sandbox core's run-scoped worker credential); an operator actor (`runId == null`) leaves it unset (T12 fix commit: `RunToolsTest` pins both, plus the no-actor fallback).
 
 **Interfaces:**
 - Consumes: `_runContext` injected by `ToolExecutionEngine` into tool arguments (precedent: `GitPackHandler` reads `_runId`); `RunContext.getRunId()`.

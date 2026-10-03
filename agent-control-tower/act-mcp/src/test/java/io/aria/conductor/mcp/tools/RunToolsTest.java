@@ -8,28 +8,39 @@ import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.mcp.McpActorContext;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.mcp.McpToolUtils;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class RunToolsTest {
+
+    /** The dispatching turn the worker (sandbox core) credential is scoped to. */
+    private static final UUID DISPATCHING_RUN = UUID.fromString("00000000-0000-0000-0000-000000000801");
 
     @Mock RunService runService;
     @Mock ApprovalRepository approvalRepository;
@@ -42,13 +53,19 @@ class RunToolsTest {
         tools = new RunTools(runService, approvalRepository, mcpProperties);
     }
 
+    private ToolContext context(ActorPrincipal actor) {
+        McpSyncServerExchange exchange = mock(McpSyncServerExchange.class);
+        when(exchange.transportContext()).thenReturn(McpActorContext.transportContext(actor));
+        return new ToolContext(Map.of(McpToolUtils.TOOL_CONTEXT_MCP_EXCHANGE_KEY, exchange));
+    }
+
     @Test
     void runAgent_delegatesAndWraps() {
         UUID agentId = UUID.randomUUID();
         when(runService.createRun(any())).thenReturn(RunResponse.builder()
                 .id(UUID.randomUUID()).agentId(agentId).status(RunStatus.PENDING).build());
 
-        String json = tools.runAgent(agentId, "fix the login bug", null);
+        String json = tools.runAgent(agentId, "fix the login bug", null, context(ActorPrincipal.operator(null)));
 
         assertThat(json).contains("\"ok\":true").contains("PENDING");
         ArgumentCaptor<CreateRunRequest> captor = ArgumentCaptor.forClass(CreateRunRequest.class);
@@ -63,11 +80,59 @@ class RunToolsTest {
         when(runService.createRun(any())).thenReturn(RunResponse.builder()
                 .id(UUID.randomUUID()).status(RunStatus.PENDING).build());
 
-        tools.runAgent(UUID.randomUUID(), "prompt", 7);
+        tools.runAgent(UUID.randomUUID(), "prompt", 7, context(ActorPrincipal.operator(null)));
 
         ArgumentCaptor<CreateRunRequest> captor = ArgumentCaptor.forClass(CreateRunRequest.class);
         verify(runService).createRun(captor.capture());
         assertThat(captor.getValue().getMaxIterations()).isEqualTo(7);
+    }
+
+    // ------------------------------------------------------------------
+    // dispatch-group stamping from the transport actor (T12 live-drill fix):
+    // the SANDBOX surface is the run-scoped worker credential, so its runId is
+    // the dispatching turn the batch-completion listener groups children by.
+    // ------------------------------------------------------------------
+
+    @Test
+    void runAgent_workerActor_stampsTheDispatchGroupFromTheTransportActor() {
+        UUID agentId = UUID.randomUUID();
+        when(runService.createRun(any())).thenReturn(RunResponse.builder()
+                .id(UUID.randomUUID()).agentId(agentId).status(RunStatus.PENDING).build());
+        ActorPrincipal worker = ActorPrincipal.worker(DISPATCHING_RUN, Instant.parse("2026-09-22T12:10:00Z"));
+
+        String json = tools.runAgent(agentId, "research X", null, context(worker));
+
+        assertThat(json).contains("\"ok\":true");
+        ArgumentCaptor<CreateRunRequest> captor = ArgumentCaptor.forClass(CreateRunRequest.class);
+        verify(runService).createRun(captor.capture());
+        assertThat(captor.getValue().getDispatchedByRunId()).isEqualTo(DISPATCHING_RUN);
+    }
+
+    @Test
+    void runAgent_operatorActor_leavesTheDispatchGroupUnstamped() {
+        UUID agentId = UUID.randomUUID();
+        when(runService.createRun(any())).thenReturn(RunResponse.builder()
+                .id(UUID.randomUUID()).agentId(agentId).status(RunStatus.PENDING).build());
+
+        tools.runAgent(agentId, "prompt", null, context(ActorPrincipal.operator(null)));
+
+        ArgumentCaptor<CreateRunRequest> captor = ArgumentCaptor.forClass(CreateRunRequest.class);
+        verify(runService).createRun(captor.capture());
+        assertThat(captor.getValue().getDispatchedByRunId()).isNull();
+    }
+
+    @Test
+    void runAgent_withoutTransportActor_stillCreatesTheRunWithoutAStamp() {
+        UUID agentId = UUID.randomUUID();
+        when(runService.createRun(any())).thenReturn(RunResponse.builder()
+                .id(UUID.randomUUID()).agentId(agentId).status(RunStatus.PENDING).build());
+
+        String json = tools.runAgent(agentId, "prompt", null, new ToolContext(Map.of()));
+
+        assertThat(json).contains("\"ok\":true");
+        ArgumentCaptor<CreateRunRequest> captor = ArgumentCaptor.forClass(CreateRunRequest.class);
+        verify(runService).createRun(captor.capture());
+        assertThat(captor.getValue().getDispatchedByRunId()).isNull();
     }
 
     @Test
@@ -75,7 +140,7 @@ class RunToolsTest {
         UUID agentId = UUID.randomUUID();
         when(runService.createRun(any())).thenThrow(new ResourceNotFoundException("Agent", agentId));
 
-        String json = tools.runAgent(agentId, "prompt", null);
+        String json = tools.runAgent(agentId, "prompt", null, context(ActorPrincipal.operator(null)));
 
         assertThat(json).contains("\"errorType\":\"NOT_FOUND\"");
         assertThat(json).doesNotContain("stackTrace");
@@ -88,7 +153,7 @@ class RunToolsTest {
         mcpProperties.setDebug(true);
         when(runService.createRun(any())).thenThrow(new IllegalArgumentException("Cannot create run for retired agent"));
 
-        String json = tools.runAgent(UUID.randomUUID(), "prompt", null);
+        String json = tools.runAgent(UUID.randomUUID(), "prompt", null, context(ActorPrincipal.operator(null)));
 
         assertThat(json).contains("\"errorType\":\"VALIDATION\"");
         assertThat(json).doesNotContain("stackTrace");

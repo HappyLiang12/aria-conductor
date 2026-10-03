@@ -10,7 +10,10 @@ import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.mcp.McpProperties;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.mcp.McpActorContext;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -25,6 +28,7 @@ import java.util.UUID;
  * GlobalExceptionHandler's REST status mapping (409 CONFLICT for
  * InvalidStateTransitionException/IllegalStateException).
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class RunTools implements McpTool {
@@ -42,13 +46,18 @@ public class RunTools implements McpTool {
             @ToolParam(description = "Agent id") UUID agentId,
             @ToolParam(description = "Prompt seed: the agent's initial instruction") String prompt,
             @ToolParam(description = "Maximum reasoning iterations; omit for the service default", required = false)
-            Integer maxIterations) {
+            Integer maxIterations,
+            ToolContext toolContext) {
         try {
             CreateRunRequest.CreateRunRequestBuilder builder = CreateRunRequest.builder()
                     .agentId(agentId)
                     .promptSeed(prompt);
             if (maxIterations != null) {
                 builder.maxIterations(maxIterations);
+            }
+            UUID dispatchingRunId = dispatchingRunId(toolContext);
+            if (dispatchingRunId != null) {
+                builder.dispatchedByRunId(dispatchingRunId);
             }
             return ToolResponses.ok(runService.createRun(builder.build()));
         } catch (ResourceNotFoundException e) {
@@ -59,6 +68,26 @@ public class RunTools implements McpTool {
             return ToolResponses.error("CONFLICT", e.getMessage(), e, mcpProperties.isDebug());
         } catch (Exception e) {
             return ToolResponses.error("RUN_CREATE_FAILED", e.getMessage(), e, mcpProperties.isDebug());
+        }
+    }
+
+    /**
+     * The dispatch group of a child run: the run-scoped worker credential's runId
+     * carried by the transport (the sandbox core's per-run token), i.e. the
+     * dispatching turn the batch-completion listener groups children by. Null for
+     * operator actors and for MCP clients without a transport actor. Never a
+     * conversationId — dispatched children must not enter the conversation
+     * timeline/context. Resolution is best-effort: run creation is the tool's
+     * primary function, so a missing transport actor logs a warn and proceeds
+     * without the stamp instead of failing the call.
+     */
+    private static UUID dispatchingRunId(ToolContext toolContext) {
+        try {
+            return McpActorContext.require(toolContext).runId();
+        } catch (SecurityException e) {
+            log.warn("run_agent could not resolve the transport actor; creating the run "
+                    + "without a dispatch stamp: {}", e.getMessage());
+            return null;
         }
     }
 

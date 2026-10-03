@@ -115,6 +115,10 @@ Aria references it on retry.
   turn's runId>` on every child run it creates (the handler sees it via the engine-injected
   `_runContext`). Every dispatch — including a re-dispatch — forms its own group keyed by that
   turn's runId.
+- Both dispatch surfaces stamp: the host/engine-pipeline tool (`RunToolHandler`, via the
+  engine-injected `_runContext`) and the SANDBOX/opencode MCP `run_agent` tool (`RunTools`,
+  from the transport actor's runId — the sandbox core's run-scoped worker credential; T12
+  drill finding, fixed on `feat/aria-turn-resilience`).
 - **Children MUST NOT be stamped with `conversationId`** (planning review 2026-10-03): the
   conversation timeline and the LLM context both select runs by `conversationId`, so stamping it
   on children would merge the researchers' whole transcripts into the Aria chat and its context.

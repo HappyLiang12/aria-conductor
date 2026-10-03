@@ -1210,7 +1210,7 @@ public class SandboxLifecycle implements AutoCloseable {
 
         private static ConnectionConfig buildConnectionConfig(String serverUrl, String apiKey) {
             ConnectionConfig.Builder builder = ConnectionConfig.builder()
-                    .protocol("http")
+                    .protocol(protocolOf(serverUrl))
                     .domain(loopbackDomainOf(serverUrl));
             // The SDK rejects blank keys ("API key cannot be blank"); a null key falls back
             // to the OPEN_SANDBOX_API_KEY env var, which matches the "optional key" contract.
@@ -1220,6 +1220,14 @@ public class SandboxLifecycle implements AutoCloseable {
             // Direct execd endpoints ({@code <host_ip>:{mapped}/proxy/<port>}) are the only
             // reliable path when sandboxes run on the default bridge; keep useServerProxy off.
             return builder.build();
+        }
+
+        /**
+         * The configured scheme is preserved (https on TLS-fronted server deployments).
+         */
+        static String protocolOf(String serverUrl) {
+            String scheme = sandboxServerUri(serverUrl).getScheme();
+            return scheme != null ? scheme : "http";
         }
 
         /**
@@ -1233,14 +1241,20 @@ public class SandboxLifecycle implements AutoCloseable {
          * 127.0.0.1.
          */
         static String loopbackDomainOf(String serverUrl) {
-            URI uri = URI.create(serverUrl != null && !serverUrl.isBlank() ? serverUrl : "http://localhost:8080");
+            URI uri = sandboxServerUri(serverUrl);
             String authority = uri.getAuthority() != null ? uri.getAuthority() : uri.getHost();
             return ipv4Loopback(authority);
         }
 
+        private static URI sandboxServerUri(String serverUrl) {
+            return URI.create(serverUrl != null && !serverUrl.isBlank() ? serverUrl : "http://localhost:8080");
+        }
+
         /**
          * Rewrites a leading loopback name of a host[:port][/path] address to the
-         * IPv4 literal; every other address is returned unchanged.
+         * IPv4 literal; every other address is returned unchanged. The loopback
+         * name must be the whole host, so name-sharing hosts such as
+         * "localhost.localdomain" are left alone.
          */
         static String ipv4Loopback(String address) {
             if (address == null) {
@@ -1253,19 +1267,36 @@ public class SandboxLifecycle implements AutoCloseable {
                 scheme = address.substring(0, schemeIndex + 3);
                 rest = address.substring(schemeIndex + 3);
             }
-            if (rest.regionMatches(true, 0, "localhost", 0, "localhost".length())) {
+            if (matchesWholeHost(rest, "localhost")) {
                 return scheme + "127.0.0.1" + rest.substring("localhost".length());
             }
-            if (rest.startsWith("[::1]")) {
+            if (matchesWholeHost(rest, "[::1]")) {
                 return scheme + "127.0.0.1" + rest.substring("[::1]".length());
             }
-            if (rest.startsWith("::1")) {
+            if (matchesWholeHost(rest, "[0:0:0:0:0:0:0:1]")) {
+                return scheme + "127.0.0.1" + rest.substring("[0:0:0:0:0:0:0:1]".length());
+            }
+            if (matchesWholeHost(rest, "::1")) {
                 return scheme + "127.0.0.1" + rest.substring("::1".length());
             }
-            if (rest.startsWith("0:0:0:0:0:0:0:1")) {
+            if (matchesWholeHost(rest, "0:0:0:0:0:0:0:1")) {
                 return scheme + "127.0.0.1" + rest.substring("0:0:0:0:0:0:0:1".length());
             }
             return address;
+        }
+
+        /**
+         * True when the address starts with the host literal followed by ':',
+         * '/' or the end of the address.
+         */
+        private static boolean matchesWholeHost(String address, String hostLiteral) {
+            int length = hostLiteral.length();
+            if (!address.regionMatches(true, 0, hostLiteral, 0, length)) {
+                return false;
+            }
+            return address.length() == length
+                    || address.charAt(length) == ':'
+                    || address.charAt(length) == '/';
         }
     }
 }

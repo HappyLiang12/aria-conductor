@@ -320,26 +320,53 @@ public class AriaService {
         try {
             List<Run> priorRuns = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
             if (priorRuns.isEmpty()) return List.of();
-            // Exclude FAILED runs to prevent error-loop pollution of context
-            List<UUID> priorRunIds = priorRuns.stream()
-                    .filter(r -> r.getStatus() != RunStatus.FAILED)
-                    .map(Run::getId).toList();
-            if (priorRunIds.isEmpty()) return List.of();
+            List<UUID> priorRunIds = priorRuns.stream().map(Run::getId).toList();
             List<SessionTrajectory> trajectories = trajectoryRepository
                     .findByRunIdInOrderByTurnNumberAsc(priorRunIds);
-            List<LlmMessage> history = trajectories.stream()
-                    .filter(t -> "user".equals(t.getRole()) || "assistant".equals(t.getRole()))
-                    .filter(t -> t.getContent() != null && !t.getContent().isBlank())
-                    .map(t -> "user".equals(t.getRole())
+            // The repository returns trajectories globally ordered by turnNumber; grouping
+            // preserves that within-run order for each run.
+            Map<UUID, List<SessionTrajectory>> trajectoriesByRun = trajectories.stream()
+                    .collect(Collectors.groupingBy(SessionTrajectory::getRunId));
+            // Assemble per run, in runs order (createdAt asc): a FAILED run's trajectories stay
+            // in context (so Aria knows what was asked) and its synthetic note lands directly
+            // after them, never after a later run's messages.
+            List<LlmMessage> history = new ArrayList<>();
+            for (Run run : priorRuns) {
+                for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
+                    if (!"user".equals(t.getRole()) && !"assistant".equals(t.getRole())) continue;
+                    if (t.getContent() == null || t.getContent().isBlank()) continue;
+                    history.add("user".equals(t.getRole())
                             ? LlmMessage.user(t.getContent())
-                            : LlmMessage.assistant(t.getContent()))
-                    .toList();
+                            : LlmMessage.assistant(t.getContent()));
+                }
+                if (run.getStatus() == RunStatus.FAILED) {
+                    history.add(LlmMessage.assistant(failedTurnNote(run.getErrorMessage())));
+                }
+            }
             // Keep the MOST RECENT turns, not the oldest, while preserving chronological order (#36).
             return keepMostRecent(history, 40); // ~20 user+assistant turns
         } catch (Exception e) {
             log.warn("Failed to load conversation history: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    /** Max characters of a failed run's error message carried into the context note. */
+    private static final int MAX_ERROR_NOTE_CHARS = 200;
+
+    /**
+     * ONE synthetic assistant message telling the next turn the previous one failed.
+     * A null/blank error message falls back to a generic note; long messages are clipped
+     * so a runaway error never floods the context.
+     */
+    private static String failedTurnNote(String errorMessage) {
+        if (errorMessage == null || errorMessage.isBlank()) {
+            return "（系統註記：上一回合失敗，未產生回覆。）";
+        }
+        String clipped = errorMessage.length() > MAX_ERROR_NOTE_CHARS
+                ? errorMessage.substring(0, MAX_ERROR_NOTE_CHARS)
+                : errorMessage;
+        return "（系統註記：上一回合因「" + clipped + "」失敗，未產生回覆。）";
     }
 
     /**

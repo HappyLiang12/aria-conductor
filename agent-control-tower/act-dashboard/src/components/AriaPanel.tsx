@@ -6,6 +6,7 @@ import { isOperatorRejection } from '../api/operatorSession';
 import { cancelRun } from '../api/runs';
 import type { AriaMessage } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
+import type { TimelineEntry } from '../api/ariaConversations';
 import { formatTimestamp } from '../utils/formatTime';
 import { useSlashCommands } from '../hooks/useSlashCommands';
 import SlashCommandMenu from './SlashCommandMenu';
@@ -50,6 +51,41 @@ function turnFailureReason(errorDetail?: StreamError): string | null {
     return null;
   }
   return errorDetail.reason || errorDetail.message || 'unknown error';
+}
+
+/** Prefix the backend's synthetic failed-turn timeline entry (A1) carries. */
+const FAILED_TURN_CONTENT_PREFIX = '回合執行失敗：';
+
+/**
+ * A failed turn's synthetic timeline entry is appended the moment the run turns
+ * FAILED, which can trail the engine's own error event by a moment — one short
+ * re-check covers that race (never more; the approvals copy is the fallback).
+ */
+const FAILED_TURN_RECHECK_WAIT_MS = 1500;
+
+/**
+ * Panel-side reconcile for a legacy stream error, whose payload carries no
+ * failed-turn detail (A4 enrichment covers only the stream service's catch; the
+ * engine's own `{"message": ...}` events stay plain). The failed turn still
+ * leaves its synthetic entry in the conversation timeline, so re-read it: when
+ * the last entry is that failure the panel reports the real reason instead of
+ * the misleading approvals copy. Returns null when the timeline is unreadable
+ * or the failure entry has not landed — after ONE bounded re-check.
+ */
+async function readFailedTurnEntry(conversationId: string): Promise<TimelineEntry | null> {
+  const readLastEntry = async (): Promise<TimelineEntry | null> => {
+    try {
+      const timeline = await getConversationTimeline(conversationId);
+      const last = timeline[timeline.length - 1];
+      return last?.error === true ? last : null;
+    } catch {
+      return null; // unreadable timeline = no evidence: keep the approvals copy
+    }
+  };
+  const first = await readLastEntry();
+  if (first) return first;
+  await new Promise((resolve) => setTimeout(resolve, FAILED_TURN_RECHECK_WAIT_MS));
+  return readLastEntry();
 }
 
 function loadOpenState(): boolean {
@@ -261,12 +297,15 @@ export function AriaPanel() {
    * after the client gave up or the stream died before `done`. A turn the backend
    * marked FAILED is the known case: its enriched error payload (A4) pinpoints
    * the failure, so the panel reports that actual reason and re-offers Retry
-   * (the run is provably dead). For a run whose state is unknown the panel asks
-   * the review queue once and reports what it actually knows: a pending-ask
-   * count, "no approval pending", or — when the operator-only queue refuses the
-   * read (401/403) or the probe fails — that it could not verify. In that unknown
-   * case never a retry prompt: resending would pile a second prompt onto a
-   * possibly live run.
+   * (the run is provably dead). A legacy stream error (no enrichment) is first
+   * reconciled against the conversation timeline: the failed turn's synthetic
+   * entry (A1) carries the same truth, so it too resolves to the failed-turn
+   * bubble whenever it is present. Only for a run whose state stays unknown —
+   * and always for a timeout — the panel asks the review queue once and reports
+   * what it actually knows: a pending-ask count, "no approval pending", or —
+   * when the operator-only queue refuses the read (401/403) or the probe fails —
+   * that it could not verify. In that unknown case never a retry prompt:
+   * resending would pile a second prompt onto a possibly live run.
    */
   const reportRunUncertain = useCallback(
     async (eventConversationId: string, origin: 'timeout' | 'stream-error', errorDetail?: StreamError) => {
@@ -287,6 +326,34 @@ export function AriaPanel() {
           },
         ]);
         return;
+      }
+
+      // Legacy path (no enriched turnFailed payload — e.g. the engine's own
+      // error events): the timeline's failed-turn entry is the truthful source,
+      // so consult it before falling back to the approvals copy. A timeout is
+      // deliberately excluded — it never proves the run died, so it keeps
+      // today's copy without this read.
+      if (origin === 'stream-error') {
+        const failedEntry = await readFailedTurnEntry(eventConversationId);
+        if (failedEntry) {
+          const reason = failedEntry.content.startsWith(FAILED_TURN_CONTENT_PREFIX)
+            ? failedEntry.content.slice(FAILED_TURN_CONTENT_PREFIX.length)
+            : failedEntry.content;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: `⚠ 上一回合失敗：${reason}`,
+              timestamp: new Date().toISOString(),
+              error: true,
+              // The failed turn is provably dead — Retry resends its own prompt.
+              noRetry: false,
+              retryText: failedEntry.retryPrompt,
+            },
+          ]);
+          return;
+        }
       }
 
       let pendingCount: number | null = null; // null until the queue actually answers
@@ -432,6 +499,12 @@ export function AriaPanel() {
     const handler = (e: Event) => {
       const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
       if (typeof prompt === 'string' && prompt.trim()) {
+        // The 彙整 button lives outside the panel: make the panel visible before
+        // the turn runs, otherwise the composed prompt streams with no feedback.
+        setOpen(true);
+        // Residual (accepted, no queue): while a turn is already in flight
+        // sendStreamed drops the composed prompt — the now-visible panel shows
+        // the busy state instead of the click doing nothing on a closed one.
         sendStreamed(prompt);
       }
     };

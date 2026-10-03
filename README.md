@@ -231,7 +231,7 @@ mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2
 mvn spring-boot:run -pl act-app -Dspring-boot.run.profiles=h2 -Dspring-boot.run.arguments=--adk.default-provider=qoder
 
 # Set OpenSandbox URL for local dev:
-# OPENCODE_SANDBOX_SERVER_URL=http://localhost:8090
+# OPENCODE_SANDBOX_SERVER_URL=http://127.0.0.1:8090
 ```
 
 Backend starts at `http://localhost:8080`
@@ -259,7 +259,7 @@ docker compose up -d opensandbox-server
 # podman compose up -d opensandbox-server
 ```
 
-OpenSandbox server starts at `http://localhost:8090`. The opencode sandbox image must be built first:
+OpenSandbox server starts at `http://127.0.0.1:8090`. The opencode sandbox image must be built first:
 
 ```bash
 docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode-sandbox
@@ -291,7 +291,7 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `LLM_API_KEY` | — | Your LLM provider API key |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM API base URL |
 | `LLM_MODEL` | `gpt-4o` | Default LLM model |
-| `OPENCODE_SANDBOX_SERVER_URL` | `http://localhost:8090` | OpenSandbox server URL |
+| `OPENCODE_SANDBOX_SERVER_URL` | `http://127.0.0.1:8090` | OpenSandbox server URL |
 | `OPENSANDBOX_API_KEY` | — | OpenSandbox API key (empty = insecure mode) |
 | `DEEPSEEK_API_KEY` | — | Injected into sandbox for opencode agents |
 | `ARIA_OPERATOR_BEARER_TOKEN` | — | Single-operator credential for operator-only surfaces (approval decisions, per-agent core/mode, the Qoder runtime credential). Paste the same value into the dashboard's "Operator access" panel; with it unset every operator route answers 401 |

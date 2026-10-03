@@ -135,6 +135,7 @@ class OpenCodeLaunchProfileTest {
 
         assertThat(Files.readString(OpenCodeCoreAdapter.governedConfigurationFile(fixture.environment())))
                 .isEqualTo(SHIPPED_GOVERNED_CONFIGURATION);
+        // Golden copy held in this test (no separate shipped file): production output must match it byte for byte.
         assertThat(OpenCodeCoreAdapter.governedConfigurationJson())
                 .as("the production no-wiring document is the shipped one, byte for byte")
                 .isEqualTo(SHIPPED_GOVERNED_CONFIGURATION);

@@ -90,6 +90,11 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * Conductor tools are not available in this session" while the endpoint was
      * connected).
      *
+     * <p>This blanket allowance stays (operator decision 2026-10-03): the
+     * reviewed core's HTTP surface has no permission reply channel, so the
+     * alternative is hiding the tools entirely, not a per-call ask. It only
+     * matters for a platform-MCP-wired run; unwired runs have no such tools.
+     *
      * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
      * the remaining slots carry the provider id, the model, the provider id
      * again, the base URL and the model again.

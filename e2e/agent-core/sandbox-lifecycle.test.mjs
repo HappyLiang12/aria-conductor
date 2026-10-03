@@ -11,6 +11,8 @@
 //   * pause (verified SIGSTOP of the writer tree, and no later writes);
 //   * renewal (the automatic TTL renewal really calls the server and stops for teardown);
 //   * background writer termination (a descendant writer that outlives the prompt is gone);
+//   * self-exit (a core that exits on its own after its completed turn is still verified
+//     stopped, and the completed turn survives as a stable export);
 //   * stable export THEN kill (export twice gives identical bytes; only then destroy);
 //   * unrelated sandbox preservation (destroying one run never touches another).
 //
@@ -41,6 +43,7 @@ const HARNESS_CLASS = 'io.aria.conductor.execution.runtime.sandbox.SandboxLifecy
 const PEER_TOKEN = 'aria-sidecar-peer-token-0123456789';
 const RUN_A = '00000000-0000-0000-0000-0000000000e1';
 const RUN_B = '00000000-0000-0000-0000-0000000000e2';
+const RUN_C = '00000000-0000-0000-0000-0000000000e3';
 const WRITER_LOG = '/workspace/ticks.log';
 
 /** Everything this lane requires, as an explicit list of named prerequisites. */
@@ -289,6 +292,7 @@ async function startLane() {
   state.runs = {
     A: { runId: RUN_A, runtimeRoot: join(state.root, 'A/runtime'), snapshot: join(state.root, 'A/snapshot') },
     B: { runId: RUN_B, runtimeRoot: join(state.root, 'B/runtime'), snapshot: join(state.root, 'B/snapshot') },
+    C: { runId: RUN_C, runtimeRoot: join(state.root, 'C/runtime'), snapshot: join(state.root, 'C/snapshot') },
   };
   state.image = image;
   state.url = url;
@@ -597,6 +601,66 @@ test('run B: destroying run A never touches another run-owned sandbox', async ()
   assert.equal(exported.ok, false, 'even the untouched run refuses an export without a stop proof');
 
   await state.harness.send({ command: 'destroy', runId: runB.runId });
+});
+
+test('run C: a core that exits on its own after its completed turn still stops, verifies and exports', async () => {
+  const state = await lane();
+  const runC = state.runs.C;
+  await prepareRun(state, runC, { coreId: 'opencode', port: 4096, notes: 'self-exited core snapshot\n' });
+  const launched = await state.harness.send({
+    command: 'launch', runId: runC.runId, argv: peerArgv('mock-opencode', 'self-exit', 4096),
+    env: { ARIA_PEER_CONTROL_TOKEN: PEER_TOKEN }, workingDirectory: '/workspace',
+  });
+  runC.endpoint = launched.endpoint;
+
+  await waitFor(async () => {
+    const reply = await fetch(endpointUrl(runC.endpoint, '/global/health')).catch(() => null);
+    return reply !== null && reply.ok;
+  }, { description: 'the run C core endpoint' });
+
+  // The core serves the completed turn in full and then exits on its own: the
+  // stop below therefore races no live writer, it verifies an exited one --
+  // exactly the live defect (a completed turn whose stop proof could not be
+  // verified, so the run failed and the output was discarded).
+  const session = await peerFetch(runC.endpoint, '/session', { method: 'POST' }).then((r) => r.json());
+  const message = await peerFetch(runC.endpoint, `/session/${session.id}/message`,
+    { method: 'POST', body: '{}' });
+  assert.equal(message.status, 200, 'the core must serve the completed turn before it exits');
+  const served = await message.json();
+  assert.equal(served.parts[0].text, 'fixture-complete', 'the served turn carries the fixture output');
+  assert.deepEqual(served.info.tokens,
+    { input: 12, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+    'the served turn carries its usage counters');
+
+  // The recorded child pid must be gone before any stop is attempted, so the
+  // stop is verified against a writer that provably exited instead of one it
+  // gets to signal.
+  const record = JSON.parse(await execLine(state, runC.runId,
+    `cat /home/aria/run/${runC.runId}/launch-record.json`));
+  assert.ok(Number.isInteger(record.childPid), 'the launch record must carry the child pid');
+  await waitFor(async () => (await execLine(state, runC.runId,
+    `test -e /proc/${record.childPid} && echo alive || echo gone`)) === 'gone',
+  { description: 'the core process to exit on its own before the stop' });
+
+  // A tracked writer that provably exited counts as stopped: the stop proof is
+  // verified, and that verified stop is what arms the export gate below.
+  const stopped = await state.harness.send({ command: 'stopWriters', runId: runC.runId });
+  assert.equal(stopped.allWritersStopped, true,
+    'the stop must verify the recorded child of the self-exited core as stopped');
+
+  // The completed turn stays exportable: the sandbox survived the stop, the
+  // verified stop unlocks the export, and the exported bytes are the real
+  // workspace bytes.
+  const destination = join(state.root, 'C/export');
+  const exported = await state.harness.send({ command: 'export', runId: runC.runId, destination, proof: 'true' });
+  assert.equal(exported.complete, true, 'the completed turn must survive as a stable export');
+  const localSnapshot = readFileSync(join(runC.snapshot, 'notes.md'));
+  const exportedSnapshot = readFileSync(join(destination, 'notes.md'));
+  assert.equal(createHash('sha256').update(exportedSnapshot).digest('hex'),
+    createHash('sha256').update(localSnapshot).digest('hex'),
+    'the exported workspace bytes must be the run snapshot bytes, not a report');
+
+  await state.harness.send({ command: 'destroy', runId: runC.runId });
 });
 
 after(async () => {

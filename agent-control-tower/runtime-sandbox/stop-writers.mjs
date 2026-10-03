@@ -13,6 +13,15 @@
 // recorded writer tree (execd, pid 1, the supervisor, other runs' processes) is
 // ever signalled, and no shell is involved: signals go through process.kill.
 //
+// A stop verifies the OUTCOME, not merely the signals it sent: a recorded
+// writer that has provably exited -- its /proc entry is gone (the launcher
+// record proves it was our child while it existed), or its entry is a corpse
+// awaiting reaping -- is a stopped writer, and after SIGKILL the script waits,
+// boundedly, for the kill to take effect before computing its report. A
+// recorded pid now held by a DIFFERENT process (reuse), or a record carrying no
+// start-ticks evidence, stays a fail-closed fault: nothing is signalled for an
+// identity that cannot be proven.
+//
 // Usage (image-internal, fixed):
 //   node /opt/aria/stop-writers.mjs --run-directory <dir> --action stop|suspend|resume
 import { readdirSync, readFileSync } from 'node:fs';
@@ -21,6 +30,13 @@ import { pathToFileURL } from 'node:url';
 
 export const RECORD_FILE = 'launch-record.json';
 const DEFAULT_GRACE_MS = 3000;
+/**
+ * Bounded confirmation window after SIGKILL. Kill delivery is asynchronous:
+ * the kernel tears a signalled process down after the signal is accepted and
+ * the supervisor reaps the corpse afterwards, so the report must observe the
+ * outcome instead of racing it.
+ */
+const DEFAULT_KILL_CONFIRM_MS = 2000;
 const MAX_TREE_MEMBERS = 4096;
 const POLL_INTERVAL_MS = 50;
 
@@ -139,6 +155,23 @@ function depthFirst(table, pid, root) {
   return depth;
 }
 
+/**
+ * The members of `pids` that are still LIVE writers at this table read:
+ * present, still carrying the frozen start ticks, and not a corpse ('Z'/'X' =
+ * the process exited and only awaits reaping, so it can never run or write
+ * again). A pid that is absent was already reaped; a pid whose ticks moved was
+ * reused by another process -- neither can still be one of our writers.
+ */
+export function liveMembers(table, pids, startTicks) {
+  return pids.filter((pid) => {
+    const stat = table.get(pid);
+    if (stat === undefined || stat.state === 'Z' || stat.state === 'X') {
+      return false;
+    }
+    return stat.startTicks === startTicks.get(pid);
+  });
+}
+
 /** True while the recorded child identity (pid + start ticks) is still the one on the host. */
 export function identityMatches(table, record) {
   const stat = table.get(record.childPid);
@@ -191,30 +224,71 @@ function verifiedMembers(table, record, selfPid) {
   return selectWriters(table, record, selfPid);
 }
 
-async function stopWriters(record, procRoot, graceMs, selfPid) {
+/**
+ * The writer members a stop may signal. The recorded identity is judged against
+ * the process table:
+ * <ul>
+ *   <li>present with the recorded start ticks: our child -- live, or an
+ *       already-exited corpse awaiting reaping; both are ours;</li>
+ *   <li>absent: the recorded child provably exited. The launcher record was
+ *       written while the child existed, and a process with no /proc entry
+ *       cannot run or write, so the absence itself is the evidence of the exit;
+ *       whatever remains of the child's tree (its process group, its still-live
+ *       descendants) is still selected and stopped.</li>
+ * </ul>
+ * Everything else -- a pid reused by another process, or a record carrying no
+ * start-ticks evidence -- is unverifiable and refused before any signal.
+ */
+export function stoppableMembers(table, record, selfPid) {
+  const recordedTicks = record.childStartTicks;
+  if (recordedTicks === null || recordedTicks === undefined) {
+    throw new ControlFault(
+      `Ownership identity mismatch for run ${record.runId}: the launch record carries no start-ticks`
+        + ` evidence for pid ${record.childPid}`, 65);
+  }
+  const stat = table.get(record.childPid);
+  if (stat !== undefined && stat.startTicks !== recordedTicks) {
+    throw new ControlFault(
+      `Ownership identity mismatch for run ${record.runId}: pid ${record.childPid} is gone or reused`, 65);
+  }
+  return selectWriters(table, record, selfPid);
+}
+
+async function stopWriters(record, procRoot, graceMs, selfPid, signalPid, killConfirmMs) {
   const firstTable = readProcTable(procRoot);
-  const initial = verifiedMembers(firstTable, record, selfPid);
-  const terminated = [];
-  for (const pid of initial) {
-    signal(pid, 'SIGTERM');
+  const initial = stoppableMembers(firstTable, record, selfPid);
+  const startTicks = new Map(initial.map((pid) => [pid, firstTable.get(pid)?.startTicks]));
+  let survivors = liveMembers(firstTable, initial, startTicks);
+  for (const pid of survivors) {
+    signalPid(pid, 'SIGTERM');
   }
   const deadline = Date.now() + graceMs;
-  let survivors = initial;
   while (survivors.length > 0 && Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
-    survivors = survivors.filter((pid) => {
-      const stat = readProcTable(procRoot).get(pid);
-      return stat !== undefined && stat.startTicks === firstTable.get(pid)?.startTicks;
-    });
+    survivors = liveMembers(readProcTable(procRoot), survivors, startTicks);
   }
+  // Re-read before escalation: a member that exited during the grace (or was
+  // already a corpse) must not be signalled again.
+  survivors = liveMembers(readProcTable(procRoot), survivors, startTicks);
   for (const pid of survivors) {
-    signal(pid, 'SIGKILL');
+    signalPid(pid, 'SIGKILL');
   }
-  const finalTable = readProcTable(procRoot);
-  const remaining = survivors.filter((pid) => {
-    const stat = finalTable.get(pid);
-    return stat !== undefined && stat.startTicks === firstTable.get(pid)?.startTicks;
-  });
+  // SIGKILL delivery is asynchronous: the kernel tears the process down after
+  // the signal is accepted and the supervisor reaps the corpse afterwards, so
+  // the first re-read can still see the dying member (observed live: a killed
+  // core's /proc entry outlived the immediate re-read by ~80-430 ms). Wait,
+  // boundedly, until every killed member is gone or a corpse; anything still
+  // live after the window stays `remaining` and keeps the stop unverified.
+  const killDeadline = Date.now() + killConfirmMs;
+  for (;;) {
+    survivors = liveMembers(readProcTable(procRoot), survivors, startTicks);
+    if (survivors.length === 0 || Date.now() >= killDeadline) {
+      break;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  const remaining = survivors;
+  const terminated = [];
   for (const pid of initial) {
     if (!remaining.includes(pid)) terminated.push(pid);
   }
@@ -259,13 +333,16 @@ async function resumeWriters(record, procRoot, selfPid) {
   };
 }
 
-export async function control({ runDirectory, action, graceMs = DEFAULT_GRACE_MS, procRoot = '/proc',
-  selfPid = process.pid } = {}) {
+export async function control({ runDirectory, action, graceMs = DEFAULT_GRACE_MS,
+  killConfirmMs = DEFAULT_KILL_CONFIRM_MS, procRoot = '/proc', selfPid = process.pid,
+  signalPid = signal } = {}) {
   if (!['stop', 'suspend', 'resume'].includes(action)) {
     throw new ControlFault(`Unsupported action: ${action}`, 64);
   }
   const record = readRecord(runDirectory);
-  if (action === 'stop') return stopWriters(record, procRoot, graceMs, selfPid);
+  if (action === 'stop') {
+    return stopWriters(record, procRoot, graceMs, selfPid, signalPid, killConfirmMs);
+  }
   if (action === 'suspend') return suspendWriters(record, procRoot, selfPid);
   return resumeWriters(record, procRoot, selfPid);
 }

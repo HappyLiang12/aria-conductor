@@ -653,6 +653,17 @@ async function runPrompt() {
     case 'disconnect':
       await runDisconnect();
       return;
+    case 'self-exit':
+      // The turn is served in full, and then the core exits on its own --
+      // before any writer-control stop runs (the stop must verify a recorded
+      // child that provably exited as stopped).
+      streamCompletions();
+      finishPrompt('end_turn');
+      setTimeout(() => {
+        record('peer.turn_served_then_exit', { sessionId, exitCode: EXIT_CODES.ok });
+        void shutdown(EXIT_CODES.ok);
+      }, 50);
+      return;
     default:
       streamCompletions();
       finishPrompt('end_turn');

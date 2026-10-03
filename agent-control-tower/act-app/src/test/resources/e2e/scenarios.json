@@ -92,6 +92,24 @@
       "expected": ["exact recorded usage values pass through", "the observed model comes from the core's report"]
     },
     {
+      "id": "self-exit",
+      "title": "The core serves its completed turn and then exits on its own, before any writer stop",
+      "prompt": "Reply with the fixture completion",
+      "peers": ["qoder", "opencode"],
+      "qoder": {
+        "turn": "the prompt result (end_turn) is served with usage, then the peer process exits by itself",
+        "exit": "0 after the prompt result"
+      },
+      "opencode": {
+        "turn": "the message response is served with usage, then the peer process exits by itself",
+        "exit": "0 after the message response"
+      },
+      "expected": [
+        "the writer-control stop verifies the recorded child's exit as a stopped writer",
+        "the completed turn remains exportable: the sandbox survives the stop and the export is stable"
+      ]
+    },
+    {
       "id": "sdd-qa-pass",
       "title": "SDD QA step: the deterministic PASS verdict the chain router consumes",
       "prompt": "QA the dev output and report your verdict",

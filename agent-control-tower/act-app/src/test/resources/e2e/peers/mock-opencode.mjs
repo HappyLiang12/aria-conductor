@@ -367,6 +367,15 @@ async function startDecisionFlow(body) {
       const decision = await writerChain();
       return assistantMessage({ text: decision.status === 'written' ? 'DONE' : decisionText(decision) });
     }
+    case 'self-exit':
+      // The turn is served in full with real usage counters; the process then
+      // exits on its own (the response handler below), so the writer-control
+      // stop runs against a recorded child that provably exited.
+      return assistantMessage({
+        text: 'fixture-complete',
+        tokens: { input: 12, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: 'efficient',
+      });
     default:
       return assistantMessage({ text: 'pong' });
   }
@@ -547,6 +556,20 @@ const server = createServer(async (request, response) => {
       // resolves (startDecisionFlow), so the run really blocks on the gate.
       const message = await startDecisionFlow(body);
       messages.push(message);
+      if (SCENARIO === 'self-exit') {
+        // The completed turn is served in full, and then the core exits on its
+        // own -- before any writer-control stop runs. The stop must verify the
+        // recorded child's exit as a stopped writer, and the environment must
+        // stay alive so the completed turn remains exportable. The exit waits
+        // for the response to finish flushing so the caller really received
+        // the turn.
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify(message), () => {
+          record('peer.turn_served_then_exit', { sessionId, exitCode: EXIT_CODES.ok });
+          setImmediate(() => process.exit(EXIT_CODES.ok));
+        });
+        return;
+      }
       json(response, 200, message);
       return;
     }

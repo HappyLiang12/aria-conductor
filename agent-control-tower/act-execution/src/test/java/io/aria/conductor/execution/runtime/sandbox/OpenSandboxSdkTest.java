@@ -224,6 +224,121 @@ class OpenSandboxSdkTest {
         verify(files, times(1)).write(any());
     }
 
+    // ---- Create retry classification ------------------------------------------------
+
+    /**
+     * The live regression this classification exists for: OpenSandbox answered
+     * create with {@code 500} + {@code DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED}
+     * — the server's bulk archive copy into the new container died with
+     * {@code write |1: broken pipe} — and the bounded create retry failed the run
+     * after one attempt because the wording matched none of the transient
+     * keywords. The {@code DOCKER::*} family on 5xx and the broken-pipe /
+     * lost-subprocess wording are transient; a fresh placement is a new attempt
+     * at the server side.
+     */
+    private static final String EXECD_DISTRIBUTION_FAILED_MESSAGE =
+            "Server error : 500 Internal Server Error {\"code\":\"DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED\","
+                    + "\"message\":\"Failed to create directory /opt/opensandbox in sandbox: 500 Server Error for "
+                    + "http+docker://localhost/v1.44/containers/abc/archive?path=%2F: Internal Server Error "
+                    + "(\\\"passing bulk input to subprocess: write |1: broken pipe\\\")\"}";
+
+    @Test
+    void isTransientStartError_classifiesServerFaultsAsRetryable() {
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(
+                new RuntimeException(EXECD_DISTRIBUTION_FAILED_MESSAGE)))
+                .as("the live 500 DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED failure")
+                .isTrue();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(
+                new RuntimeException("DOCKER::SANDBOX_START_FAILED: port 40369 excluded")))
+                .as("the existing port-bind classification stays")
+                .isTrue();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(
+                new RuntimeException("write |1: broken pipe")))
+                .isTrue();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(
+                new RuntimeException("passing bulk input to subprocess")))
+                .isTrue();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(null)).isFalse();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(new RuntimeException((String) null)))
+                .isFalse();
+    }
+
+    /**
+     * The fail-fast half of the contract: a 4xx Docker client error (a bad image,
+     * an invalid request) must not be swallowed by the new classification — the
+     * {@code Client error :} wrapper wins over every retry keyword.
+     */
+    @Test
+    void isTransientStartError_doesNotRetryDockerClientErrors() {
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(new RuntimeException(
+                "Client error : 404 Not Found {\"code\":\"DOCKER::SANDBOX_IMAGE_NOT_FOUND\","
+                        + "\"message\":\"image aria-conductor/opencode-sandbox:9.9 not found\"}")))
+                .as("a 4xx DOCKER:: code is not a server fault")
+                .isFalse();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(new RuntimeException(
+                "Client error : 400 Bad Request {\"code\":\"DOCKER::SANDBOX_START_FAILED\","
+                        + "\"message\":\"bad request\"}")))
+                .as("even a retry keyword inside a 4xx body is rejected")
+                .isFalse();
+        assertThat(SandboxLifecycle.OpenSandboxSdk.isTransientStartError(
+                new RuntimeException("invalid API key: authentication failed")))
+                .isFalse();
+    }
+
+    /**
+     * The retry loop must actually consume the classification: a 500
+     * DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED on the first attempt is retried
+     * (after the 2s backoff) instead of failing the run outright.
+     */
+    @Test
+    void create_retriesServerFault_thenSucceeds() {
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = stubBuilder(sandboxStatic);
+            Sandbox sandbox = mock(Sandbox.class);
+            when(builder.build())
+                    .thenThrow(new RuntimeException(EXECD_DISTRIBUTION_FAILED_MESSAGE))
+                    .thenReturn(sandbox);
+            when(sandbox.getId()).thenReturn(SANDBOX_ID);
+
+            long startNanos = System.nanoTime();
+            String id = newSdk().create("test-image", Map.of());
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+
+            assertThat(id).isEqualTo(SANDBOX_ID);
+            verify(builder, times(2)).build();
+            assertThat(elapsedMs)
+                    .as("the retry must wait for the 2s backoff")
+                    .isGreaterThanOrEqualTo(1_500L);
+        }
+    }
+
+    /**
+     * The classification is a barrier, not a blanket: a 4xx Docker client error
+     * (image the server rejects) fails fast — exactly one attempt, no backoff.
+     */
+    @Test
+    void create_failsFastOnDockerClientError() {
+        try (MockedStatic<Sandbox> sandboxStatic = mockStatic(Sandbox.class)) {
+            Sandbox.Builder builder = stubBuilder(sandboxStatic);
+            when(builder.build()).thenThrow(new RuntimeException(
+                    "Client error : 404 Not Found {\"code\":\"DOCKER::SANDBOX_IMAGE_NOT_FOUND\"}"));
+
+            long startNanos = System.nanoTime();
+            assertThatThrownBy(() -> newSdk().create("test-image", Map.of()))
+                    .isInstanceOf(TaskExecutionException.class)
+                    .hasMessageContaining("OpenSandbox sandbox creation failed for image test-image")
+                    .satisfies(e -> org.assertj.core.api.Assertions.assertThat(
+                            ((TaskExecutionException) e).cause())
+                            .isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE));
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - startNanos).toMillis();
+
+            verify(builder, times(1)).build();
+            assertThat(elapsedMs)
+                    .as("a permanent error must not back off before failing")
+                    .isLessThan(1_500L);
+        }
+    }
+
     // ---- IPv4 loopback normalization ----------------------------------------------
 
     /**

@@ -26,9 +26,16 @@ import java.util.concurrent.Executor;
 /**
  * Automatically manages Kanban items in response to run lifecycle events:
  * <ul>
- *   <li>{@link RunStartedEvent}     → creates a TODO item</li>
- *   <li>{@link RunIterationEvent}   → transitions TODO → IN_PROGRESS</li>
- *   <li>{@link RunCompletedEvent}   → transitions to DONE (or CANCELLED)</li>
+ *   <li>{@link RunStartedEvent}     → creates an IN_PROGRESS mirror item. The
+ *       event is published for a run that has already been accepted and is
+ *       dispatched for execution the moment it is created, so the mirror card is
+ *       born in the column the run is already in — and TODO stays reserved for
+ *       real dispatch intents (linked cards are never auto-dispatched).</li>
+ *   <li>{@link RunIterationEvent}   → transitions TODO → IN_PROGRESS (defensive:
+ *       only the legacy turn loop publishes it, so a linked card still sitting in
+ *       TODO is dragged to the live column when an iteration does arrive)</li>
+ *   <li>{@link RunCompletedEvent}   → settles the card to REVIEW / CANCELLED,
+ *       stepping a card that never left TODO through IN_PROGRESS first</li>
  * </ul>
  *
  * <p>Every method runs AFTER the publisher's transaction commits, in its own
@@ -113,6 +120,15 @@ public class RunKanbanAutoCreator {
 
         CreateKanbanItemRequest request = CreateKanbanItemRequest.builder()
                 .title(title)
+                // The mirror card is born IN_PROGRESS: the run is already
+                // dispatched for execution when RunStartedEvent fires, and only
+                // the legacy turn loop ever publishes RunIterationEvent — a TODO
+                // birth left run-owned runs (opencode/qoder) in TODO forever and
+                // the completion settlement then failed on the illegal
+                // TODO -> REVIEW move. TODO remains the status of real dispatch
+                // intents; this card already carries a linkedRunId, so the
+                // auto-dispatch listener still never dispatches it.
+                .status(KanbanStatus.IN_PROGRESS)
                 .priority(KanbanPriority.MEDIUM)
                 .linkedRunId(event.getRunId().toString())
                 .linkedAgentId(event.getAgentId().toString())
@@ -187,6 +203,16 @@ public class RunKanbanAutoCreator {
         for (KanbanItem item : items) {
             if (item.getStatus() != KanbanStatus.DONE
                     && item.getStatus() != KanbanStatus.CANCELLED) {
+                // A card that never left TODO — created before the IN_PROGRESS
+                // birth, or by a path that skipped the start signal — must still
+                // settle: TODO -> REVIEW is not a legal direct move, so the card
+                // passes through IN_PROGRESS, the column it would have shown had
+                // the run started it. Any other unexpected state keeps failing
+                // loudly in the transition below.
+                if (item.getStatus() == KanbanStatus.TODO) {
+                    kanbanService.transition(item.getId(), KanbanStatus.IN_PROGRESS,
+                            "Run " + event.getStatus() + " (settling from Todo)");
+                }
                 kanbanService.transition(item.getId(), targetStatus, "Run " + event.getStatus());
                 log.info("Auto-transitioned Kanban item {} to {} for run {}",
                         item.getId(), targetStatus, event.getRunId());

@@ -119,6 +119,24 @@ class KanbanListenerNonTransactionalPublishTest {
         assertThat(statusOf(cardId)).isEqualTo(KanbanStatus.REVIEW);
     }
 
+    /**
+     * The live regression: the run-owned core path never publishes
+     * {@code RunIterationEvent}, so a mirror card could still sit in TODO when
+     * the run ends — and TODO → REVIEW is not a legal direct move, so the
+     * settlement used to fail and leave the card in TODO forever. The settlement
+     * must step the card through IN_PROGRESS to its terminal column.
+     */
+    @Test
+    void runCompletedPublishedWithoutATransactionSettlesATodoCardThroughInProgress() {
+        UUID runId = UUID.randomUUID();
+        String cardId = saveCard(runId, KanbanStatus.TODO);
+        assertNoActiveTransaction();
+
+        eventPublisher.publishEvent(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.FAILED));
+
+        assertThat(statusOf(cardId)).isEqualTo(KanbanStatus.REVIEW);
+    }
+
     @Test
     void runIterationPublishedWithoutATransactionStillStartsTheCard() {
         UUID runId = UUID.randomUUID();
@@ -155,10 +173,13 @@ class KanbanListenerNonTransactionalPublishTest {
     @Test
     void aFailedCardMirrorDoesNotAbortTheListenerChain() {
         UUID runId = UUID.randomUUID();
-        // The engine's auto-card for a run that fails before its first iteration:
-        // still TODO when the completion mirror runs, and TODO → REVIEW is not a
-        // legal move, so the mirror genuinely fails (the card stays behind).
-        String cardId = saveCard(runId, KanbanStatus.TODO);
+        // A card the settlement genuinely refuses: a stale run link on a BACKLOG
+        // card (the park paths detach the link, so this blemish only survives
+        // from an old version or a direct write). BACKLOG -> REVIEW is not a
+        // legal move, so the mirror fails loudly and the card stays behind —
+        // the deliberate loudness the settlement keeps for invalid states.
+        // (TODO no longer stands in for this: a TODO card now settles.)
+        String cardId = saveCard(runId, KanbanStatus.BACKLOG);
         assertNoActiveTransaction();
 
         // The failure must stay inside the creator. If it escapes, the multicaster
@@ -169,7 +190,7 @@ class KanbanListenerNonTransactionalPublishTest {
                 new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.FAILED)))
                 .doesNotThrowAnyException();
 
-        assertThat(statusOf(cardId)).isEqualTo(KanbanStatus.TODO);
+        assertThat(statusOf(cardId)).isEqualTo(KanbanStatus.BACKLOG);
         assertThat(completedRunProbe.completedRunIds()).contains(runId);
     }
 

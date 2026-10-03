@@ -542,6 +542,7 @@ git commit -m "feat(aria): notify the conversation when a dispatched batch compl
 - Modify: `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/controller/AriaConversationController.java` (add `POST /{conversationId}/synthesize`)
 - Modify: `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/service/AriaService.java` (add `composeSynthesisPrompt`)
 - Test: `agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/service/AriaSynthesisPromptTest.java`
+- Modify (required at execution, review-adjudicated): `agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/controller/AriaConversationControllerTest.java` — the controller constructor gains `AriaService`; without the updated test construction the module's tests do not compile.
 
 **Interfaces:**
 - Consumes: `findByConversationIdOrderByCreatedAtAsc` + `findByDispatchedByRunId`.
@@ -573,7 +574,8 @@ Same command as Step 2. Expected: PASS.
 ```bash
 git add agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/controller/AriaConversationController.java \
         agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/service/AriaService.java \
-        agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/service/AriaSynthesisPromptTest.java
+        agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/service/AriaSynthesisPromptTest.java \
+        agent-control-tower/act-aria/src/test/java/io/aria/conductor/aria/controller/AriaConversationControllerTest.java
 git commit -m "feat(aria): compose a one-click synthesis prompt for a dispatch batch"
 ```
 

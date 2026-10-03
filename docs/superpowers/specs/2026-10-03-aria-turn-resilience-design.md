@@ -126,12 +126,15 @@ Aria references it on retry.
 **B2. Group watcher (backend, act-aria).**
 Listener on `RunCompletedEvent` (AFTER_COMMIT, fallbackExecution): if the completed run has a
 `dispatchedByRunId`, load the group; when ALL group members are terminal, create exactly one
-notification. Dedupe: check-then-insert guarded by existing notification lookup
-(resourceType/ID below); the residual simultaneous-completion race is accepted and documented.
+notification. Dedupe: check-then-insert scoped to the dispatch GROUP — skip when a
+notification for the same dispatchedByRunId already exists on the conversation-scoped resource
+(matched via the body's `Batch <dispatchedByRunId>:` marker); a LATER batch in the same
+conversation notifies again. The residual simultaneous-completion race is accepted and documented.
 
 **B3. Notification.**
 Type `run.batch.completed`; title `子任務批次完成（N 個：成功 X／失敗 Y）`; `resourceType
-= "CONVERSATION"`, `resourceId = conversationId`; body lists child runIds + statuses (clipped).
+= "CONVERSATION"`, `resourceId = conversationId`; body starts with `Batch <dispatchedByRunId>: `
+(the dedupe marker) then lists child runIds + statuses (clipped).
 
 **B4. One-click synthesis.**
 - New endpoint `POST /api/v1/aria/conversations/{id}/synthesize` body `{dispatchedByRunId}` →

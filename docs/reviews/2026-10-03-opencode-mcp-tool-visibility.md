@@ -88,13 +88,117 @@ backstop is follow-up work, not part of #95.
 | Related sandbox suite | `-Dtest="OpenSandboxSdkTest,OpenCodeSandboxManagerTest,SandboxExecutionBackendTest"` | 51 run, 0 failures |
 | Post-edit launch profile tests | `-Dtest="OpenCodeLaunchProfileTest"` | 4 run, 0 failures, BUILD SUCCESS |
 | Full Java regression | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | BUILD SUCCESS, all 10 modules green (act-execution 01:57 min; act-app 61 tests, coverage checks met; 2026-10-03 local run) |
+| Live sandbox E2E (branch head) | `scripts/start.ps1 -NonInteractive`, `POST /api/v1/aria/chat`, in-sandbox capture | PASS — run `584f14fb-...` COMPLETED; `list_agents` + `get_dashboard_summary` `outcome=ok`; see the live round below |
 | CI at review time (before the follow-up commits) | `gh pr checks 95` | 16 pass, 1 skipped, 0 fail |
+
+## Live E2E on the branch head (2026-10-03)
+
+Full stack on the branch head `65bbbb5f`: Windows dev host, podman machine (WSL), local-dev
+topology (backend and dashboard on the host, OpenSandbox in a container), image
+`localhost/aria-conductor/opencode-sandbox:1.1`, backend started with
+`ARIA_MCP_SANDBOX_HOST_ADDRESS=172.30.112.1` (the podman/WSL host-side gateway address). The
+local `.env` carried `LLM_MODEL=deepseek-v4-flash`, which the DeepSeek endpoint does not serve
+(recorded in the 2026-10-01 round); the worktree copy was set to `deepseek-flash` for this
+round only.
+
+```pwsh
+pwsh -NoProfile -File scripts/start.ps1 -NonInteractive   # Backend/Dashboard/OpenSandbox all OK
+curl -s -X POST http://127.0.0.1:8080/api/v1/aria/chat -H "Content-Type: application/json" -d '{"message":"Use your platform tools now: call list_agents and get_dashboard_summary, then tell me in one short paragraph how many agents exist and the current dashboard numbers (active agents, running runs, total tokens burned)."}'
+```
+
+### Observed: the delivered configuration inside the live sandbox
+
+Captured from the run-owned container while run `584f14fb-10c8-4610-8c24-0b861e2f28fe` was
+alive (`podman exec` dump of `/home/aria/run/<runId>/config/opencode/opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "deny",
+    "read": "allow",
+    "list": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "edit": "deny",
+    "write": "deny",
+    "patch": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
+    "task": "deny",
+    "question": "deny",
+    "external_directory": "deny",
+    "aria-conductor*": "allow"
+  },
+  "mcp": {
+    "aria-conductor": {
+      "type": "remote",
+      "url": "http://172.30.112.1:8080/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:ARIA_MCP_TOKEN}"
+      }
+    }
+  },
+  "model": "deepseek/deepseek-flash",
+  "provider": { "deepseek": { "npm": "@ai-sdk/openai-compatible",
+    "options": { "apiKey": "{env:LLM_API_KEY}", "baseURL": "https://api.deepseek.com" },
+    "models": { "deepseek-flash": {} } } }
+}
+```
+
+The launch manifest (mode 600) carries both env keys; the config (mode 644) contains no
+literal secret. The container ran `opencode` and `execd`.
+
+### Observed: the model called the Conductor tools (backend audit)
+
+```
+13:07:23.092 INFO ToolAuditAspect : MCP tool 'list_agents' args=[] durationMs=18 outcome=ok
+13:07:23.166 INFO ToolAuditAspect : MCP tool 'get_dashboard_summary' args=[] durationMs=10 outcome=ok
+```
+
+### Observed: the run chain and the outcome
+
+```
+13:07:08.167 CoreRunLauncher  : Froze run 584f14fb-... to core opencode/SANDBOX
+13:07:10.827 SandboxLifecycle : Sandbox ba6b7c5f-... created for run 584f14fb-... from image aria-conductor/opencode-sandbox:1.1
+13:07:12.313 SandboxLifecycle : Uploaded 1 run configuration entry(ies) into 'config' of run 584f14fb-...
+13:07:25.823 OpenSandboxSdk   : Writer control 'stop' ... {"writersStopped":true,"terminated":[29],"remaining":[]}
+13:07:26.634 AgentLoopEngine  : Completing run: runId=584f14fb-..., status=COMPLETED, iterations=1, tokens=3069
+```
+
+`GET /api/v1/runs/584f14fb-...`:
+
+```json
+{"status":"COMPLETED","iterationCount":1,"totalTokensUsed":3069,"errorMessage":null,
+ "finalOutput":"There are 4 agents: the SDD BA, DEV, and QA agents (all HEALTHY) plus Aria itself. The dashboard shows 4 active agents, all healthy with 0 degraded, 1 running run, 0 pending approvals, and 0 total tokens burned."}
+```
+
+The answer is the model's own read of the live platform (the seeded SDD roster; the "1 running
+run" is the answering run itself), produced in one sandboxed turn — the exact behavior PR #95
+fixes (the same turn previously answered "the Conductor tools are not available in this
+session").
+
+Claims this confirms:
+
+1. The delivered governed config in a real sandbox carries the `aria-conductor*` allowance and
+   the opencode 1.18 MCP block (`enabled`, `headers.Authorization` with the env reference).
+2. The platform tools execute from the sandbox (`outcome=ok` audit lines), i.e. the model sees
+   and calls the Conductor surface.
+3. The branch head's connection path works end to end: the SDK create/upload/launch chain ran
+   against the configured `http://127.0.0.1:8090` (scheme preserved, IPv4 loopback) with no
+   loopback failure, and the sandbox reached the backend MCP endpoint at the configured host
+   address.
+4. Teardown is clean: writers stopped, sandbox destroyed, run finalized COMPLETED.
+
+NOT VERIFIED in this round: a mutating tool call (out of scope per the operator decision), and
+the TLS (`https`) server deployment path.
 
 ## Not verified
 
-- The live sandbox behavior (denied-tools-hidden, the 57-tool listing, the live post-fix Aria
-  turn) was reported in PR #95 and NOT re-executed during this review; the config mechanics were
-  verified in the sources instead.
+- The pre-fix hidden-tool behavior and the 57-tool listing were reported in PR #95 and not
+  re-probed; the post-fix live turn and the in-sandbox config were verified on the branch head
+  (see the live E2E round), and the config mechanics were verified in the sources.
 - The `https` scheme fix is not exercised against a TLS-fronted OpenSandbox deployment (no such
   environment here).
 - That no deployment profile excludes `CoreRuntimeConfiguration` is INFERRED from annotations and

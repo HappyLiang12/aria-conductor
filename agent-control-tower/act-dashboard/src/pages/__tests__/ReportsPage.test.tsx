@@ -113,3 +113,99 @@ describe('ReportsPage archive confirmation (Task 10)', () => {
     expect(mockArchiveReport).toHaveBeenCalledTimes(1);
   });
 });
+
+const ARCHIVED_REPORT: ReportArtifact = {
+  ...REPORT,
+  id: 'r-2',
+  title: 'Legacy Q4 Brief',
+  status: 'ARCHIVED',
+  createdAt: '2026-08-01T10:00:00Z',
+};
+
+const showArchivedToggle = () => screen.getByRole('checkbox', { name: 'Show archived' });
+
+/** The toolbar's selected-report title (the preview iframe also carries the title attr). */
+const toolbarTitle = (title: string) => screen.getByText(title, { selector: '.report-title' });
+const queryToolbarTitle = (title: string) => screen.queryByText(title, { selector: '.report-title' });
+
+describe('ReportsPage archived visibility (Delete soft-archive)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetReportHtml.mockResolvedValue('<html><body>brief</body></html>');
+    mockArchiveReport.mockResolvedValue(undefined);
+  });
+
+  it('hides ARCHIVED reports by default and auto-selects from the visible list', async () => {
+    // Archived first: selection must skip it, not land on the hidden row.
+    mockListReports.mockResolvedValue([ARCHIVED_REPORT, REPORT]);
+    ui();
+
+    expect(await screen.findByRole('button', { name: /Q1 Agent Performance Brief/ })).toBeInTheDocument();
+    expect(screen.queryByText('Legacy Q4 Brief')).not.toBeInTheDocument();
+
+    // Auto-selection picked the first VISIBLE report, not the archived head.
+    expect(toolbarTitle('Q1 Agent Performance Brief')).toBeInTheDocument();
+
+    // The toggle exists and starts off, keeping the archived row hidden.
+    expect(showArchivedToggle()).not.toBeChecked();
+    expect(screen.queryByText('Legacy Q4 Brief')).not.toBeInTheDocument();
+  });
+
+  it('reveals archived reports via the toggle and hides them again when off', async () => {
+    mockListReports.mockResolvedValue([REPORT, ARCHIVED_REPORT]);
+    ui();
+
+    await screen.findByRole('button', { name: /Q1 Agent Performance Brief/ });
+    const toggle = showArchivedToggle();
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByText('Legacy Q4 Brief')).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(toggle).toBeChecked();
+
+    // The archived row now renders and keeps its ARCHIVED status chip.
+    const archivedTab = await screen.findByRole('button', { name: /Legacy Q4 Brief/ });
+    expect(within(archivedTab).getByText('ARCHIVED')).toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(screen.queryByText('Legacy Q4 Brief')).not.toBeInTheDocument());
+  });
+
+  it('falls back to the first visible report when the selection becomes hidden', async () => {
+    mockListReports.mockResolvedValue([REPORT, ARCHIVED_REPORT]);
+    ui();
+
+    const toggle = await screen.findByRole('checkbox', { name: 'Show archived' });
+    await userEvent.click(toggle);
+
+    // Select the archived report while it is revealed.
+    await userEvent.click(await screen.findByRole('button', { name: /Legacy Q4 Brief/ }));
+    expect(toolbarTitle('Legacy Q4 Brief')).toBeInTheDocument();
+
+    // Hiding it again cannot leave a hidden selection: fall back to the first visible.
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toolbarTitle('Q1 Agent Performance Brief')).toBeInTheDocument());
+    expect(queryToolbarTitle('Legacy Q4 Brief')).not.toBeInTheDocument();
+  });
+
+  it('removes the archived report from the list after a confirmed archive', async () => {
+    const other: ReportArtifact = { ...REPORT, id: 'r-3', title: 'Ops Weekly Brief', owner: 'bob' };
+    mockListReports
+      .mockResolvedValueOnce([REPORT, other])
+      .mockResolvedValue([{ ...REPORT, status: 'ARCHIVED' }, other]);
+    ui();
+
+    await clickDelete();
+    await userEvent.click(within(confirmDialog() as HTMLElement).getByRole('button', { name: 'Confirm' }));
+
+    await waitFor(() => expect(mockArchiveReport).toHaveBeenCalledWith('r-1'));
+    expect(mockArchiveReport).toHaveBeenCalledTimes(1);
+
+    // The refetched list hides the archived row; the remaining report takes over.
+    await waitFor(() => expect(screen.queryByText('Q1 Agent Performance Brief')).not.toBeInTheDocument());
+    await waitFor(() => expect(toolbarTitle('Ops Weekly Brief')).toBeInTheDocument());
+
+    // Still hidden by default: the toggle is available, unchecked.
+    expect(showArchivedToggle()).not.toBeChecked();
+  });
+});

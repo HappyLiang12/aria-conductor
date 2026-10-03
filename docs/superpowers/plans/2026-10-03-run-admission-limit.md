@@ -925,10 +925,11 @@ git commit -m "test(app): cap enforcement IT - second run waits PENDING/TODO unt
 **Files:**
 - Create: `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/runtime/RunAdmissionBootstrap.java`
 - Test: `agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/runtime/RunAdmissionBootstrapTest.java`
+- Modify: `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/engine/AgentLoopEngine.java` (pin the orphan reaper strictly first — see Step 3)
 
 **Interfaces:**
 - Consumes: `RunRepository.findByStatus(RunStatus.PENDING)` (`act-agent` repository; runs sorted by `createdAt`), `AgentLoopEngine.startRun(UUID)` (public, `AgentLoopEngine.java:185`).
-- Produces: on `ApplicationReadyEvent`, runs left `PENDING` by a restart re-enter the engine (and therefore the admission queue) in `createdAt` order; ordering is AFTER `AgentLoopEngine.recoverOrphanedRuns` (which FAILs only RUNNING/INITIALIZING at `AgentLoopEngine.java:538-563`) so fresh admissions are never reaped.
+- Produces: on `ApplicationReadyEvent`, runs left `PENDING` by a restart re-enter the engine (and therefore the admission queue) in `createdAt` order; ordering is AFTER `AgentLoopEngine.recoverOrphanedRuns` (which FAILs only RUNNING/INITIALIZING at `AgentLoopEngine.java:538-563`) so fresh admissions are never reaped. The guarantee is structural: the reaper gets `@Order(Ordered.HIGHEST_PRECEDENCE)` (Step 3) — an unordered listener resolves to `Ordered.LOWEST_PRECEDENCE` and would TIE the bootstrap's order (verified: spring-context 6.2.6).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1045,6 +1046,16 @@ public class RunAdmissionBootstrap {
 }
 ```
 
+Also in `AgentLoopEngine`, pin the reaper first so "strictly after" is structural rather than scan-order luck — annotate the `@EventListener(ApplicationReadyEvent.class)` method (L568, `onApplicationReady`) with `@Order(Ordered.HIGHEST_PRECEDENCE)`:
+
+```java
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    @EventListener(ApplicationReadyEvent.class)
+    void onApplicationReady() {
+```
+
+(add imports `org.springframework.core.Ordered` and `org.springframework.core.annotation.Order`; method-level `@Order` is honored for `@EventListener` methods). Rationale: an unordered listener resolves to `Ordered.LOWEST_PRECEDENCE` — the same value as the bootstrap's order — so without this annotation the relative order is a scan-order tie; with it, the reaper always runs before the bootstrap re-enqueues. The other `ApplicationReadyEvent` listeners (Aria's `TaskSchedulerSchedulerPort`, `SpecReviewCoordinator`) start timers/orchestration, not runs, so reaper-first is safe for them.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd agent-control-tower && mvn -B test -pl act-execution -Dtest=RunAdmissionBootstrapTest -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true`
@@ -1054,7 +1065,8 @@ Expected: PASS (2 tests).
 
 ```bash
 git add agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/runtime/RunAdmissionBootstrap.java \
-        agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/runtime/RunAdmissionBootstrapTest.java
+        agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/runtime/RunAdmissionBootstrapTest.java \
+        agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/engine/AgentLoopEngine.java
 git commit -m "feat(runtime): re-enqueue PENDING runs at boot (ordered after the orphan reaper)"
 ```
 
@@ -1085,4 +1097,4 @@ Also verify cancel-while-queued live: while the cap is saturated, cancel a `PEND
 - **Spec coverage:** D1 gateway at engine ✓ Task 4; D2 6+1 config ✓ Task 1 + pool logic Task 2; D3 PENDING + card TODO + start signal ✓ Tasks 2/4/5; D4 deadline freeze at admission ✓ (gate sits above `CoreRunLauncher.execute`, verified L124-134); release/PAUSED semantics ✓ Tasks 2/3; restart re-enqueue ✓ Task 7; cancel-while-queued ✓ Task 3; testing (unit/FIFO/reserve/release/boot/card/live) ✓ Tasks 2-8.
 - **Placeholders:** Task 4's test and Task 6 describe the test body as structured steps over an existing verified pattern (both name the exact pattern file and assertions); no TBD/TODO markers elsewhere.
 - **Type consistency:** `RunAdmissionProperties.getMaxActive()/getAriaReserved()` used consistently; `RunAdmissionQueue.acquire/release/dequeue/settle/onRunCompleted` names consistent across tasks; `RunIterationEvent` 5-arg ctor matches `RunIterationEvent.java:28`; `RunCompletedEvent(source, runId, agentId, status)` matches `RunService.java:207`.
-- **Known judgment calls to watch during execution:** (a) the exact local variable names inside `AgentLoopEngine.startRun` (names may adapt, behavior may not); (b) the `@Order` interplay between the bootstrap and `recoverOrphanedRuns` — if the recovery listener is itself ordered, keep the bootstrap strictly after it; (c) `KanbanAutoDispatchIntegrationTest`'s mid-flight assertion contingency (Task 5 Step 4).
+- **Known judgment calls to watch during execution:** (a) the exact local variable names inside `AgentLoopEngine.startRun` (names may adapt, behavior may not); (b) RESOLVED by amendment 2026-10-03: the recovery listener was unordered — spring-context resolves it to `Ordered.LOWEST_PRECEDENCE`, tying the bootstrap — so Task 7 Step 3 now pins it `HIGHEST_PRECEDENCE`; (c) `KanbanAutoDispatchIntegrationTest`'s mid-flight assertion contingency (Task 5 Step 4, second contingency applied).

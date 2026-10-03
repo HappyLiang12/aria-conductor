@@ -23,7 +23,7 @@ import java.util.Map;
  * <pre>
  * ARIA_OPERATOR_BEARER_TOKEN=&lt;synthetic operator credential&gt; \
  * java -cp "&lt;harness&gt;/app:&lt;harness&gt;/harness:&lt;harness&gt;/lib/*" \
- *     io.aria.conductor.app.e2e.CoreE2eSetup --confirm-retire-historical-seeds \
+ *     io.aria.conductor.app.e2e.CoreE2eSetup \
  *     [--base-url=http://127.0.0.1:8080] [--health-timeout-seconds=120]
  * </pre>
  *
@@ -31,10 +31,6 @@ import java.util.Map;
  * <ol>
  *   <li>wait for {@code GET /actuator/health} and require the exact body
  *       {@code {"status":"UP"}};</li>
- *   <li>{@code POST /api/v1/maintenance/langchain/preview} and
- *       {@code POST /api/v1/maintenance/langchain/execute} with the verified
- *       digest -- the production preview-first retirement, never a database
- *       shortcut;</li>
  *   <li>{@code POST /api/v1/maintenance/initialize-builtins} -- the production
  *       create-only built-in setup;</li>
  *   <li>{@code PUT /api/v1/adk/providers/qoder/credential} -- provisions the
@@ -63,11 +59,9 @@ import java.util.Map;
  *
  * <p>The synthetic operator credential is supplied by the environment
  * ({@value #OPERATOR_TOKEN_ENV}, the same variable the production operator
- * boundary reads); it is never generated, defaulted or logged. The retirement
- * confirmation flag is required: without it the setup refuses loudly
- * (exit code 2) instead of retiring historical seeds implicitly. Operational
+ * boundary reads); it is never generated, defaulted or logged. Operational
  * failures -- unreachable application, unexpected health body, refused
- * retirement, unexpected setup response -- exit non-zero with the observed
+ * setup response -- exit non-zero with the observed
  * response, never with a silent success.
  */
 public final class CoreE2eSetup {
@@ -84,14 +78,9 @@ public final class CoreE2eSetup {
      */
     public static final String QODER_CREDENTIAL_ENV = "ARIA_E2E_QODER_CREDENTIAL";
 
-    /** Explicit confirmation required before historical seeds are retired. */
-    public static final String CONFIRM_RETIRE_FLAG = "--confirm-retire-historical-seeds";
-
     static final String DEFAULT_BASE_URL = "http://127.0.0.1:8080";
     static final String HEALTH_PATH = "/actuator/health";
     static final String EXPECTED_HEALTH_BODY = "{\"status\":\"UP\"}";
-    static final String PREVIEW_PATH = "/api/v1/maintenance/langchain/preview";
-    static final String EXECUTE_PATH = "/api/v1/maintenance/langchain/execute";
     static final String BUILTINS_PATH = "/api/v1/maintenance/initialize-builtins";
     static final String CREDENTIAL_PATH = "/api/v1/adk/providers/qoder/credential";
 
@@ -119,11 +108,6 @@ public final class CoreE2eSetup {
     /** The whole setup; every refusal and failure aborts with no later step attempted. */
     static void run(List<String> args) throws IOException, InterruptedException {
         Map<String, String> options = parseOptions(args);
-        if (!args.contains(CONFIRM_RETIRE_FLAG)) {
-            throw new SetupRefusal("refusing to retire historical seeds without " + CONFIRM_RETIRE_FLAG
-                    + "; the harness setup never bypasses preview-first retirement and never"
-                    + " executes a retirement the operator did not explicitly request");
-        }
         String operatorToken = System.getenv(OPERATOR_TOKEN_ENV);
         if (operatorToken == null || operatorToken.isBlank()) {
             throw new SetupRefusal("no synthetic operator credential in the environment ("
@@ -137,18 +121,6 @@ public final class CoreE2eSetup {
 
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         awaitHealthy(http, baseUrl, Duration.ofSeconds(healthTimeoutSeconds));
-
-        JsonNode preview = postJson(http, baseUrl + PREVIEW_PATH, null, operatorToken, "retirement preview");
-        String previewId = requiredText(preview, "previewId", "retirement preview");
-        String digest = requiredText(preview, "digest", "retirement preview");
-        System.out.println("core-e2e setup: retirement preview previewId=" + previewId + " digest=" + digest
-                + " agents=" + preview.path("agentIds").size() + " runs=" + preview.path("runIds").size());
-
-        JsonNode receipt = postJson(http, baseUrl + EXECUTE_PATH,
-                JSON.writeValueAsString(Map.of("previewId", previewId, "expectedDigest", digest)),
-                operatorToken, "retirement execute");
-        // The receipt is the only record of what the destructive step did: print it whole.
-        System.out.println("core-e2e setup: retirement receipt " + receipt);
 
         JsonNode builtins = postJson(http, baseUrl + BUILTINS_PATH, null, operatorToken, "built-in setup");
         System.out.println("core-e2e setup: built-ins created=" + builtins.path("createdAgentIds").size()
@@ -262,22 +234,11 @@ public final class CoreE2eSetup {
         }
     }
 
-    private static String requiredText(JsonNode node, String field, String step) {
-        String value = node.path(field).asText("");
-        if (value.isBlank()) {
-            throw new SetupRefusal(step + " response carries no " + field + ": " + node);
-        }
-        return value;
-    }
-
     /** Strict {@code --key=value} parsing; unknown options are refused, never ignored. */
     private static Map<String, String> parseOptions(List<String> args) {
         Map<String, String> options = new java.util.LinkedHashMap<>();
         List<String> unknown = new ArrayList<>();
         for (String arg : args) {
-            if (arg.equals(CONFIRM_RETIRE_FLAG)) {
-                continue;
-            }
             if (arg.startsWith(BASE_URL_ARG + "=")) {
                 options.put(BASE_URL_ARG, arg.substring((BASE_URL_ARG + "=").length()));
             } else if (arg.startsWith(HEALTH_TIMEOUT_ARG + "=")) {
@@ -288,7 +249,7 @@ public final class CoreE2eSetup {
         }
         if (!unknown.isEmpty()) {
             throw new SetupRefusal("unknown argument(s) " + unknown + "; supported: "
-                    + CONFIRM_RETIRE_FLAG + ", " + BASE_URL_ARG + "=, " + HEALTH_TIMEOUT_ARG + "=");
+                    + BASE_URL_ARG + "=, " + HEALTH_TIMEOUT_ARG + "=");
         }
         return options;
     }

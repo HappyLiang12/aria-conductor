@@ -303,9 +303,10 @@ public class CoreE2eConfiguration {
      * through the control route for the agent the run will actually use: Aria's
      * runs and the SDD role-agent steps would otherwise fail closed at the
      * scenario gate. The registered ids are exactly the built-ins the harness
-     * setup ({@code initialize-builtins}) creates with the production default
-     * selection -- Aria and the SDD BA/DEV/QA rows of
-     * {@code V42__seed_sdd_role_agents.sql} -- so a spec-created agent still
+     * setup ({@code initialize-builtins}) guarantees exist with the production
+     * default selection -- Aria and the SDD BA/DEV/QA rows of
+     * {@code V42__seed_sdd_role_agents.sql}, which on a migrated harness schema
+     * already carry the supported core -- so a spec-created agent still
      * carries an explicit selection and an explicit selection always wins.
      */
     @Bean

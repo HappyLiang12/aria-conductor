@@ -71,14 +71,14 @@ runs:
           --e2e.work-root="$GITHUB_WORKSPACE/backend-e2e-harness/work" \
           --e2e.sandbox-transport=process > "$GITHUB_WORKSPACE/backend.log" 2>&1 &
         timeout 180 bash -c 'until curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; do sleep 2; done'
-    - name: Run the explicit harness setup (retirement, built-ins, Qoder credential)
+    - name: Run the explicit harness setup (built-ins, Qoder credential)
       shell: bash
       run: |
         set -euo pipefail
         HARNESS="$GITHUB_WORKSPACE/backend-e2e-harness/extracted"
         java --enable-preview -cp "$HARNESS/app:$HARNESS/harness:$HARNESS/lib/*" \
           io.aria.conductor.app.e2e.CoreE2eSetup \
-          --confirm-retire-historical-seeds --base-url=http://127.0.0.1:8080
+          --base-url=http://127.0.0.1:8080
     - name: Install frontend deps and serve dist
       if: ${{ inputs.frontend-mode == 'dist' }}
       shell: bash

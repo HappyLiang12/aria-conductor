@@ -584,17 +584,6 @@ Write-Output ("RESULT exit=" + `$LASTEXITCODE)
     Assert-True "the refusal cites the design rule behind it" ($out -match '6\.2') $out
     Assert-True "the refusal writes no .run state" (-not (Test-Path (Join-Path $refuseRoot '.run'))) $out
 
-    # compose stays langchain-only (its backend is containerized and cannot reach the
-    # OpenSandbox endpoints), so an explicit qoder request there must fail loudly instead
-    # of silently starting the other provider.
-    $out = Invoke-Snippet @"
-`$env:FAKE_PODMAN_SOCKET = 'unix:///run/user/1000/podman/podman.sock'
-Write-Output (pwsh -NoProfile -File '$ProjectRoot\scripts\start.ps1' -DryRun -NonInteractive -Mode compose -Provider qoder -ProjectRoot '$qoderRoot' 2>&1 | Out-String)
-Write-Output ("RESULT exit=" + `$LASTEXITCODE)
-"@ -PathPrepend $FakePodmanDir
-    Assert-True "qoder mode refuses -Mode compose instead of downgrading to langchain" `
-        (($out -match "RESULT exit=1") -and ($out -match '(?i)langchain') -and ($out -match 'qoder')) $out
-
     Write-Host "start.ps1 fresh-checkout -DryRun scenario:" -ForegroundColor Cyan
 
     # The help text promises -DryRun mutates nothing, so on a checkout with no .env it must

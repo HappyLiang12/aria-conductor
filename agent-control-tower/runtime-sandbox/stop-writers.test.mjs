@@ -18,11 +18,13 @@ import {
   ControlFault,
   control,
   identityMatches,
+  liveMembers,
   parseArgs,
   parseProcStat,
   readProcTable,
   readRecord,
   selectWriters,
+  stoppableMembers,
 } from './stop-writers.mjs';
 
 const RUN_ID = '00000000-0000-0000-0000-0000000000t2';
@@ -47,6 +49,48 @@ function record(overrides = {}) {
     platform: 'linux',
     ...overrides,
   };
+}
+
+/** A run-owned control directory carrying one record. */
+function runDirectoryWith(root, overrides = {}) {
+  const runDirectory = join(root, RUN_ID);
+  mkdirSync(runDirectory, { recursive: true });
+  writeFileSync(join(runDirectory, 'launch-record.json'), JSON.stringify(record(overrides)));
+  return runDirectory;
+}
+
+/**
+ * A synthetic procfs the tests can mutate, so the stop state machine runs
+ * deterministically on any host: the injected signal substitutes the effects a
+ * real kernel would produce and no real process is ever signalled.
+ */
+function syntheticProc(entries) {
+  const root = mkdtempSync(join(tmpdir(), 'aria-proc-'));
+  const write = (entry) => writeFileSync(join(root, String(entry.pid), 'stat'),
+    statLine(entry.pid, entry.comm, entry.state, entry.ppid, entry.pgrp, entry.startTicks));
+  const add = (entry) => {
+    mkdirSync(join(root, String(entry.pid)), { recursive: true });
+    write(entry);
+  };
+  for (const entry of entries) add(entry);
+  return {
+    root,
+    add,
+    remove: (pid) => rmSync(join(root, String(pid)), { recursive: true, force: true }),
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+/** A signal recorder; `effects(pid, name)` simulates what the signal does to the process. */
+function signalRecorder(effects = () => {}) {
+  const calls = [];
+  const signalPid = (pid, name) => {
+    calls.push([name, pid]);
+    effects(pid, name);
+    return null;
+  };
+  signalPid.calls = calls;
+  return signalPid;
 }
 
 test('a proc stat line is parsed into the identity fields', () => {
@@ -105,7 +149,7 @@ test('the process table reader fails closed without procfs and reads a real tabl
   }
 });
 
-test('a reused or missing root identity is refused before any signal', async () => {
+test('the identity predicate distinguishes a live, reused and vanished child', async () => {
   const table = tableOf([
     { pid: 100, comm: 'other', state: 'S', ppid: 1, pgrp: 100, startTicks: 9999 },
   ]);
@@ -117,6 +161,187 @@ test('a reused or missing root identity is refused before any signal', async () 
     { pid: 100, comm: 'opencode', state: 'S', ppid: 1, pgrp: 100, startTicks: 4242 },
   ]), record()), true);
   await assert.rejects(control({ runDirectory: 'relative', action: 'stop' }), /absolute path/);
+});
+
+test('the stop selection admits a provably exited child and refuses a reused or evidence-less identity', () => {
+  const live = tableOf([{ pid: 100, comm: 'opencode', state: 'S', ppid: 90, pgrp: 100, startTicks: 4242 }]);
+  assert.deepEqual(stoppableMembers(live, record(), 777), [100]);
+
+  // The recorded pid is absent: the child provably exited (the record was
+  // written while it existed, and a process without a /proc entry cannot run).
+  const absent = tableOf([{ pid: 90, comm: 'node', state: 'S', ppid: 1, pgrp: 1, startTicks: 2 }]);
+  assert.deepEqual(stoppableMembers(absent, record(), 777), []);
+
+  // The recorded pid is now another process: unverifiable, refused.
+  const reused = tableOf([{ pid: 100, comm: 'other', state: 'S', ppid: 1, pgrp: 100, startTicks: 9999 }]);
+  assert.throws(() => stoppableMembers(reused, record(), 777),
+    (error) => error instanceof ControlFault && error.exitCode === 65
+      && error.message === `Ownership identity mismatch for run ${RUN_ID}: pid 100 is gone or reused`);
+
+  // No start-ticks evidence: the exit claim cannot be proven, even though the pid is absent.
+  assert.throws(() => stoppableMembers(absent, record({ childStartTicks: null }), 777),
+    (error) => error instanceof ControlFault && error.exitCode === 65
+      && /no start-ticks evidence for pid 100/.test(error.message));
+});
+
+test('live members exclude the reaped, the corpse and the reused pid', () => {
+  const startTicks = new Map([[100, 4242], [101, 4243], [102, 4244], [103, 4245]]);
+  const table = tableOf([
+    { pid: 101, comm: 'writer', state: 'S', ppid: 100, pgrp: 100, startTicks: 4243 },
+    { pid: 102, comm: 'opencode', state: 'Z', ppid: 90, pgrp: 100, startTicks: 4244 },
+    { pid: 103, comm: 'reused', state: 'S', ppid: 1, pgrp: 100, startTicks: 9999 },
+    // pid 100 is absent: already reaped.
+  ]);
+
+  assert.deepEqual(liveMembers(table, [100, 101, 102, 103], startTicks), [101]);
+});
+
+test('a stop verifies a recorded child that provably exited before the stop ran', async () => {
+  const location = syntheticProc([
+    { pid: 1, comm: 'execd', state: 'S', ppid: 0, pgrp: 1, startTicks: 1 },
+    { pid: 90, comm: 'node', state: 'S', ppid: 1, pgrp: 1, startTicks: 2 },
+    // The recorded child (pid 100) already exited and was reaped: gone entirely.
+  ]);
+  try {
+    const runDirectory = runDirectoryWith(location.root);
+    const signalPid = signalRecorder();
+
+    const report = await control({ runDirectory, action: 'stop', procRoot: location.root,
+      graceMs: 0, killConfirmMs: 0, signalPid });
+
+    assert.deepEqual(report, {
+      action: 'stop',
+      runId: RUN_ID,
+      writersStopped: true,
+      terminated: [],
+      remaining: [],
+    });
+    assert.deepEqual(signalPid.calls, [], 'nothing may be signalled for an already exited child');
+  } finally {
+    location.cleanup();
+  }
+});
+
+test('a stop verifies the recorded child corpse (exited, awaiting reaping) as a stopped writer', async () => {
+  const location = syntheticProc([
+    { pid: 1, comm: 'execd', state: 'S', ppid: 0, pgrp: 1, startTicks: 1 },
+    { pid: 90, comm: 'node', state: 'S', ppid: 1, pgrp: 1, startTicks: 2 },
+    // The recorded child exited while its parent never reaped it: a corpse.
+    { pid: 100, comm: 'opencode', state: 'Z', ppid: 90, pgrp: 100, startTicks: 4242 },
+  ]);
+  try {
+    const runDirectory = runDirectoryWith(location.root);
+    const signalPid = signalRecorder();
+
+    const report = await control({ runDirectory, action: 'stop', procRoot: location.root,
+      graceMs: 0, killConfirmMs: 50, signalPid });
+
+    assert.deepEqual(report, {
+      action: 'stop',
+      runId: RUN_ID,
+      writersStopped: true,
+      terminated: [100],
+      remaining: [],
+    });
+    assert.deepEqual(signalPid.calls, [], 'a corpse can never be stopped again and is never escalated');
+  } finally {
+    location.cleanup();
+  }
+});
+
+test('a stop observes the SIGKILL effect instead of racing the kernel teardown', async () => {
+  const location = syntheticProc([
+    { pid: 1, comm: 'execd', state: 'S', ppid: 0, pgrp: 1, startTicks: 1 },
+    { pid: 90, comm: 'node', state: 'S', ppid: 1, pgrp: 1, startTicks: 2 },
+    { pid: 100, comm: 'opencode', state: 'S', ppid: 90, pgrp: 100, startTicks: 4242 },
+  ]);
+  try {
+    const runDirectory = runDirectoryWith(location.root);
+    // The kernel takes a moment to tear the killed process down: the /proc
+    // entry survives the immediate re-read and disappears only afterwards --
+    // exactly the live race in which a verified kill was reported as a
+    // surviving writer.
+    const signalPid = signalRecorder((pid, name) => {
+      assert.equal(pid, 100);
+      if (name === 'SIGKILL') {
+        setTimeout(() => location.remove(100), 120);
+      }
+    });
+
+    const report = await control({ runDirectory, action: 'stop', procRoot: location.root,
+      graceMs: 0, signalPid });
+
+    assert.deepEqual(report, {
+      action: 'stop',
+      runId: RUN_ID,
+      writersStopped: true,
+      terminated: [100],
+      remaining: [],
+    });
+    assert.deepEqual(signalPid.calls, [['SIGTERM', 100], ['SIGKILL', 100]]);
+  } finally {
+    location.cleanup();
+  }
+});
+
+test('a writer that survives the kill confirmation keeps the stop unverified and failed closed', async () => {
+  const location = syntheticProc([
+    { pid: 1, comm: 'execd', state: 'S', ppid: 0, pgrp: 1, startTicks: 1 },
+    { pid: 90, comm: 'node', state: 'S', ppid: 1, pgrp: 1, startTicks: 2 },
+    { pid: 100, comm: 'opencode', state: 'S', ppid: 90, pgrp: 100, startTicks: 4242 },
+    { pid: 101, comm: 'writer', state: 'S', ppid: 100, pgrp: 100, startTicks: 4243 },
+  ]);
+  try {
+    const runDirectory = runDirectoryWith(location.root);
+    const signalPid = signalRecorder(); // nothing dies: every member survives
+
+    const report = await control({ runDirectory, action: 'stop', procRoot: location.root,
+      graceMs: 0, killConfirmMs: 30, signalPid });
+
+    assert.deepEqual(report, {
+      action: 'stop',
+      runId: RUN_ID,
+      writersStopped: false,
+      terminated: [],
+      remaining: [101, 100],
+    });
+    assert.deepEqual(signalPid.calls,
+      [['SIGTERM', 101], ['SIGTERM', 100], ['SIGKILL', 101], ['SIGKILL', 100]],
+      'a surviving writer is escalated and then reported, never silently dropped');
+  } finally {
+    location.cleanup();
+  }
+});
+
+test('a stop refuses a reused pid or an evidence-less record before any signal', async () => {
+  const location = syntheticProc([
+    { pid: 1, comm: 'execd', state: 'S', ppid: 0, pgrp: 1, startTicks: 1 },
+    { pid: 90, comm: 'node', state: 'S', ppid: 1, pgrp: 1, startTicks: 2 },
+    { pid: 100, comm: 'other', state: 'S', ppid: 1, pgrp: 100, startTicks: 9999 },
+  ]);
+  const runRoot = mkdtempSync(join(tmpdir(), 'aria-stop-test-'));
+  try {
+    const reusedDirectory = runDirectoryWith(runRoot);
+    const signalPid = signalRecorder();
+    await assert.rejects(control({ runDirectory: reusedDirectory, action: 'stop',
+      procRoot: location.root, graceMs: 0, killConfirmMs: 0, signalPid }),
+    (error) => error instanceof ControlFault && error.exitCode === 65
+      && error.message === `Ownership identity mismatch for run ${RUN_ID}: pid 100 is gone or reused`);
+    assert.deepEqual(signalPid.calls, [], 'an unverifiable identity is refused before any signal');
+
+    // A record without start-ticks evidence proves nothing about an absent pid.
+    location.remove(100);
+    const evidenceLessDirectory = runDirectoryWith(join(runRoot, 'evidence-less'),
+      { childStartTicks: null });
+    await assert.rejects(control({ runDirectory: evidenceLessDirectory, action: 'stop',
+      procRoot: location.root, graceMs: 0, killConfirmMs: 0, signalPid }),
+    (error) => error instanceof ControlFault && error.exitCode === 65
+      && /no start-ticks evidence for pid 100/.test(error.message));
+    assert.deepEqual(signalPid.calls, []);
+  } finally {
+    location.cleanup();
+    rmSync(runRoot, { recursive: true, force: true });
+  }
 });
 
 test('readRecord refuses a missing, malformed or foreign record', () => {

@@ -406,6 +406,8 @@ test('scenarios.json declares every scenario both peers implement', async () => 
       'pause-resume',
       'permission-expiry',
       'reported-usage',
+      'sdd-qa-pass',
+      'self-exit',
       'timeout',
       'two-turn-nonce',
       'unknown-usage',

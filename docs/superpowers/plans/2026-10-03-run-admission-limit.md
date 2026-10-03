@@ -283,6 +283,67 @@ class RunAdmissionQueueTest {
         assertThat(((TaskExecutionException) queuedFailures.get(0)).cause())
                 .isEqualTo(TaskExecutionException.Cause.ABORTED);
     }
+
+    @Test
+    void interruptedWaiterLeavesNoPhantomPermit() throws Exception {
+        RunAdmissionQueue queue = queue(1, 1);
+        CountDownLatch admitted = new CountDownLatch(1);
+        List<Throwable> failures = new ArrayList<>();
+        acquiring(queue, UUID.randomUUID(), WORKER, Instant.parse("2026-10-03T00:00:00Z"), admitted, failures);
+        assertThat(admitted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        UUID parked = UUID.randomUUID();
+        List<Throwable> parkedFailures = new ArrayList<>();
+        Thread parkedThread = acquiring(queue, parked, WORKER, Instant.parse("2026-10-03T00:00:01Z"),
+                new CountDownLatch(1), parkedFailures);
+        Thread.sleep(200); // let it park
+
+        parkedThread.interrupt();
+        parkedThread.join(5000);
+        assertThat(parkedThread.isAlive()).isFalse();
+        assertThat(parkedFailures).hasSize(1);
+        assertThat(parkedFailures.get(0)).isInstanceOf(TaskExecutionException.class);
+
+        // The interrupted thread is gone: releasing the holder must NOT hand its
+        // slot to the dead waiter's phantom permit.
+        for (UUID runId : queue.activeRunIds()) {
+            queue.release(runId);
+            break;
+        }
+        assertThat(queue.activeWorkerCount()).isZero();
+        assertThat(queue.isWaiting(parked)).isFalse();
+        assertThat(failures).isEmpty();
+    }
+
+    @Test
+    void settleAtomicallyRemovesWaiterAndPermit() throws Exception {
+        RunAdmissionQueue queue = queue(1, 1);
+        CountDownLatch admitted = new CountDownLatch(1);
+        List<Throwable> failures = new ArrayList<>();
+        UUID holder = UUID.randomUUID();
+        acquiring(queue, holder, WORKER, Instant.parse("2026-10-03T00:00:00Z"), admitted, failures);
+        assertThat(admitted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        UUID parked = UUID.randomUUID();
+        List<Throwable> parkedFailures = new ArrayList<>();
+        acquiring(queue, parked, WORKER, Instant.parse("2026-10-03T00:00:01Z"), new CountDownLatch(1), parkedFailures);
+        Thread.sleep(200); // let it park
+
+        queue.settle(parked);
+        long deadline = System.currentTimeMillis() + 5000;
+        while (parkedFailures.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(parkedFailures).hasSize(1);
+        assertThat(parkedFailures.get(0)).isInstanceOf(TaskExecutionException.class);
+        assertThat(failures).isEmpty();
+
+        queue.settle(holder);
+        assertThat(queue.activeWorkerCount()).isZero();
+        queue.settle(holder); // idempotent
+        queue.settle(UUID.randomUUID());
+        assertThat(queue.activeWorkerCount()).isZero();
+    }
 }
 ```
 
@@ -364,6 +425,9 @@ public class RunAdmissionQueue {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                // The thread is walking away: drop its waiter and any permit a
+                // racing grant already handed it, or a dead thread holds a slot.
+                removeAndPromote(runId);
                 throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
                         "Run " + runId + " was interrupted while waiting for an admission slot", e);
             }
@@ -376,6 +440,20 @@ public class RunAdmissionQueue {
             active.remove(runId);
             promote();
             monitor.notifyAll();
+        }
+    }
+
+    /**
+     * Settles a run that reached a terminal state: atomically drops any permit it
+     * holds and removes it from both wait deques, then admits the next waiters.
+     * {@code release()} + {@code dequeue()} in sequence is NOT equivalent — a
+     * grant landing between the two would admit an already-terminal run — so the
+     * terminal-event listener and the engine's post-admission revalidation use
+     * this instead. Idempotent.
+     */
+    public void settle(UUID runId) {
+        synchronized (monitor) {
+            removeAndPromote(runId);
         }
     }
 
@@ -403,14 +481,25 @@ public class RunAdmissionQueue {
     }
 
     boolean isWaiting(UUID runId) {
-        return workersWaiting.stream().anyMatch(w -> w.runId().equals(runId))
-                || ariaWaiting.stream().anyMatch(w -> w.runId().equals(runId));
+        synchronized (monitor) {
+            return workersWaiting.stream().anyMatch(w -> w.runId().equals(runId))
+                    || ariaWaiting.stream().anyMatch(w -> w.runId().equals(runId));
+        }
     }
 
     Set<UUID> activeRunIds() {
         synchronized (monitor) {
             return new HashSet<>(active.keySet());
         }
+    }
+
+    /** Removes a run from both wait deques and the active map, then promotes (must hold the monitor). */
+    private void removeAndPromote(UUID runId) {
+        workersWaiting.removeIf(w -> w.runId().equals(runId));
+        ariaWaiting.removeIf(w -> w.runId().equals(runId));
+        active.remove(runId);
+        promote();
+        monitor.notifyAll();
     }
 
     /** Admits head waiters while their pool has capacity (called under monitor). */
@@ -450,7 +539,7 @@ Note: `grantHead` runs under the monitor; `activeWorkerCount()/activeAriaCount()
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd agent-control-tower && mvn -B test -pl act-execution -Dtest=RunAdmissionQueueTest -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true`
-Expected: PASS (4 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -580,12 +669,13 @@ Add to `RunAdmissionQueue`:
 ```java
     /**
      * The single terminal source of truth: a completed/cancelled/failed/aborted
-     * run releases its permit and leaves the queue if it never got one.
+     * run releases its permit and leaves the queue if it never got one — in one
+     * atomic step, so a grant can never land between the two and admit a run
+     * that is already terminal.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onRunCompleted(RunCompletedEvent event) {
-        release(event.getRunId());
-        dequeue(event.getRunId());
+        settle(event.getRunId());
     }
 ```
 
@@ -594,7 +684,7 @@ with imports `io.aria.conductor.common.event.RunCompletedEvent` and `org.springf
 - [ ] **Step 4: Run the tests (new + Task 2 suite)**
 
 Run: `cd agent-control-tower && mvn -B test -pl act-execution -Dtest="RunAdmissionQueueTest,RunAdmissionQueueEventsTest" -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -660,7 +750,7 @@ class AgentLoopEngineAdmissionTest {
 }
 ```
 
-Implementer note: this test class follows `AgentLoopEngineTaskPathTest`'s setup verbatim (mocks for repositories/emitter; `RecordingQueue extends RunAdmissionQueue` overriding `acquire` to record and return immediately). The stub launcher is the same style used there (a launcher whose `owns` returns true). Assert both directions (owned → one acquire with exact arguments; not-owned → none).
+Implementer note: this test class follows `AgentLoopEngineTaskPathTest`'s setup verbatim (mocks for repositories/emitter; `RecordingQueue extends RunAdmissionQueue` overriding `acquire` to record and return immediately and `settle` to record). The stub launcher is the same style used there (a launcher whose `owns` returns true). Assert three scenarios: (a) owned → exactly one acquire with the run's exact id/agentId/createdAt, and settle never called; (b) not-owned → no acquire; (c) cancelled-while-queued → the run repository's `findById` returns the PENDING run on the entry load and a CANCELLED copy on the post-admission re-read (stub the two returns sequentially), `startRun` throws `TaskExecutionException` with `Cause.ABORTED`, settle was called with the run id, and no `RunIterationEvent` was published.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -680,6 +770,17 @@ In `AgentLoopEngine`:
         CoreRunLauncher coreLauncher = runCoreLauncher();
         if (coreLauncher != null && coreLauncher.owns(agent)) {
             admission.acquire(run.getId(), run.getAgentId(), run.getCreatedAt());
+            // The cancel can land before this waiter was even parked: settle()
+            // no-ops, then admission grants the slot. Re-read after admission —
+            // a run that left PENDING while queued must give its slot back and
+            // never start (the stale INITIALIZING write would resurrect it).
+            RunStatus afterAdmission = runRepository.findById(run.getId())
+                    .map(Run::getStatus).orElse(null);
+            if (afterAdmission != RunStatus.PENDING && afterAdmission != RunStatus.PAUSED) {
+                admission.settle(run.getId());
+                throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                        "Run " + run.getId() + " left PENDING while queued (" + afterAdmission + "); start aborted");
+            }
             eventPublisher.publishEvent(new RunIterationEvent(this, run.getId(), run.getAgentId(),
                     1, run.getMaxIterations()));
         }
@@ -971,6 +1072,8 @@ Expected: BUILD SUCCESS, 0 failures.
 
 With defaults (6+1): dispatch 8 runs on the local stack; expect 6 executing and 2 `PENDING` with TODO cards; completing one starts the next; no `DOCKER::*` 500s in `.run/backend.log` during the capped fan-out. Evidence: run statuses via `GET /api/v1/runs/{id}`, cards via `GET /api/v1/kanban/items`, log grep `docker::`.
 
+Also verify cancel-while-queued live: while the cap is saturated, cancel a `PENDING` run via the API; it must stay `CANCELLED` (never `INITIALIZING`/`RUNNING`), its card must not reach `IN_PROGRESS`, and the freed slot must admit the next waiter.
+
 - [ ] **Step 3: Push and open the PR** (requires the operator's explicit go-ahead first — the standing push-confirmation rule).
 
 ---
@@ -979,5 +1082,5 @@ With defaults (6+1): dispatch 8 runs on the local stack; expect 6 executing and 
 
 - **Spec coverage:** D1 gateway at engine ✓ Task 4; D2 6+1 config ✓ Task 1 + pool logic Task 2; D3 PENDING + card TODO + start signal ✓ Tasks 2/4/5; D4 deadline freeze at admission ✓ (gate sits above `CoreRunLauncher.execute`, verified L124-134); release/PAUSED semantics ✓ Tasks 2/3; restart re-enqueue ✓ Task 7; cancel-while-queued ✓ Task 3; testing (unit/FIFO/reserve/release/boot/card/live) ✓ Tasks 2-8.
 - **Placeholders:** Task 4's test and Task 6 describe the test body as structured steps over an existing verified pattern (both name the exact pattern file and assertions); no TBD/TODO markers elsewhere.
-- **Type consistency:** `RunAdmissionProperties.getMaxActive()/getAriaReserved()` used consistently; `RunAdmissionQueue.acquire/release/dequeue/onRunCompleted` names consistent across tasks; `RunIterationEvent` 5-arg ctor matches `RunIterationEvent.java:28`; `RunCompletedEvent(source, runId, agentId, status)` matches `RunService.java:207`.
+- **Type consistency:** `RunAdmissionProperties.getMaxActive()/getAriaReserved()` used consistently; `RunAdmissionQueue.acquire/release/dequeue/settle/onRunCompleted` names consistent across tasks; `RunIterationEvent` 5-arg ctor matches `RunIterationEvent.java:28`; `RunCompletedEvent(source, runId, agentId, status)` matches `RunService.java:207`.
 - **Known judgment calls to watch during execution:** (a) the exact local variable names inside `AgentLoopEngine.startRun` (names may adapt, behavior may not); (b) the `@Order` interplay between the bootstrap and `recoverOrphanedRuns` — if the recovery listener is itself ordered, keep the bootstrap strictly after it; (c) `KanbanAutoDispatchIntegrationTest`'s mid-flight assertion contingency (Task 5 Step 4).

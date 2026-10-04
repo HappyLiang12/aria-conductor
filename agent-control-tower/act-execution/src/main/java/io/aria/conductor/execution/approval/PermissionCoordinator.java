@@ -2,9 +2,11 @@ package io.aria.conductor.execution.approval;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
@@ -183,6 +185,7 @@ public class PermissionCoordinator {
         boolean autoApproved = request.expiresAt().isAfter(now) && autoApprovalCovers(request);
         Approval approval = Approval.builder()
                 .runId(request.runId())
+                .source(ApprovalSource.ACP_PERMISSION)
                 .status(autoApproved ? ApprovalStatus.APPROVED : ApprovalStatus.PENDING)
                 .reason(autoApproved ? AUTO_APPROVE_REASON : registrationReason(request))
                 .decidedAt(autoApproved ? now : null)
@@ -450,6 +453,28 @@ public class PermissionCoordinator {
     }
 
     /**
+     * Settles every still-PENDING native ask of a run whose runtime has ended
+     * (the run can no longer receive a reply, so the ask is adjudicated, never
+     * left behind): EXPIRED with the recorded reason "run ended", the waiter
+     * released, and {@link ApprovalExpiredEvent} published. Already-settled
+     * asks are never rewritten.
+     */
+    @Transactional
+    public int cancelPendingForRun(UUID runId) {
+        Objects.requireNonNull(runId, "runId");
+        int settled = 0;
+        for (AcpPermissionRequest row : permissions.findByRunId(runId)) {
+            Approval approval = approvals.findById(row.getApprovalId()).orElse(null);
+            if (approval == null || approval.getStatus() != ApprovalStatus.PENDING) {
+                continue;
+            }
+            expireWith(approval, row, clock.instant(), "run ended");
+            settled++;
+        }
+        return settled;
+    }
+
+    /**
      * Delivers a decision that was held by a manual pause. Re-checks the state
      * inside this transaction: still paused, already delivered, not decided, or
      * expired → nothing is delivered, and an expired delivery is never replayed
@@ -543,12 +568,22 @@ public class PermissionCoordinator {
      * session blocked on the ask would wait for its own timeout.
      */
     private void expire(Approval approval, AcpPermissionRequest row, Instant now) {
+        expireWith(approval, row, now, EXPIRY_REASON);
+    }
+
+    /**
+     * The single native settle-by-timeout path. Publishes {@link ApprovalExpiredEvent}
+     * with the ask's tool name so the operator learns what was skipped.
+     */
+    private void expireWith(Approval approval, AcpPermissionRequest row, Instant now, String reason) {
         approval.setStatus(ApprovalStatus.EXPIRED);
-        approval.setReason(EXPIRY_REASON);
+        approval.setReason(reason);
         approval.setDecidedAt(now);
         approvals.save(approval);
         markDeliveryExpired(row);
         approvalGate.cancelPendingApproval(approval.getId());
+        eventPublisher.publishEvent(new ApprovalExpiredEvent(this, approval.getId(),
+                approval.getRunId(), approval.getReason(), row.getToolName()));
     }
 
     private void markDeliveryExpired(AcpPermissionRequest row) {

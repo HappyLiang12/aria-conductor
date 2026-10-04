@@ -1,8 +1,10 @@
 package io.aria.conductor.execution.approval;
 
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
@@ -14,6 +16,7 @@ import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -44,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -246,6 +250,23 @@ class PermissionCoordinatorTest {
         assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
         assertThat(requestedEvents.get(0).getRunId()).isEqualTo(RUN_ID);
         assertThat(requestedEvents.get(0).getToolCallId()).isNull();
+    }
+
+    /**
+     * A native ask must carry its provenance: the persisted approval is stamped
+     * {@code ACP_PERMISSION}, so the run-end sweep and the legacy card sweeps
+     * leave it to its own coordinator instead of treating it as a legacy gate
+     * row and rewriting it.
+     */
+    @Test
+    void registerStampsNativeAsksWithTheAcpPermissionSource() {
+        coordinator = coordinator(T0);
+
+        coordinator.register(permission(PermissionTarget.NATIVE_TOOL));
+
+        ArgumentCaptor<Approval> saved = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(saved.capture());
+        assertThat(saved.getValue().getSource()).isEqualTo(ApprovalSource.ACP_PERMISSION);
     }
 
     /**
@@ -928,6 +949,50 @@ class PermissionCoordinatorTest {
         assertThat(approvalStore.get(settled).getStatus()).isEqualTo(ApprovalStatus.DENIED);
         assertThat(approvalStore.get(settled).getReason())
                 .isEqualTo("Operator denied write_file (native permission request 2)");
+    }
+
+    /**
+     * The run-end settle (spec §5.3): every still-PENDING native ask of a run
+     * whose runtime has ended is adjudicated — EXPIRED with the recorded reason
+     * "run ended", the waiter released and the operator told via the expired
+     * event carrying the ask's tool name — while an already-settled ask is never
+     * rewritten.
+     */
+    @Test
+    void cancelPendingForRunSettlesOnlyPendingAsksWithTheRunEndedReason() {
+        coordinator = coordinator(T0);
+        UUID pendingId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "0", "run_agent",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        UUID settledId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "1", "WebSearch",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        coordinator.decide(settledId, PermissionChoice.ALLOW_ONCE, ActorPrincipal.operator(null));
+
+        int settledCount = coordinator.cancelPendingForRun(RUN_ID);
+
+        assertThat(settledCount).isEqualTo(1);
+        assertThat(approvalStore.get(pendingId).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(approvalStore.get(pendingId).getReason()).isEqualTo("run ended");
+        assertThat(approvalStore.get(settledId).getStatus()).isEqualTo(ApprovalStatus.APPROVED); // untouched
+        ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
+    }
+
+    /**
+     * Every expiry announces the ask: the settled-by-timeout event carries the
+     * ask's tool name, so the operator learns what was skipped.
+     */
+    @Test
+    void expiryPublishesTheExpiredEventWithTheToolName() {
+        coordinator = coordinator(T0);
+        coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID, "run_agent",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+
+        coordinator.expirePendingForRun(RUN_ID, EXPIRES_AT.plusSeconds(1));
+
+        ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
     }
 
     @Test

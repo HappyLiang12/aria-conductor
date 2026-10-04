@@ -298,6 +298,28 @@ class ApprovalGateTest {
         verify(approvalRepository, never()).save(any());
     }
 
+    /**
+     * Task 3 pin: a native ask is stamped {@code ACP_PERMISSION} at registration
+     * (PermissionCoordinator.register), so the legacy run-end sweep must leave it
+     * to the ACP permission coordinator's own {@code cancelPendingForRun} — this
+     * is the guard the source stamp makes effective for native rows.
+     */
+    @Test
+    void cancelAllPendingForRunLeavesNativeAsksAlone() {
+        RunContext ctx = ctx();
+        Approval nativeAsk = Approval.builder().id(UUID.randomUUID()).runId(ctx.getRunId())
+                .status(ApprovalStatus.PENDING)
+                .source(ApprovalSource.ACP_PERMISSION)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .build();
+        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(nativeAsk));
+
+        gate.cancelAllPendingForRun(ctx.getRunId());
+
+        assertThat(nativeAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(nativeAsk);
+    }
+
     @Test
     void cancelPendingApproval_unknownId_doesNotAffectOtherPendingApprovals() throws Exception {
         RunContext ctx = ctx();

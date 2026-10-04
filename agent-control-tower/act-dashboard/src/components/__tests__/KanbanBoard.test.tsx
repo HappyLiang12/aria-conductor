@@ -802,3 +802,183 @@ describe('KanbanBoard Assign-to picker (UX-7)', () => {
     );
   });
 });
+
+describe('KanbanBoard batch decisions on the REVIEW column (Task 8)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+  });
+
+  const renderBoard = async (data: KanbanItem[]) => {
+    kanbanData = data;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const utils = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return utils;
+  };
+
+  // The audited backlog shape (spec problem statement): failed cards dominate.
+  const mixedReviewCards = () => [
+    baseItem({ id: 'k-c1', title: 'completed card', status: 'REVIEW', runOutcome: 'COMPLETED' }),
+    baseItem({ id: 'k-f1', title: 'failed card one', status: 'REVIEW', runOutcome: 'FAILED' }),
+    baseItem({ id: 'k-f2', title: 'failed card two', status: 'REVIEW', runOutcome: 'FAILED' }),
+  ];
+
+  it('offers the three header buttons with outcome-driven counts', async () => {
+    await renderBoard(mixedReviewCards());
+
+    expect(screen.getByRole('button', { name: 'Accept all completed (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rework all failed (2)' })).toBeInTheDocument();
+    // Cancel acts on every REVIEW card, regardless of outcome (spec D3/item 5).
+    expect(screen.getByRole('button', { name: 'Cancel all (3)' })).toBeInTheDocument();
+  });
+
+  it('accept-all gates on a count-stating confirm, then transitions each completed card', async () => {
+    const { transitionKanbanItem, listKanbanItems } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'DONE' }));
+    await renderBoard(mixedReviewCards());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all completed (1)' }));
+    // The confirmation is the gate: nothing has been decided yet, and the
+    // dialog states the affected card count (spec D3).
+    expect(transitionKanbanItem).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog').textContent).toContain('1 card');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() =>
+      expect(transitionKanbanItem).toHaveBeenCalledWith('k-c1', { status: 'DONE' }),
+    );
+    // Only the completed card: the two FAILED cards are not part of this batch.
+    expect(transitionKanbanItem).toHaveBeenCalledTimes(1);
+    // The list refreshes after the batch (first call is the mount fetch).
+    await waitFor(() =>
+      expect(vi.mocked(listKanbanItems).mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+  });
+
+  it('rework-all states the count and the dispatch, mapping to TODO', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'TODO' }));
+    await renderBoard(mixedReviewCards());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rework all failed (2)' }));
+    const dialog = screen.getByRole('dialog').textContent ?? '';
+    expect(dialog).toContain('2 cards');
+    expect(dialog).toContain('this will dispatch 2 new runs');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(transitionKanbanItem).toHaveBeenCalledTimes(2));
+    expect(transitionKanbanItem).toHaveBeenNthCalledWith(1, 'k-f1', { status: 'TODO' });
+    expect(transitionKanbanItem).toHaveBeenNthCalledWith(2, 'k-f2', { status: 'TODO' });
+  });
+
+  it('cancel-all acts on every review card, regardless of outcome', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'CANCELLED' }));
+    await renderBoard(mixedReviewCards());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel all (3)' }));
+    expect(screen.getByRole('dialog').textContent).toContain('3 cards');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(transitionKanbanItem).toHaveBeenCalledTimes(3));
+    for (const id of ['k-c1', 'k-f1', 'k-f2']) {
+      expect(transitionKanbanItem).toHaveBeenCalledWith(id, { status: 'CANCELLED' });
+    }
+  });
+
+  it('a refused card never aborts the batch; the summary reports the failure', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    vi.mocked(transitionKanbanItem)
+      .mockRejectedValueOnce({
+        message: 'Request failed with status code 409',
+        response: { status: 409, data: { message: 'linked run is still RUNNING' } },
+      })
+      .mockResolvedValueOnce(baseItem({ status: 'DONE' }));
+    await renderBoard([
+      baseItem({ id: 'k-r1', title: 'refused card', status: 'REVIEW', runOutcome: 'COMPLETED' }),
+      baseItem({ id: 'k-r2', title: 'second card', status: 'REVIEW', runOutcome: 'COMPLETED' }),
+    ]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all completed (2)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    // The rejection on the first card does not stop the loop: the second ran.
+    await waitFor(() =>
+      expect(transitionKanbanItem).toHaveBeenNthCalledWith(2, 'k-r2', { status: 'DONE' }),
+    );
+    expect(
+      await screen.findByText('Accepted 1, 1 failed: linked run is still RUNNING'),
+    ).toBeInTheDocument();
+  });
+
+  it('disables the batch buttons while a batch runs', async () => {
+    const { transitionKanbanItem } = await import('../../api/kanban');
+    let release!: (value: KanbanItem) => void;
+    vi.mocked(transitionKanbanItem).mockImplementationOnce(
+      () => new Promise<KanbanItem>((resolve) => { release = resolve; }),
+    );
+    await renderBoard([
+      baseItem({ id: 'k-s1', title: 'slow card', status: 'REVIEW', runOutcome: 'FAILED' }),
+    ]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rework all failed (1)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(transitionKanbanItem).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole('button', { name: 'Rework all failed (1)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel all (1)' })).toBeDisabled();
+
+    await act(async () => { release(baseItem({ status: 'TODO' })); });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Rework all failed (1)' })).not.toBeDisabled(),
+    );
+  });
+});
+
+describe('KanbanBoard board-card outcome chip (R-RFUX4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCtx = { lastMessage: null, isConnected: false };
+  });
+
+  const renderBoard = async (data: KanbanItem[]) => {
+    kanbanData = data;
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const utils = ui(qc);
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    return utils;
+  };
+
+  it('renders the exported outcome chip on a REVIEW card when runOutcome is known', async () => {
+    await renderBoard([baseItem({ id: 'k-rev', status: 'REVIEW', runOutcome: 'FAILED' })]);
+
+    const card = screen
+      .getByTestId('lane-REVIEW')
+      .querySelector('[data-card="k-rev"]') as HTMLElement;
+    expect(card).not.toBeNull();
+    // The chip is the exported component (tones from its own mapping): the
+    // FAILED tone is the red `pill risk` pill.
+    const chip = card.querySelector('.pill.risk');
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toBe('FAILED');
+  });
+
+  it('renders no chip for UNKNOWN or absent outcomes, while a known one still renders', async () => {
+    await renderBoard([
+      baseItem({ id: 'k-rev', status: 'REVIEW', runOutcome: 'FAILED' }),
+      baseItem({ id: 'k-unk', status: 'REVIEW', runOutcome: 'UNKNOWN' }),
+      baseItem({ id: 'k-none', status: 'REVIEW' }),
+    ]);
+
+    const lane = screen.getByTestId('lane-REVIEW');
+    // Positive control: exactly the FAILED card carries a chip…
+    const chips = lane.querySelectorAll('.pill.risk');
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent).toBe('FAILED');
+    // …while UNKNOWN and a missing outcome render nothing.
+    expect(lane.querySelector('[data-card="k-unk"]')!.querySelector('.pill.risk')).toBeNull();
+    expect(lane.querySelector('[data-card="k-unk"]')!.textContent).not.toContain('UNKNOWN');
+    expect(lane.querySelector('[data-card="k-none"]')!.querySelector('.pill.risk')).toBeNull();
+  });
+});

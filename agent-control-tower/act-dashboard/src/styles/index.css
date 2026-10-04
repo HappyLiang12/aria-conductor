@@ -196,6 +196,18 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 .col-k header .count { background: rgba(255,255,255,.04); border: 1px solid var(--line-2); padding: 1px 7px; border-radius: 999px; color: var(--text); font-size: 10px; }
 .col-k.gate header { color: #ffd884; }
 .col-k.gate { background: linear-gradient(180deg, rgba(246,196,83,.06), rgba(255,255,255,.02)); border-color: rgba(246,196,83,.25); }
+/* REVIEW-column batch decisions (Task 8): compact preset row under the header. */
+.batch-actions {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 7px 8px; border-bottom: 1px dashed var(--line-2);
+}
+.batch-actions button {
+  border: 1px solid var(--line-2); background: transparent; color: var(--text-mute);
+  border-radius: 5px; font-family: inherit; font-size: 10px; line-height: 1.6;
+  padding: 3px 7px; cursor: pointer; text-align: left;
+}
+.batch-actions button:hover:not(:disabled) { border-color: var(--brand-2); color: var(--brand-2); }
+.batch-actions button:disabled { opacity: .5; cursor: default; }
 .col-k .lane { padding: 8px; display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 60px; }
 /* Drop-target affordance while a card is being dragged: legal lanes light up,
    illegal lanes dim. */

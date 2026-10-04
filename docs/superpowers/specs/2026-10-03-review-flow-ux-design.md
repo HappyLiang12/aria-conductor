@@ -97,22 +97,32 @@ individually operator-approved). Complements the decisions above; nothing in D1-
    stays: no single option, no auto-settle). The platform-prefix clause is unchanged; a native ask not on the
    list keeps the per-call approval (this amendment is the operator decision the 2026-09-29 policy required).
    Defaults gain `WebSearch` and `WebFetch`; `run_agent` stays off the list.
-2. **Settle event (act-common).** New `ApprovalSettledEvent(approvalId, runId, status, reason, toolName)`,
-   published AFTER_COMMIT from the single settle point in `PermissionCoordinator`; the run-end leftover
-   settlement in `ApprovalGate` is routed through that same point so reap-settles emit it too.
-3. **Card settle (act-execution/kanban).** A listener on `ApprovalSettledEvent` resolves the approval's
-   `kanbanItemId` (linked by `KanbanReviewCardListener.linkReviewCard`) and transitions the card: APPROVED ->
-   DONE, DENIED/EXPIRED -> CANCELLED. `KanbanReviewCardListener` gains a guard: never create or link a card
-   for an already-settled ask. The D2 sweep guard (never sweep native permission asks) is untouched - the
-   auto-settle happens at ask registration, not through the sweep.
-4. **Notification flip and expiry notice (act-aria).** On settle: mark the matching `approval.requested`
-   notification(s) (type + resourceId = approvalId) read; on EXPIRED also create one `approval.expired`
-   notification ("Permission request expired - tool call skipped: <tool> (run <id8>)") with
-   resourceType APPROVAL and the approval id. The frontend `NotificationType` union and bell rendering are
-   extended for the new type.
-5. **Ask context (frontend + listing).** Tool-call review cards and Review Queue rows show the tool name plus
-   an arguments excerpt (approval reason + argumentsJson, through the existing view/DTO path; the card-detail
-   surface rides the workstream above).
+2. **Settle events (act-common; recon adjustment).** Planning recon found the lifecycle events already exist:
+   `ApprovalDecidedEvent` (published by `ApprovalGate.decideApproval`, which the native decide path already
+   routes through) and `ApprovalExpiredEvent` (published by the legacy timeout path only). No third event is
+   introduced. The coordinator's `expire()` gains the `ApprovalExpiredEvent` publish (carrying the tool name),
+   and the run-end settle for native asks is added to the coordinator (item 3), so the two existing events
+   cover every settle path.
+3. **Native lifecycle fix (defect found in planning recon).** `Approval.source` defaults to `LEGACY_GATE` and
+   `PermissionCoordinator.register()` never stamps it, so native ACP asks persist as LEGACY_GATE: the
+   repository guards meant to protect them (`denyPendingByKanbanItemId` and `markStaleByKanbanItemId` filter
+   LEGACY_GATE; `cancelAllPendingForRun` skips ACP_PERMISSION) all misfire - observed in the drill as the
+   ask settled "Run cancelled" by the legacy run-cancel sweep. `register()` stamps `ACP_PERMISSION`; the
+   coordinator gains `cancelPendingForRun(runId)` settling a run's still-pending native asks at run end
+   (EXPIRED, reason "run ended", waiter released, `ApprovalExpiredEvent` published); the engine's run-end
+   hook calls it beside the gate sweep.
+4. **Card settle (act-execution/kanban).** A listener on `ApprovalDecidedEvent` + `ApprovalExpiredEvent`
+   resolves the approval's `kanbanItemId` (linked by `KanbanReviewCardListener.linkReviewCard`) and
+   transitions the card: APPROVED -> DONE, DENIED/EXPIRED -> CANCELLED. `KanbanReviewCardListener` gains a
+   guard: never create or link a card for an already-settled ask. The D2 sweep guard is untouched - with the
+   source stamp of item 3 the repository guards become effective.
+5. **Notification flip and expiry notice (act-aria).** On `ApprovalDecidedEvent`/`ApprovalExpiredEvent`: mark
+   the matching `approval.requested` notification(s) (type + resourceId = approvalId) read. The
+   `approval.expired` notification itself already exists (UX-6); its text gains the tool name (from the
+   extended event) and the frontend `NotificationType` union gains `approval.expired` with bell rendering.
+6. **Ask context (frontend + card creation).** Tool-call cards carry the tool name and an arguments excerpt
+   in title/description at creation (the queue rows on the Ops surface already render `toolName` and the
+   native facts; the Overview rail and the board cards are the gaps).
 
 ## Error handling
 
@@ -124,10 +134,13 @@ individually operator-approved). Complements the decisions above; nothing in D1-
 ## Testing
 
 - Unit: native-clause coverage (a listed native ask auto-settles when a single ALLOW_ONCE option is offered;
-  an unlisted native ask stays PENDING; a listed ask without a single option stays PENDING); event emission on
-  decide, on expiry and on reap.
-- Listener: card DONE on approve, CANCELLED on deny and on expire; no card creation for an already-settled
-  ask; `approval.requested` flipped read; `approval.expired` created only on expiry.
+  an unlisted native ask stays PENDING; a listed ask without a single option stays PENDING); `register()`
+  stamps ACP_PERMISSION; the run-end `cancelPendingForRun` settles pending native asks with the "run ended"
+  reason and publishes `ApprovalExpiredEvent`; the legacy sweeps (deny/stale/cancelAllPendingForRun) leave
+  ACP_PERMISSION rows untouched (explicit negative tests).
+- Listener: card DONE on decide-approved, CANCELLED on decide-denied and on expired; no card creation for an
+  already-settled ask; `approval.requested` flipped read on both events; the expiry notification carries the
+  tool name (creation itself already exists since UX-6).
 - Existing suites: the sweep negative tests (native asks untouched) stay green; `PlatformMcpAutoApprovalTest`
   extended; notification tests extended.
 - Live: rerun the qoder drill - zero `WebSearch` asks; tool-call cards reach terminal states with their asks;

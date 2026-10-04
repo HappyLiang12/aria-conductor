@@ -84,6 +84,21 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
                                   @Param("reason") String reason,
                                   @Param("now") Instant now);
 
+    /** Bulk approve of a card's PENDING review asks (the operator accepted the
+     *  work): single-statement bulk update, no entity load; callers must be
+     *  @Transactional and results bypass the persistence context. Only
+     *  {@code LEGACY_GATE} rows are swept: rows with {@code source = ACP_PERMISSION}
+     *  are owned by the ACP permission coordinator and must never be decided by
+     *  a legacy card sweep. */
+    @Modifying
+    @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.APPROVED, " +
+           "a.reason = :reason, a.decidedAt = :now " +
+           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
+           "and a.source = io.aria.conductor.common.model.ApprovalSource.LEGACY_GATE")
+    int approvePendingByKanbanItemId(@Param("itemId") String itemId,
+                                     @Param("reason") String reason,
+                                     @Param("now") Instant now);
+
     /** Marks PENDING asks on a card stale (EXPIRED) when the operator sends
      *  the work back with changes. Single-statement bulk update, no entity
      *  load; callers must be @Transactional and results bypass the persistence

@@ -144,7 +144,10 @@ public class KanbanTransitionService {
                         "Invalid kanban transition: " + item.getStatus() + " -> " + to);
             };
             case REVIEW -> kanbanService.transition(id, KanbanStatus.REVIEW, request.getComment());
-            case DONE -> kanbanService.transition(id, KanbanStatus.DONE, request.getComment());
+            case DONE -> {
+                approvalRepository.approvePendingByKanbanItemId(id, "accepted by card decision", Instant.now());
+                yield kanbanService.transition(id, KanbanStatus.DONE, request.getComment());
+            }
             case CANCELLED -> cancel(item, request.getComment());
             // BLOCKED is retired: persisted rows may still carry it; it has no
             // orchestrator side effects and is rejected like any illegal move.
@@ -215,11 +218,12 @@ public class KanbanTransitionService {
      * from starting. Cancelling (not pausing) is what publishes
      * {@code RunCompletedEvent(CANCELLED)} and lets the coordinator expire the run's pending
      * asks with the run-ended reason. A card without a linked run, or whose run already
-     * ended, is unaffected; the stale-ask sweep and the re-dispatch below are unchanged.
+     * ended, is unaffected; the deny sweep of superseded pending asks and the re-dispatch
+     * below are unchanged.
      */
     private KanbanItem requestChanges(KanbanItem item, TransitionRequest request) {
         cancelLiveLinkedRun(item);
-        approvalRepository.markStaleByKanbanItemId(item.getId(), Instant.now());
+        approvalRepository.denyPendingByKanbanItemId(item.getId(), "superseded by request changes", Instant.now());
         kanbanService.transition(item.getId(), KanbanStatus.TODO, request.getComment());
         return pickup(item, request);
     }

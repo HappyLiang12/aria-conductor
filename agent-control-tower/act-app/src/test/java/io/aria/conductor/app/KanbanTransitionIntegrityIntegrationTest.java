@@ -7,6 +7,9 @@ import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
@@ -17,6 +20,7 @@ import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.kanban.KanbanStatus;
 import io.aria.conductor.execution.kanban.KanbanTransitionService;
 import io.aria.conductor.execution.kanban.TransitionRequest;
+import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
 import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
@@ -95,6 +99,8 @@ class KanbanTransitionIntegrityIntegrationTest {
     KanbanRepository kanbanRepository;
     @Autowired
     AgentRepository agentRepository;
+    @Autowired
+    ApprovalRepository approvalRepository;
     @Autowired
     ApplicationEventPublisher eventPublisher;
 
@@ -279,6 +285,55 @@ class KanbanTransitionIntegrityIntegrationTest {
         assertThat(after.getStatus()).isEqualTo(KanbanStatus.REVIEW);
         assertThat(after.getLinkedRunId()).isEqualTo(runId.toString());
         assertThat(after.getLinkedAgentId()).isEqualTo(reviewAgentId);
+    }
+
+    @Test
+    void acceptingAReviewCardSettlesLegacyAsksButNeverNativeOnes() {
+        // Born in REVIEW (a creatable birth state): the TODO -> REVIEW hop does
+        // not exist in the state machine, and no run link is needed — the sweep
+        // keys on the card id alone.
+        KanbanItem card = kanbanService.create(CreateKanbanItemRequest.builder()
+                .title("native negative")
+                .status(KanbanStatus.REVIEW)
+                .build());
+        // approvals.run_id carries an FK to runs, so the asks need a real run row.
+        Run run = runRepository.save(Run.builder()
+                .agentId(AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.COMPLETED)
+                .build());
+
+        // Two PENDING asks on the card: the legacy gate ask (builder default
+        // source) that the card sweep owns, and a V60 ACP permission ask that is
+        // owned by AcpPermissionCoordinator and must never be decided here.
+        Approval legacyAsk = approvalRepository.save(Approval.builder()
+                .runId(run.getId())
+                .status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.SPEC_REVIEW)
+                .askType(Approval.AskType.REVIEW_REQUEST)
+                .kanbanItemId(card.getId())
+                .contextMd("legacy review ask")
+                .build());
+        Approval nativeAsk = approvalRepository.save(Approval.builder()
+                .runId(run.getId())
+                .status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.SPEC_REVIEW)
+                .askType(Approval.AskType.APPROVAL)
+                .kanbanItemId(card.getId())
+                .contextMd("native permission ask")
+                .source(ApprovalSource.ACP_PERMISSION)
+                .build());
+
+        kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.DONE).build());
+
+        Approval settledLegacy = approvalRepository.findById(legacyAsk.getId()).orElseThrow();
+        assertThat(settledLegacy.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(settledLegacy.getReason()).isEqualTo("accepted by card decision");
+        assertThat(settledLegacy.getDecidedAt()).isNotNull();
+
+        Approval untouchedNative = approvalRepository.findById(nativeAsk.getId()).orElseThrow();
+        assertThat(untouchedNative.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(untouchedNative.getDecidedAt()).isNull();
     }
 
     /**

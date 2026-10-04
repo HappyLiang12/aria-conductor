@@ -1,29 +1,87 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { WsEvent } from '../../types';
 import { routeForNotificationType } from '../../utils/notificationRoutes';
 import { Toast } from '../Toast';
 
-// The Toast reads the shared WebSocket context from Layout; swap it for a
-// mutable stub so each test can control the "last event" directly.
-let mockCtx: { lastMessage: WsEvent | null; isConnected: boolean } = {
+// The Toast reads the shared WebSocket context from Layout. Swap it for a
+// test context fed by a stateful stub that mirrors useWebSocket exactly:
+// every emitted frame updates `lastMessage` AND fans out to `subscribe`
+// handlers in the same tick, so React batching/coalescing behaves like the
+// real provider (see the burst regression test below).
+interface TestWsCtx {
+  lastMessage: WsEvent | null;
+  isConnected: boolean;
+  send: (data: string) => void;
+  subscribe: (handler: (e: WsEvent) => void) => { unsubscribe: () => void };
+}
+
+const TestWsContext = createContext<TestWsCtx>({
   lastMessage: null,
   isConnected: false,
-};
+  send: () => {},
+  subscribe: () => ({ unsubscribe: () => {} }),
+});
 
 vi.mock('../Layout', () => ({
-  useWebSocketContext: () => mockCtx,
+  useWebSocketContext: () => useContext(TestWsContext),
 }));
 
-function setEvent(event: WsEvent | null) {
-  mockCtx = { lastMessage: event, isConnected: true };
+// Set by the mounted stub; emitting mirrors one ws.onmessage frame.
+let pushEvent: (e: WsEvent) => void = () => {};
+
+function WsStubProvider({ children }: { children: React.ReactNode }) {
+  const [lastMessage, setLastMessage] = useState<WsEvent | null>(null);
+  const handlersRef = useRef(new Set<(e: WsEvent) => void>());
+  const subscribe = useCallback((handler: (e: WsEvent) => void) => {
+    handlersRef.current.add(handler);
+    return {
+      unsubscribe: () => {
+        handlersRef.current.delete(handler);
+      },
+    };
+  }, []);
+  useEffect(() => {
+    pushEvent = (event: WsEvent) => {
+      setLastMessage(event);
+      handlersRef.current.forEach((h) => h(event));
+    };
+    return () => {
+      pushEvent = () => {};
+    };
+  }, []);
+  return (
+    <TestWsContext.Provider
+      value={{ lastMessage, isConnected: true, send: () => {}, subscribe }}
+    >
+      {children}
+    </TestWsContext.Provider>
+  );
+}
+
+/** Emit frames like the socket does: all frames share one React tick. */
+function emit(...events: WsEvent[]) {
+  act(() => {
+    for (const e of events) pushEvent(e);
+  });
 }
 
 // Toast calls useNavigate (it mounts inside the app's BrowserRouter via
 // Layout), so every render must supply a Router context.
 function inRouter(ui: React.ReactElement) {
   return <MemoryRouter initialEntries={['/']}>{ui}</MemoryRouter>;
+}
+
+function renderToast() {
+  return render(
+    inRouter(
+      <WsStubProvider>
+        <Toast />
+      </WsStubProvider>,
+    ),
+  );
 }
 
 function LocationTracker({ paths }: { paths: string[] }) {
@@ -35,7 +93,6 @@ function LocationTracker({ paths }: { paths: string[] }) {
 describe('Toast', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mockCtx = { lastMessage: null, isConnected: false };
   });
 
   afterEach(() => {
@@ -43,25 +100,47 @@ describe('Toast', () => {
   });
 
   it('renders nothing when no event has arrived', () => {
-    const { container } = render(inRouter(<Toast />));
+    const { container } = renderToast();
     expect(container).toBeEmptyDOMElement();
   });
 
   it('shows a human-readable label without the raw event type for noteworthy events', () => {
-    setEvent({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });
 
     expect(screen.getByText('Run Failed')).toBeInTheDocument();
     // The machine-oriented event type must never be surfaced to users.
     expect(screen.queryByText('run.completed')).not.toBeInTheDocument();
   });
 
+  // Regression (observability-live, CI shard 2): a run's lifecycle frames
+  // (run.started, kanban.*, run.completed, aria.notification) arrive in one
+  // burst within ~30ms. The Toast used to read only `lastMessage`; when React
+  // coalesced the burst into one render, the toast-worthy frame was never
+  // observed and no toast appeared. Consuming `subscribe` delivers every
+  // frame regardless of render batching.
+  it('shows the Run Failed toast when the run lifecycle arrives as one burst', () => {
+    renderToast();
+    emit(
+      { type: 'run.started', payload: {}, timestamp: 't0' },
+      { type: 'kanban.created', payload: {}, timestamp: 't1' },
+      { type: 'run.iteration', payload: {}, timestamp: 't2' },
+      { type: 'kanban.transitioned', payload: {}, timestamp: 't3' },
+      { type: 'aria.notification', payload: { id: 'n-1', title: 'Run failed' }, timestamp: 't4' },
+      { type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't5' },
+      { type: 'kanban.transitioned', payload: {}, timestamp: 't6' },
+    );
+
+    expect(screen.getByText('Run Failed')).toBeInTheDocument();
+    expect(screen.getByText('Run failed')).toBeInTheDocument();
+  });
+
   // UX-6: approval expiry used to be completely silent to the operator. The
   // backend now broadcasts approval.expired, and it must surface as a toast
   // with an operator-readable label — never the raw event type.
   it('toasts approval.expired with a human-readable label', () => {
-    setEvent({ type: 'approval.expired', payload: { approvalId: 'a-1' }, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'approval.expired', payload: { approvalId: 'a-1' }, timestamp: 't1' });
 
     expect(screen.getByText('Approval Expired')).toBeInTheDocument();
     expect(screen.queryByText('approval.expired')).not.toBeInTheDocument();
@@ -70,25 +149,25 @@ describe('Toast', () => {
   it.each(['run.started', 'kanban.created', 'kanban.transitioned', 'run.iteration'])(
     'does not toast internal lifecycle event %s',
     (type) => {
-      setEvent({ type, payload: {}, timestamp: 't1' });
-      const { container } = render(inRouter(<Toast />));
+      const { container } = renderToast();
+      emit({ type, payload: {}, timestamp: 't1' });
       expect(container).toBeEmptyDOMElement();
     },
   );
 
   it('does not toast unknown event types', () => {
-    setEvent({ type: 'custom.event', payload: {}, timestamp: 't1' });
-    const { container } = render(inRouter(<Toast />));
+    const { container } = renderToast();
+    emit({ type: 'custom.event', payload: {}, timestamp: 't1' });
     expect(container).toBeEmptyDOMElement();
   });
 
   it('renders aria.notification events with their title and a View action', () => {
-    setEvent({
+    renderToast();
+    emit({
       type: 'aria.notification',
       payload: { id: 'n-1', title: 'Build finished' },
       timestamp: 't1',
     });
-    render(inRouter(<Toast />));
 
     expect(screen.getByText('Build finished')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
@@ -99,8 +178,8 @@ describe('Toast', () => {
   // though its event type maps to a route. It must offer the same View action
   // as the aria.notification branch.
   it('offers a View action on an approval.requested toast', () => {
-    setEvent({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
 
     expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
   });
@@ -111,13 +190,15 @@ describe('Toast', () => {
   // only an actual navigate() to the mapped route satisfies the assertion.
   it('View on an approval.requested toast navigates to the route the map resolves', () => {
     const paths: string[] = [];
-    setEvent({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
     render(
       <MemoryRouter initialEntries={['/runs']}>
-        <Toast />
-        <LocationTracker paths={paths} />
+        <WsStubProvider>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </WsStubProvider>
       </MemoryRouter>,
     );
+    emit({ type: 'approval.requested', payload: { runId: 'r1' }, timestamp: 't1' });
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
 
@@ -128,34 +209,33 @@ describe('Toast', () => {
   });
 
   it('uses a default title when the notification payload has none', () => {
-    setEvent({ type: 'aria.notification', payload: { id: 'n-2' }, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'aria.notification', payload: { id: 'n-2' }, timestamp: 't1' });
 
     expect(screen.getByText('Notification')).toBeInTheDocument();
   });
 
   it('deduplicates aria.notification events by notification id', () => {
-    setEvent({
+    renderToast();
+    emit({
       type: 'aria.notification',
       payload: { id: 'dup-1', title: 'Once only' },
       timestamp: 't1',
     });
-    const { rerender } = render(inRouter(<Toast />));
     expect(screen.getAllByText('Once only')).toHaveLength(1);
 
     // same notification id arrives again as a new event object
-    setEvent({
+    emit({
       type: 'aria.notification',
       payload: { id: 'dup-1', title: 'Once only' },
       timestamp: 't2',
     });
-    rerender(inRouter(<Toast />));
     expect(screen.getAllByText('Once only')).toHaveLength(1);
   });
 
   it('dismisses a toast automatically after 5 seconds', () => {
-    setEvent({ type: 'run.completed', payload: {}, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'run.completed', payload: {}, timestamp: 't1' });
     expect(screen.getByText('Run Completed')).toBeInTheDocument();
 
     act(() => {
@@ -173,10 +253,9 @@ describe('Toast', () => {
   // of newer events (previously the effect cleanup cancelled it, freezing the
   // whole toast stack on screen).
   it('dismisses each toast on its own schedule even when newer events arrive', () => {
-    const { rerender } = render(inRouter(<Toast />));
+    renderToast();
 
-    setEvent({ type: 'run.completed', payload: { status: 'FAILED', n: 1 }, timestamp: 't1' });
-    rerender(inRouter(<Toast />));
+    emit({ type: 'run.completed', payload: { status: 'FAILED', n: 1 }, timestamp: 't1' });
     expect(screen.getByText('Run Failed')).toBeInTheDocument();
 
     act(() => {
@@ -185,8 +264,7 @@ describe('Toast', () => {
 
     // A second noteworthy event arrives at t+3s; the first toast must still
     // expire at t+5s.
-    setEvent({ type: 'approval.requested', payload: { n: 2 }, timestamp: 't2' });
-    rerender(inRouter(<Toast />));
+    emit({ type: 'approval.requested', payload: { n: 2 }, timestamp: 't2' });
     expect(screen.getByText('Approval Needed')).toBeInTheDocument();
 
     act(() => {
@@ -204,26 +282,25 @@ describe('Toast', () => {
   // Review P2-1: failures arrive as run.completed with payload.status, so the
   // label must reflect the terminal status instead of always saying Completed.
   it('labels run.completed with FAILED status as Run Failed', () => {
-    setEvent({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'run.completed', payload: { status: 'FAILED' }, timestamp: 't1' });
 
     expect(screen.getByText('Run Failed')).toBeInTheDocument();
     expect(screen.queryByText('Run Completed')).not.toBeInTheDocument();
   });
 
   it('toasts the housekeeping completion audit event with a human label', () => {
-    setEvent({ type: 'audit.HOUSEKEEPING_EXECUTED', payload: {}, timestamp: 't1' });
-    render(inRouter(<Toast />));
+    renderToast();
+    emit({ type: 'audit.HOUSEKEEPING_EXECUTED', payload: {}, timestamp: 't1' });
 
     expect(screen.getByText('Housekeeping Executed')).toBeInTheDocument();
     expect(screen.queryByText('audit.HOUSEKEEPING_EXECUTED')).not.toBeInTheDocument();
   });
 
   it('keeps at most 5 toasts on screen', () => {
-    const { rerender } = render(inRouter(<Toast />));
+    renderToast();
     for (let i = 0; i < 7; i++) {
-      setEvent({ type: 'run.completed', payload: { i }, timestamp: `t${i}` });
-      rerender(inRouter(<Toast />));
+      emit({ type: 'run.completed', payload: { i }, timestamp: `t${i}` });
     }
     expect(screen.getAllByText('Run Completed')).toHaveLength(5);
   });
@@ -233,7 +310,15 @@ describe('Toast', () => {
   // the backend: fine-grained `type` + coarse `resourceType` (NotificationDto).
   it('navigates to the resource route when View is clicked on an aria.notification', () => {
     const paths: string[] = [];
-    setEvent({
+    render(
+      inRouter(
+        <WsStubProvider>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </WsStubProvider>,
+      ),
+    );
+    emit({
       type: 'aria.notification',
       payload: {
         id: 'n-nav-1',
@@ -243,14 +328,6 @@ describe('Toast', () => {
       },
       timestamp: 't1',
     });
-    render(
-      inRouter(
-        <>
-          <Toast />
-          <LocationTracker paths={paths} />
-        </>,
-      ),
-    );
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
     expect(paths).toContain('/reports');
@@ -258,19 +335,19 @@ describe('Toast', () => {
 
   it('does not navigate when the notification type has no mapped route', () => {
     const paths: string[] = [];
-    setEvent({
+    render(
+      inRouter(
+        <WsStubProvider>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </WsStubProvider>,
+      ),
+    );
+    emit({
       type: 'aria.notification',
       payload: { id: 'n-nav-2', title: 'Daily brief', type: 'brief', resourceType: '' },
       timestamp: 't1',
     });
-    render(
-      inRouter(
-        <>
-          <Toast />
-          <LocationTracker paths={paths} />
-        </>,
-      ),
-    );
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
     expect(paths).toEqual(['/']);
@@ -282,19 +359,19 @@ describe('Toast', () => {
   // the fine-grained keys never matched, so View was a silent no-op.
   it('does not navigate when only the coarse resourceType is present', () => {
     const paths: string[] = [];
-    setEvent({
+    render(
+      inRouter(
+        <WsStubProvider>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </WsStubProvider>,
+      ),
+    );
+    emit({
       type: 'aria.notification',
       payload: { id: 'n-nav-3', title: 'Build finished', resourceType: 'REPORT' },
       timestamp: 't1',
     });
-    render(
-      inRouter(
-        <>
-          <Toast />
-          <LocationTracker paths={paths} />
-        </>,
-      ),
-    );
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
     expect(paths).toEqual(['/']);

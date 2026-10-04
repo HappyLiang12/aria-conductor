@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,6 +24,15 @@ public interface AcpPermissionRequestRepository extends JpaRepository<AcpPermiss
     Optional<AcpPermissionRequest> findByApprovalId(UUID approvalId);
 
     List<AcpPermissionRequest> findByRunId(UUID runId);
+
+    /**
+     * Scheduled expiry backstop scan: the ledger rows still in the given delivery
+     * state whose own window has closed ({@code expiresAt < expiresAtBefore}). The
+     * scheduled sweep hands the {@code AWAITING_DECISION} rows to the permission
+     * coordinator, which adjudicates each by its recorded window exactly like the
+     * per-run deadline path.
+     */
+    List<AcpPermissionRequest> findByDeliveryStateAndExpiresAtBefore(String deliveryState, Instant expiresAtBefore);
 
     /** Housekeeping/retirement: set-based delete of every ledger row of the purged runs. */
     @Modifying

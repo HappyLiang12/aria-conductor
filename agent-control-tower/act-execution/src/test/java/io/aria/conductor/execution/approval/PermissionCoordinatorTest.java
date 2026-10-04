@@ -47,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -183,6 +184,16 @@ class PermissionCoordinatorTest {
                     .filter(row -> runId.equals(row.getRunId()))
                     .toList();
         });
+        lenient().when(permissionRepository.findByDeliveryStateAndExpiresAtBefore(
+                        any(String.class), any(Instant.class)))
+                .thenAnswer(inv -> {
+                    String deliveryState = inv.getArgument(0);
+                    Instant cutoff = inv.getArgument(1);
+                    return permissionStore.values().stream()
+                            .filter(row -> deliveryState.equals(row.getDeliveryState()))
+                            .filter(row -> row.getExpiresAt().isBefore(cutoff))
+                            .toList();
+                });
 
         lenient().doAnswer(inv -> {
             requestedEvents.add(inv.getArgument(0));
@@ -993,6 +1004,84 @@ class PermissionCoordinatorTest {
         ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
+    }
+
+    /**
+     * The scheduled expiry backstop (R-RFUX2): a native ask still
+     * {@code AWAITING_DECISION} whose own window has closed is settled by the
+     * coordinator sweep — EXPIRED with the recorded expiry reason, the ledger
+     * delivery moved to EXPIRED, and {@link ApprovalExpiredEvent} published with
+     * the ask's tool name — so the scheduled sweep leaves nothing silently
+     * unsettled. An already-decided ask is never rewritten.
+     */
+    @Test
+    void expireOverdueNativeAsksSettlesAwaitingAsksWithTheExpiryReasonAndAnnouncesTheToolName() {
+        coordinator = coordinator(T0);
+        UUID pendingId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "0", "run_agent",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        UUID settledId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "1", "WebSearch",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        coordinator.decide(settledId, PermissionChoice.ALLOW_ONCE, ActorPrincipal.operator(null));
+        Instant asOf = EXPIRES_AT.plusSeconds(1);
+
+        int settledCount = coordinator.expireOverdueNativeAsks(asOf);
+
+        assertThat(settledCount).isEqualTo(1);
+        assertThat(approvalStore.get(pendingId).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(approvalStore.get(pendingId).getReason()).isEqualTo(PermissionCoordinator.EXPIRY_REASON);
+        assertThat(approvalStore.get(pendingId).getDecidedAt()).isEqualTo(asOf);
+        assertThat(permissionRow(pendingId).getDeliveryState()).isEqualTo(PermissionDeliveryState.EXPIRED.name());
+        // The settled ask keeps its decision: the sweep never rewrites it.
+        assertThat(approvalStore.get(settledId).getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approvalStore.get(settledId).getReason())
+                .isEqualTo("Operator allowed one use of WebSearch (native permission request 1)");
+        assertThat(permissionRow(settledId).getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
+    }
+
+    /**
+     * The sweep's own settled-skip guard, independent of the finder's
+     * delivery-state filter: a row whose approval is missing or no longer
+     * PENDING is never rewritten, however the finder handed it back — a settled
+     * ask stays the historical fact and no expiry is announced for it.
+     */
+    @Test
+    void expireOverdueNativeAsksNeverRewritesASettledOrOrphanedRow() {
+        coordinator = coordinator(T0);
+        Approval settled = Approval.builder()
+                .runId(RUN_ID).source(ApprovalSource.ACP_PERMISSION)
+                .status(ApprovalStatus.APPROVED)
+                .reason("Operator allowed one use of run_agent")
+                .decidedAt(T0).expiresAt(EXPIRES_AT).build();
+        approvalRepository.save(settled);
+        AcpPermissionRequest staleAwaiting = AcpPermissionRequest.builder()
+                .id(UUID.randomUUID()).approvalId(settled.getId())
+                .kind(AcpPermissionRequest.Kind.NATIVE_PERMISSION)
+                .runId(RUN_ID).sessionId(SESSION_ID).requestId("0").toolName("run_agent")
+                .target(PermissionTarget.NATIVE_TOOL.name())
+                .argumentsDigest(WriteGrantService.digestOf("{}"))
+                .deliveryState(PermissionDeliveryState.AWAITING_DECISION.name())
+                .expiresAt(EXPIRES_AT.minusSeconds(30)).createdAt(T0).build();
+        AcpPermissionRequest orphaned = AcpPermissionRequest.builder()
+                .id(UUID.randomUUID()).approvalId(UUID.randomUUID())
+                .kind(AcpPermissionRequest.Kind.NATIVE_PERMISSION)
+                .runId(RUN_ID).sessionId(SESSION_ID).requestId("1").toolName("WebSearch")
+                .target(PermissionTarget.NATIVE_TOOL.name())
+                .argumentsDigest(WriteGrantService.digestOf("{}"))
+                .deliveryState(PermissionDeliveryState.AWAITING_DECISION.name())
+                .expiresAt(EXPIRES_AT.minusSeconds(30)).createdAt(T0).build();
+        permissionRepository.save(staleAwaiting);
+        permissionRepository.save(orphaned);
+
+        int settledCount = coordinator.expireOverdueNativeAsks(EXPIRES_AT.plusSeconds(1));
+
+        assertThat(settledCount).isEqualTo(0);
+        assertThat(settled.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(staleAwaiting.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(orphaned.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        verify(eventPublisher, never()).publishEvent(any(ApprovalExpiredEvent.class));
     }
 
     @Test

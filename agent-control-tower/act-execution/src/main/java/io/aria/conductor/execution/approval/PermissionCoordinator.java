@@ -453,6 +453,36 @@ public class PermissionCoordinator {
     }
 
     /**
+     * The scheduled backstop for native asks orphaned past their own window —
+     * the crash/restart windows in which no run deadline fired to settle them:
+     * every ledger row still {@code AWAITING_DECISION} whose window has closed
+     * is adjudicated exactly like the per-run deadline path — EXPIRED with the
+     * recorded expiry reason ({@value #EXPIRY_REASON}), the ledger delivery
+     * moved to EXPIRED, the blocked waiter released, and
+     * {@link ApprovalExpiredEvent} published with the ask's tool name. A row
+     * whose approval is missing or no longer PENDING is skipped: a settled ask
+     * is never rewritten.
+     *
+     * @param asOf the sweep instant
+     * @return the number of asks this call settled
+     */
+    @Transactional
+    public int expireOverdueNativeAsks(Instant asOf) {
+        Objects.requireNonNull(asOf, "asOf");
+        int settled = 0;
+        for (AcpPermissionRequest row : permissions.findByDeliveryStateAndExpiresAtBefore(
+                PermissionDeliveryState.AWAITING_DECISION.name(), asOf)) {
+            Approval approval = approvals.findById(row.getApprovalId()).orElse(null);
+            if (approval == null || approval.getStatus() != ApprovalStatus.PENDING) {
+                continue; // a settled ask is never rewritten
+            }
+            expireWith(approval, row, asOf, EXPIRY_REASON);
+            settled++;
+        }
+        return settled;
+    }
+
+    /**
      * Settles every still-PENDING native ask of a run whose runtime has ended
      * (the run can no longer receive a reply, so the ask is adjudicated, never
      * left behind): EXPIRED with the recorded reason "run ended", the waiter

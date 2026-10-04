@@ -81,6 +81,12 @@ public class NotificationService {
         return toDto(entity);
     }
 
+    /** D6: a settled ask's "waiting for your decision" notification stops being unread. */
+    @Transactional
+    public int markRequestedReadForApproval(String approvalId) {
+        return notificationRepository.markApprovalRequestedRead(approvalId);
+    }
+
     public Page<NotificationDto> list(int page, int size) {
         return notificationRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size))
                 .map(this::toDto);

@@ -377,6 +377,7 @@ export type NotificationType =
   | 'run.completed'
   | 'run.failed'
   | 'approval.requested'
+  | 'approval.expired'
   | 'knowledge.submitted'
   | 'report.generated'
   | 'reminder'

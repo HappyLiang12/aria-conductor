@@ -98,6 +98,7 @@ export function NotificationBell() {
     'run.completed': '✅',
     'run.failed': '❌',
     'approval.requested': '✋',
+    'approval.expired': '⌛',
     'knowledge.submitted': '📝',
     'report.generated': '📊',
     'reminder': '⏰',

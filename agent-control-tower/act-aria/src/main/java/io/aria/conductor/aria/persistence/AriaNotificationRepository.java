@@ -31,4 +31,14 @@ public interface AriaNotificationRepository extends JpaRepository<AriaNotificati
     @Modifying
     @Query("UPDATE AriaNotificationEntity n SET n.isRead = true WHERE n.id = :id")
     int markRead(@Param("id") String id);
+
+    /**
+     * D6: a settled ask (decided or expired) flips its own
+     * "waiting for your decision" notification back to read. Scoped by the
+     * approval id written verbatim into {@code resourceId} at creation time.
+     */
+    @Modifying
+    @Query("UPDATE AriaNotificationEntity n SET n.isRead = true " +
+           "WHERE n.type = 'approval.requested' AND n.resourceId = :resourceId AND n.isRead = false")
+    int markApprovalRequestedRead(@Param("resourceId") String resourceId);
 }

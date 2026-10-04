@@ -85,6 +85,10 @@ public class KanbanItem {
     @Transient
     private Integer pendingAskCount;
 
+    /** Derived at listing time from the linked run's status; never persisted. */
+    @Transient
+    private String runOutcome;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 

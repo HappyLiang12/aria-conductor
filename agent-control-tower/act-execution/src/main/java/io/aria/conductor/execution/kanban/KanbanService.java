@@ -8,6 +8,7 @@ import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -22,8 +23,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * CRUD + lifecycle service for {@link KanbanItem}.
@@ -152,7 +155,50 @@ public class KanbanService {
             counts.forEach(row -> byItem.put((String) row[0], (Long) row[1]));
             items.forEach(item -> item.setPendingAskCount(byItem.getOrDefault(item.getId(), 0L).intValue()));
         }
+        if (!items.isEmpty()) {
+            List<UUID> linkedRunIds = items.stream()
+                    .map(KanbanItem::getLinkedRunId)
+                    .filter(linkedRunId -> linkedRunId != null && !linkedRunId.isBlank())
+                    .map(linkedRunId -> {
+                        try {
+                            return UUID.fromString(linkedRunId);
+                        } catch (IllegalArgumentException e) {
+                            return null; // a corrupt link is history, not an outcome
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+            Map<UUID, RunStatus> statuses = linkedRunIds.isEmpty() ? Map.of()
+                    : runRepository.findAllById(linkedRunIds).stream()
+                            .collect(Collectors.toMap(Run::getId, Run::getStatus));
+            items.forEach(item -> {
+                RunStatus runStatus = item.getLinkedRunId() == null ? null : parseStatusOrNull(statuses, item.getLinkedRunId());
+                item.setRunOutcome(runOutcome(runStatus));
+            });
+        }
         return items;
+    }
+
+    /** The four display classes of a linked run; UNKNOWN when there is no resolvable run. */
+    static String runOutcome(RunStatus status) {
+        if (status == null) {
+            return "UNKNOWN";
+        }
+        return switch (status) {
+            case COMPLETED -> "COMPLETED";
+            case FAILED -> "FAILED";
+            case CANCELLED, ABORTED -> "CANCELLED";
+            case RUNNING, PENDING, INITIALIZING, PAUSED -> "ACTIVE";
+        };
+    }
+
+    private static RunStatus parseStatusOrNull(Map<UUID, RunStatus> statuses, String linkedRunId) {
+        try {
+            return statuses.get(UUID.fromString(linkedRunId));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Transactional

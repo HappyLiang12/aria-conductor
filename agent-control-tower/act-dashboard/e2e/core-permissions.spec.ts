@@ -339,7 +339,12 @@ test('an expired ask is EXPIRED and refuses a late grant', async ({ request }) =
   // closed by the time the list is read, which is exactly what this case exists
   // to pin. The offered options still read what the core asked for.
   const asks = await runApprovals(request, run.id, 60_000);
-  const ask = asks[0];
+  // Deterministic selection: a completed run's kanban card also carries a
+  // REVIEW_REQUEST mirror ask (the Review column's own surface), while this
+  // case is about the NATIVE permission ask the core raised — the one whose
+  // offered option set this test pins. The list order is not a contract.
+  const ask = asks.find((a) => a.askType !== 'REVIEW_REQUEST');
+  expect(ask).toBeTruthy();
   expect(permissionOptions(ask)).toEqual([
     { optionId: 'proceed_once', choice: 'ALLOW_ONCE' },
     { optionId: 'cancel', choice: 'DENY' },

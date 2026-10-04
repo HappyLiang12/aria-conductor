@@ -1,6 +1,6 @@
 # 2026-10-03 Review flow UX: outcome-aware REVIEW cards and batch decisions
 
-Status: design approved by the operator (2026-10-03); implementation not started.
+Status: design approved by the operator (2026-10-03); amended 2026-10-04 (amendment: Qoder permission-ask UX); implementation not started.
 
 ## Problem (audited live + in code)
 
@@ -49,3 +49,96 @@ Status: design approved by the operator (2026-10-03); implementation not started
 - Unifying asks and cards into one review-decision model (the two-layer decoupling stays; only the sweep couples them).
 - A server-side batch endpoint (revisit only if client-loop pain is demonstrated).
 - Multi-select arbitrary subsets in the board UI (presets cover the audited backlog; add selection only if asked).
+
+---
+
+# Amendment (2026-10-04): Qoder permission-ask UX
+
+Added after the 2026-10-04 qoder/HOST Okinawa drill (3 researchers, 2 fact-checkers, one synthesis; every ask
+individually operator-approved). Complements the decisions above; nothing in D1-D4 changes.
+
+## Problem (observed live in the 2026-10-04 drill)
+
+1. **Ask storm.** One researcher's run raised about 95 asks for the Qoder CLI's OWN native tool `WebSearch`
+   (`mcp__aria-conductor__run_agent` dispatches and native web reads together: 271 approved asks in one drill).
+   The auto-approve policy cannot cover these today: a native ask without the platform-MCP prefix
+   (`mcp__aria-conductor__`) is never covered by `aria.mcp.auto-approve-read-tools`, by design ("the core's own
+   tool keeps the per-call operator approval"). Dashboard-only operation therefore needs a human clicking within
+   minutes of every web call.
+2. **Invisible ask expiry, three layered windows.** The CLI's own wait for a permission answer is the effective
+   bound (minutes): it stops waiting, treats the call as denied, and continues (observed: Aria reported "you
+   rejected the first tool call" for a call no one had decided). The bridge's `permissionTimeoutMs` (default
+   600000 = 10 min) bounds the bridge-to-CLI reply. The platform ask row's `expiresAt` is the run's task
+   deadline (a late backstop; `PermissionCoordinator.register` persists `runtime.spec().deadline()`), and a
+   leftover ask is settled at run end with reason "Run cancelled" - even for a COMPLETED run. The operator sees
+   none of this: the ask simply stops existing.
+3. **Zombie artifacts after settle.** The auto-created `Review: tool call (run X)` card stays after its ask
+   settles (deciding again returns 409; an expired ask leaves the card in REVIEW). The `approval.requested`
+   notification stays unread even after the ask was decided (about 330 unread after one drill).
+4. **No context on tool-call asks.** The card title and queue row say `Review: tool call (run X)` - no tool
+   name, no arguments, though both exist (`approval.reason` names the tool; `AcpPermissionRequest.argumentsJson`
+   carries the arguments).
+
+## Decisions (operator, 2026-10-04)
+
+- **D5** - Web reads must not ask: extend the auto-approval policy to the Qoder CLI's native read-only web
+  tools via the operator-configured list (default list gains `WebSearch`, `WebFetch`). `run_agent` and every
+  other tool keep the per-call operator approval.
+- **D6** - Settle must propagate: an ask settling (approved / denied / expired) settles its card and flips its
+  notification; expiry additionally raises a visible `approval.expired` notification. The bridge window stays
+  10 min (documented, not lengthened).
+- **D7** - Tool-call cards and Review Queue rows carry the tool name and an arguments excerpt.
+
+## Design
+
+1. **Policy: the native clause (act-execution).** `PlatformMcpAutoApproval` gains a native-tool clause: a
+   `NATIVE_TOOL` ask whose normalized name is on `aria.mcp.auto-approve-read-tools` auto-settles through the
+   same single-allow-once reply path the manual decision uses (the existing single-ALLOW_ONCE-option guard
+   stays: no single option, no auto-settle). The platform-prefix clause is unchanged; a native ask not on the
+   list keeps the per-call approval (this amendment is the operator decision the 2026-09-29 policy required).
+   Defaults gain `WebSearch` and `WebFetch`; `run_agent` stays off the list.
+2. **Settle event (act-common).** New `ApprovalSettledEvent(approvalId, runId, status, reason, toolName)`,
+   published AFTER_COMMIT from the single settle point in `PermissionCoordinator`; the run-end leftover
+   settlement in `ApprovalGate` is routed through that same point so reap-settles emit it too.
+3. **Card settle (act-execution/kanban).** A listener on `ApprovalSettledEvent` resolves the approval's
+   `kanbanItemId` (linked by `KanbanReviewCardListener.linkReviewCard`) and transitions the card: APPROVED ->
+   DONE, DENIED/EXPIRED -> CANCELLED. `KanbanReviewCardListener` gains a guard: never create or link a card
+   for an already-settled ask. The D2 sweep guard (never sweep native permission asks) is untouched - the
+   auto-settle happens at ask registration, not through the sweep.
+4. **Notification flip and expiry notice (act-aria).** On settle: mark the matching `approval.requested`
+   notification(s) (type + resourceId = approvalId) read; on EXPIRED also create one `approval.expired`
+   notification ("Permission request expired - tool call skipped: <tool> (run <id8>)") with
+   resourceType APPROVAL and the approval id. The frontend `NotificationType` union and bell rendering are
+   extended for the new type.
+5. **Ask context (frontend + listing).** Tool-call review cards and Review Queue rows show the tool name plus
+   an arguments excerpt (approval reason + argumentsJson, through the existing view/DTO path; the card-detail
+   surface rides the workstream above).
+
+## Error handling
+
+- Settle listeners are best-effort like `KanbanReviewCardListener`: a failure is logged and never breaks the
+  settle transaction (the settle itself is the authority; the event is the propagation).
+- A card already settled by the operator (or missing): the transition refusal is logged, never retried, and
+  the notification flip still runs.
+
+## Testing
+
+- Unit: native-clause coverage (a listed native ask auto-settles when a single ALLOW_ONCE option is offered;
+  an unlisted native ask stays PENDING; a listed ask without a single option stays PENDING); event emission on
+  decide, on expiry and on reap.
+- Listener: card DONE on approve, CANCELLED on deny and on expire; no card creation for an already-settled
+  ask; `approval.requested` flipped read; `approval.expired` created only on expiry.
+- Existing suites: the sweep negative tests (native asks untouched) stay green; `PlatformMcpAutoApprovalTest`
+  extended; notification tests extended.
+- Live: rerun the qoder drill - zero `WebSearch` asks; tool-call cards reach terminal states with their asks;
+  the unread count does not grow with settled asks; leave one `run_agent` ask unanswered - the expiry notice,
+  the card settle and the flip all fire (compare against the drill's silent lapse).
+
+## Out of scope (amendment)
+
+- No remembered or session-wide grant for `run_agent` (per-call approval stands).
+- No window lengthening; the CLI's internal wait bounds the effective window and is documented here, not
+  changed.
+- No read-side computed card state (settle is event-written).
+- Usage/token accounting for qoder runs (observed `totalTokensUsed=0`) is a separate follow-up, not this
+  amendment.

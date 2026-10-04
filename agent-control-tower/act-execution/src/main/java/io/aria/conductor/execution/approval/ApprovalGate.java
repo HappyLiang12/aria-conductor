@@ -346,6 +346,12 @@ public class ApprovalGate {
      *
      * <p>R20.5: ACP permission asks are likewise left alone — their lifecycle belongs to
      * {@code AcpPermissionCoordinator.cancelPendingForRun}.
+     *
+     * <p>R-RFUX6/D6: each settled ask is an expiry, not a silent lapse — the same
+     * {@link ApprovalExpiredEvent} the timeout and scheduled sweeps publish is emitted
+     * after the row is saved, so the request notification flips and the operator gets an
+     * expiry notice. Listeners run synchronously here (this method is non-transactional),
+     * and the native-only card-settle listener no-ops for these legacy rows.
      */
     public void cancelAllPendingForRun(UUID runId) {
         approvalRepository.findByRunId(runId).stream()
@@ -359,6 +365,8 @@ public class ApprovalGate {
                     a.setDecidedAt(Instant.now());
                     approvalRepository.save(a);
                     cancelPendingApproval(a.getId());
+                    eventPublisher.publishEvent(new ApprovalExpiredEvent(
+                            this, a.getId(), a.getRunId(), a.getReason()));
                 });
     }
 }

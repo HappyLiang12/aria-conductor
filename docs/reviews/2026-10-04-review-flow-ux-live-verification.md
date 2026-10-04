@@ -75,3 +75,25 @@ during the drill and whose fresh review ask awaits the operator — normal lifec
   by the KanbanBoard unit tests.
 - The ReviewWorkspace rail's ask-ful chip parity (T7 minor) was not exercised in the browser.
 - The benign double-settle loser warn (T4) did not appear in this drill's logs.
+
+## Accepted residuals (final review triage, 2026-10-04)
+
+The final whole-branch review accepted the following limitations; each is recorded so the ledger matches
+the code:
+
+- **Settled-ask exemption is time-unbounded** (`KanbanService.isSettledNativeAskCard`,
+  `KanbanService.java:353`): a card with at least one settled ACP ask and no PENDING ACP ask stays exempt
+  from the run-active DONE guard (`KanbanService.transition`, `:223-226`) on every future REVIEW→DONE
+  transition, however old the settle. Consequence is bounded: a run can keep working on a card that is
+  already DONE, and the mirror later creates a replacement card for a later ask (the link path reuses only
+  REVIEW/TODO/IN_PROGRESS cards, `KanbanReviewCardListener.linkReviewCard`).
+- **Link-side re-check settles cards for any settled ask; the settle listener is native-only**
+  (`KanbanReviewCardListener.settleCardIfAskSettledAfterLink`, `:191` — no source filter — vs
+  `ApprovalSettleCardListener.settle`, `:74` — `ACP_PERMISSION` only): an ask that settles while its card
+  is being linked settles the card regardless of source, while the event-driven settle path fires only for
+  native asks. For legacy asks in the link window the outcome is therefore timing-dependent; accepted as
+  ledger-bounded (the V66 repair and the run-end sweep cover the stale-ask class).
+- **V66 also flips pre-stamp native rows** (`V66__settle_stale_review_asks.sql`): native asks persisted
+  before the `ACP_PERMISSION` source stamp carry `LEGACY_GATE` and are indistinguishable from legacy asks,
+  so the migration's card-state repair converts them to `DENIED | settled by card state`. Benign for
+  long-dead asks on terminal cards — their decision surface is gone either way.

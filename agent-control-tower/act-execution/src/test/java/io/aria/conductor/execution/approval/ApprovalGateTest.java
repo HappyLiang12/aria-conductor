@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.approval;
 
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
@@ -318,6 +319,47 @@ class ApprovalGateTest {
 
         assertThat(nativeAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         verify(approvalRepository, never()).save(nativeAsk);
+    }
+
+    /**
+     * R-RFUX6 pin: the run-end sweep is an expiry path, so every legacy TOOL_CALL ask it
+     * settles must publish the same {@link ApprovalExpiredEvent} the timeout and scheduled
+     * sweep paths publish — the ask's {@code approval.requested} notification must flip and
+     * an expiry notice must be raised (D6: no silent lapse). SPEC_REVIEW asks are outside the
+     * sweep and must stay silent.
+     */
+    @Test
+    void cancelAllPendingForRun_publishesExpiredEventForSettledLegacyAsk_only() {
+        RunContext ctx = ctx();
+        Approval legacyAsk = TestDataBuilder.anApproval()
+                .withRunId(ctx.getRunId())
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("Agent requests approval to execute deploy {}")
+                .build();
+        approvalStore.put(legacyAsk.getId(), legacyAsk);
+        Approval specReview = TestDataBuilder.anApproval()
+                .withRunId(ctx.getRunId())
+                .withApprovalType(Approval.ApprovalType.SPEC_REVIEW)
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("Spec ready for review")
+                .build();
+        approvalStore.put(specReview.getId(), specReview);
+        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(legacyAsk, specReview));
+
+        gate.cancelAllPendingForRun(ctx.getRunId());
+
+        assertThat(legacyAsk.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(legacyAsk.getReason()).isEqualTo("Run cancelled");
+        assertThat(specReview.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+
+        // Exactly one expiry event, for the settled legacy ask — none for the spec-review ask.
+        ArgumentCaptor<ApprovalExpiredEvent> captor = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher, times(1)).publishEvent(captor.capture());
+        ApprovalExpiredEvent event = captor.getValue();
+        assertThat(event.getApprovalId()).isEqualTo(legacyAsk.getId());
+        assertThat(event.getRunId()).isEqualTo(ctx.getRunId());
+        assertThat(event.getReason()).isEqualTo("Run cancelled");
+        assertThat(event.getToolName()).isNull();
     }
 
     @Test

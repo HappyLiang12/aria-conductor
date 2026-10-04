@@ -87,7 +87,7 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                 {permission ? (
                   <NativePermissionKindPill permission={permission} />
                 ) : (
-                  <span className="pill warn">Approval</span>
+                  <span className="pill warn">Review</span>
                 )}
                 <span
                   className="owner"
@@ -110,7 +110,9 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
                 )}
               </div>
               <div className="desc">
-                {approval.reason || 'Awaiting human verification before tool execution proceeds.'}
+                {permission
+                  ? approval.reason || 'Awaiting human verification before tool execution proceeds.'
+                  : approval.content ?? approval.reason ?? 'Review requested — open the run for context.'}
               </div>
               {permission && (
                 <div className="ask-meta">

@@ -2,6 +2,7 @@ package io.aria.conductor.app;
 
 import io.aria.conductor.ActApplication;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -91,9 +92,12 @@ class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
                 doneCardNativeAskId.toString(), runId.toString(), doneCardId.toString(), "native ask on the DONE card");
 
         // Apply the migration(s) the pinned context left pending (V66 today).
+        // Pinned to V66: this test asserts the exact V66 contract, so later
+        // migrations (V67+) must never be able to change its outcome.
         Flyway toV66 = Flyway.configure()
                 .dataSource(dataSource)
                 .locations("classpath:db/migration")
+                .target(MigrationVersion.fromVersion("66"))
                 .load();
         toV66.migrate();
 

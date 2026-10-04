@@ -41,12 +41,12 @@
 | `act-aria/.../persistence/AriaNotificationRepository.java` | mark-requested-read bulk update | T5 |
 | `act-aria/.../service/NotificationService.java` | expose the flip | T5 |
 | `act-aria/.../listener/NotificationTriggerListener.java` | flip on decide/expire; expiry text gains the tool name | T5 |
-| `act-dashboard/src/types/index.ts` | `NotificationType` += `approval.expired`; `KanbanItem.runOutcome` | T5/T6 |
+| `act-dashboard/src/types/index.ts` | `NotificationType` += `approval.expired`; `KanbanItem.runOutcome` | T5/T7 |
 | `act-dashboard/src/components/NotificationBell.tsx` | icon for `approval.expired` | T5 |
-| `act-dashboard/src/components/ReviewPanels.tsx` (`ShortApprovalView`) + `TaskDrawer.tsx` | outcome chip + copy | T6 |
-| `act-dashboard/src/components/KanbanBoard.tsx` | REVIEW column batch actions | T7 |
-| `act-dashboard/src/components/ReviewQueue.tsx` | accurate label + ask content rows | T8 |
-| `act-app/src/main/resources/db/migration/V66__settle_stale_review_asks.sql` | data repair | T9 |
+| `act-dashboard/src/components/ReviewPanels.tsx` (`ShortApprovalView`) + `TaskDrawer.tsx` | outcome chip + copy | T7 |
+| `act-dashboard/src/components/KanbanBoard.tsx` | REVIEW column batch actions | T8 |
+| `act-dashboard/src/components/ReviewQueue.tsx` | accurate label + ask content rows | T9 |
+| `act-app/src/main/resources/db/migration/V66__settle_stale_review_asks.sql` | data repair | T10 |
 
 ---
 
@@ -894,7 +894,7 @@ git commit -m "feat(aria): flip settled asks' notifications; expiry notice names
 
 ---
 
-### Task 5b: Native web tools auto-approve (D5)
+### Task 6: Native web tools auto-approve (D5)
 
 **Files:**
 - Modify: `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/mcp/McpProperties.java` (default list + javadoc)
@@ -956,7 +956,7 @@ git commit -m "feat(execution): auto-approve listed native read-only tools (WebS
 
 ---
 
-### Task 6: Outcome chips and copy on the board
+### Task 7: Outcome chips and copy on the board
 
 **Files:**
 - Modify: `agent-control-tower/act-dashboard/src/types/index.ts` (`KanbanItem`)
@@ -1000,7 +1000,7 @@ git commit -m "feat(dashboard): outcome chips and honest copy on review cards"
 
 ---
 
-### Task 7: Batch decisions on the REVIEW column
+### Task 8: Batch decisions on the REVIEW column
 
 **Files:**
 - Modify: `agent-control-tower/act-dashboard/src/components/KanbanBoard.tsx` (REVIEW column header, line ~302-316; `ConfirmDialog` from `./ConfirmDialog`)
@@ -1052,7 +1052,7 @@ git commit -m "feat(dashboard): card-layer batch decisions on the review column"
 
 ---
 
-### Task 8: Review Queue rows tell the truth
+### Task 9: Review Queue rows tell the truth
 
 **Files:**
 - Modify: `agent-control-tower/act-dashboard/src/components/ReviewQueue.tsx`
@@ -1086,7 +1086,7 @@ git commit -m "feat(dashboard): accurate review-request rows in the queue"
 
 ---
 
-### Task 9: V66 data repair for stuck review asks
+### Task 10: V66 data repair for stuck review asks
 
 **Files:**
 - Create: `agent-control-tower/act-app/src/main/resources/db/migration/V66__settle_stale_review_asks.sql`
@@ -1135,7 +1135,7 @@ git commit -m "fix(kanban): repair stale review asks whose card already settled 
 
 ---
 
-### Task 10: Regression + live verification
+### Task 11: Regression + live verification
 
 **Files:** none (verification task; evidence goes to `docs/reviews/`).
 
@@ -1174,7 +1174,7 @@ git commit -m "docs(reviews): review-flow UX live verification"
 
 ## Self-Review
 
-**Spec coverage:** D1 (failed cards labelled + split actions) → T6 (chips/copy) + T7 (actions); D2 (card-layer batch + sweep) → T2 + T7; D3 (confirm dialogs) → T7; D4 (client-side loop, no endpoint) → T7; spec backend 1 (`runOutcome`) → T1; backend 3 (repair migration) → T9; D5 (native web auto-approve) → Task 5b (between T5 and T6); D6 (settle propagation) → T3 + T4 + T5; D7 (ask context) → T4 (card) + T8 (queue). Testing section → each task + T10; live drill → T10.
+**Spec coverage:** D1 (failed cards labelled + split actions) → T7 (chips/copy) + T8 (actions); D2 (card-layer batch + sweep) → T2 + T8; D3 (confirm dialogs) → T8; D4 (client-side loop, no endpoint) → T8; spec backend 1 (`runOutcome`) → T1; backend 3 (repair migration) → T10; D5 (native web auto-approve) → T6; D6 (settle propagation) → T3 + T4 + T5; D7 (ask context) → T4 (card) + T9 (queue). Testing section → each task + T11; live drill → T11.
 
 **Placeholder scan:** no TBD/TODO placeholders; every step carries its code or a named template to mirror (test-fixture helper names in T3/T4 are explicitly flagged to adapt to the class's actual helpers).
 

@@ -1,8 +1,11 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,6 +42,7 @@ class KanbanReviewCardListenerTest {
     private static final UUID APPROVAL_ID = UUID.fromString("33333333-3333-3333-3333-333333333333");
 
     private ApprovalRepository approvalRepository;
+    private AcpPermissionRequestRepository permissions;
     private KanbanRepository kanbanRepository;
     private KanbanService kanbanService;
     private KanbanReviewCardListener listener;
@@ -46,12 +50,13 @@ class KanbanReviewCardListenerTest {
     @BeforeEach
     void setUp() {
         approvalRepository = mock(ApprovalRepository.class);
+        permissions = mock(AcpPermissionRequestRepository.class);
         kanbanRepository = mock(KanbanRepository.class);
         kanbanService = mock(KanbanService.class);
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         listener = new KanbanReviewCardListener(
-                approvalRepository, kanbanRepository, kanbanService, transactionManager, Runnable::run);
+                approvalRepository, kanbanRepository, kanbanService, permissions, transactionManager, Runnable::run);
     }
 
     private Approval approval() {
@@ -133,6 +138,26 @@ class KanbanReviewCardListenerTest {
         verify(kanbanService, never()).create(any());
     }
 
+    // ---- behavior 2b: a settled ask never gains a card ----
+
+    /**
+     * The mirror reads the approval while it may still be PENDING and commits
+     * after the operator's decision: a settled ask must not have a card created
+     * or linked for it afterwards — nothing would ever settle that card
+     * (a second decision is refused).
+     */
+    @Test
+    void anAlreadySettledAskGetsNoCard() {
+        Approval settled = approval();
+        settled.setStatus(ApprovalStatus.APPROVED);
+        when(approvalRepository.findById(APPROVAL_ID)).thenReturn(Optional.of(settled));
+
+        listener.onApprovalRequested(event());
+
+        verify(kanbanService, never()).create(any(CreateKanbanItemRequest.class));
+        verify(approvalRepository, never()).linkKanbanItemIdIfAbsent(any(), any());
+    }
+
     // ---- behavior 3: orphan approval ----
 
     @Test
@@ -159,6 +184,54 @@ class KanbanReviewCardListenerTest {
         assertThat(approval.getKanbanItemId()).isNull();
         verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-new");
         verify(approvalRepository, never()).save(approval);
+    }
+
+    @Test
+    void aToolCallCardCarriesTheToolNameAndAnArgumentExcerpt() {
+        // The native ask's ledger row names the tool and carries the argument
+        // document: the card face must say what the operator is deciding, not
+        // just "tool call" (D7).
+        Approval approval = approval();
+        approval.setSource(ApprovalSource.ACP_PERMISSION);
+        when(approvalRepository.findById(APPROVAL_ID)).thenReturn(Optional.of(approval));
+        when(kanbanRepository.findByLinkedRunId(RUN_ID.toString())).thenReturn(List.of());
+        when(permissions.findByApprovalId(APPROVAL_ID)).thenReturn(Optional.of(
+                AcpPermissionRequest.builder()
+                        .toolName("run_agent")
+                        .argumentsJson("{\"agentId\":\"9aaa1111-2222-3333-4444-555566667777\","
+                                + "\"prompt\":\"research the release\"}")
+                        .build()));
+        when(kanbanService.create(any(CreateKanbanItemRequest.class)))
+                .thenReturn(card("card-new", KanbanStatus.REVIEW));
+
+        listener.onApprovalRequested(event());
+
+        ArgumentCaptor<CreateKanbanItemRequest> captor =
+                ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
+        verify(kanbanService).create(captor.capture());
+        assertThat(captor.getValue().getTitle()).isEqualTo("Review: tool call - run_agent (run 11111111)");
+        assertThat(captor.getValue().getDescription()).startsWith("{\"agentId\"");
+        verify(approvalRepository).linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-new");
+    }
+
+    @Test
+    void aHugeArgumentDocumentIsTruncatedToAnExcerpt() {
+        Approval approval = approval();
+        approval.setSource(ApprovalSource.ACP_PERMISSION);
+        String arguments = "{\"prompt\":\"" + "x".repeat(400) + "\"}";
+        when(approvalRepository.findById(APPROVAL_ID)).thenReturn(Optional.of(approval));
+        when(kanbanRepository.findByLinkedRunId(RUN_ID.toString())).thenReturn(List.of());
+        when(permissions.findByApprovalId(APPROVAL_ID)).thenReturn(Optional.of(
+                AcpPermissionRequest.builder().toolName("run_agent").argumentsJson(arguments).build()));
+        when(kanbanService.create(any(CreateKanbanItemRequest.class)))
+                .thenReturn(card("card-new", KanbanStatus.REVIEW));
+
+        listener.onApprovalRequested(event());
+
+        ArgumentCaptor<CreateKanbanItemRequest> captor =
+                ArgumentCaptor.forClass(CreateKanbanItemRequest.class);
+        verify(kanbanService).create(captor.capture());
+        assertThat(captor.getValue().getDescription()).isEqualTo(arguments.substring(0, 200) + "...");
     }
 
     @Test

@@ -1,7 +1,10 @@
 package io.aria.conductor.execution.kanban;
 
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -12,12 +15,14 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.Optional;
 import java.util.concurrent.Executor;
 
 /**
- * Surfaces every approval as a Review-column card (spec 4.3): links the ask to
- * the card already associated with the run, or creates a REVIEW card for
- * orphan approvals.
+ * Surfaces every pending approval as a Review-column card (spec 4.3): links the
+ * ask to the card already associated with the run, or creates a REVIEW card for
+ * orphan approvals. An ask that already settled while the mirror was in flight
+ * is skipped: its card could never be settled again.
  *
  * <p>Runs after the requesting transaction commits, in its own transaction: the
  * approval is recorded before the board is touched, and a failure here must
@@ -46,17 +51,20 @@ public class KanbanReviewCardListener {
     private final ApprovalRepository approvalRepository;
     private final KanbanRepository kanbanRepository;
     private final KanbanService kanbanService;
+    private final AcpPermissionRequestRepository permissions;
     private final TransactionTemplate reviewTransaction;
     private final Executor mirrorExecutor;
 
     public KanbanReviewCardListener(ApprovalRepository approvalRepository,
                                     KanbanRepository kanbanRepository,
                                     KanbanService kanbanService,
+                                    AcpPermissionRequestRepository permissions,
                                     PlatformTransactionManager transactionManager,
                                     @Qualifier("kanbanMirrorExecutor") Executor mirrorExecutor) {
         this.approvalRepository = approvalRepository;
         this.kanbanRepository = kanbanRepository;
         this.kanbanService = kanbanService;
+        this.permissions = permissions;
         this.reviewTransaction = new TransactionTemplate(transactionManager);
         this.reviewTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.mirrorExecutor = mirrorExecutor;
@@ -103,9 +111,14 @@ public class KanbanReviewCardListener {
      * decision path's row lock cannot prevent), and a further decision could
      * then re-arm an already consumed one-use grant. The entity is neither
      * mutated nor saved, so no dirty snapshot can flush over the decision.
+     *
+     * <p>A settled ask is skipped before anything is read or written: a second
+     * decision is refused, so a card created or linked now could never be
+     * settled again — it would linger in REVIEW forever.
      */
     private void linkReviewCard(ApprovalRequestedEvent event) {
         approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
+            if (approval.getStatus() != ApprovalStatus.PENDING) return;
             if (approval.getKanbanItemId() != null) return;
 
             kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
@@ -120,16 +133,35 @@ public class KanbanReviewCardListener {
     }
 
     private void createCard(Approval approval, ApprovalRequestedEvent event) {
-        String title = "Review: " + (approval.getApprovalType() != null
-                ? approval.getApprovalType().name().toLowerCase().replace('_', ' ')
-                : "approval") + " (run " + event.getRunId().toString().substring(0, 8) + ")";
+        // A native ask knows its tool and arguments (D7): its card must say what
+        // the operator is deciding, not just "tool call". Review asks keep the
+        // readable approval-type title; they have no tool correlation.
+        Optional<AcpPermissionRequest> permission = permissions.findByApprovalId(approval.getId());
+        String title;
+        String description;
+        if (permission.isPresent()) {
+            title = "Review: tool call - " + permission.get().getToolName()
+                    + " (run " + approval.getRunId().toString().substring(0, 8) + ")";
+            description = argumentExcerpt(permission.get().getArgumentsJson());
+        } else {
+            title = "Review: " + (approval.getApprovalType() != null
+                    ? approval.getApprovalType().name().toLowerCase().replace('_', ' ')
+                    : "approval") + " (run " + event.getRunId().toString().substring(0, 8) + ")";
+            description = approval.getContent();
+        }
         KanbanItem card = kanbanService.create(CreateKanbanItemRequest.builder()
                 .title(title)
-                .description(approval.getContent())
+                .description(description)
                 .status(KanbanStatus.REVIEW)
                 .linkedRunId(event.getRunId().toString())
                 .build());
         approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), card.getId());
         log.info("Auto-created review card {} for orphan approval {}", card.getId(), approval.getId());
+    }
+
+    /** Card-face cap on the arguments document; a null document stays null. */
+    private static String argumentExcerpt(String arguments) {
+        if (arguments == null) return null;
+        return arguments.length() > 200 ? arguments.substring(0, 200) + "..." : arguments;
     }
 }

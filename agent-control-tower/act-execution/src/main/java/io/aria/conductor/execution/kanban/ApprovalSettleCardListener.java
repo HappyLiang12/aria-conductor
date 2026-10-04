@@ -7,10 +7,11 @@ import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.UUID;
@@ -21,14 +22,20 @@ import java.util.UUID;
  * state instead of lingering. Only native asks are handled: review asks are the
  * card layer's own vocabulary and keep their existing flows.
  *
+ * <p>Both handlers run {@code AFTER_COMMIT}: a settle must only propagate from a
+ * decision that actually committed, and the guarded transition must be able to
+ * see that commitment — {@link KanbanService}'s DONE guard exempts cards whose
+ * linked native ask has settled (R-RFUX3), and the deciding transaction has
+ * published this event before its row update commits. Running at the publish
+ * point instead would read the uncommitted row as PENDING and refuse the very
+ * settle this listener exists to perform. {@code fallbackExecution} keeps
+ * publishers outside any transaction on the immediate path.
+ *
  * <p>Best-effort like {@link KanbanReviewCardListener}: the settle runs in its
- * own transaction via a {@link TransactionTemplate} instead of a
- * {@code @Transactional} method, so the catch can sit outside the transaction
- * boundary. A refusal inside it — say the linked run is still active, so
- * REVIEW → DONE is rejected — would otherwise leave the publisher's transaction
- * rollback-only, and its commit would then throw
- * {@code UnexpectedRollbackException} past the catch into the settle path that
- * published the event, turning a decision the platform already made into a 500.
+ * own transaction via a {@link TransactionTemplate} and the catch sits outside
+ * that transaction boundary, so a refusal — say the linked run is still active —
+ * rolls back only the settle and is logged; it can never travel back into the
+ * decision path that published the event.
  */
 @Slf4j
 @Component
@@ -48,14 +55,14 @@ public class ApprovalSettleCardListener {
         this.settleTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onDecided(ApprovalDecidedEvent event) {
         settle(event.getApprovalId(),
                 event.getDecision() == ApprovalStatus.APPROVED ? KanbanStatus.DONE : KanbanStatus.CANCELLED,
                 event.getDecision() == ApprovalStatus.APPROVED ? "ask approved" : "ask denied");
     }
 
-    @EventListener
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onExpired(ApprovalExpiredEvent event) {
         settle(event.getApprovalId(), KanbanStatus.CANCELLED, "ask expired");
     }

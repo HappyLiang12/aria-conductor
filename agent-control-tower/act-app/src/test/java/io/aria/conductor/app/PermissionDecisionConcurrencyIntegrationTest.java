@@ -19,9 +19,12 @@ import io.aria.conductor.execution.approval.PermissionDeliveryState;
 import io.aria.conductor.execution.approval.PermissionOption;
 import io.aria.conductor.execution.approval.PermissionTarget;
 import io.aria.conductor.execution.approval.WriteGrantService;
+import io.aria.conductor.execution.kanban.KanbanRepository;
+import io.aria.conductor.execution.kanban.KanbanStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -29,6 +32,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -62,13 +66,19 @@ import static org.awaitility.Awaitility.await;
  * PENDING, both would settle, and the loser would re-issue — and re-arm — the
  * one-use grant of the identical call.
  *
- * <p>Each round waits (bounded) until the ask's asynchronous review-card
- * mirroring has linked {@code kanban_item_id} before the two decisions are
- * fired, so the race under test is operator-vs-operator only: that mirror runs
- * in its own transaction. Since fix round 3 the mirror writes only the one
- * column it owns, guarded on it still being null, so it can never revert a
- * committed decision; the second method below proves exactly that interaction —
- * the decision settles first, the mirror's write lands afterwards.
+ * <p>Each round of the first test waits (bounded) until the ask's asynchronous
+ * review-card mirroring has linked {@code kanban_item_id} before the two
+ * decisions are fired, so the race under test is operator-vs-operator only: that
+ * mirror runs in its own transaction. Since fix round 3 the mirror writes only
+ * the one column it owns, guarded on it still being null, so it can never revert
+ * a committed decision; the second method below proves exactly that interaction
+ * — the decision settles before or around the mirror's write. That round drains
+ * the single mirror thread and branches: the mirror either won its first read
+ * and linked a card (the settled decision must survive the late write, and the
+ * card must settle with it) or observed the settled row and skipped (nothing
+ * may be created or linked after the fact). A third method forces that skip
+ * deterministically by holding the single mirror thread until after the
+ * decision commits.
  */
 class PermissionDecisionConcurrencyIntegrationTest extends BaseH2IntegrationTest {
 
@@ -101,6 +111,18 @@ class PermissionDecisionConcurrencyIntegrationTest extends BaseH2IntegrationTest
 
     @Autowired
     private RunRepository runRepository;
+
+    @Autowired
+    private KanbanRepository kanbanRepository;
+
+    /**
+     * The single mirror thread. A task submitted to it runs after every mirror
+     * task already enqueued: the drain barrier the second test uses to make its
+     * round deterministic under both the link and the guard-skip interleavings.
+     */
+    @Autowired
+    @Qualifier("kanbanMirrorExecutor")
+    private Executor mirrorExecutor;
 
     @Test
     void parallelDecisionsOnOnePlatformMcpAsk_settleExactlyOneAndArmExactlyOneUse() throws Exception {
@@ -173,6 +195,17 @@ class PermissionDecisionConcurrencyIntegrationTest extends BaseH2IntegrationTest
                         .isEqualTo("Approval " + approvalId
                                 + " is already APPROVED; a decision on a settled request is refused");
 
+                // The mirror linked a review card for this ask before the race;
+                // the winner's settle must move it out of Review (I2/R-RFUX3)
+                // even though the linked run is still RUNNING.
+                String cardId = approvals.findById(approvalId).orElseThrow().getKanbanItemId();
+                assertThat(cardId)
+                        .as("round %d: the mirror linked a review card before the race", round)
+                        .isNotNull();
+                assertThat(kanbanRepository.findById(cardId).orElseThrow().getStatus())
+                        .as("round %d: the approved tool-call card leaves Review for Done while the run is RUNNING", round)
+                        .isEqualTo(KanbanStatus.DONE);
+
                 Approval approval = approvals.findById(approvalId).orElseThrow();
                 assertThat(approval.getStatus())
                         .as("round %d: the approval keeps the winner's verdict", round)
@@ -235,14 +268,18 @@ class PermissionDecisionConcurrencyIntegrationTest extends BaseH2IntegrationTest
 
     /**
      * Proves the fixed interaction between the decision path and the
-     * asynchronous review-card mirror (R2.4, fix round 3): one operator decision
-     * settles while the mirror is (typically) still in flight, then the mirror's
-     * write commits — before, during or after the decision — and the settled
-     * row must survive it whole. The mirror's write is confined to the one
-     * column it owns, so the verdict, reason and decision time, the ask's
-     * delivery and the single one-use grant are all unchanged, a further
-     * decision refuses with the exact settled-refusal message, and nothing can
-     * re-arm the grant.
+     * asynchronous review-card mirror (R2.4, fix round 3; re-scoped by R-RFUX3):
+     * one operator decision settles while the mirror is (typically) still in
+     * flight, and the round then drains the mirror thread so exactly one of two
+     * interleavings is observed deterministically. When the mirror won its first
+     * read (PENDING), its write lands before, during or after the decision, the
+     * settled row must survive it whole — the write is confined to the one
+     * column the mirror owns, so the verdict, reason and decision time, the
+     * ask's delivery and the single one-use grant are all unchanged — and the
+     * card it linked must have settled with the ask. When the mirror lost the
+     * first read to the settled-ask guard, nothing may be created or linked
+     * after the fact. Either way a further decision refuses with the exact
+     * settled-refusal message, and nothing can re-arm the grant.
      */
     @Test
     void decisionSettledBeforeTheReviewCardMirror_neverRevertsAndFurtherDecisionRefuses() {
@@ -302,23 +339,45 @@ class PermissionDecisionConcurrencyIntegrationTest extends BaseH2IntegrationTest
                     .as("round %d: exactly one grant row before the mirror's write", round)
                     .isEqualTo(1L);
 
-            // The mirror may have won or lost the race; await its committed link.
-            await().atMost(20, TimeUnit.SECONDS).until(() -> approvals.findById(approvalId)
-                    .orElseThrow().getKanbanItemId() != null);
+            // The mirror may win the first read (PENDING: it links or creates the
+            // card around the decision) or lose it to the settled-ask guard (it
+            // skips and nothing lands). Drain the single mirror thread — a task
+            // submitted behind the mirror's own — so the round observes exactly
+            // one of the two interleavings deterministically, then branch.
+            CountDownLatch mirrorDrained = new CountDownLatch(1);
+            mirrorExecutor.execute(mirrorDrained::countDown);
+            await().atMost(20, TimeUnit.SECONDS).until(() -> mirrorDrained.getCount() == 0);
 
             Approval afterMirror = approvals.findById(approvalId).orElseThrow();
-            assertThat(afterMirror.getKanbanItemId())
-                    .as("round %d: the mirror linked the ask to its review card", round)
-                    .isNotNull();
-            assertThat(afterMirror.getStatus())
-                    .as("round %d: the late mirror write must never revert the settled decision", round)
-                    .isEqualTo(ApprovalStatus.APPROVED);
-            assertThat(afterMirror.getReason())
-                    .as("round %d: the mirror must not rewrite the decision reason", round)
-                    .isEqualTo(settledReason);
-            assertThat(afterMirror.getDecidedAt())
-                    .as("round %d: the mirror must not rewrite the decision time", round)
-                    .isEqualTo(settledDecidedAt);
+            boolean mirrorLinked = afterMirror.getKanbanItemId() != null;
+            if (mirrorLinked) {
+                // The mirror won the first read: its write landed before, during
+                // or after the decision, and the settled row must survive it
+                // whole. Its card must have settled with the ask — whichever
+                // writer lands second performs the settle — approved reaches
+                // Done even though the linked run is still RUNNING (I2/R-RFUX3).
+                assertThat(afterMirror.getStatus())
+                        .as("round %d: the late mirror write must never revert the settled decision", round)
+                        .isEqualTo(ApprovalStatus.APPROVED);
+                assertThat(afterMirror.getReason())
+                        .as("round %d: the mirror must not rewrite the decision reason", round)
+                        .isEqualTo(settledReason);
+                assertThat(afterMirror.getDecidedAt())
+                        .as("round %d: the mirror must not rewrite the decision time", round)
+                        .isEqualTo(settledDecidedAt);
+                assertThat(kanbanRepository.findById(afterMirror.getKanbanItemId()).orElseThrow().getStatus())
+                        .as("round %d: the approved card leaves Review for Done while the run is still RUNNING", round)
+                        .isEqualTo(KanbanStatus.DONE);
+            } else {
+                // The guard-skipped interleaving: the mirror saw the settled row
+                // before writing, so no card may exist or be linked for the ask.
+                assertThat(afterMirror.getStatus())
+                        .as("round %d: a guard-skipped mirror leaves the settled row untouched", round)
+                        .isEqualTo(ApprovalStatus.APPROVED);
+                assertThat(kanbanRepository.findByLinkedRunId(runId.toString()))
+                        .as("round %d: a guard-skipped mirror creates no card", round)
+                        .isEmpty();
+            }
 
             AcpPermissionRequest askAfterMirror = ledger.findByApprovalId(approvalId).orElseThrow();
             assertThat(askAfterMirror.getDeliveryState())
@@ -364,13 +423,80 @@ class PermissionDecisionConcurrencyIntegrationTest extends BaseH2IntegrationTest
                     .as("round %d: the refused decision must not re-arm the consumed grant", round)
                     .isNotNull();
 
-            rounds.add("round " + round + " kanbanItemId=" + afterMirror.getKanbanItemId()
+            rounds.add("round " + round + " mirror="
+                    + (mirrorLinked ? "linked card=" + afterMirror.getKanbanItemId() : "guard-skipped card=none")
                     + " status=" + afterMirror.getStatus() + " grants=1");
         }
 
         // Per-round evidence in the captured report (every round asserted above).
         System.out.println("[PermissionDecisionLateMirror] " + ROUNDS + " rounds, the settled decision survived: "
                 + rounds);
+    }
+
+    /**
+     * The guard-skip interleaving, forced deterministically: the single mirror
+     * thread is held on a blocker while the ask is registered and settled, so
+     * the mirror's first read observes the settled row — it must skip the link
+     * and create nothing, and the settled row plus its delivery must stay
+     * intact. This is the outcome the re-scoped await above tolerates; forced
+     * here so the branch cannot silently rot behind scheduling luck.
+     */
+    @Test
+    void mirrorBlockedUntilAfterTheSettlement_skipsTheLinkAndTouchesNothing() {
+        UUID agentId = agentRepository.save(Agent.builder()
+                .id(UUID.randomUUID())
+                .name("permission-blocked-mirror-agent")
+                .description("R-RFUX3 guard-skip interleaving, forced")
+                .agentType(AgentType.NATIVE)
+                .role("tester")
+                .model("gpt-4o-mini")
+                .provider("openai")
+                .config("{}")
+                .healthStatus(HealthStatus.HEALTHY)
+                .createdAt(Instant.now())
+                .build()).getId();
+
+        // Hold the single mirror thread so the ask's mirror task stays queued
+        // until after the decision has committed (FIFO: this blocker is
+        // submitted before register enqueues the mirror task).
+        CountDownLatch release = new CountDownLatch(1);
+        mirrorExecutor.execute(() -> {
+            try {
+                release.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        UUID runId = runRepository.save(Run.builder()
+                .agentId(agentId)
+                .status(RunStatus.RUNNING)
+                .promptSeed("permission blocked mirror")
+                .build()).getId();
+        UUID approvalId = coordinator.register(new NativePermission(runId, "ses_blocked_mirror",
+                "blocked-req-0", TOOL, PermissionTarget.PLATFORM_MCP,
+                "{\"path\":\"blocked.txt\",\"content\":\"task 12\"}", OFFERED,
+                Instant.now().plusSeconds(600)));
+        coordinator.decide(approvalId, PermissionChoice.ALLOW_ONCE, OPERATOR);
+
+        release.countDown();
+        // Drain: once the barrier behind the released mirror task completes, the
+        // mirror has had its first (and only) read of the settled ask.
+        CountDownLatch drained = new CountDownLatch(1);
+        mirrorExecutor.execute(drained::countDown);
+        await().atMost(20, TimeUnit.SECONDS).until(() -> drained.getCount() == 0);
+
+        Approval approval = approvals.findById(approvalId).orElseThrow();
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approval.getKanbanItemId())
+                .as("a mirror that observed the settled row must not link the ask")
+                .isNull();
+        assertThat(kanbanRepository.findByLinkedRunId(runId.toString()))
+                .as("a guard-skipped mirror must not create a card")
+                .isEmpty();
+        assertThat(ledger.findByApprovalId(approvalId).orElseThrow().getDeliveryState())
+                .as("the skip must not disturb the decision's own delivery")
+                .isEqualTo(PermissionDeliveryState.DELIVERED.name());
     }
 
     /** The run's WRITE_GRANT ledger row count, the one-use authorization ledger. */

@@ -8,6 +8,9 @@ import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -217,7 +220,8 @@ public class KanbanService {
 
             // Both guards run BEFORE the status changes, so a rejection always
             // leaves the card where it was.
-            if (toStatus == KanbanStatus.DONE && item.getLinkedRunId() != null) {
+            if (toStatus == KanbanStatus.DONE && item.getLinkedRunId() != null
+                    && !isSettledNativeAskCard(item.getId())) {
                 guardLinkedRunNotActive(item.getLinkedRunId());
             }
             if (toStatus == KanbanStatus.REVIEW) {
@@ -335,6 +339,29 @@ public class KanbanService {
                         Map.of("runId", runId.toString(), "runStatus", status.name()));
             }
         });
+    }
+
+    /**
+     * D7 ruling (R-RFUX3): a card mirroring a settled native ask is exempt from
+     * the run-active guard — the ask's decision IS the card's outcome (approved
+     * reaches Done), and a tool-call ask is raised while its run is still active,
+     * so the guard would otherwise keep its card in Review forever. A PENDING
+     * native ask keeps the guard: the decision surface is still live. LEGACY_GATE
+     * asks never exempt — their decisions belong to the card layer's own flows —
+     * and a card with no linked ask is an ordinary run card, guarded as before.
+     */
+    private boolean isSettledNativeAskCard(String cardId) {
+        boolean settled = false;
+        for (Approval approval : approvalRepository.findByKanbanItemId(cardId)) {
+            if (approval.getSource() != ApprovalSource.ACP_PERMISSION) {
+                continue;
+            }
+            if (approval.getStatus() == ApprovalStatus.PENDING) {
+                return false;
+            }
+            settled = true;
+        }
+        return settled;
     }
 
     /**

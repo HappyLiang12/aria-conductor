@@ -16,13 +16,15 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.Executor;
 
 /**
  * Surfaces every pending approval as a Review-column card (spec 4.3): links the
  * ask to the card already associated with the run, or creates a REVIEW card for
  * orphan approvals. An ask that already settled while the mirror was in flight
- * is skipped: its card could never be settled again.
+ * is skipped; an ask that settles around the mirror's own write is settled by
+ * the post-write re-check, so no card is left without a settle path.
  *
  * <p>Runs after the requesting transaction commits, in its own transaction: the
  * approval is recorded before the board is touched, and a failure here must
@@ -81,7 +83,10 @@ public class KanbanReviewCardListener {
         }
         submitMirror(() -> {
             try {
-                reviewTransaction.executeWithoutResult(status -> linkReviewCard(event));
+                String linkedCardId = reviewTransaction.execute(status -> linkReviewCard(event));
+                if (linkedCardId != null) {
+                    settleCardIfAskSettledAfterLink(event.getApprovalId(), linkedCardId);
+                }
             } catch (Exception e) {
                 log.warn("Failed to surface review card for approval {}: {}",
                         event.getApprovalId(), e.getMessage());
@@ -112,27 +117,39 @@ public class KanbanReviewCardListener {
      * then re-arm an already consumed one-use grant. The entity is neither
      * mutated nor saved, so no dirty snapshot can flush over the decision.
      *
-     * <p>A settled ask is skipped before anything is read or written: a second
-     * decision is refused, so a card created or linked now could never be
-     * settled again — it would linger in REVIEW forever.
+     * <p>A settled ask is skipped before anything is read or written: nothing
+     * would ever settle a card created or linked now (a second decision is
+     * refused) — it would linger in REVIEW forever. The opposite interleaving —
+     * the ask settles after this first read but around the write — is closed by
+     * the re-check in {@link #settleCardIfAskSettledAfterLink}, which runs once
+     * the write below has committed.
+     *
+     * @return the id of the card this mirror linked or created, or {@code null}
+     *         when nothing was written (settled elsewhere, already linked, or
+     *         the link write lost to another link)
      */
-    private void linkReviewCard(ApprovalRequestedEvent event) {
-        approvalRepository.findById(event.getApprovalId()).ifPresent(approval -> {
-            if (approval.getStatus() != ApprovalStatus.PENDING) return;
-            if (approval.getKanbanItemId() != null) return;
-
-            kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
-                    .filter(card -> card.getStatus() == KanbanStatus.REVIEW
-                            || card.getStatus() == KanbanStatus.IN_PROGRESS
-                            || card.getStatus() == KanbanStatus.TODO)
-                    .findFirst()
-                    .ifPresentOrElse(
-                            card -> approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), card.getId()),
-                            () -> createCard(approval, event));
-        });
+    private String linkReviewCard(ApprovalRequestedEvent event) {
+        Approval approval = approvalRepository.findById(event.getApprovalId()).orElse(null);
+        if (approval == null || approval.getStatus() != ApprovalStatus.PENDING
+                || approval.getKanbanItemId() != null) {
+            return null;
+        }
+        Optional<KanbanItem> card = kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
+                .filter(candidate -> candidate.getStatus() == KanbanStatus.REVIEW
+                        || candidate.getStatus() == KanbanStatus.IN_PROGRESS
+                        || candidate.getStatus() == KanbanStatus.TODO)
+                .findFirst();
+        if (card.isEmpty()) {
+            return createCard(approval, event);
+        }
+        String cardId = card.get().getId();
+        return approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), cardId) == 1 ? cardId : null;
     }
 
-    private void createCard(Approval approval, ApprovalRequestedEvent event) {
+    /**
+     * @return the created card's id when the backfill link landed, else {@code null}
+     */
+    private String createCard(Approval approval, ApprovalRequestedEvent event) {
         // A native ask knows its tool and arguments (D7): its card must say what
         // the operator is deciding, not just "tool call". Review asks keep the
         // readable approval-type title; they have no tool correlation.
@@ -155,8 +172,53 @@ public class KanbanReviewCardListener {
                 .status(KanbanStatus.REVIEW)
                 .linkedRunId(event.getRunId().toString())
                 .build());
-        approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), card.getId());
         log.info("Auto-created review card {} for orphan approval {}", card.getId(), approval.getId());
+        return approvalRepository.linkKanbanItemIdIfAbsent(approval.getId(), card.getId()) == 1
+                ? card.getId() : null;
+    }
+
+    /**
+     * The two settle writers can interleave either way: this mirror may have read
+     * the approval while it was still PENDING and written its card after the ask
+     * settled — in that order the settle listener had already run and, seeing no
+     * {@code kanbanItemId} on record, left the card alone. Once the mirror's own
+     * write has committed the approval is read again: a settled ask's fresh card
+     * is settled on the spot, with the settle listener's mapping — approved
+     * reaches Done, denied or expired is cancelled — and only a card still in
+     * Review is moved, so the second of the two writes settles the card and both
+     * interleavings converge.
+     */
+    private void settleCardIfAskSettledAfterLink(UUID approvalId, String cardId) {
+        try {
+            Approval current = approvalRepository.findById(approvalId).orElse(null);
+            if (current == null || current.getStatus() == ApprovalStatus.PENDING) {
+                return; // still pending: the settle listener owns the later settle
+            }
+            KanbanItem card = kanbanRepository.findById(cardId).orElse(null);
+            if (card == null || card.getStatus() != KanbanStatus.REVIEW) {
+                return; // the settle listener got there first, or the operator moved it
+            }
+            KanbanStatus target;
+            String comment;
+            switch (current.getStatus()) {
+                case APPROVED -> {
+                    target = KanbanStatus.DONE;
+                    comment = "ask approved";
+                }
+                case EXPIRED -> {
+                    target = KanbanStatus.CANCELLED;
+                    comment = "ask expired";
+                }
+                default -> {
+                    target = KanbanStatus.CANCELLED;
+                    comment = "ask denied";
+                }
+            }
+            kanbanService.transition(cardId, target, comment);
+        } catch (RuntimeException e) {
+            log.warn("Ask {} settled while its review card {} was being mirrored, but the card could not be settled: {}",
+                    approvalId, cardId, e.getMessage());
+        }
     }
 
     /** Card-face cap on the arguments document; a null document stays null. */

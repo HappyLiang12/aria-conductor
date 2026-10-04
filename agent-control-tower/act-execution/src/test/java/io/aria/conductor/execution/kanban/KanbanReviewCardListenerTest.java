@@ -158,6 +158,84 @@ class KanbanReviewCardListenerTest {
         verify(approvalRepository, never()).linkKanbanItemIdIfAbsent(any(), any());
     }
 
+    // ---- behavior 2c: the link-settle race is closed by a re-check (I1b) ----
+
+    /**
+     * The opposite interleaving of the settled-ask guard: the mirror read
+     * PENDING and linked its card while the decision committed; the settle
+     * listener had already run (its read saw no link) and left the card alone.
+     * The mirror re-reads the approval once its write is done and settles the
+     * card it just linked — approved reaches Done, exactly like the settle
+     * listener would have.
+     */
+    @Test
+    void anAskSettledWhileItsCardWasBeingLinkedSettlesTheCardImmediately() {
+        Approval settledMeanwhile = approval();
+        settledMeanwhile.setStatus(ApprovalStatus.APPROVED);
+        when(approvalRepository.findById(APPROVAL_ID))
+                .thenReturn(Optional.of(approval()), Optional.of(settledMeanwhile));
+        when(kanbanRepository.findByLinkedRunId(RUN_ID.toString()))
+                .thenReturn(List.of(card("card-1", KanbanStatus.REVIEW)));
+        when(approvalRepository.linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-1")).thenReturn(1);
+        when(kanbanRepository.findById("card-1"))
+                .thenReturn(Optional.of(card("card-1", KanbanStatus.REVIEW)));
+
+        listener.onApprovalRequested(event());
+
+        verify(kanbanService).transition("card-1", KanbanStatus.DONE, "ask approved");
+    }
+
+    @Test
+    void anAskSettledWhileItsCardWasBeingCreatedSettlesTheNewCardImmediately() {
+        Approval settledMeanwhile = approval();
+        settledMeanwhile.setStatus(ApprovalStatus.DENIED);
+        when(approvalRepository.findById(APPROVAL_ID))
+                .thenReturn(Optional.of(approval()), Optional.of(settledMeanwhile));
+        when(kanbanRepository.findByLinkedRunId(RUN_ID.toString())).thenReturn(List.of());
+        when(kanbanService.create(any(CreateKanbanItemRequest.class)))
+                .thenReturn(card("card-new", KanbanStatus.REVIEW));
+        when(approvalRepository.linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-new")).thenReturn(1);
+        when(kanbanRepository.findById("card-new"))
+                .thenReturn(Optional.of(card("card-new", KanbanStatus.REVIEW)));
+
+        listener.onApprovalRequested(event());
+
+        verify(kanbanService).transition("card-new", KanbanStatus.CANCELLED, "ask denied");
+    }
+
+    @Test
+    void anAskStillPendingAfterTheWriteIsLeftToTheSettleListener() {
+        when(approvalRepository.findById(APPROVAL_ID)).thenReturn(Optional.of(approval()));
+        when(kanbanRepository.findByLinkedRunId(RUN_ID.toString()))
+                .thenReturn(List.of(card("card-1", KanbanStatus.REVIEW)));
+        when(approvalRepository.linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-1")).thenReturn(1);
+
+        listener.onApprovalRequested(event());
+
+        // Still pending: the settle listener owns the later settle — the mirror
+        // must not touch the board beyond its own write.
+        verify(kanbanService, never()).transition(any(), any(), any());
+    }
+
+    @Test
+    void aCardAlreadySettledByTheSettleListenerIsLeftAlone() {
+        // The settle listener won the race after the link landed: the re-check
+        // sees the card is no longer in Review and never fights the winner.
+        Approval settledMeanwhile = approval();
+        settledMeanwhile.setStatus(ApprovalStatus.APPROVED);
+        when(approvalRepository.findById(APPROVAL_ID))
+                .thenReturn(Optional.of(approval()), Optional.of(settledMeanwhile));
+        when(kanbanRepository.findByLinkedRunId(RUN_ID.toString()))
+                .thenReturn(List.of(card("card-1", KanbanStatus.REVIEW)));
+        when(approvalRepository.linkKanbanItemIdIfAbsent(APPROVAL_ID, "card-1")).thenReturn(1);
+        when(kanbanRepository.findById("card-1"))
+                .thenReturn(Optional.of(card("card-1", KanbanStatus.DONE)));
+
+        listener.onApprovalRequested(event());
+
+        verify(kanbanService, never()).transition(any(), any(), any());
+    }
+
     // ---- behavior 3: orphan approval ----
 
     @Test

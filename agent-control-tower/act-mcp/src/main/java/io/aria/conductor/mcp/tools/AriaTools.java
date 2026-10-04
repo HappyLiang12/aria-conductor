@@ -8,6 +8,7 @@ import io.aria.conductor.aria.dto.TimelineEntry;
 import io.aria.conductor.aria.service.NotificationService;
 import io.aria.conductor.aria.service.ScheduledJobService;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.ScheduleType;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.execution.mcp.McpProperties;
@@ -18,7 +19,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -188,7 +189,7 @@ public class AriaTools implements McpTool {
     }
 
     @Tool(name = "get_conversation_timeline",
-            description = "Return the full message timeline of a conversation across all its runs: role, content, timestamp and runId per entry, ordered by run creation time then turn. Returns an empty list for an unknown conversationId.")
+            description = "Return the full message timeline of a conversation across all its runs: role, content, timestamp, runId and error/retryPrompt per entry, ordered by run creation time then turn. A failed run adds a synthetic assistant entry (error=true, retryPrompt) directly after that run's entries. Returns an empty list for an unknown conversationId.")
     public String getConversationTimeline(
             @ToolParam(description = "Conversation id, e.g. from get_latest_conversation") String conversationId) {
         try {
@@ -199,22 +200,46 @@ public class AriaTools implements McpTool {
             List<UUID> runIds = runs.stream().map(Run::getId).toList();
             List<SessionTrajectory> trajectories = trajectoryRepository
                     .findByRunIdInOrderByTurnNumberAsc(runIds);
-            Map<UUID, Instant> runCreated = runs.stream()
-                    .collect(Collectors.toMap(Run::getId, Run::getCreatedAt));
-            List<TimelineEntry> timeline = trajectories.stream()
-                    .sorted(Comparator.comparing(
-                            t -> runCreated.getOrDefault(t.getRunId(), t.getCreatedAt())))
-                    .map(t -> TimelineEntry.builder()
+            Map<UUID, List<SessionTrajectory>> trajectoriesByRun = trajectories.stream()
+                    .collect(Collectors.groupingBy(SessionTrajectory::getRunId));
+
+            // Same assembly as AriaConversationController.getTimeline (REST/MCP parity):
+            // per run, then a FAILED run's synthetic error entry directly after its entries.
+            List<TimelineEntry> timeline = new ArrayList<>();
+            for (Run run : runs) {
+                for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
+                    timeline.add(TimelineEntry.builder()
                             .role(t.getRole())
                             .content(t.getContent())
                             .timestamp(t.getCreatedAt())
                             .runId(t.getRunId().toString())
-                            .build())
-                    .toList();
+                            .build());
+                }
+                if (run.getStatus() == RunStatus.FAILED) {
+                    timeline.add(TimelineEntry.builder()
+                            .role("assistant")
+                            .content("回合執行失敗：" + clipError(run.getErrorMessage()))
+                            .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
+                            .runId(run.getId().toString())
+                            .error(true)
+                            .retryPrompt(run.getPromptSeed())
+                            .build());
+                }
+            }
             return ToolResponses.ok(timeline);
         } catch (Exception e) {
             return ToolResponses.error("CONVERSATION_READ_FAILED", e.getMessage(), e, mcpProperties.isDebug());
         }
+    }
+
+    private static final int MAX_ERROR_CHARS = 300;
+
+    /** Deliberately duplicated from AriaConversationController (parity fix; shared extraction is a recorded follow-up). */
+    private static String clipError(String message) {
+        if (message == null || message.isBlank()) {
+            return "原因不明";
+        }
+        return message.length() > MAX_ERROR_CHARS ? message.substring(0, MAX_ERROR_CHARS) : message;
     }
 
     private static ScheduleType parseScheduleType(String raw) {

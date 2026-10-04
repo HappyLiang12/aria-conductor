@@ -9,6 +9,7 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.execution.engine.RunContext;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.tool.ToolHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -65,9 +66,22 @@ public class RunToolHandler implements ToolHandler {
         CreateRunRequest req = CreateRunRequest.builder()
                 .agentId(resolvedAgentId)
                 .promptSeed(prompt)
+                .dispatchedByRunId(dispatchingRunId(args))
                 .build();
         RunResponse resp = runService.createRun(req);
         return "Run started: " + resp.getId().toString() + " (agent: " + agentId + ")";
+    }
+
+    /**
+     * The dispatching turn's run id, read from the {@code _runContext} the
+     * ToolExecutionEngine injects into tool arguments. Null when the tool is
+     * invoked outside a run context (direct callers/tests): the child then
+     * carries no dispatch group. Never a conversationId — dispatched children
+     * must not enter the conversation timeline/context.
+     */
+    private static UUID dispatchingRunId(Map<String, Object> args) {
+        Object ctx = args.get("_runContext");
+        return ctx instanceof RunContext runContext ? runContext.getRunId() : null;
     }
 
     private String listRuns() {

@@ -25,12 +25,13 @@ vi.mock('../../api/skills', () => ({ listSkills: vi.fn() }));
 vi.mock('../../api/approvals', () => ({ listApprovals: vi.fn() }));
 
 import { streamMessage } from '../../api/aria';
-import { getLatestConversation, deleteConversation } from '../../api/ariaConversations';
+import { getLatestConversation, getConversationTimeline, deleteConversation } from '../../api/ariaConversations';
 import { listSkills } from '../../api/skills';
 import { listApprovals } from '../../api/approvals';
 
 const mockStream = streamMessage as Mock;
 const mockGetLatest = getLatestConversation as Mock;
+const mockGetTimeline = getConversationTimeline as Mock;
 const mockDeleteConversation = deleteConversation as Mock;
 const mockListSkills = listSkills as Mock;
 const mockListApprovals = listApprovals as Mock;
@@ -81,6 +82,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   mockGetLatest.mockResolvedValue(null);
+  mockGetTimeline.mockResolvedValue([]);
   mockDeleteConversation.mockResolvedValue(undefined);
   mockListSkills.mockResolvedValue(SKILLS);
   mockListApprovals.mockResolvedValue([]);
@@ -149,8 +151,10 @@ describe('AriaPanel slash-command skill handling', () => {
     await userEvent.type(ta, 'do the thing');
     await userEvent.type(ta, '{Enter}');
     // The raw error text is replaced by the honest, retry-free report; the retry
-    // affordance stays for a failure that is not an approval wait.
-    expect(await screen.findByText(/no approval is pending/)).toBeInTheDocument();
+    // affordance stays for a failure that is not an approval wait. The legacy
+    // path reconciles against the timeline first (one bounded re-check), so
+    // this assertion must outwait that re-check window.
+    expect(await screen.findByText(/no approval is pending/, undefined, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
@@ -261,9 +265,12 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
     fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
-    await act(async () => {});
 
-    expect(screen.getByText(/1 pending ask in the Review Queue/)).toBeInTheDocument();
+    // The legacy path reconciles against the timeline first — one bounded
+    // re-check — before landing on today's approvals copy.
+    expect(
+      await screen.findByText(/1 pending ask in the Review Queue/, undefined, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/please try again/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/connection closed unexpectedly/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
@@ -285,5 +292,165 @@ describe('AriaPanel run-uncertain reporting (timeout / dropped stream)', () => {
     expect(mockListApprovals).not.toHaveBeenCalled();
     expect(screen.queryByText(/waiting for your approval/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Conversation ID/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A failed TURN reports the actual failure reason and offers a retry that
+// resends the turn's own prompt — from the timeline (A1 synthetic entries) and
+// from the enriched stream error payload (A4). The pending-ask copy stays the
+// fallback for a run whose state is unknown.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel failed-turn reporting (timeline + stream)', () => {
+  it('a failed turn from the timeline renders its reason and offers retry using its own prompt', async () => {
+    mockGetLatest.mockResolvedValue({ conversationId: 'conv-1', lastMessageAt: '2026-09-30T10:01:00Z', runCount: 2 });
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'what next', timestamp: '2026-09-30T10:00:00Z', runId: 'r0' },
+      {
+        role: 'assistant',
+        content: '回合執行失敗：relay dead',
+        timestamp: '2026-09-30T10:01:00Z',
+        runId: 'r1',
+        error: true,
+        retryPrompt: 'what next',
+      },
+    ]);
+    renderPanel();
+    await act(async () => {}); // flush the conversation load
+
+    await openPanel();
+    expect(await screen.findByText(/relay dead/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('what next');
+  });
+
+  it('a stream turn failure shows the reason instead of the pending-ask copy', async () => {
+    mockListApprovals.mockResolvedValue(
+      Array.from({ length: 14 }, (_, i) => pendingAsk(`a${i}`)),
+    );
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      // the enriched error payload streamMessage emits for a failed turn (A4)
+      args[3]?.onError?.({ turnFailed: true, reason: 'relay dead' });
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(screen.getByText(/relay dead/)).toBeInTheDocument();
+    expect(screen.getByText(/上一回合失敗/)).toBeInTheDocument();
+    expect(screen.queryByText(/pending ask/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('a legacy stream error resolves to the failed-turn bubble when the timeline has a failure entry', async () => {
+    mockGetTimeline.mockResolvedValue([
+      { role: 'user', content: 'what next', timestamp: '2026-09-30T10:00:00Z', runId: 'r0' },
+      {
+        role: 'assistant',
+        content: '回合執行失敗：relay dead',
+        timestamp: '2026-09-30T10:01:00Z',
+        runId: 'r1',
+        error: true,
+        retryPrompt: 'what next',
+      },
+    ]);
+    mockListApprovals.mockResolvedValue([pendingAsk('a1')]);
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      // The engine's own legacy error event: a plain message, no turnFailed
+      // payload — the misreporting case this reconcile exists for.
+      args[3]?.onError?.('legacy engine error');
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    expect(await screen.findByText(/relay dead/)).toBeInTheDocument();
+    expect(screen.getByText(/上一回合失敗/)).toBeInTheDocument();
+    expect(screen.queryByText(/pending ask/i)).not.toBeInTheDocument();
+    // The truthful timeline entry replaces the approvals probe entirely.
+    expect(mockListApprovals).not.toHaveBeenCalled();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(2));
+    expect(mockStream.mock.calls[1][1]).toBe('what next');
+  });
+
+  it('a legacy stream error with no failure entry keeps the approvals copy', async () => {
+    mockGetTimeline.mockResolvedValue([
+      // The last entry is not an error entry — no failed turn to report.
+      { role: 'user', content: 'hello', timestamp: '2026-09-30T10:00:00Z', runId: 'r0' },
+    ]);
+    mockListApprovals.mockResolvedValue([pendingAsk('a1')]);
+    mockStream.mockImplementation(async (...args: StreamArgs) => {
+      args[3]?.onError?.('legacy engine error');
+    });
+    renderPanel();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Open Aria panel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Brief me on overnight runs' }));
+    await act(async () => {});
+
+    // Exactly one bounded re-check: first read + one re-read, then today's copy.
+    expect(
+      await screen.findByText(/1 pending ask in the Review Queue/, undefined, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(mockGetTimeline).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/上一回合失敗/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One-click synthesis (Feature B2): the batch-completion notification composes
+// the prompt and hands it over through the `aria:compose` window event. The
+// panel owns the SSE path, so the event must go through sendStreamed exactly
+// like a typed message — and the listener must not survive unmount.
+// ---------------------------------------------------------------------------
+
+describe('AriaPanel aria:compose handling', () => {
+  it('an aria:compose event sends the prompt through the stream path', async () => {
+    renderPanel();
+    await act(async () => {}); // flush the conversation load
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt: 'summarize the batch' } }));
+    });
+
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('summarize the batch');
+  });
+
+  it('an aria:compose event opens the panel', async () => {
+    renderPanel();
+    await act(async () => {}); // flush the conversation load
+    // The 彙整 button lives outside the panel — with the panel closed the
+    // composed turn must still become visible instead of running unseen.
+    expect(screen.queryByRole('dialog', { name: 'Aria assistant' })).not.toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt: 'summarize the batch' } }));
+    });
+
+    expect(await screen.findByRole('dialog', { name: 'Aria assistant' })).toBeInTheDocument();
+    await waitFor(() => expect(mockStream).toHaveBeenCalledTimes(1));
+    expect(mockStream.mock.calls[0][1]).toBe('summarize the batch');
+  });
+
+  it('stops listening for aria:compose on unmount', async () => {
+    const { unmount } = renderPanel();
+    await act(async () => {});
+    unmount();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt: 'late prompt' } }));
+    });
+
+    expect(mockStream).not.toHaveBeenCalled();
   });
 });

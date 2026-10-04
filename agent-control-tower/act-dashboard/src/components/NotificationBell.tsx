@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useWebSocketContext } from './Layout';
 import { getUnreadCount, listNotifications, markRead, markAllRead } from '../api/ariaNotifications';
+import { composeSynthesis } from '../api/ariaConversations';
 import type { Notification } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { formatTimestamp } from '../utils/formatTime';
@@ -71,6 +72,28 @@ export function NotificationBell() {
     }
   };
 
+  /**
+   * One-click synthesis (Feature B2): a `run.batch.completed` notification carries
+   * the dispatching conversation in `resourceId`. The backend composes the prompt,
+   * the row is marked read, and the prompt is handed to AriaPanel through the
+   * `aria:compose` window event (the panel owns the SSE path). Never navigates —
+   * the stopPropagation keeps the row's own click handler out of this press.
+   */
+  const handleComposeClick = async (
+    e: React.MouseEvent<HTMLButtonElement>,
+    notification: Notification,
+  ) => {
+    e.stopPropagation();
+    if (!notification.resourceId) return;
+    try {
+      const { prompt } = await composeSynthesis(notification.resourceId);
+      if (!notification.isRead) {
+        await handleMarkRead(notification.id);
+      }
+      window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt } }));
+    } catch { /* silent — same contract as markRead */ }
+  };
+
   const typeEmoji: Record<string, string> = {
     'run.completed': '✅',
     'run.failed': '❌',
@@ -80,6 +103,7 @@ export function NotificationBell() {
     'reminder': '⏰',
     'monitor': '👁',
     'brief': '📋',
+    'run.batch.completed': '📦',
   };
 
   const fmtTime = (iso: string): string => {
@@ -151,6 +175,15 @@ export function NotificationBell() {
                   <span className="notif-item-emoji">{typeEmoji[n.type] || '🔔'}</span>
                   <div className="notif-item-content">
                     <div className="notif-item-title">{n.title}</div>
+                    {n.type === 'run.batch.completed' && (
+                      <button
+                        type="button"
+                        className="notif-mark-all-btn"
+                        onClick={(e) => void handleComposeClick(e, n)}
+                      >
+                        彙整
+                      </button>
+                    )}
                     {n.body && <div style={{ fontSize: '0.78rem', color: 'var(--text-mute)', marginTop: 2 }}>{n.body.slice(0, 100)}</div>}
                     <div className="notif-item-time">{fmtTime(n.createdAt)}</div>
                   </div>

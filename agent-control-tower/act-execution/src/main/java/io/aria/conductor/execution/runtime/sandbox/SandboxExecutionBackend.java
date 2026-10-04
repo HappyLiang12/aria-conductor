@@ -2,6 +2,7 @@ package io.aria.conductor.execution.runtime.sandbox;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.runtime.ArtifactBundle;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ExecutionBackend;
@@ -12,6 +13,7 @@ import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import io.aria.conductor.execution.runtime.WorkspacePaths;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.URI;
@@ -41,10 +43,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * that cannot complete is reported as an incomplete artifact result (a refusal),
  * never as a stable final diff.
  */
+@Slf4j
 public class SandboxExecutionBackend implements ExecutionBackend {
 
     /** Host-side staging directory of the run-owned sandbox configuration, inside the workspace runtime root. */
     private static final String STAGING_DIRECTORY = "sandbox";
+
+    /** One recreate attempt per launch: a second relay-dead sandbox fails the run. */
+    static final int RELAY_RECREATE_BUDGET = 1;
 
     /** Raised image/port pair of one core, resolved from operator configuration, never from a worker. */
     public record SandboxProfile(String image, int port) {
@@ -151,20 +157,34 @@ public class SandboxExecutionBackend implements ExecutionBackend {
             throw new IllegalArgumentException("Environment was not prepared by this backend for run "
                     + environment.runId());
         }
-        SandboxLifecycle.LaunchManifest manifest;
+        PreparedEnvironment launched = environment;
         try {
-            manifest = new SandboxLifecycle.LaunchManifest(
+            SandboxLifecycle.LaunchManifest manifest = new SandboxLifecycle.LaunchManifest(
                     environment.runId(), prepared.profile().port(), workingDirectory(profile),
                     profile.argv(), profile.env());
-            // The manifest can carry the run's core environment, so no host-side copy is
-            // written: the only copy is the run-owned one uploaded into the sandbox
-            // control directory (mode 600), which dies with the sandbox.
-            lifecycle.uploadSnapshot(environment.runId(), prepared.snapshotRoot(), manifest);
-            // The run-owned governed configuration (written into the host staging
-            // directory by the core adapter) is uploaded into the sandbox run control
-            // directory, where the launch manifest's XDG roots point.
-            lifecycle.uploadRunConfiguration(environment.runId(), prepared.stagingDirectory(), "config");
-            lifecycle.launch(environment.runId());
+            int recreateBudget = RELAY_RECREATE_BUDGET;
+            while (true) {
+                try {
+                    uploadAll(prepared, launched, manifest);
+                    lifecycle.launch(launched.runId());
+                    break;
+                } catch (TaskExecutionException e) {
+                    // The relay-never-established upload failure class is not healed by
+                    // waiting: the published relay port never accepted a connection in
+                    // the whole upload window, so only a fresh sandbox can carry this
+                    // run. One recreate is admitted; a second relay-dead sandbox fails
+                    // the run (through the outer failure path below).
+                    if (recreateBudget <= 0 || !SandboxLifecycle.isRelayNeverEstablished(e)) {
+                        throw e;
+                    }
+                    recreateBudget--;
+                    log.warn("Relay never established for sandbox {} of run {}; recreating a fresh sandbox "
+                            + "({} attempt(s) left)", launched.environmentId(), launched.runId(), recreateBudget + 1);
+                    lifecycle.destroy(launched.runId());
+                    launched = recreateSandbox(prepared, launched);
+                    log.info("Recreated sandbox {} for run {}", launched.environmentId(), launched.runId());
+                }
+            }
         } catch (RuntimeException e) {
             // The sandbox was created during prepare: a failure before the core is
             // running must not leak it (a refused manifest or a failed upload would
@@ -173,8 +193,53 @@ public class SandboxExecutionBackend implements ExecutionBackend {
             lifecycle.destroy(environment.runId());
             throw e;
         }
-        return new RuntimeHandle(environment.runId(), ExecutionMode.SANDBOX, environment.environmentId(),
-                ownershipIdentity(environment, prepared), environment.endpoint());
+        return new RuntimeHandle(launched.runId(), ExecutionMode.SANDBOX, launched.environmentId(),
+                ownershipIdentity(launched, prepared), launched.endpoint());
+    }
+
+    /**
+     * The upload sequence a sandbox needs before the launch: the workspace
+     * snapshot plus its trusted manifest in one write, then the run-owned
+     * governed configuration. This is the single place both uploads live, so
+     * the recreate path re-runs both against the fresh sandbox by construction.
+     */
+    private void uploadAll(Prepared prepared, PreparedEnvironment environment,
+            SandboxLifecycle.LaunchManifest manifest) {
+        // The manifest can carry the run's core environment, so no host-side copy is
+        // written: the only copy is the run-owned one uploaded into the sandbox
+        // control directory (mode 600), which dies with the sandbox.
+        lifecycle.uploadSnapshot(environment.runId(), prepared.snapshotRoot(), manifest);
+        // The run-owned governed configuration (written into the host staging
+        // directory by the core adapter) is uploaded into the sandbox run control
+        // directory, where the launch manifest's XDG roots point.
+        lifecycle.uploadRunConfiguration(environment.runId(), prepared.stagingDirectory(), "config");
+    }
+
+    /**
+     * The bounded recreate of a relay-dead sandbox: the dead sandbox is already
+     * destroyed by the caller (releasing the run key), and one fresh sandbox is
+     * created from the same configured image with its endpoint re-resolved
+     * exactly as {@link #prepare} does, so the run can be re-uploaded and
+     * launched against it. The run-keyed map entry is refreshed so the entry
+     * always names the live environment.
+     */
+    private PreparedEnvironment recreateSandbox(Prepared prepared, PreparedEnvironment stale) {
+        UUID runId = stale.runId();
+        String sandboxId = lifecycle.create(runId, prepared.profile().image(), Map.of());
+        URI endpoint;
+        try {
+            endpoint = lifecycle.resolveEndpoint(runId, prepared.profile().port());
+        } catch (RuntimeException e) {
+            // Same invariant as prepare: an environment without a verified endpoint is
+            // not usable, so the just-created sandbox is destroyed instead of leaked.
+            lifecycle.destroy(runId);
+            throw e;
+        }
+        PreparedEnvironment recreated = new PreparedEnvironment(runId, ExecutionMode.SANDBOX, sandboxId,
+                lifecycle.workspaceRoot(), stale.configurationDirectory(), endpoint);
+        environments.put(runId, new Prepared(recreated, prepared.profile(),
+                prepared.stagingDirectory(), prepared.snapshotRoot()));
+        return recreated;
     }
 
     @Override

@@ -4,6 +4,7 @@ import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.ConversationSummary;
 import io.aria.conductor.aria.dto.TimelineEntry;
+import io.aria.conductor.aria.service.AriaService;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -14,7 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -30,15 +31,18 @@ public class AriaConversationController {
     private final SessionTrajectoryRepository trajectoryRepository;
     private final AuditEventRepository auditEventRepository;
     private final ToolCallRepository toolCallRepository;
+    private final AriaService ariaService;
 
     public AriaConversationController(RunRepository runRepository,
                                        SessionTrajectoryRepository trajectoryRepository,
                                        AuditEventRepository auditEventRepository,
-                                       ToolCallRepository toolCallRepository) {
+                                       ToolCallRepository toolCallRepository,
+                                       AriaService ariaService) {
         this.runRepository = runRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.auditEventRepository = auditEventRepository;
         this.toolCallRepository = toolCallRepository;
+        this.ariaService = ariaService;
     }
 
     /**
@@ -83,23 +87,47 @@ public class AriaConversationController {
         List<SessionTrajectory> trajectories = trajectoryRepository
                 .findByRunIdInOrderByTurnNumberAsc(runIds);
 
-        // Pre-build runId → createdAt map for O(1) sort lookup
-        Map<UUID, Instant> runCreated = runs.stream()
-                .collect(Collectors.toMap(Run::getId, Run::getCreatedAt));
+        // The repository returns trajectories globally ordered by turnNumber; grouping
+        // preserves that within-run order for each run.
+        Map<UUID, List<SessionTrajectory>> trajectoriesByRun = trajectories.stream()
+                .collect(Collectors.groupingBy(SessionTrajectory::getRunId));
 
-        // Sort globally by run creation time, then by turnNumber within each run
-        List<TimelineEntry> timeline = trajectories.stream()
-                .sorted(Comparator.comparing(
-                        t -> runCreated.getOrDefault(t.getRunId(), t.getCreatedAt())))
-                .map(t -> TimelineEntry.builder()
+        // Assemble per run, in runs order (createdAt asc): a FAILED run's synthetic
+        // error entry lands directly after that run's messages, never after a later run's.
+        List<TimelineEntry> timeline = new ArrayList<>();
+        for (Run run : runs) {
+            for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
+                timeline.add(TimelineEntry.builder()
                         .role(t.getRole())
                         .content(t.getContent())
                         .timestamp(t.getCreatedAt())
                         .runId(t.getRunId().toString())
-                        .build())
-                .toList();
+                        .build());
+            }
+            // A failed run that died before producing any trajectory would otherwise be
+            // invisible in the timeline; add one synthetic error entry per FAILED run.
+            if (run.getStatus() == RunStatus.FAILED) {
+                timeline.add(TimelineEntry.builder()
+                        .role("assistant")
+                        .content("回合執行失敗：" + clipError(run.getErrorMessage()))
+                        .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
+                        .runId(run.getId().toString())
+                        .error(true)
+                        .retryPrompt(run.getPromptSeed())
+                        .build());
+            }
+        }
 
         return ResponseEntity.ok(timeline);
+    }
+
+    private static final int MAX_ERROR_CHARS = 300;
+
+    private static String clipError(String message) {
+        if (message == null || message.isBlank()) {
+            return "原因不明";
+        }
+        return message.length() > MAX_ERROR_CHARS ? message.substring(0, MAX_ERROR_CHARS) : message;
     }
 
     /**
@@ -135,5 +163,31 @@ public class AriaConversationController {
                 conversationId, runs.size(), runIds.size());
 
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Compose (but never run) the one-click synthesis prompt for a completed dispatch
+     * batch (Feature B4). With no body — or no {@code dispatchedByRunId} in it — the
+     * conversation's latest dispatch group is used; an explicit id selects that group
+     * directly. Returns 404 when nothing resolves (unknown conversation, or a group id
+     * without children), 400 for a malformed UUID. The client sends the returned prompt
+     * through the normal chat path.
+     */
+    @PostMapping("/{conversationId}/synthesize")
+    public ResponseEntity<Map<String, String>> synthesize(
+            @PathVariable String conversationId,
+            @RequestBody(required = false) Map<String, String> body) {
+        String rawDispatchedByRunId = body != null ? body.get("dispatchedByRunId") : null;
+        UUID dispatchedByRunId = null;
+        if (rawDispatchedByRunId != null && !rawDispatchedByRunId.isBlank()) {
+            try {
+                dispatchedByRunId = UUID.fromString(rawDispatchedByRunId.trim());
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().build();
+            }
+        }
+        return ariaService.composeSynthesisPrompt(conversationId, dispatchedByRunId)
+                .map(prompt -> ResponseEntity.ok(Map.of("prompt", prompt)))
+                .orElse(ResponseEntity.notFound().build());
     }
 }

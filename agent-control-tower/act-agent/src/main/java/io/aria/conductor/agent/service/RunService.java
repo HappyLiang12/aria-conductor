@@ -91,6 +91,7 @@ public class RunService {
                 .promptSeed(request.getPromptSeed())
                 .maxIterations(request.getMaxIterations() > 0 ? request.getMaxIterations() : 0)
                 .status(RunStatus.PENDING)
+                .dispatchedByRunId(request.getDispatchedByRunId())
                 .build();
 
         Run saved = runRepository.save(run);

@@ -318,18 +318,99 @@ class AriaServiceChatTest {
     }
 
     @Test
-    void chat_excludesFailedRunsFromConversationHistory() {
+    void chat_keepsFailedRunTrajectoriesAndAppendsTheFailureNote() {
+        UUID completedRunId = UUID.randomUUID();
+        Run completedPriorRun = Run.builder().id(completedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.COMPLETED).createdAt(Instant.now()).build();
+        UUID failedRunId = UUID.randomUUID();
+        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.FAILED).errorMessage("relay dead").createdAt(Instant.now()).build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
+                .thenReturn(List.of(completedPriorRun, failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(completedRunId, failedRunId)))
+                .thenReturn(List.of(
+                        trajectory(completedRunId, 1, "user", "first question"),
+                        trajectory(completedRunId, 2, "assistant", "first answer"),
+                        trajectory(failedRunId, 1, "user", "seed of the failed turn")));
+
+        ariaService.chat(request("follow-up"));
+
+        List<LlmMessage> history = capturedHistory();
+        assertThat(history).hasSize(4);
+        assertThat(history.get(0).role()).isEqualTo("user");
+        assertThat(history.get(0).content()).isEqualTo("first question");
+        assertThat(history.get(1).role()).isEqualTo("assistant");
+        assertThat(history.get(1).content()).isEqualTo("first answer");
+        assertThat(history.get(2).role()).isEqualTo("user");
+        assertThat(history.get(2).content()).isEqualTo("seed of the failed turn");
+        assertThat(history.get(3).role()).isEqualTo("assistant");
+        assertThat(history.get(3).content())
+                .isEqualTo("（系統註記：上一回合因「relay dead」失敗，未產生回覆。）");
+    }
+
+    @Test
+    void chat_appendsGenericNoteWhenFailedRunHasNoErrorMessage() {
         UUID failedRunId = UUID.randomUUID();
         Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
                 .status(RunStatus.FAILED).createdAt(Instant.now()).build();
         when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
                 .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId)))
+                .thenReturn(List.of());
 
         ariaService.chat(request("retry"));
 
-        // all prior runs failed -> no trajectory lookup and empty context
-        verify(trajectoryRepository, never()).findByRunIdInOrderByTurnNumberAsc(anyList());
-        verify(agentLoopEngine).startRun(RUN_ID, List.of());
+        List<LlmMessage> history = capturedHistory();
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).role()).isEqualTo("assistant");
+        assertThat(history.get(0).content())
+                .isEqualTo("（系統註記：上一回合失敗，未產生回覆。）");
+    }
+
+    @Test
+    void chat_placesTheFailureNoteRightAfterItsOwnRunNeverAfterALaterRun() {
+        UUID failedRunId = UUID.randomUUID();
+        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.FAILED).errorMessage("sandbox died").createdAt(Instant.now()).build();
+        UUID completedRunId = UUID.randomUUID();
+        Run completedPriorRun = Run.builder().id(completedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.COMPLETED).createdAt(Instant.now()).build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
+                .thenReturn(List.of(failedRun, completedPriorRun));
+        // Global turnNumber order interleaves the runs; grouping must still land the
+        // note directly after the failed run's own trajectory.
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId, completedRunId)))
+                .thenReturn(List.of(
+                        trajectory(completedRunId, 1, "user", "second question"),
+                        trajectory(failedRunId, 1, "user", "seed of the failed turn"),
+                        trajectory(completedRunId, 2, "assistant", "second answer")));
+
+        ariaService.chat(request("follow-up"));
+
+        List<LlmMessage> history = capturedHistory();
+        assertThat(history).extracting(LlmMessage::content).containsExactly(
+                "seed of the failed turn",
+                "（系統註記：上一回合因「sandbox died」失敗，未產生回覆。）",
+                "second question",
+                "second answer");
+    }
+
+    @Test
+    void chat_clipsFailedRunErrorMessageTo200CharsInTheNote() {
+        UUID failedRunId = UUID.randomUUID();
+        Run failedRun = Run.builder().id(failedRunId).agentId(AriaConstants.ARIA_AGENT_ID)
+                .status(RunStatus.FAILED).errorMessage("x".repeat(350)).createdAt(Instant.now()).build();
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
+                .thenReturn(List.of(failedRun));
+        when(trajectoryRepository.findByRunIdInOrderByTurnNumberAsc(List.of(failedRunId)))
+                .thenReturn(List.of());
+
+        ariaService.chat(request("retry"));
+
+        List<LlmMessage> history = capturedHistory();
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).content())
+                .isEqualTo("（系統註記：上一回合因「" + "x".repeat(200) + "」失敗，未產生回覆。）");
     }
 
     @Test
@@ -352,6 +433,14 @@ class AriaServiceChatTest {
 
         assertThat(response.getRunId()).isEqualTo(RUN_ID.toString());
         assertThat(response.getMessage()).contains("completed your request");
+    }
+
+    /** The conversation history the chat handed to the engine, in order. */
+    private List<LlmMessage> capturedHistory() {
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<LlmMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(agentLoopEngine).startRun(eq(RUN_ID), captor.capture());
+        return captor.getValue();
     }
 
     private SessionTrajectory trajectory(UUID runId, int turn, String role, String content) {

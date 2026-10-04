@@ -20,6 +20,7 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
     List<Run> findByAgentIdAndStatus(UUID agentId, RunStatus status);
     long countByStatus(RunStatus status);
     List<Run> findByConversationIdOrderByCreatedAtAsc(String conversationId);
+    List<Run> findByDispatchedByRunId(UUID dispatchedByRunId);
 
     /**
      * The run's committed status and output, read straight from the database.

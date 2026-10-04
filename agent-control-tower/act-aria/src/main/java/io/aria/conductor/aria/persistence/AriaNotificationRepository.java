@@ -13,6 +13,14 @@ public interface AriaNotificationRepository extends JpaRepository<AriaNotificati
 
     Page<AriaNotificationEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
+    /**
+     * Dedupe guard for the dispatch-batch completion wake, scoped PER dispatch group: the group id
+     * is written verbatim into the notification body ({@code Batch <dispatchedByRunId>: ...}), so
+     * matching on the body fragment keeps a replayed completion of an already-notified group
+     * suppressed while a later batch in the same conversation notifies again.
+     */
+    boolean existsByTypeAndResourceIdAndBodyContaining(String type, String resourceId, String fragment);
+
     @Query("SELECT COUNT(n) FROM AriaNotificationEntity n WHERE n.isRead = false")
     long countUnread();
 

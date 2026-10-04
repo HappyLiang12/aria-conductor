@@ -30,4 +30,11 @@ public class CreateRunRequest {
      */
     @Builder.Default
     private boolean suppressAutoCard = false;
+
+    /**
+     * The dispatching turn's run id when this run is a child dispatched by the
+     * Aria run tool. Null for every non-dispatched run. Never a conversationId:
+     * dispatched children must not enter the conversation timeline/context.
+     */
+    private UUID dispatchedByRunId;
 }

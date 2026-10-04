@@ -1353,4 +1353,25 @@ public class SandboxLifecycle implements AutoCloseable {
                     || address.charAt(length) == '/';
         }
     }
+
+    /**
+     * The relay-warm-up failure class: every upload attempt was refused by the
+     * sandbox's published-port relay, so the port NEVER accepted a connection
+     * within the window. Unlike a transient execd fault, waiting longer cannot
+     * heal this sandbox -- only a fresh one can (see the recreate path).
+     */
+    static boolean isRelayNeverEstablished(Throwable exhaustionCause) {
+        for (Throwable t = exhaustionCause; t != null; t = t.getCause()) {
+            if (t.getCause() == t) break;
+            String message = t.getMessage();
+            if (message == null) continue;
+            String lower = message.toLowerCase(Locale.ROOT);
+            if (lower.contains("failed to connect to localhost/127.0.0.1:")
+                    || lower.contains("failed to connect to 127.0.0.1:")
+                    || lower.contains("failed to connect to localhost/[0:0:0:0:0:0:0:1]:")) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

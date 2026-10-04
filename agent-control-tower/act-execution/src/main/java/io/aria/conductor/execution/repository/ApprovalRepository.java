@@ -99,23 +99,6 @@ public interface ApprovalRepository extends JpaRepository<Approval, UUID> {
                                      @Param("reason") String reason,
                                      @Param("now") Instant now);
 
-    /** Marks PENDING asks on a card stale (EXPIRED) when the operator sends
-     *  the work back with changes. Single-statement bulk update, no entity
-     *  load; callers must be @Transactional and results bypass the persistence
-     *  context. Represents the spec's CHANGES_REQUESTED ask state via
-     *  EXPIRED + reason (ApprovalStatus has no dedicated value). Only
-     *  {@code LEGACY_GATE} rows are swept: rows with {@code source = ACP_PERMISSION}
-     *  are owned by {@code AcpPermissionCoordinator} ({@code cancelPendingForRun} /
-     *  the run-end listener) and must never be mutated by a legacy card sweep — a
-     *  card transition would otherwise diverge an ask from its companion with no
-     *  delivery. */
-    @Modifying
-    @Query("update Approval a set a.status = io.aria.conductor.common.model.ApprovalStatus.EXPIRED, " +
-           "a.reason = 'superseded by request changes', a.decidedAt = :now " +
-           "where a.kanbanItemId = :itemId and a.status = io.aria.conductor.common.model.ApprovalStatus.PENDING " +
-           "and a.source = io.aria.conductor.common.model.ApprovalSource.LEGACY_GATE")
-    int markStaleByKanbanItemId(@Param("itemId") String itemId, @Param("now") Instant now);
-
     /** Review-card mirror: writes only the column the mirror owns, guarded on it
      *  still being null, so a mirror that read the approval while it was PENDING
      *  and commits after an operator decision can never rewrite the decision

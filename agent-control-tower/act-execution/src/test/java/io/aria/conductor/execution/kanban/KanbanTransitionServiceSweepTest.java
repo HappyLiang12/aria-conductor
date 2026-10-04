@@ -63,7 +63,6 @@ class KanbanTransitionServiceSweepTest {
 
         verify(approvalRepository).denyPendingByKanbanItemId(eq("card-1"),
                 eq("superseded by request changes"), any(Instant.class));
-        verify(approvalRepository, Mockito.never()).markStaleByKanbanItemId(any(), any());
     }
 
     private static KanbanItem reviewCard(String id) {

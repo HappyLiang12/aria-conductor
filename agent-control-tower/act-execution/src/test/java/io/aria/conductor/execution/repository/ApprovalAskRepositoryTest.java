@@ -70,23 +70,6 @@ class ApprovalAskRepositoryTest extends DataJpaTestBase {
         assertThat(repository.findById(a.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.DENIED);
     }
 
-    @Test
-    void markStaleByKanbanItemIdOnlyTouchesPending() {
-        Approval a = saveAsk("item-7", Approval.AskType.QUESTION);
-        Approval b = saveAsk("item-7", Approval.AskType.QUESTION);
-        b.setStatus(ApprovalStatus.APPROVED);
-        repository.save(b);
-
-        int stale = repository.markStaleByKanbanItemId("item-7", java.time.Instant.now());
-
-        assertThat(stale).isEqualTo(1);
-        // Bulk update bypasses the persistence context; force a real SQL round-trip.
-        flushAndClear();
-        Approval reloaded = repository.findById(a.getId()).orElseThrow();
-        assertThat(reloaded.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
-        assertThat(reloaded.getDecidedAt()).isNotNull();
-    }
-
     /**
      * I1: an ACP ask is owned by {@code AcpPermissionCoordinator}; a card cancel sweeps only
      * legacy rows, otherwise the ask diverges from its companion with no delivery.
@@ -103,22 +86,5 @@ class ApprovalAskRepositoryTest extends DataJpaTestBase {
         flushAndClear();
         assertThat(repository.findById(legacy.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.DENIED);
         assertThat(repository.findById(acp.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.PENDING);
-    }
-
-    /** I1: same shape for the request-changes sweep. */
-    @Test
-    void markStaleByKanbanItemId_leavesAcpPermissionRowsToTheCoordinator() {
-        Approval legacy = saveAsk("item-acp-stale", Approval.AskType.QUESTION);
-        Approval acp = saveAcpAsk("item-acp-stale", Approval.AskType.QUESTION);
-
-        int stale = repository.markStaleByKanbanItemId("item-acp-stale", java.time.Instant.now());
-
-        assertThat(stale).isEqualTo(1);
-        // Bulk update bypasses the persistence context; force a real SQL round-trip.
-        flushAndClear();
-        assertThat(repository.findById(legacy.getId()).orElseThrow().getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
-        Approval reloadedAcp = repository.findById(acp.getId()).orElseThrow();
-        assertThat(reloadedAcp.getStatus()).isEqualTo(ApprovalStatus.PENDING);
-        assertThat(reloadedAcp.getDecidedAt()).isNull();
     }
 }

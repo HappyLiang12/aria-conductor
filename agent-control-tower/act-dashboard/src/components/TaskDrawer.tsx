@@ -8,7 +8,7 @@ import {
 import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
-import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -137,6 +137,12 @@ export function TaskDrawer() {
   });
   const linkedRun = runQuery.data;
 
+  // Task 7: the linked run's outcome for the REVIEW chip. The single-item
+  // payload (GET /kanban/items/{id}) does not carry runOutcome — the T1
+  // enrichment is listing-only — so a missing value derives from the run the
+  // drawer already fetches.
+  const runOutcome = item?.runOutcome ?? runOutcomeFromStatus(linkedRun?.status);
+
   const transitionMutation = useMutation({
     mutationFn: ({
       id,
@@ -260,11 +266,23 @@ export function TaskDrawer() {
                   While the in-place ReviewWorkspace is open the drawer is
                   closed entirely, so no zone gate is needed here. Keyed by
                   card so answer drafts reset on sibling navigation. */}
+              {item.status === 'REVIEW'
+                && pendingAsks.length > 0
+                && runOutcome != null
+                && runOutcome !== 'UNKNOWN' && (
+                // Task 7: ask-ful REVIEW cards render the DecisionPanel instead
+                // of the ShortApprovalView (which carries its own chip), so the
+                // linked run's outcome chip must render here — a failed run
+                // must not read as a normal review while asks are decided.
+                <div className="dz-title">
+                  <RunOutcomeChip outcome={runOutcome} />
+                </div>
+              )}
               {pendingAsks.length > 0 && (
                 <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
               )}
               {item.status === 'REVIEW' && asksQuery.isSuccess && pendingAsks.length === 0 && (
-                <ShortApprovalView item={item} />
+                <ShortApprovalView item={item} runOutcome={runOutcome} />
               )}
 
               {/* Status row */}

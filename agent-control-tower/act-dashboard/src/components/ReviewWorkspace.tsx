@@ -4,7 +4,7 @@ import { getKanbanItem } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
 import { MarkdownViewer } from './MarkdownViewer';
-import { DecisionPanel, ShortApprovalView } from './ReviewPanels';
+import { DecisionPanel, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem } from '../types';
@@ -42,6 +42,11 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
     retry: false,
   });
   const linkedRun = runQuery.data;
+
+  // Task 7: the single-item payload carries no runOutcome (the T1 enrichment is
+  // listing-only), so the outcome chip derives from the run this rail already
+  // fetches instead of claiming nothing (or worse, completion).
+  const runOutcome = item?.runOutcome ?? runOutcomeFromStatus(linkedRun?.status);
 
   // Auto-exit when the card leaves REVIEW (e.g. the short-view Approve moved
   // it to DONE): a stale workspace must not linger on a card that no longer
@@ -256,7 +261,7 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
             // Mirrors the drawer's guard: while the asks query is in flight an
             // empty pendingAsks array is NOT evidence that the card has no
             // asks — the rail stays empty instead of flashing the short view.
-            <ShortApprovalView item={item} />
+            <ShortApprovalView item={item} runOutcome={runOutcome} />
           ) : null}
         </div>
       </div>

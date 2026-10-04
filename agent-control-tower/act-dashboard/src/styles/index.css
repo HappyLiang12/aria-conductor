@@ -273,6 +273,8 @@ body.afterhours .badge.afterhours { display: inline-flex; }
 .pill.warn { background: rgba(246,196,83,.10); color: #ffd884; border-color: rgba(246,196,83,.30); }
 /* C5: ACP permission asks (qoder provider) — amber family per the pill tokens. */
 .pill.acp { background: rgba(246,196,83,.10); color: #ffd884; border-color: rgba(246,196,83,.30); }
+/* T7: dim tone for a CANCELLED linked-run outcome (mirrors .skill-table .lvl.ro). */
+.pill.dim { background: rgba(255,255,255,.04); color: var(--text-mute); border-color: var(--line-2); }
 .card .owner { font-size: 10.5px; color: var(--text-dim); margin-left: auto; }
 .card .gateline {
   position: absolute; left: -1px; top: -1px; bottom: -1px; width: 3px; border-radius: 9px 0 0 9px;
@@ -1249,6 +1251,7 @@ body.light .pill { background: rgba(58,100,230,.10); color: #2552cf; border-colo
 body.light .pill.ok { background: rgba(20,160,100,.10); color: #168253; border-color: rgba(20,160,100,.30); }
 body.light .pill.warn { background: rgba(190,140,30,.10); color: #a07512; border-color: rgba(190,140,30,.30); }
 body.light .pill.risk { background: rgba(200,60,80,.10); color: #b73244; border-color: rgba(200,60,80,.30); }
+body.light .pill.dim { background: rgba(60,70,100,.06); color: var(--text-mute); border-color: var(--line-2); }
 body.light .card.gate .gateline { background: #d49a1a; }
 body.light .topbar .clock { color: var(--text-dim); }
 body.light .btn { background: #ffffff; color: var(--text); border-color: var(--line-2); }

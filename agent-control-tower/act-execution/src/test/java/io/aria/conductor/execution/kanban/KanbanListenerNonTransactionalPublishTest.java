@@ -8,6 +8,7 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.execution.listener.RunKanbanAutoCreator;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import org.junit.jupiter.api.Test;
@@ -61,11 +62,12 @@ class KanbanListenerNonTransactionalPublishTest {
 
         @Bean
         KanbanReviewCardListener kanbanReviewCardListener(ApprovalRepository approvalRepository,
+                                                         AcpPermissionRequestRepository permissions,
                                                          KanbanRepository kanbanRepository,
                                                          KanbanService kanbanService,
                                                          PlatformTransactionManager transactionManager) {
             return new KanbanReviewCardListener(
-                    approvalRepository, kanbanRepository, kanbanService, transactionManager, Runnable::run);
+                    approvalRepository, kanbanRepository, kanbanService, permissions, transactionManager, Runnable::run);
         }
 
         /**

@@ -31,6 +31,7 @@ import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
+import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.kanban.KanbanService;
@@ -92,6 +93,12 @@ public class AgentLoopEngine {
     private final ActionExecutionPipeline actionPipeline;
     private final CircuitBreaker circuitBreaker;
     private final ApprovalGate approvalGate;
+    /**
+     * The native-ask coordinator (Task 3): the run-end hook settles the run's
+     * still-pending ACP asks through it — the legacy gate sweeps skip those rows
+     * (they are stamped {@code ACP_PERMISSION}), so this is their only owner.
+     */
+    private final PermissionCoordinator permissionCoordinator;
     private final PromptCallRepository promptCallRepository;
     private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
@@ -141,6 +148,7 @@ public class AgentLoopEngine {
                            ActionExecutionPipeline actionPipeline,
                            CircuitBreaker circuitBreaker,
                            ApprovalGate approvalGate,
+                           PermissionCoordinator permissionCoordinator,
                            PromptCallRepository promptCallRepository,
                            SessionTrajectoryRepository trajectoryRepository,
                            ToolCallRepository toolCallRepository,
@@ -168,6 +176,7 @@ public class AgentLoopEngine {
         this.actionPipeline = actionPipeline;
         this.circuitBreaker = circuitBreaker;
         this.approvalGate = approvalGate;
+        this.permissionCoordinator = permissionCoordinator;
         this.promptCallRepository = promptCallRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;
@@ -1812,6 +1821,7 @@ public class AgentLoopEngine {
                 coordinator.expirePendingAsksForRun(ctx.getRunId(), Instant.now());
             }
             approvalGate.cancelAllPendingForRun(ctx.getRunId());
+            permissionCoordinator.cancelPendingForRun(ctx.getRunId());
         } catch (Exception e) {
             log.warn("Failed to cancel pending approvals for {}: {}", ctx.getRunId(), e.getMessage());
         }

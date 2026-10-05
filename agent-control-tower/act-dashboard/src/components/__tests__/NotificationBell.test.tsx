@@ -116,3 +116,19 @@ describe('NotificationBell one-click synthesis', () => {
     expect(screen.queryByRole('button', { name: '彙整' })).not.toBeInTheDocument();
   });
 });
+
+describe('NotificationBell approval.expired rendering', () => {
+  it('renders the expiry icon and keeps the feed intact', async () => {
+    const expired = notification({
+      id: 'n-expired',
+      type: 'approval.expired',
+      title: 'Approval expired',
+      body: 'Approval a-1 expired without a decision (run ended). Tool call skipped: run_agent.',
+      resourceType: 'APPROVAL',
+      resourceId: 'a-1',
+    });
+    await openDropdown([expired]);
+    expect(await screen.findByText('Approval expired')).toBeInTheDocument();
+    expect(screen.getByText('⌛')).toBeInTheDocument();
+  });
+});

@@ -685,7 +685,7 @@ class KanbanTransitionServiceTest {
     // ---- behavior 6: request changes ----
 
     @Test
-    void reviewToTodoWithFeedback_marksAsksStaleAndRedispatches() {
+    void reviewToTodoWithFeedback_deniesAsksAndRedispatches() {
         card.setStatus(KanbanStatus.REVIEW);
         card.setAssignee("BA Agent");
         card.setLinkedAgentId(AGENT_ID.toString());
@@ -693,7 +693,7 @@ class KanbanTransitionServiceTest {
         service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.TODO).feedback("use semicolons").comment("changes requested").build());
 
-        verify(approvalRepository).markStaleByKanbanItemId(eq("c1"), any());
+        verify(approvalRepository).denyPendingByKanbanItemId(eq("c1"), eq("superseded by request changes"), any());
         ArgumentCaptor<CreateRunRequest> runCaptor = ArgumentCaptor.forClass(CreateRunRequest.class);
         verify(runService).createRun(runCaptor.capture());
         assertThat(runCaptor.getValue().getPromptSeed()).contains("use semicolons");
@@ -711,7 +711,7 @@ class KanbanTransitionServiceTest {
         service.transition("c1", TransitionRequest.builder()
                 .status(KanbanStatus.TODO).feedback("redo").build());
 
-        verify(approvalRepository).markStaleByKanbanItemId(eq("c1"), any());
+        verify(approvalRepository).denyPendingByKanbanItemId(eq("c1"), eq("superseded by request changes"), any());
         assertThat(card.getLinkedAgentId()).isEqualTo(AGENT_ID.toString());
         verify(kanbanService).transition("c1", KanbanStatus.TODO, null);
         verify(kanbanService).transition("c1", KanbanStatus.IN_PROGRESS, null);

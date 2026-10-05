@@ -288,6 +288,12 @@ export interface KanbanItem {
   labels: string | null;
   linkedRunId: string | null;
   linkedAgentId: string | null;
+  /**
+   * The linked run's outcome class. Enriched on the listing endpoint only
+   * (COMPLETED | FAILED | ACTIVE | CANCELLED; UNKNOWN when no run is
+   * resolvable); null/absent on payloads that predate the enrichment.
+   */
+  runOutcome?: 'COMPLETED' | 'FAILED' | 'ACTIVE' | 'CANCELLED' | 'UNKNOWN' | null;
   // HITL fields: assigned template, last pickup error, pending ask count
   // (null/absent from the API when 0).
   agentTemplateId?: string | null;
@@ -377,6 +383,7 @@ export type NotificationType =
   | 'run.completed'
   | 'run.failed'
   | 'approval.requested'
+  | 'approval.expired'
   | 'knowledge.submitted'
   | 'report.generated'
   | 'reminder'

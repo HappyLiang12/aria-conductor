@@ -13,6 +13,7 @@ import type {
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
 import { ConfirmDialog } from './ConfirmDialog';
+import { RunOutcomeChip } from './ReviewPanels';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
 // that sent { id } silently swallowed every card click (TaskDrawer never opened).
 import { dispatchOpenTaskDrawer, useDrawerContext } from './DrawerContext';
@@ -60,6 +61,61 @@ function priorityPillClass(priority: KanbanPriority): string {
   }
 }
 
+/* Task 8: REVIEW-column batch decisions (spec D2/D3/D4). The header buttons
+   capture the affected card set from the runOutcome filters; the executor is a
+   sequential client loop over the existing per-card transition endpoint — one
+   refusal never aborts the batch. */
+type BatchKind = 'ACCEPT' | 'REWORK' | 'CANCEL';
+
+const BATCH_STATUS: Record<BatchKind, KanbanStatus> = {
+  ACCEPT: 'DONE',
+  REWORK: 'TODO',
+  CANCEL: 'CANCELLED',
+};
+
+const BATCH_VERB: Record<BatchKind, string> = {
+  ACCEPT: 'Accepted',
+  REWORK: 'Reworked',
+  CANCEL: 'Cancelled',
+};
+
+function batchConfirmTitle(kind: BatchKind): string {
+  switch (kind) {
+    case 'ACCEPT':
+      return 'Accept all completed — confirmation required';
+    case 'REWORK':
+      return 'Rework all failed — confirmation required';
+    case 'CANCEL':
+      return 'Cancel all review cards — confirmation required';
+  }
+}
+
+/** Confirm copy: the affected card count, plus the dispatch for Rework (D3). */
+function batchConfirmMessage(kind: BatchKind, n: number): string {
+  const cards = `${n} card${n === 1 ? '' : 's'}`;
+  switch (kind) {
+    case 'ACCEPT':
+      return `This accepts ${cards}. Each card moves to Done and its pending review asks are settled.`;
+    case 'REWORK':
+      return `This reworks ${cards} — this will dispatch ${n} new run${n === 1 ? '' : 's'}. `
+        + 'Each card moves to Todo and its pending review asks are settled.';
+    case 'CANCEL':
+      return `This cancels ${cards}. Each card leaves the board (CANCELLED) and its pending review asks are denied.`;
+  }
+}
+
+/** One-line failure reason for the batch summary (409 body shape when present). */
+function batchFailureReason(err: unknown): string {
+  const data = (err as { response?: { data?: KanbanRejection & { error?: string } } } | null)
+    ?.response?.data;
+  return (
+    data?.message
+    ?? data?.error
+    ?? (err as { message?: string } | null)?.message
+    ?? 'transition refused'
+  );
+}
+
 interface NewItemDraft {
   title: string;
   description: string;
@@ -83,6 +139,12 @@ export default function KanbanBoard() {
   const [cardFeedback, setCardFeedback] = useState('');
   // Task 10: the card ✕ requests a cancel; the confirmation modal owns it.
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  // Task 8: a REVIEW-column batch button captures its action + affected cards;
+  // the confirm dialog runs it. batchRunning disables the buttons mid-loop.
+  const [batchAction, setBatchAction] = useState<{ kind: BatchKind; items: KanbanItem[] } | null>(
+    null
+  );
+  const [batchRunning, setBatchRunning] = useState(false);
   const { lastMessage } = useWebSocketContext();
   const { openReviewMode } = useDrawerContext();
 
@@ -257,6 +319,38 @@ export default function KanbanBoard() {
     });
   };
 
+  /**
+   * Task 8 batch executor (spec error handling): sequential — one refusal never
+   * aborts the rest — with a one-line per-batch summary on the board's status
+   * surface. The list refetches after, regardless of outcome.
+   */
+  const runBatch = async () => {
+    if (!batchAction || batchRunning) return;
+    const { kind, items: batchItems } = batchAction;
+    const status = BATCH_STATUS[kind];
+    setBatchAction(null);
+    setBatchRunning(true);
+    setError(null);
+    let accepted = 0;
+    const failures: string[] = [];
+    for (const item of batchItems) {
+      try {
+        await transitionKanbanItem(item.id, { status });
+        accepted += 1;
+      } catch (err) {
+        failures.push(batchFailureReason(err));
+      }
+    }
+    queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+    queryClient.invalidateQueries({ queryKey: ['kanban'] });
+    setBatchRunning(false);
+    setError(
+      failures.length
+        ? `${BATCH_VERB[kind]} ${accepted}, ${failures.length} failed: ${failures.join('; ')}`
+        : `${BATCH_VERB[kind]} ${accepted}.`
+    );
+  };
+
   // Legal drop targets for the card currently being dragged.
   const legalTargets: KanbanStatus[] = draggingId
     ? LEGAL_DROPS[(items ?? []).find((i) => i.id === draggingId)?.status ?? 'DONE'] ?? []
@@ -300,6 +394,10 @@ export default function KanbanBoard() {
         <div className="kanban-grid">
           {COLUMNS.map((col) => {
             const columnItems = grouped[col.key] ?? [];
+            // Task 8: batch sets come from the same runOutcome filters the
+            // buttons display (Cancel acts on every REVIEW card).
+            const completedItems = columnItems.filter((it) => it.runOutcome === 'COMPLETED');
+            const failedItems = columnItems.filter((it) => it.runOutcome === 'FAILED');
             return (
               <div
                 key={col.key}
@@ -314,6 +412,30 @@ export default function KanbanBoard() {
                   <span>{col.label}</span>
                   <span className="count">{columnItems.length}</span>
                 </header>
+                {col.isGate && columnItems.length > 0 && (
+                  <div className="batch-actions">
+                    <button
+                      disabled={batchRunning || completedItems.length === 0}
+                      onClick={() =>
+                        setBatchAction({ kind: 'ACCEPT', items: completedItems })
+                      }
+                    >
+                      Accept all completed ({completedItems.length})
+                    </button>
+                    <button
+                      disabled={batchRunning || failedItems.length === 0}
+                      onClick={() => setBatchAction({ kind: 'REWORK', items: failedItems })}
+                    >
+                      Rework all failed ({failedItems.length})
+                    </button>
+                    <button
+                      disabled={batchRunning}
+                      onClick={() => setBatchAction({ kind: 'CANCEL', items: columnItems })}
+                    >
+                      Cancel all ({columnItems.length})
+                    </button>
+                  </div>
+                )}
                 <div
                   className={`lane${
                     draggingId && legalTargets.includes(col.key) ? ' drop-legal' : ''
@@ -350,6 +472,12 @@ export default function KanbanBoard() {
                       <div className="t">{item.title}</div>
                       {!!item.pendingAskCount && (
                         <span className="pill warn">{item.pendingAskCount} asks</span>
+                      )}
+                      {item.status === 'REVIEW' && item.runOutcome && item.runOutcome !== 'UNKNOWN' && (
+                        // R-RFUX4: the board's compact REVIEW card carries the
+                        // linked run's outcome (the exported chip's own tones);
+                        // UNKNOWN/null claim nothing.
+                        <RunOutcomeChip outcome={item.runOutcome} />
                       )}
                       {flash?.itemId === item.id && flash.kind === 'assign' && (
                         <span className="owner" style={{ color: 'var(--brand-2)' }}>
@@ -658,6 +786,21 @@ export default function KanbanBoard() {
           transitionMutation.mutate({ id, status: 'CANCELLED' });
         }}
         onCancel={() => setConfirmCancelId(null)}
+      />
+
+      {/* Task 8: one dialog for the three batch presets; the count is frozen
+          when the button opened it, and CANCEL reads as destructive. */}
+      <ConfirmDialog
+        open={batchAction !== null}
+        title={batchAction ? batchConfirmTitle(batchAction.kind) : ''}
+        message={
+          batchAction ? batchConfirmMessage(batchAction.kind, batchAction.items.length) : ''
+        }
+        danger={batchAction?.kind === 'CANCEL'}
+        onConfirm={() => {
+          void runBatch();
+        }}
+        onCancel={() => setBatchAction(null)}
       />
     </section>
   );

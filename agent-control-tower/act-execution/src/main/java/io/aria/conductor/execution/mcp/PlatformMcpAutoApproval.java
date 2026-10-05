@@ -7,13 +7,17 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The platform-side auto-approval policy for read-only platform MCP tools asked
- * by the Aria assistant's own coordinated runs (operator decision 2026-09-29;
- * amendment to the Qoder CLI core spec §5.2). The tool is never granted a
- * session-wide escalation by this policy: it settles the platform's own ask,
- * once, through the normal one-use path — the grant of a {@code PLATFORM_MCP}
- * delivery, or the native reply of a {@code NATIVE_TOOL} ask whose raw name
- * carries the platform's own MCP namespace ({@link #PLATFORM_MCP_PREFIX}).
+ * The platform-side auto-approval policy for the read-only tools asked by the
+ * Aria assistant's own coordinated runs (operator decisions 2026-09-29 and
+ * 2026-10-04; amendment to the Qoder CLI core spec §5.2). The tool is never
+ * granted a session-wide escalation by this policy: it settles the ask, once,
+ * through the normal one-use path — the grant of a {@code PLATFORM_MCP}
+ * delivery, or the native reply of a listed {@code NATIVE_TOOL} ask that offers
+ * the single allow-once option its reply will name. Since the 2026-10-04
+ * decision the list also names the cores' own read-only tools (the CLI's
+ * {@code WebSearch}/{@code WebFetch}); those carry no platform prefix by
+ * construction, so the operator's explicit listing is the provenance gate for
+ * a bare native name.
  *
  * <p>The allowlist is explicit configuration ({@code aria.mcp.auto-approve-read-tools}),
  * not a naming heuristic: every tool it does not name — mutating, operator-only

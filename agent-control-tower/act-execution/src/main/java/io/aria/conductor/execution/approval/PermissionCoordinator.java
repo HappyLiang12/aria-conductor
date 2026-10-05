@@ -2,9 +2,11 @@ package io.aria.conductor.execution.approval;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
 import io.aria.conductor.common.security.ActorPrincipal;
@@ -46,18 +48,19 @@ import java.util.function.Supplier;
  * reply. Denials produce no grant.
  *
  * <p>An ask whose tool is on the configured read-only allowlist (operator
- * decision 2026-09-29; {@link PlatformMcpAutoApproval}) and whose shape is
- * platform-owned settles at registration through that same delivery path —
- * APPROVED with the policy as its reason, no operator ask and no card. The
- * platform-owned shapes are the platform's own {@code PLATFORM_MCP} delivery
- * (one one-use grant, no native reply) and the live shape a core reports for a
- * platform MCP call: a {@code NATIVE_TOOL} ask carrying the platform-MCP prefix
- * ({@code mcp__aria-conductor__<tool>}), answered with the reply naming the
- * single offered allow-once option so its core session proceeds instead of
- * waiting. A native ask without that prefix — the core's own tools, e.g. the
- * CLI's {@code WebSearch} — never matches. It is a platform-side policy for the
- * Aria assistant's own platform asks only; the offered options are never
- * changed and no session-wide grant (allow-always) is ever produced.
+ * decisions 2026-09-29 and 2026-10-04; {@link PlatformMcpAutoApproval}) and
+ * whose shape is answerable settles at registration through that same delivery
+ * path — APPROVED with the policy as its reason, no operator ask and no card.
+ * The covered shapes are the platform's own {@code PLATFORM_MCP} delivery (one
+ * one-use grant, no native reply) and a {@code NATIVE_TOOL} ask offering the
+ * single allow-once option its reply will name: the live shape a core reports
+ * for a platform MCP call ({@code mcp__aria-conductor__<tool>}) and, since the
+ * 2026-10-04 decision, the cores' own listed read-only tools (e.g. the CLI's
+ * {@code WebSearch}/{@code WebFetch} — a bare native name is covered only
+ * because the operator listed it explicitly). A native ask not on the list
+ * never matches. It is a platform-side policy for the Aria assistant's own
+ * coordinated runs; the offered options are never changed and no session-wide
+ * grant (allow-always) is ever produced.
  *
  * <p>The sink is resolved lazily because the run coordinator depends on this
  * coordinator to register asks: the lazy lookup is the seam that breaks that
@@ -154,15 +157,16 @@ public class PermissionCoordinator {
      * is rejected rather than coerced.
      *
      * <p>An ask whose tool is on the configured read-only allowlist (operator
-     * decision 2026-09-29) and whose shape is platform-owned settles here: the
-     * approval is recorded APPROVED with the policy as its reason and delivered
-     * through the same path a manual {@code ALLOW_ONCE} decision uses — a
-     * one-use grant for a {@code PLATFORM_MCP} ask, the reply the owning core
-     * session answers with for a native ask carrying the platform-MCP prefix —
-     * no operator ask is surfaced and nothing waits. An ask whose own window has
-     * already closed is never approved past it (spec §5.3) and keeps the
-     * operator-facing flow, as does a covered native ask that offers no single
-     * allow-once option to answer with.
+     * decisions 2026-09-29 and 2026-10-04) and whose shape is answerable
+     * settles here: the approval is recorded APPROVED with the policy as its
+     * reason and delivered through the same path a manual {@code ALLOW_ONCE}
+     * decision uses — a one-use grant for a {@code PLATFORM_MCP} ask, the reply
+     * the owning core session answers with for a listed native ask that offers
+     * the single allow-once option its reply will name — no operator ask is
+     * surfaced and nothing waits. An ask whose own window has already closed is
+     * never approved past it (spec §5.3) and keeps the operator-facing flow, as
+     * does a covered native ask that offers no single allow-once option to
+     * answer with.
      */
     @Transactional
     public UUID register(NativePermission request) {
@@ -183,6 +187,7 @@ public class PermissionCoordinator {
         boolean autoApproved = request.expiresAt().isAfter(now) && autoApprovalCovers(request);
         Approval approval = Approval.builder()
                 .runId(request.runId())
+                .source(ApprovalSource.ACP_PERMISSION)
                 .status(autoApproved ? ApprovalStatus.APPROVED : ApprovalStatus.PENDING)
                 .reason(autoApproved ? AUTO_APPROVE_REASON : registrationReason(request))
                 .decidedAt(autoApproved ? now : null)
@@ -334,17 +339,18 @@ public class PermissionCoordinator {
 
     /**
      * True when the configured read-only policy settles {@code request}: its
-     * tool is on the list and its shape is platform-owned. The platform-owned
-     * shapes are the platform's own {@code PLATFORM_MCP} delivery and the live
-     * shape a core reports for a platform MCP call — a {@code NATIVE_TOOL} ask
-     * carrying the platform-MCP prefix ({@code mcp__aria-conductor__<tool>}) and
-     * offering the single allow-once option its reply will name (the manual
-     * ALLOW_ONCE decision's own fail-closed selection).
+     * tool is on the operator-configured list and its shape is answerable with
+     * a single allow-once reply. A {@code PLATFORM_MCP} ask is covered by the
+     * list alone (a one-use grant, no native reply); a listed {@code NATIVE_TOOL}
+     * ask is covered when it offers the single allow-once option its reply will
+     * name — the manual ALLOW_ONCE decision's own fail-closed selection — with
+     * the operator's explicit listing as the provenance gate for a bare native
+     * name (the CLI's {@code WebSearch}/{@code WebFetch} carries no platform
+     * prefix by construction).
      *
-     * <p>A native ask without that prefix is the core's own tool (e.g. the
-     * CLI's {@code WebSearch}) and is never covered: it keeps the per-call
-     * operator approval (spec §6.3), like a covered native ask that offers no
-     * single allow-once option at all.
+     * <p>A native ask NOT on the list is never covered: it keeps the per-call
+     * operator approval (spec §6.3), like a listed native ask that offers no
+     * single allow-once option to answer with.
      */
     private boolean autoApprovalCovers(NativePermission request) {
         if (!platformMcpAutoApproval.allows(request.toolName())) {
@@ -353,8 +359,12 @@ public class PermissionCoordinator {
         if (request.target() == PermissionTarget.PLATFORM_MCP) {
             return true;
         }
+        // A listed NATIVE_TOOL auto-settles only through the single allow-once
+        // option its reply will name -- the exact shape the platform-MCP branch
+        // already required. The operator's explicit listing is the provenance
+        // gate for a bare native name (the CLI's own WebSearch/WebFetch carries
+        // no platform prefix by construction).
         return request.target() == PermissionTarget.NATIVE_TOOL
-                && PlatformMcpAutoApproval.carriesPlatformMcpPrefix(request.toolName())
                 && singleAllowOnceOptionId(request.options()).isPresent();
     }
 
@@ -444,6 +454,58 @@ public class PermissionCoordinator {
                 continue; // still inside its own window
             }
             expire(approval, row, asOf);
+            settled++;
+        }
+        return settled;
+    }
+
+    /**
+     * The scheduled backstop for native asks orphaned past their own window —
+     * the crash/restart windows in which no run deadline fired to settle them:
+     * every ledger row still {@code AWAITING_DECISION} whose window has closed
+     * is adjudicated exactly like the per-run deadline path — EXPIRED with the
+     * recorded expiry reason ({@value #EXPIRY_REASON}), the ledger delivery
+     * moved to EXPIRED, the blocked waiter released, and
+     * {@link ApprovalExpiredEvent} published with the ask's tool name. A row
+     * whose approval is missing or no longer PENDING is skipped: a settled ask
+     * is never rewritten.
+     *
+     * @param asOf the sweep instant
+     * @return the number of asks this call settled
+     */
+    @Transactional
+    public int expireOverdueNativeAsks(Instant asOf) {
+        Objects.requireNonNull(asOf, "asOf");
+        int settled = 0;
+        for (AcpPermissionRequest row : permissions.findByDeliveryStateAndExpiresAtBefore(
+                PermissionDeliveryState.AWAITING_DECISION.name(), asOf)) {
+            Approval approval = approvals.findById(row.getApprovalId()).orElse(null);
+            if (approval == null || approval.getStatus() != ApprovalStatus.PENDING) {
+                continue; // a settled ask is never rewritten
+            }
+            expireWith(approval, row, asOf, EXPIRY_REASON);
+            settled++;
+        }
+        return settled;
+    }
+
+    /**
+     * Settles every still-PENDING native ask of a run whose runtime has ended
+     * (the run can no longer receive a reply, so the ask is adjudicated, never
+     * left behind): EXPIRED with the recorded reason "run ended", the waiter
+     * released, and {@link ApprovalExpiredEvent} published. Already-settled
+     * asks are never rewritten.
+     */
+    @Transactional
+    public int cancelPendingForRun(UUID runId) {
+        Objects.requireNonNull(runId, "runId");
+        int settled = 0;
+        for (AcpPermissionRequest row : permissions.findByRunId(runId)) {
+            Approval approval = approvals.findById(row.getApprovalId()).orElse(null);
+            if (approval == null || approval.getStatus() != ApprovalStatus.PENDING) {
+                continue;
+            }
+            expireWith(approval, row, clock.instant(), "run ended");
             settled++;
         }
         return settled;
@@ -543,12 +605,22 @@ public class PermissionCoordinator {
      * session blocked on the ask would wait for its own timeout.
      */
     private void expire(Approval approval, AcpPermissionRequest row, Instant now) {
+        expireWith(approval, row, now, EXPIRY_REASON);
+    }
+
+    /**
+     * The single native settle-by-timeout path. Publishes {@link ApprovalExpiredEvent}
+     * with the ask's tool name so the operator learns what was skipped.
+     */
+    private void expireWith(Approval approval, AcpPermissionRequest row, Instant now, String reason) {
         approval.setStatus(ApprovalStatus.EXPIRED);
-        approval.setReason(EXPIRY_REASON);
+        approval.setReason(reason);
         approval.setDecidedAt(now);
         approvals.save(approval);
         markDeliveryExpired(row);
         approvalGate.cancelPendingApproval(approval.getId());
+        eventPublisher.publishEvent(new ApprovalExpiredEvent(this, approval.getId(),
+                approval.getRunId(), approval.getReason(), row.getToolName()));
     }
 
     private void markDeliveryExpired(AcpPermissionRequest row) {

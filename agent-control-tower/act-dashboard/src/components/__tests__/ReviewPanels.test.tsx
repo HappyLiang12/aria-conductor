@@ -24,7 +24,7 @@ const mockedApprove = vi.mocked(approveApproval);
 const mockedReject = vi.mocked(rejectApproval);
 const mockedAnswer = vi.mocked(answerAsk);
 
-const item = { id: 'k-1', title: 'add CSV export', status: 'REVIEW', assignee: 'dev-agent', linkedRunId: 'run-abc' } as KanbanItem;
+const item = { id: 'k-1', title: 'add CSV export', status: 'REVIEW', assignee: 'dev-agent', linkedRunId: 'run-abc', runOutcome: 'COMPLETED' } as KanbanItem;
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -238,5 +238,53 @@ describe('ShortApprovalView', () => {
     await waitFor(() =>
       expect(screen.queryByText('Action rejected — the card is unchanged.')).not.toBeInTheDocument(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7: the REVIEW card's linked-run outcome — chip + honest copy.
+// ---------------------------------------------------------------------------
+
+describe('ShortApprovalView run outcome (Task 7)', () => {
+  it('renders the red failed chip and the rework copy — never the completion claim', () => {
+    renderPanel(<ShortApprovalView item={{ ...item, runOutcome: 'FAILED' }} />);
+    expect(screen.getByText('FAILED')).toHaveClass('pill', 'risk');
+    expect(screen.getByText('Run failed — rework or accept')).toBeInTheDocument();
+    expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the green completed chip with the existing sign-off copy', () => {
+    renderPanel(<ShortApprovalView item={{ ...item, runOutcome: 'COMPLETED' }} />);
+    expect(screen.getByText('COMPLETED')).toHaveClass('pill', 'ok');
+    expect(screen.getByText('Run completed — quick decision')).toBeInTheDocument();
+  });
+
+  it('renders the active chip and in-progress copy while the run is still going', () => {
+    renderPanel(<ShortApprovalView item={{ ...item, runOutcome: 'ACTIVE' }} />);
+    expect(screen.getByText('ACTIVE')).toHaveClass('pill');
+    expect(screen.getByText('Run still in progress')).toBeInTheDocument();
+    expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the dim cancelled chip and the cancelled copy', () => {
+    renderPanel(<ShortApprovalView item={{ ...item, runOutcome: 'CANCELLED' }} />);
+    expect(screen.getByText('CANCELLED')).toHaveClass('pill', 'dim');
+    expect(screen.getByText('Run cancelled')).toBeInTheDocument();
+    expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
+  });
+
+  it('claims nothing for a null outcome: no chip, no completion copy', () => {
+    renderPanel(<ShortApprovalView item={{ ...item, runOutcome: null }} />);
+    expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('COMPLETED')).not.toBeInTheDocument();
+    expect(screen.queryByText('FAILED')).not.toBeInTheDocument();
+    expect(screen.getByText('Quick decision')).toBeInTheDocument();
+  });
+
+  it('claims nothing for an UNKNOWN outcome: no chip, no completion copy', () => {
+    renderPanel(<ShortApprovalView item={{ ...item, runOutcome: 'UNKNOWN' }} />);
+    expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
+    expect(screen.getByText('Quick decision')).toBeInTheDocument();
   });
 });

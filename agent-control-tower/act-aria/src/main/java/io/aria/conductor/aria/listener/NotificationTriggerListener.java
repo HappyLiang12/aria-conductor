@@ -36,16 +36,29 @@ public class NotificationTriggerListener {
     }
 
     /**
-     * UX-6: an expired approval persists an unread notification with resource APPROVAL, so the
+     * D6: any decision settles the ask, so its "waiting for your decision"
+     * notification stops being unread.
+     */
+    @EventListener
+    public void onApprovalDecided(ApprovalDecidedEvent event) {
+        notificationService.markRequestedReadForApproval(event.getApprovalId().toString());
+    }
+
+    /**
+     * UX-6/D6: an expired approval persists an unread notification with resource APPROVAL, so the
      * bell and the notification feed close the loop the "approval requested" entry opened
-     * instead of staying silent while the ask vanishes from the queue.
+     * instead of staying silent while the ask vanishes from the queue — and flips that
+     * requested entry read, since the ask is gone either way. The skipped tool is named
+     * when the publishing path knew it.
      */
     @EventListener
     public void onApprovalExpired(ApprovalExpiredEvent event) {
+        notificationService.markRequestedReadForApproval(event.getApprovalId().toString());
         notificationService.create("approval.expired",
                 "Approval expired",
                 "Approval " + event.getApprovalId() + " expired without a decision ("
-                        + (event.getReason() != null ? event.getReason() : "no reason recorded") + ").",
+                        + (event.getReason() != null ? event.getReason() : "no reason recorded") + ")."
+                        + (event.getToolName() != null ? " Tool call skipped: " + event.getToolName() + "." : ""),
                 "APPROVAL", event.getApprovalId().toString());
     }
 

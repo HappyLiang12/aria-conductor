@@ -50,6 +50,44 @@ function gateAsk(): Approval {
   } as Approval;
 }
 
+/**
+ * review-flow-ux Task 9: a card REVIEW_REQUEST carries its text in `content`
+ * (backend: `KanbanReviewAskCreator` — "Run … completed (FAILED) - awaiting
+ * your review: …") while `reason` is null.
+ */
+const REVIEW_REQUEST_CONTENT =
+  'Run 1234abcd completed (FAILED) - awaiting your review: Fix the flaky parser test';
+
+function reviewRequestAsk(): Approval {
+  return {
+    id: 'a-review',
+    runId: 'run-abc',
+    toolCallId: null,
+    status: 'PENDING',
+    reason: null as unknown as string,
+    requestedAt: '2026-09-22T11:55:00Z',
+    decidedAt: null,
+    expiresAt: NATIVE_ASK_EXPIRES_AT,
+    askType: 'REVIEW_REQUEST',
+    content: REVIEW_REQUEST_CONTENT,
+  } as Approval;
+}
+
+/** A non-native ask with neither `content` nor `reason` (neutral-sentence corner). */
+function bareAsk(): Approval {
+  return {
+    id: 'a-bare',
+    runId: 'run-abc',
+    toolCallId: null,
+    status: 'PENDING',
+    reason: null as unknown as string,
+    requestedAt: '2026-09-22T11:55:00Z',
+    decidedAt: null,
+    expiresAt: NATIVE_ASK_EXPIRES_AT,
+    askType: 'APPROVAL',
+  } as Approval;
+}
+
 /** The shared axios adapter: serves the pending list and records every request. */
 const originalAdapter = client.defaults.adapter;
 const requests: InternalAxiosRequestConfig[] = [];
@@ -109,8 +147,8 @@ describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
     expect(
       screen.getByText(`expires ${formatTimestamp(NATIVE_ASK_EXPIRES_AT)}`),
     ).toBeInTheDocument();
-    // A gate ask keeps the generic rendering.
-    expect(screen.getByText('Approval')).toBeInTheDocument();
+    // A gate ask is non-native: review-flow-ux Task 9 labels such rows 'Review'.
+    expect(screen.getByText('Review')).toBeInTheDocument();
   });
 
   it('carries the operator session CSRF header on the native ask decision', async () => {
@@ -144,7 +182,7 @@ describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
       }),
     );
     ui();
-    await screen.findByText('Approval');
+    await screen.findByText('Review');
 
     await userEvent.click(screen.getByRole('button', { name: 'Deny' }));
 
@@ -153,5 +191,62 @@ describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
     );
     const decide = requests.find((r) => r.url === '/api/v1/approvals/a-gate/decide');
     expect(decide?.headers.get(OPERATOR_CSRF_HEADER)).toBe('csrf-fixture-token');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// review-flow-ux Task 9: non-native rows must tell the truth — an accurate
+// 'Review' label and the ask content (a REVIEW_REQUEST's text lives in
+// `content` with a null `reason`), never the generic null-reason fallback.
+// Native permission rows keep their pill + facts rendering.
+// ---------------------------------------------------------------------------
+
+describe('ReviewQueue non-native rows (review-flow-ux Task 9)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    sessionStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    sessionStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('renders a REVIEW_REQUEST row with its accurate label and ask content, not the stale fallback', async () => {
+    serve([reviewRequestAsk()]);
+    ui();
+
+    expect(await screen.findByText(REVIEW_REQUEST_CONTENT)).toBeInTheDocument();
+    expect(screen.getByText('Review')).toHaveClass('pill', 'warn');
+    expect(
+      screen.queryByText('Awaiting human verification before tool execution proceeds.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the native pill, facts and reason rendering untouched (regression guard)', async () => {
+    serve([nativeAsk()]);
+    ui();
+
+    expect(await screen.findByText('Native permission · NATIVE_TOOL')).toBeInTheDocument();
+    expect(screen.getByText('tool write_file')).toBeInTheDocument();
+    expect(screen.getByText('request req-42')).toBeInTheDocument();
+    expect(
+      screen.getByText(`expires ${formatTimestamp(NATIVE_ASK_EXPIRES_AT)}`),
+    ).toBeInTheDocument();
+    expect(screen.getByText(NATIVE_ASK_REASON)).toBeInTheDocument();
+  });
+
+  it('shows the neutral sentence when both content and reason are absent', async () => {
+    serve([bareAsk()]);
+    ui();
+
+    expect(
+      await screen.findByText('Review requested — open the run for context.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Awaiting human verification before tool execution proceeds.'),
+    ).not.toBeInTheDocument();
   });
 });

@@ -21,6 +21,7 @@ import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.AdkSystemProperties;
 import io.aria.conductor.execution.approval.ApprovalGate;
+import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.harness.ToolSteeringGuard;
 import io.aria.conductor.execution.llm.LlmMessage;
@@ -99,6 +100,7 @@ class AgentLoopEngineCoreDispatchTest {
     @Mock ActionExecutionPipeline actionPipeline;
     @Mock CircuitBreaker circuitBreaker;
     @Mock ApprovalGate approvalGate;
+    @Mock PermissionCoordinator permissionCoordinator;
     @Mock PromptCallRepository promptCallRepository;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
@@ -215,7 +217,7 @@ class AgentLoopEngineCoreDispatchTest {
     private AgentLoopEngine engine() {
         return new AgentLoopEngine(
                 runRepository, agentRepository, providerRegistry(), sessionStateManager,
-                actionPipeline, circuitBreaker, approvalGate, promptCallRepository,
+                actionPipeline, circuitBreaker, approvalGate, permissionCoordinator, promptCallRepository,
                 trajectoryRepository, toolCallRepository, eventPublisher, workflowService,
                 workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,

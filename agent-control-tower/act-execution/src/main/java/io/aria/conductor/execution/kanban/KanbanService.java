@@ -8,6 +8,10 @@ import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -22,8 +26,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * CRUD + lifecycle service for {@link KanbanItem}.
@@ -152,7 +158,50 @@ public class KanbanService {
             counts.forEach(row -> byItem.put((String) row[0], (Long) row[1]));
             items.forEach(item -> item.setPendingAskCount(byItem.getOrDefault(item.getId(), 0L).intValue()));
         }
+        if (!items.isEmpty()) {
+            List<UUID> linkedRunIds = items.stream()
+                    .map(KanbanItem::getLinkedRunId)
+                    .filter(linkedRunId -> linkedRunId != null && !linkedRunId.isBlank())
+                    .map(linkedRunId -> {
+                        try {
+                            return UUID.fromString(linkedRunId);
+                        } catch (IllegalArgumentException e) {
+                            return null; // a corrupt link is history, not an outcome
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .toList();
+            Map<UUID, RunStatus> statuses = linkedRunIds.isEmpty() ? Map.of()
+                    : runRepository.findAllById(linkedRunIds).stream()
+                            .collect(Collectors.toMap(Run::getId, Run::getStatus));
+            items.forEach(item -> {
+                RunStatus runStatus = item.getLinkedRunId() == null ? null : parseStatusOrNull(statuses, item.getLinkedRunId());
+                item.setRunOutcome(runOutcome(runStatus));
+            });
+        }
         return items;
+    }
+
+    /** The four display classes of a linked run; UNKNOWN when there is no resolvable run. */
+    static String runOutcome(RunStatus status) {
+        if (status == null) {
+            return "UNKNOWN";
+        }
+        return switch (status) {
+            case COMPLETED -> "COMPLETED";
+            case FAILED -> "FAILED";
+            case CANCELLED, ABORTED -> "CANCELLED";
+            case RUNNING, PENDING, INITIALIZING, PAUSED -> "ACTIVE";
+        };
+    }
+
+    private static RunStatus parseStatusOrNull(Map<UUID, RunStatus> statuses, String linkedRunId) {
+        try {
+            return statuses.get(UUID.fromString(linkedRunId));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Transactional
@@ -171,7 +220,8 @@ public class KanbanService {
 
             // Both guards run BEFORE the status changes, so a rejection always
             // leaves the card where it was.
-            if (toStatus == KanbanStatus.DONE && item.getLinkedRunId() != null) {
+            if (toStatus == KanbanStatus.DONE && item.getLinkedRunId() != null
+                    && !isSettledNativeAskCard(item.getId())) {
                 guardLinkedRunNotActive(item.getLinkedRunId());
             }
             if (toStatus == KanbanStatus.REVIEW) {
@@ -289,6 +339,29 @@ public class KanbanService {
                         Map.of("runId", runId.toString(), "runStatus", status.name()));
             }
         });
+    }
+
+    /**
+     * D7 ruling (R-RFUX3): a card mirroring a settled native ask is exempt from
+     * the run-active guard — the ask's decision IS the card's outcome (approved
+     * reaches Done), and a tool-call ask is raised while its run is still active,
+     * so the guard would otherwise keep its card in Review forever. A PENDING
+     * native ask keeps the guard: the decision surface is still live. LEGACY_GATE
+     * asks never exempt — their decisions belong to the card layer's own flows —
+     * and a card with no linked ask is an ordinary run card, guarded as before.
+     */
+    private boolean isSettledNativeAskCard(String cardId) {
+        boolean settled = false;
+        for (Approval approval : approvalRepository.findByKanbanItemId(cardId)) {
+            if (approval.getSource() != ApprovalSource.ACP_PERMISSION) {
+                continue;
+            }
+            if (approval.getStatus() == ApprovalStatus.PENDING) {
+                return false;
+            }
+            settled = true;
+        }
+        return settled;
     }
 
     /**

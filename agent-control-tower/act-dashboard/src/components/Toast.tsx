@@ -41,12 +41,10 @@ function toastMessage(type: string, payload: Record<string, unknown> | undefined
 
 export function Toast() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const wsEvent = useWebSocketContext();
+  const { subscribe } = useWebSocketContext();
   const shownIds = useRef(new Set<string>());
   const timersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const navigate = useNavigate();
-
-  const eventToUse = wsEvent.lastMessage;
 
   // Clear every pending dismiss timer on unmount only. Timers must NOT be
   // cleared when a new event arrives — cancelling them froze the toast stack
@@ -59,63 +57,70 @@ export function Toast() {
     };
   }, []);
 
+  // Consume every frame via subscribe: run lifecycle frames arrive in bursts
+  // (run.started / kanban.* / run.completed within milliseconds) and reading
+  // only `lastMessage` loses the toast-worthy frame whenever React coalesces
+  // the burst into one render (regression test: "run lifecycle arrives as one
+  // burst").
   useEffect(() => {
-    if (!eventToUse) return;
-    if (!TOAST_WORTHY.has(eventToUse.type)) return;
-    try {
-      const id = ++toastId;
+    const sub = subscribe((event) => {
+      if (!TOAST_WORTHY.has(event.type)) return;
+      try {
+        const id = ++toastId;
 
-      // Handle aria.notification events
-      if (eventToUse.type === 'aria.notification') {
-        const notifId = eventToUse.payload?.id as string | undefined;
-        if (notifId && shownIds.current.has(notifId)) return;
-        if (notifId) shownIds.current.add(notifId);
+        // Handle aria.notification events
+        if (event.type === 'aria.notification') {
+          const notifId = event.payload?.id as string | undefined;
+          if (notifId && shownIds.current.has(notifId)) return;
+          if (notifId) shownIds.current.add(notifId);
 
-        const title = (eventToUse.payload?.title as string) || 'Notification';
-        // The fine-grained notification type (run.completed, report.generated,
-        // ...) lives in the payload; payload.resourceType is only a coarse
-        // category (RUN/APPROVAL/KNOWLEDGE/REPORT) and has no route mapping.
-        const notifType = eventToUse.payload?.type as string | undefined;
-        const notifToast: ToastItem = {
-          id,
-          message: title,
-          type: 'aria.notification',
-          action: {
-            label: 'View',
-            onClick: () => {
-              const route = routeForNotificationType(notifType);
-              if (route) navigate(route);
-            },
-          },
-        };
-        setToasts((prev) => [...prev.slice(-4), notifToast]);
-      } else {
-        // Human-readable label only — never expose the raw event type.
-        const message = toastMessage(eventToUse.type, eventToUse.payload);
-        // Not every noteworthy event has a destination (e.g. approval.decided,
-        // housekeeping audits); reuse the shared route map as the single source
-        // of truth and only offer View when it resolves.
-        const route = routeForNotificationType(eventToUse.type);
-        setToasts((prev) => [
-          ...prev.slice(-4),
-          {
+          const title = (event.payload?.title as string) || 'Notification';
+          // The fine-grained notification type (run.completed, report.generated,
+          // ...) lives in the payload; payload.resourceType is only a coarse
+          // category (RUN/APPROVAL/KNOWLEDGE/REPORT) and has no route mapping.
+          const notifType = event.payload?.type as string | undefined;
+          const notifToast: ToastItem = {
             id,
-            message,
-            type: eventToUse.type,
-            action: route ? { label: 'View', onClick: () => navigate(route) } : undefined,
-          },
-        ]);
-      }
+            message: title,
+            type: 'aria.notification',
+            action: {
+              label: 'View',
+              onClick: () => {
+                const route = routeForNotificationType(notifType);
+                if (route) navigate(route);
+              },
+            },
+          };
+          setToasts((prev) => [...prev.slice(-4), notifToast]);
+        } else {
+          // Human-readable label only — never expose the raw event type.
+          const message = toastMessage(event.type, event.payload);
+          // Not every noteworthy event has a destination (e.g. approval.decided,
+          // housekeeping audits); reuse the shared route map as the single source
+          // of truth and only offer View when it resolves.
+          const route = routeForNotificationType(event.type);
+          setToasts((prev) => [
+            ...prev.slice(-4),
+            {
+              id,
+              message,
+              type: event.type,
+              action: route ? { label: 'View', onClick: () => navigate(route) } : undefined,
+            },
+          ]);
+        }
 
-      const timer = setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
-        timersRef.current.delete(id);
-      }, 5000);
-      timersRef.current.set(id, timer);
-    } catch {
-      // Silently ignore malformed events
-    }
-  }, [eventToUse]);
+        const timer = setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== id));
+          timersRef.current.delete(id);
+        }, 5000);
+        timersRef.current.set(id, timer);
+      } catch {
+        // Silently ignore malformed events
+      }
+    });
+    return () => sub.unsubscribe();
+  }, [subscribe, navigate]);
 
   if (toasts.length === 0) return null;
 

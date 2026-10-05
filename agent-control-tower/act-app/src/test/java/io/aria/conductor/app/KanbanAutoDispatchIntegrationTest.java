@@ -135,6 +135,23 @@ class KanbanAutoDispatchIntegrationTest {
                 runRepository.findById(run.getId()).orElseThrow().getStatus())
                 .isEqualTo(RunStatus.FAILED));
 
+        // Let the run-completion mirror quiesce BEFORE creating the guard card.
+        // RunKanbanAutoCreator settles EVERY card linked to the run when the run
+        // completes (its mirror card moves IN_PROGRESS -> REVIEW here); a guard
+        // card created inside that still-running window would be swept to REVIEW
+        // by that same settle and the TODO hold below could never hold
+        // (reproduced locally, ~2/4 runs, 2026-10-04). With the completion path
+        // quiesced, the only mover left for the card below is the auto-dispatch
+        // path this guard exists to stop.
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
+            List<KanbanItem> runCards = kanbanRepository.findAll().stream()
+                    .filter(card -> run.getId().toString().equals(card.getLinkedRunId()))
+                    .toList();
+            assertThat(runCards).isNotEmpty();
+            assertThat(runCards).allMatch(card -> card.getStatus() != KanbanStatus.TODO
+                    && card.getStatus() != KanbanStatus.IN_PROGRESS);
+        });
+
         // A TODO card naming the existing run — the shape every mirror card had
         // before the IN_PROGRESS birth, and a shape a future regression could
         // reintroduce. The creation publishes KanbanItemCreatedEvent, which the

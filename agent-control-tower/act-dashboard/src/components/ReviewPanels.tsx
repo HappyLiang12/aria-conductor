@@ -9,7 +9,7 @@ import {
   NativePermissionKindPill,
   nativePermissionOf,
 } from './NativePermissionAsk';
-import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus } from '../types';
+import type { Approval, ApprovalDecisionReceipt, KanbanItem, KanbanStatus, RunStatus } from '../types';
 
 interface PanelProps {
   item: KanbanItem;
@@ -168,8 +168,78 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Run outcome (Task 7): chips and honest copy on REVIEW cards               */
+/* -------------------------------------------------------------------------- */
+
+type KnownRunOutcome = 'COMPLETED' | 'FAILED' | 'ACTIVE' | 'CANCELLED';
+
+/** Chip tone per outcome, following this file's existing pill classes. */
+const RUN_OUTCOME_PILL: Record<KnownRunOutcome, string> = {
+  COMPLETED: 'pill ok',
+  FAILED: 'pill risk',
+  ACTIVE: 'pill',
+  CANCELLED: 'pill dim',
+};
+
+/** Decision copy per outcome; only COMPLETED keeps the original sign-off text. */
+const RUN_OUTCOME_TITLE: Record<KnownRunOutcome, string> = {
+  COMPLETED: 'Run completed — quick decision',
+  FAILED: 'Run failed — rework or accept',
+  ACTIVE: 'Run still in progress',
+  CANCELLED: 'Run cancelled',
+};
+
+/** Narrow the outcome union to the classes that render a chip and a claim. */
+function knownRunOutcome(outcome: KanbanItem['runOutcome']): KnownRunOutcome | null {
+  return outcome === 'COMPLETED' || outcome === 'FAILED' || outcome === 'ACTIVE' || outcome === 'CANCELLED'
+    ? outcome
+    : null;
+}
+
+/** Outcome chip for a REVIEW card's linked run; UNKNOWN/absent render nothing. */
+export function RunOutcomeChip({ outcome }: { outcome: KanbanItem['runOutcome'] }) {
+  const known = knownRunOutcome(outcome);
+  if (!known) return null;
+  return <span className={RUN_OUTCOME_PILL[known]}>{known}</span>;
+}
+
+/**
+ * Maps a fetched run status onto the listing's outcome classes (mirror of the
+ * backend's KanbanService#runOutcome). Fallback for surfaces whose item
+ * payload carries no runOutcome: GET /kanban/items/{id} is not enriched (the
+ * T1 enrichment is listing-only), so the drawer and the workspace derive the
+ * chip from the run they already fetch.
+ */
+export function runOutcomeFromStatus(status: RunStatus | null | undefined): KanbanItem['runOutcome'] {
+  if (!status) return null;
+  switch (status) {
+    case 'COMPLETED':
+      return 'COMPLETED';
+    case 'FAILED':
+      return 'FAILED';
+    case 'CANCELLED':
+    case 'ABORTED':
+      return 'CANCELLED';
+    default:
+      // PENDING / INITIALIZING / RUNNING / PAUSED.
+      return 'ACTIVE';
+  }
+}
+
 /** Quick decision surface for ask-less Review cards (spec 10.1). */
-export function ShortApprovalView({ item }: { item: KanbanItem }) {
+export function ShortApprovalView({
+  item,
+  runOutcome,
+}: {
+  item: KanbanItem;
+  /**
+   * Effective outcome when the caller already resolved it (the drawer and the
+   * workspace fetch the linked run separately; the single-item payload does
+   * not carry runOutcome).
+   */
+  runOutcome?: KanbanItem['runOutcome'];
+}) {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -185,9 +255,17 @@ export function ShortApprovalView({ item }: { item: KanbanItem }) {
     onError: () => setError('Action rejected — the card is unchanged.'),
   });
 
+  // Task 7: the linked run's outcome drives both the chip and the copy — a
+  // FAILED/CANCELLED/ACTIVE run must never read as "Run completed".
+  const effectiveOutcome = runOutcome ?? item.runOutcome;
+  const outcome = knownRunOutcome(effectiveOutcome);
+
   return (
     <div className="decision-zone short-view" role="region" aria-label="Decision panel">
-      <div className="dz-title">Run completed — quick decision</div>
+      <div className="dz-title">
+        <RunOutcomeChip outcome={effectiveOutcome} />{' '}
+        {outcome ? RUN_OUTCOME_TITLE[outcome] : 'Quick decision'}
+      </div>
       <div className="ask-ctx">
         agent {item.assignee ?? 'n/a'} · run {item.linkedRunId ? item.linkedRunId.slice(0, 8) : '—'}
       </div>

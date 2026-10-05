@@ -21,7 +21,7 @@ class PlatformMcpAutoApprovalTest {
             "list_kanban_items", "list_knowledge", "query_knowledge", "list_llm_providers",
             "get_llm_provider", "list_reports", "list_runs", "list_running_runs", "get_run",
             "list_skills", "get_skill", "list_agent_skills", "list_workflow_templates",
-            "get_workflow");
+            "get_workflow", "WebSearch", "WebFetch");
 
     /**
      * Every mutating / operator-only / gated tool the operator's decision lists
@@ -48,6 +48,22 @@ class PlatformMcpAutoApprovalTest {
         McpProperties props = new McpProperties();
         assertThat(props.getAutoApproveReadTools()).containsExactlyElementsOf(DEFAULT_READ_TOOLS);
         assertThat(policy(props).allows("list_agents")).isTrue();
+    }
+
+    /**
+     * The 2026-10-04 operator decision (D5): the default list also names the
+     * cores' own read-only web tools, which carry no platform-MCP prefix — the
+     * explicit listing is their provenance gate. {@code run_agent} stays off
+     * the list and keeps the per-call operator approval.
+     */
+    @Test
+    void theDefaultListAlsoNamesTheCoresOwnReadOnlyWebTools() {
+        McpProperties props = new McpProperties();
+
+        assertThat(props.getAutoApproveReadTools()).contains("WebSearch", "WebFetch");
+        assertThat(props.getAutoApproveReadTools()).doesNotContain("run_agent");
+        assertThat(policy(props).allows("WebSearch")).isTrue();
+        assertThat(policy(props).allows("WebFetch")).isTrue();
     }
 
     @Test

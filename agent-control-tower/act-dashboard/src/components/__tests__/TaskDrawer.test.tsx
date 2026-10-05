@@ -157,13 +157,14 @@ describe('TaskDrawer linked run result (D4)', () => {
     openTaskDrawerEvent();
 
     expect(await screen.findByText('Run Result')).toBeInTheDocument();
-    // The run query resolves asynchronously: wait for the status pill.
-    expect(await screen.findByText('COMPLETED')).toBeInTheDocument();
+    const runSection = document.querySelector('.run-result') as HTMLElement;
+    expect(runSection).not.toBeNull();
+    // The run query resolves asynchronously: wait for the status pill, scoped to
+    // the run section — the short view also renders a COMPLETED outcome chip.
+    expect(await within(runSection).findByText('COMPLETED')).toBeInTheDocument();
     expect(mockedGetRun).toHaveBeenCalledWith('run-7');
     // Status pill + effort counters + completion time, scoped to the run
     // section so the drawer's own "Updated <date>" line cannot satisfy them.
-    const runSection = document.querySelector('.run-result') as HTMLElement;
-    expect(runSection).not.toBeNull();
     expect(within(runSection).getByText('COMPLETED')).toBeInTheDocument();
     expect(within(runSection).getByText(/iter 4/i)).toBeInTheDocument();
     expect(within(runSection).getByText(/1,?234/)).toBeInTheDocument();
@@ -262,6 +263,43 @@ describe('TaskDrawer review decision zone', () => {
     openTaskDrawerEvent();
 
     expect(await screen.findByText(/NEEDS YOUR DECISION/)).toBeInTheDocument();
+  });
+
+  it('renders the linked run outcome chip on an ask-ful REVIEW card (Task 7)', async () => {
+    // Ask-ful REVIEW cards render DecisionPanel instead of the ShortApprovalView:
+    // the outcome chip must still be visible or a FAILED run reads as a normal review.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ pendingAskCount: 1, runOutcome: 'FAILED' }));
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a1', askType: 'REVIEW_REQUEST', content: 'review the deliverable' }),
+    ]);
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    expect(screen.getByText('FAILED')).toHaveClass('pill', 'risk');
+    expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
+  });
+
+  it('derives the chip from the linked run when the item payload has no runOutcome (Task 7)', async () => {
+    // GET /kanban/items/{id} is not enriched (the T1 enrichment is listing-only),
+    // so the drawer falls back to the run it already fetches.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7', pendingAskCount: 1 }));
+    mockedListAsks.mockResolvedValue([
+      mkAsk({ id: 'a1', askType: 'REVIEW_REQUEST', content: 'review the deliverable' }),
+    ]);
+    mockedGetRun.mockResolvedValue(mkRun({ status: 'FAILED', finalOutput: null, errorMessage: 'boom' }));
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    await screen.findByText(/NEEDS YOUR DECISION/);
+    // Scoped to the chip row above the panel: the run-result section below also
+    // renders the raw FAILED status pill. The row appears once the run lands.
+    const chipRow = await waitFor(() => {
+      const el = document.querySelector('.drawer .body > .dz-title') as HTMLElement;
+      expect(el).not.toBeNull();
+      return el;
+    });
+    expect(within(chipRow).getByText('FAILED')).toHaveClass('pill', 'risk');
   });
 
   it('shows no decision zone for a non-REVIEW card', async () => {
@@ -418,7 +456,7 @@ describe('TaskDrawer review decision zone', () => {
   it('Request changes (short view) sends the card back to TODO with the typed feedback', async () => {
     const user = userEvent.setup();
     // Ask-less Review card: the short approval view carries the Request-changes affordance.
-    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW' }));
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW', runOutcome: 'COMPLETED' }));
     mockedListAsks.mockResolvedValue([]);
     renderDrawer();
     openTaskDrawerEvent();
@@ -437,7 +475,7 @@ describe('TaskDrawer review decision zone', () => {
 
   it('short approval view waits for the asks query before rendering (no flash)', async () => {
     let resolveAsks!: (asks: Approval[]) => void;
-    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW' }));
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ status: 'REVIEW', runOutcome: 'COMPLETED' }));
     mockedListAsks.mockReturnValue(new Promise<Approval[]>((res) => { resolveAsks = res; }));
     renderDrawer();
     openTaskDrawerEvent();

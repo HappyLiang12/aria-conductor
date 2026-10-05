@@ -95,10 +95,11 @@ class KanbanReviewAskCreatorTest {
     }
 
     @Test
-    void doesNotSkipWhenTheOnlyPendingAskIsAnAcpPermissionAsk() {
-        // A pending ACP permission ask is owned by AcpPermissionCoordinator and
-        // resolved independently (decision / expiry / run-end sweep): it must not
-        // suppress the review surface for a card that just entered REVIEW.
+    void skipsWhenTheOnlyPendingAskIsAnAcpPermissionAsk() {
+        // A pending ACP permission ask IS a decision surface for the card: the
+        // card entering REVIEW must not get a second, card-level review ask on
+        // top of it (the duplicate drove "completed (STATUS)" copy and double
+        // decision rows in the Review column).
         when(approvalRepository.findByStatusAndKanbanItemId(ApprovalStatus.PENDING, "c1"))
                 .thenReturn(List.of(Approval.builder()
                         .runId(runId).status(ApprovalStatus.PENDING)
@@ -109,11 +110,7 @@ class KanbanReviewAskCreatorTest {
 
         creator.onKanbanItemTransitioned(event("IN_PROGRESS", "REVIEW"));
 
-        ArgumentCaptor<Approval> captor = ArgumentCaptor.forClass(Approval.class);
-        verify(approvalRepository).save(captor.capture());
-        Approval ask = captor.getValue();
-        assertThat(ask.getAskType()).isEqualTo(Approval.AskType.REVIEW_REQUEST);
-        assertThat(ask.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(any());
     }
 
     @Test

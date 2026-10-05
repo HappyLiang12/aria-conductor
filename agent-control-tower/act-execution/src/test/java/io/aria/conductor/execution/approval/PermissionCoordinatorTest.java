@@ -1,8 +1,10 @@
 package io.aria.conductor.execution.approval;
 
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.AcpPermissionRequest;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.repository.AcpPermissionRequestRepository;
@@ -14,6 +16,7 @@ import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -44,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -179,6 +184,16 @@ class PermissionCoordinatorTest {
                     .filter(row -> runId.equals(row.getRunId()))
                     .toList();
         });
+        lenient().when(permissionRepository.findByDeliveryStateAndExpiresAtBefore(
+                        any(String.class), any(Instant.class)))
+                .thenAnswer(inv -> {
+                    String deliveryState = inv.getArgument(0);
+                    Instant cutoff = inv.getArgument(1);
+                    return permissionStore.values().stream()
+                            .filter(row -> deliveryState.equals(row.getDeliveryState()))
+                            .filter(row -> row.getExpiresAt().isBefore(cutoff))
+                            .toList();
+                });
 
         lenient().doAnswer(inv -> {
             requestedEvents.add(inv.getArgument(0));
@@ -246,6 +261,23 @@ class PermissionCoordinatorTest {
         assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
         assertThat(requestedEvents.get(0).getRunId()).isEqualTo(RUN_ID);
         assertThat(requestedEvents.get(0).getToolCallId()).isNull();
+    }
+
+    /**
+     * A native ask must carry its provenance: the persisted approval is stamped
+     * {@code ACP_PERMISSION}, so the run-end sweep and the legacy card sweeps
+     * leave it to its own coordinator instead of treating it as a legacy gate
+     * row and rewriting it.
+     */
+    @Test
+    void registerStampsNativeAsksWithTheAcpPermissionSource() {
+        coordinator = coordinator(T0);
+
+        coordinator.register(permission(PermissionTarget.NATIVE_TOOL));
+
+        ArgumentCaptor<Approval> saved = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(saved.capture());
+        assertThat(saved.getValue().getSource()).isEqualTo(ApprovalSource.ACP_PERMISSION);
     }
 
     /**
@@ -433,24 +465,74 @@ class PermissionCoordinatorTest {
     }
 
     /**
-     * The exact boundary spec §6.3 protects: the core's own tools ask as native
-     * permission requests without the platform-MCP prefix, so they are never
-     * auto-approved — not even while the policy is enabled.
+     * The 2026-10-04 operator decision (D5): the cores' own read-only web tools
+     * ask as native permission requests without the platform-MCP prefix, and a
+     * listed name now auto-settles exactly like the prefixed live platform
+     * shape — APPROVED with the policy as its reason, answered with the single
+     * allow-once reply its core session is waiting for. The operator's explicit
+     * listing is the provenance gate for the bare native name.
      */
     @Test
-    void aWebSearchNativeAskIsNeverCoveredEvenWithThePolicyEnabled() {
+    void anAllowlistedNativeWebAskIsAutoApprovedAndAnsweredToTheOwningSession() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
+        String arguments = "{\"query\":\"aria\"}";
+
+        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
+                "WebSearch", PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
+
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approval.getReason()).isEqualTo(PermissionCoordinator.AUTO_APPROVE_REASON);
+        assertThat(approval.getDecidedAt()).isEqualTo(T0);
+
+        // The correlation row records the decision and its delivery, exactly as
+        // a manual ALLOW_ONCE decision does: nothing stays pending.
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getToolName()).isEqualTo("WebSearch");
+        assertThat(row.getTarget()).isEqualTo(PermissionTarget.NATIVE_TOOL.name());
+        assertThat(row.getSelectedOptionId()).isEqualTo("proceed_once");
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        assertThat(row.getDeliveredAt()).isEqualTo(T0);
+        assertThat(coordinator.deliveryState(approvalId)).isEqualTo(PermissionDeliveryState.DELIVERED);
+        assertThat(requestedEvents).isEmpty();
+
+        // The owning session received exactly one ALLOW_ONCE reply, naming the
+        // option the core offered.
+        assertThat(delivered).containsExactly(
+                new PermissionReply(RUN_ID, SESSION_ID, REQUEST_ID, "proceed_once"));
+
+        // A native reply answered the CLI directly; no platform grant was issued.
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
+        assertThat(writeGrants.consume(RUN_ID, "WebSearch", WriteGrantService.digestOf(arguments))).isFalse();
+    }
+
+    /**
+     * The list stays the gate (D5): a native ask whose name the operator did
+     * not list keeps the per-call operator approval, exactly as before — the
+     * policy is not a naming heuristic.
+     */
+    @Test
+    void anUnlistedNativeAskStillSurfacesToTheOperator() {
         List<PermissionReply> delivered = new ArrayList<>();
         coordinator = coordinator(T0, delivered::add);
 
         UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
-                "WebSearch", PermissionTarget.NATIVE_TOOL, "{\"query\":\"aria\"}", OFFERED, EXPIRES_AT));
+                "SomeOtherTool", PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
 
-        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
-        assertThat(permissionRow(approvalId).getDeliveryState())
-                .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
-        assertThat(permissionRow(approvalId).getSelectedOptionId()).isNull();
+        Approval approval = approvalStore.get(approvalId);
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(approval.getReason()).isEqualTo(
+                "Native permission request 0 from session ses_fixture_1 for tool SomeOtherTool (NATIVE_TOOL)");
+        AcpPermissionRequest row = permissionRow(approvalId);
+        assertThat(row.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(row.getSelectedOptionId()).isNull();
         assertThat(requestedEvents).hasSize(1);
+        assertThat(requestedEvents.get(0).getApprovalId()).isEqualTo(approvalId);
         assertThat(delivered).isEmpty();
+        assertThat(permissionStore.values())
+                .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
     }
 
     /**
@@ -499,21 +581,39 @@ class PermissionCoordinatorTest {
     }
 
     /**
-     * The policy is a platform-ask policy, not a tool-name shortcut: a
-     * {@code NATIVE_TOOL} ask keeps the operator flow even when its tool name is
-     * on the read-only list.
+     * The native clause's fail-closed guard (D5): a listed native ask
+     * auto-settles only when it offers exactly one ALLOW_ONCE option its reply
+     * can name — the same selection the manual ALLOW_ONCE decision uses. Zero
+     * or several allow-once options keep the operator flow: the policy never
+     * guesses what the core did not offer.
      */
     @Test
-    void anAllowlistedToolNameOfANativeAskKeepsTheOperatorFlow() {
-        coordinator = coordinator(T0);
+    void aListedNativeAskWithoutASingleAllowOnceOptionKeepsTheOperatorFlow() {
+        List<PermissionReply> delivered = new ArrayList<>();
+        coordinator = coordinator(T0, delivered::add);
 
-        UUID approvalId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID,
-                "list_agents", PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        UUID denyOnly = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "0",
+                "WebSearch", PermissionTarget.NATIVE_TOOL, "{}",
+                List.of(new PermissionOption("cancel", PermissionChoice.DENY)), EXPIRES_AT));
+        UUID twoAllowOnce = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "1",
+                "WebSearch", PermissionTarget.NATIVE_TOOL, "{}",
+                List.of(new PermissionOption("proceed_once", PermissionChoice.ALLOW_ONCE),
+                        new PermissionOption("proceed_always", PermissionChoice.ALLOW_ONCE)),
+                EXPIRES_AT));
 
-        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.PENDING);
-        assertThat(permissionRow(approvalId).getDeliveryState())
+        assertThat(approvalStore.get(denyOnly).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(permissionRow(denyOnly).getDeliveryState())
                 .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
-        assertThat(requestedEvents).hasSize(1);
+        assertThat(permissionRow(denyOnly).getSelectedOptionId()).isNull();
+
+        assertThat(approvalStore.get(twoAllowOnce).getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(permissionRow(twoAllowOnce).getDeliveryState())
+                .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(permissionRow(twoAllowOnce).getSelectedOptionId()).isNull();
+
+        // Both asks surfaced to the operator and nothing was delivered.
+        assertThat(requestedEvents).hasSize(2);
+        assertThat(delivered).isEmpty();
         assertThat(permissionStore.values())
                 .noneMatch(r -> r.getKind() == AcpPermissionRequest.Kind.WRITE_GRANT);
     }
@@ -928,6 +1028,128 @@ class PermissionCoordinatorTest {
         assertThat(approvalStore.get(settled).getStatus()).isEqualTo(ApprovalStatus.DENIED);
         assertThat(approvalStore.get(settled).getReason())
                 .isEqualTo("Operator denied write_file (native permission request 2)");
+    }
+
+    /**
+     * The run-end settle (spec §5.3): every still-PENDING native ask of a run
+     * whose runtime has ended is adjudicated — EXPIRED with the recorded reason
+     * "run ended", the waiter released and the operator told via the expired
+     * event carrying the ask's tool name — while an already-settled ask is never
+     * rewritten.
+     */
+    @Test
+    void cancelPendingForRunSettlesOnlyPendingAsksWithTheRunEndedReason() {
+        coordinator = coordinator(T0);
+        UUID pendingId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "0", "run_agent",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        UUID settledId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "1", "write_file",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        coordinator.decide(settledId, PermissionChoice.ALLOW_ONCE, ActorPrincipal.operator(null));
+
+        int settledCount = coordinator.cancelPendingForRun(RUN_ID);
+
+        assertThat(settledCount).isEqualTo(1);
+        assertThat(approvalStore.get(pendingId).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(approvalStore.get(pendingId).getReason()).isEqualTo("run ended");
+        assertThat(approvalStore.get(settledId).getStatus()).isEqualTo(ApprovalStatus.APPROVED); // untouched
+        ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
+    }
+
+    /**
+     * Every expiry announces the ask: the settled-by-timeout event carries the
+     * ask's tool name, so the operator learns what was skipped.
+     */
+    @Test
+    void expiryPublishesTheExpiredEventWithTheToolName() {
+        coordinator = coordinator(T0);
+        coordinator.register(new NativePermission(RUN_ID, SESSION_ID, REQUEST_ID, "run_agent",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+
+        coordinator.expirePendingForRun(RUN_ID, EXPIRES_AT.plusSeconds(1));
+
+        ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
+    }
+
+    /**
+     * The scheduled expiry backstop (R-RFUX2): a native ask still
+     * {@code AWAITING_DECISION} whose own window has closed is settled by the
+     * coordinator sweep — EXPIRED with the recorded expiry reason, the ledger
+     * delivery moved to EXPIRED, and {@link ApprovalExpiredEvent} published with
+     * the ask's tool name — so the scheduled sweep leaves nothing silently
+     * unsettled. An already-decided ask is never rewritten.
+     */
+    @Test
+    void expireOverdueNativeAsksSettlesAwaitingAsksWithTheExpiryReasonAndAnnouncesTheToolName() {
+        coordinator = coordinator(T0);
+        UUID pendingId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "0", "run_agent",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        UUID settledId = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "1", "write_file",
+                PermissionTarget.NATIVE_TOOL, "{}", OFFERED, EXPIRES_AT));
+        coordinator.decide(settledId, PermissionChoice.ALLOW_ONCE, ActorPrincipal.operator(null));
+        Instant asOf = EXPIRES_AT.plusSeconds(1);
+
+        int settledCount = coordinator.expireOverdueNativeAsks(asOf);
+
+        assertThat(settledCount).isEqualTo(1);
+        assertThat(approvalStore.get(pendingId).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
+        assertThat(approvalStore.get(pendingId).getReason()).isEqualTo(PermissionCoordinator.EXPIRY_REASON);
+        assertThat(approvalStore.get(pendingId).getDecidedAt()).isEqualTo(asOf);
+        assertThat(permissionRow(pendingId).getDeliveryState()).isEqualTo(PermissionDeliveryState.EXPIRED.name());
+        // The settled ask keeps its decision: the sweep never rewrites it.
+        assertThat(approvalStore.get(settledId).getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(approvalStore.get(settledId).getReason())
+                .isEqualTo("Operator allowed one use of write_file (native permission request 1)");
+        assertThat(permissionRow(settledId).getDeliveryState()).isEqualTo(PermissionDeliveryState.DELIVERED.name());
+        ArgumentCaptor<ApprovalExpiredEvent> event = ArgumentCaptor.forClass(ApprovalExpiredEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getToolName()).isEqualTo("run_agent");
+    }
+
+    /**
+     * The sweep's own settled-skip guard, independent of the finder's
+     * delivery-state filter: a row whose approval is missing or no longer
+     * PENDING is never rewritten, however the finder handed it back — a settled
+     * ask stays the historical fact and no expiry is announced for it.
+     */
+    @Test
+    void expireOverdueNativeAsksNeverRewritesASettledOrOrphanedRow() {
+        coordinator = coordinator(T0);
+        Approval settled = Approval.builder()
+                .runId(RUN_ID).source(ApprovalSource.ACP_PERMISSION)
+                .status(ApprovalStatus.APPROVED)
+                .reason("Operator allowed one use of run_agent")
+                .decidedAt(T0).expiresAt(EXPIRES_AT).build();
+        approvalRepository.save(settled);
+        AcpPermissionRequest staleAwaiting = AcpPermissionRequest.builder()
+                .id(UUID.randomUUID()).approvalId(settled.getId())
+                .kind(AcpPermissionRequest.Kind.NATIVE_PERMISSION)
+                .runId(RUN_ID).sessionId(SESSION_ID).requestId("0").toolName("run_agent")
+                .target(PermissionTarget.NATIVE_TOOL.name())
+                .argumentsDigest(WriteGrantService.digestOf("{}"))
+                .deliveryState(PermissionDeliveryState.AWAITING_DECISION.name())
+                .expiresAt(EXPIRES_AT.minusSeconds(30)).createdAt(T0).build();
+        AcpPermissionRequest orphaned = AcpPermissionRequest.builder()
+                .id(UUID.randomUUID()).approvalId(UUID.randomUUID())
+                .kind(AcpPermissionRequest.Kind.NATIVE_PERMISSION)
+                .runId(RUN_ID).sessionId(SESSION_ID).requestId("1").toolName("WebSearch")
+                .target(PermissionTarget.NATIVE_TOOL.name())
+                .argumentsDigest(WriteGrantService.digestOf("{}"))
+                .deliveryState(PermissionDeliveryState.AWAITING_DECISION.name())
+                .expiresAt(EXPIRES_AT.minusSeconds(30)).createdAt(T0).build();
+        permissionRepository.save(staleAwaiting);
+        permissionRepository.save(orphaned);
+
+        int settledCount = coordinator.expireOverdueNativeAsks(EXPIRES_AT.plusSeconds(1));
+
+        assertThat(settledCount).isEqualTo(0);
+        assertThat(settled.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(staleAwaiting.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        assertThat(orphaned.getDeliveryState()).isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
+        verify(eventPublisher, never()).publishEvent(any(ApprovalExpiredEvent.class));
     }
 
     @Test

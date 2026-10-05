@@ -90,14 +90,14 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
     )
     .toBe('DENIED');
 
-  // Card state, asserted. A denial is a decision to the CORE, not a run-killer:
-  // the run-owned session receives the refusal, its turn ends and the run
-  // completes with the fixture's refusal text, so
-  // RunKanbanAutoCreator.onRunCompleted maps the finished run to REVIEW
-  // (listener/RunKanbanAutoCreator.java:102). The previous expectation
-  // (CANCELLED) described the retired task-level gate, whose denial cancelled
-  // the run; CANCELLED is now only reachable for an actually cancelled/aborted
-  // run (:103-104). Polled read-only via GET /kanban/items/{id}.
+  // Card state, asserted. Since the review-flow amendment (D6, 2026-10-04) a
+  // settling ask settles its card: the DENIED native ask moves this REVIEW card
+  // to CANCELLED at decide time (ApprovalSettleCardListener takes the
+  // DENIED -> CANCELLED branch; the card is in REVIEW, so the settle applies).
+  // The run's own end still arrives (the fixture's refusal completes the turn;
+  // RunKanbanAutoCreator then finds a card that has already left REVIEW and
+  // skips it) - the settled card state is the contract asserted here.
+  // Polled read-only via GET /kanban/items/{id}.
   //
   // This replaces a cleanup that wrote CANCELLED explicitly and merely logged a
   // non-200. That write raced the listener's move (optimistic-lock 409,
@@ -111,7 +111,7 @@ test('clicking Deny in the decision zone resolves the ask', async ({ page, reque
       },
       { timeout: 30_000 },
     )
-    .toBe('REVIEW');
+    .toBe('CANCELLED');
 });
 
 /**
@@ -208,17 +208,14 @@ test('clicking Approve in the decision zone resolves the ask', async ({ page, re
 
   // Resulting card state, asserted read-only via GET /kanban/items/{id}.
   //
-  // Approving changes the RUN, not the card. The resumed run settles COMPLETED on
-  // the local stack (a real opencode provider; measured: ask APPROVED at
-  // 16:43:50, run COMPLETED at 16:44:16) or FAILED in CI (no sandbox —
-  // AgentLoopEngine.java:881 maps SANDBOX_UNAVAILABLE/PROVIDER_ERROR to FAILED),
-  // and RunKanbanAutoCreator.onRunCompleted maps both to REVIEW
-  // (listener/RunKanbanAutoCreator.java:102 for COMPLETED, :108 for FAILED).
-  // That is the same column this spec parked the card in, so the listener's move
-  // is a same-status no-op (KanbanTransitionService.java:95-97). CANCELLED is NOT
-  // reachable on this path: only ABORTED/CANCELLED runs map to a CANCELLED card
-  // (:103-104), and approval resumes the run rather than cancelling it. REVIEW is
-  // also the intended sign-off stop for finished work (the D8 rule at :99-101).
+  // Since the review-flow amendment (D6, 2026-10-04) a settling ask settles its
+  // card: the APPROVED native ask moves this REVIEW card to DONE at decide time
+  // (ApprovalSettleCardListener takes the APPROVED -> DONE branch; the settled
+  // ask's card is exempt from the run-active DONE guard, so DONE is reachable
+  // while the resumed run is still in flight). The resumed run then completes in
+  // its own lane; RunKanbanAutoCreator finds a card that has already left REVIEW
+  // and skips it. DONE is also the intended sign-off stop for finished work
+  // (the D8 rule at :99-101).
   //
   // The previous cleanup wrote CANCELLED explicitly and only logged a non-200 —
   // that write, not the behaviour, is what put earlier cards in CANCELLED. It was
@@ -236,5 +233,5 @@ test('clicking Approve in the decision zone resolves the ask', async ({ page, re
       },
       { timeout: 30_000 },
     )
-    .toBe('REVIEW');
+    .toBe('DONE');
 });

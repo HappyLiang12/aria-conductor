@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReviewWorkspace } from '../ReviewWorkspace';
@@ -144,7 +144,11 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     await openReview();
     await screen.findByText('Spec task');
 
-    expect(await screen.findByText('COMPLETED')).toBeInTheDocument();
+    const runSection = document.querySelector('.run-result') as HTMLElement;
+    expect(runSection).not.toBeNull();
+    // Scoped to the run section: the rail's short view also renders a COMPLETED
+    // outcome chip alongside the raw status pill.
+    expect(await within(runSection).findByText('COMPLETED')).toBeInTheDocument();
     expect(mockedGetRun).toHaveBeenCalledWith('run-7');
     const output = document.querySelector('.run-result .spec-review-markdown') as HTMLElement;
     expect(output).not.toBeNull();
@@ -191,6 +195,7 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
   });
 
   it('shows the ShortApprovalView when the card has no asks (no empty state)', async () => {
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ runOutcome: 'COMPLETED' }));
     mockedListAsks.mockResolvedValue([]);
     renderWorkspace();
     await openReview();
@@ -198,6 +203,23 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
     expect(screen.queryByText(/NEEDS YOUR DECISION/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No pending asks/)).not.toBeInTheDocument();
+  });
+
+  it('renders the outcome chip from the fetched linked run when the payload has no runOutcome (Task 7)', async () => {
+    // GET /kanban/items/{id} is not enriched (listing-only, T1): the rail derives
+    // the chip from the run it already fetches instead of claiming nothing.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({ status: 'FAILED', finalOutput: null, errorMessage: 'boom' }));
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    // Scoped to the decision rail: the spec pane's run section also renders the
+    // raw FAILED status pill.
+    const rail = document.querySelector('.rf-decisions') as HTMLElement;
+    expect(rail).not.toBeNull();
+    expect(await within(rail).findByText('FAILED')).toHaveClass('pill', 'risk');
+    expect(within(rail).getByText('Run failed — rework or accept')).toBeInTheDocument();
   });
 
   it('Collapse returns to the drawer on the same card', async () => {
@@ -219,6 +241,7 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     // pendingAsks array is NOT evidence that the card has no asks — the rail
     // must stay empty rather than flash the short view during load.
     let resolveAsks!: (asks: Approval[]) => void;
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ runOutcome: 'COMPLETED' }));
     mockedListAsks.mockImplementation(
       () => new Promise<Approval[]>((res) => { resolveAsks = res; }),
     );

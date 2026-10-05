@@ -5,6 +5,9 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.exception.PickupRejectedException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -26,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -262,6 +266,97 @@ class KanbanServiceTest {
 
         assertThatThrownBy(() -> service.guardLinkedRunNotActive(LINKED_RUN_ID.toString()))
                 .isInstanceOf(DataAccessResourceFailureException.class);
+    }
+
+    @Test
+    void doneIsAllowedForAReviewCardWhoseNativeAskSettledWhileTheRunIsStillActive() {
+        // R-RFUX3 (D7): the card mirrors the ask's decision, not the run's work —
+        // an APPROVED native ask must reach Done even though the linked run that
+        // raised the ask is still RUNNING.
+        stored.setStatus(KanbanStatus.REVIEW);
+        stored.setLinkedRunId(LINKED_RUN_ID.toString());
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(approvalRepository.findByKanbanItemId(stored.getId()))
+                .thenReturn(List.of(nativeAsk(ApprovalStatus.APPROVED)));
+        // The exemption means the guard is never consulted, so this active-run
+        // stub documents the state the guard would refuse on and stays unused.
+        lenient().when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
+                Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
+        when(repository.save(any(KanbanItem.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        KanbanItem result = service.transition(stored.getId(), KanbanStatus.DONE, "ask approved");
+
+        assertThat(result.getStatus()).isEqualTo(KanbanStatus.DONE);
+    }
+
+    @Test
+    void doneIsStillRefusedForAReviewCardWithAPendingNativeAskWhileTheRunIsActive() {
+        // The negative pin: only a SETTLED native ask exempts. A PENDING one is
+        // the live decision surface and keeps the run-active guard.
+        stored.setStatus(KanbanStatus.REVIEW);
+        stored.setLinkedRunId(LINKED_RUN_ID.toString());
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(approvalRepository.findByKanbanItemId(stored.getId()))
+                .thenReturn(List.of(nativeAsk(ApprovalStatus.PENDING)));
+        when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
+                Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
+
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE, "approved anyway"))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("LINKED_RUN_ACTIVE"));
+        assertThat(stored.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void doneIsStillRefusedForAPlainRunCardWhileTheRunIsActive() {
+        // A card with no linked ask is an ordinary run card: guarded as before.
+        stored.setStatus(KanbanStatus.REVIEW);
+        stored.setLinkedRunId(LINKED_RUN_ID.toString());
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(approvalRepository.findByKanbanItemId(stored.getId())).thenReturn(List.of());
+        when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
+                Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
+
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE, "done"))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("LINKED_RUN_ACTIVE"));
+        assertThat(stored.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void aSettledLegacyAskDoesNotExemptTheCard() {
+        // The discriminator is the source: a decided LEGACY_GATE ask belongs to
+        // the card layer's own flows and never widens the run-active DONE guard.
+        stored.setStatus(KanbanStatus.REVIEW);
+        stored.setLinkedRunId(LINKED_RUN_ID.toString());
+        when(repository.findById(stored.getId())).thenReturn(Optional.of(stored));
+        when(approvalRepository.findByKanbanItemId(stored.getId())).thenReturn(List.of(
+                Approval.builder().id(UUID.randomUUID()).runId(LINKED_RUN_ID)
+                        .status(ApprovalStatus.APPROVED).source(ApprovalSource.LEGACY_GATE)
+                        .kanbanItemId(stored.getId()).build()));
+        when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
+                Run.builder().id(LINKED_RUN_ID).status(RunStatus.RUNNING).build()));
+
+        assertThatThrownBy(() -> service.transition(stored.getId(), KanbanStatus.DONE, "approved"))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code())
+                        .isEqualTo("LINKED_RUN_ACTIVE"));
+        assertThat(stored.getStatus()).isEqualTo(KanbanStatus.REVIEW);
+        verify(repository, never()).save(any());
+    }
+
+    private Approval nativeAsk(ApprovalStatus status) {
+        return Approval.builder()
+                .id(UUID.randomUUID())
+                .runId(LINKED_RUN_ID)
+                .status(status)
+                .source(ApprovalSource.ACP_PERMISSION)
+                .kanbanItemId(stored.getId())
+                .build();
     }
 
     @Test

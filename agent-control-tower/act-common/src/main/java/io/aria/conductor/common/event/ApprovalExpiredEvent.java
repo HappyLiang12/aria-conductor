@@ -25,11 +25,22 @@ public class ApprovalExpiredEvent extends ApplicationEvent {
     private final UUID approvalId;
     private final UUID runId;
     private final String reason;
+    /**
+     * The tool the expired ask was about, when the publishing path knows it
+     * (the native ACP asks of the permission coordinator); {@code null} for the
+     * legacy gate timeout, which has no tool correlation to name.
+     */
+    private final String toolName;
 
     public ApprovalExpiredEvent(Object source, UUID approvalId, UUID runId, String reason) {
+        this(source, approvalId, runId, reason, null);
+    }
+
+    public ApprovalExpiredEvent(Object source, UUID approvalId, UUID runId, String reason, String toolName) {
         super(source);
         this.approvalId = approvalId;
         this.runId = runId;
         this.reason = reason;
+        this.toolName = toolName;
     }
 }

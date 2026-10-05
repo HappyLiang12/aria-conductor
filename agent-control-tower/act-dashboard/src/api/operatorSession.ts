@@ -12,16 +12,18 @@ import client from './client';
  * `POST /api/v1/operator/session` answers 200 with `{ csrfToken, expiresAt }`
  * and sets the cookie; without a valid credential the backend fails closed
  * (401). Mutations authenticated by the cookie must carry `X-CSRF-Token` (the
- * cookie is HttpOnly, so the token is kept in per-tab sessionStorage) and an
+ * cookie is HttpOnly, so the token is kept in localStorage (shared by all tabs
+ * of this browser profile) and an
  * allowed Origin, which the browser adds for non-GET requests.
  *
- * Only the CSRF token + expiry are persisted (sessionStorage, this tab); the
+ * Only the CSRF token + expiry are persisted (localStorage, shared by all tabs
+ * of this browser profile); the
  * token is applied to the shared axios defaults so every operator-only call —
  * approvals, credentials, agent/host selection — carries it without touching
  * the shared client module.
  */
 
-/** Per-tab storage key of the local operator session record. */
+/** Storage key of the local operator session record (shared by all tabs of this browser profile). */
 export const OPERATOR_SESSION_STORAGE_KEY = 'aria.operator.session';
 
 /** CSRF header name the backend validates (`OperatorSessionService.CSRF_HEADER`). */
@@ -36,7 +38,7 @@ export interface OperatorSessionState {
   established: boolean;
   expiresAt: string | null;
   /**
-   * True when this tab held a session record that had already expired (the
+   * True when this browser held a session record that had already expired (the
    * loader drops such a record, so only this flag distinguishes "the previous
    * session expired" from a first run). A malformed record is not an expiry.
    */
@@ -44,12 +46,12 @@ export interface OperatorSessionState {
 }
 
 /**
- * The stored record as this tab holds it, before any expiry handling. Null for
- * an absent, unreadable or malformed record.
+ * The stored record as this browser profile holds it, before any expiry
+ * handling. Null for an absent, unreadable or malformed record.
  */
 function readStoredRecord(): OperatorSessionInfo | null {
   try {
-    const raw = sessionStorage.getItem(OPERATOR_SESSION_STORAGE_KEY);
+    const raw = localStorage.getItem(OPERATOR_SESSION_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<OperatorSessionInfo>;
     if (!parsed?.csrfToken || !parsed?.expiresAt) return null;
@@ -65,7 +67,7 @@ export function loadOperatorSession(): OperatorSessionInfo | null {
   if (!record) return null;
   if (!(new Date(record.expiresAt).getTime() > Date.now())) {
     try {
-      sessionStorage.removeItem(OPERATOR_SESSION_STORAGE_KEY);
+      localStorage.removeItem(OPERATOR_SESSION_STORAGE_KEY);
     } catch {
       // Storage unavailable: there is nothing to drop.
     }
@@ -74,7 +76,7 @@ export function loadOperatorSession(): OperatorSessionInfo | null {
   return record;
 }
 
-/** Local (this-tab) view of the operator session; not a server-side probe. */
+/** Local (this browser profile) view of the operator session; not a server-side probe. */
 export function operatorSessionState(): OperatorSessionState {
   // The stored record is read before the loader drops an expired one, so the
   // expiry is reported as such instead of as an empty (first-run) tab.
@@ -106,7 +108,7 @@ export function applyOperatorHeaders(): void {
 /** Forgets the local session record and drops the CSRF header. */
 export function clearOperatorSession(): void {
   try {
-    sessionStorage.removeItem(OPERATOR_SESSION_STORAGE_KEY);
+    localStorage.removeItem(OPERATOR_SESSION_STORAGE_KEY);
   } catch {
     // Storage unavailable (private mode): there is nothing stored to forget.
   }
@@ -127,7 +129,7 @@ export async function establishOperatorSession(
   );
   const session: OperatorSessionInfo = { csrfToken: data.csrfToken, expiresAt: data.expiresAt };
   try {
-    sessionStorage.setItem(OPERATOR_SESSION_STORAGE_KEY, JSON.stringify(session));
+    localStorage.setItem(OPERATOR_SESSION_STORAGE_KEY, JSON.stringify(session));
   } catch {
     // Storage unavailable: the session cookie still authenticates reads, but
     // mutations cannot carry CSRF — stay honest and fail closed below.

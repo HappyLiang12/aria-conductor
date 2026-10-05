@@ -7,7 +7,7 @@ import {
 } from '../api/ops';
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
-import { applyOperatorHeaders } from '../api/operatorSession';
+import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
 import {
   NativePermissionFacts,
   NativePermissionKindPill,
@@ -172,7 +172,7 @@ export default function OpsPage() {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
       setToast({ kind: 'ok', msg: 'Approval granted — agent unblocked.' });
     },
-    onError: () => setToast({ kind: 'err', msg: 'Approve failed. Retry.' }),
+    onError: (err: unknown) => setToast({ kind: 'err', msg: apiErrorMessage(err, 'Approve failed. Retry.') }),
   });
 
   const rejectM = useMutation({
@@ -184,7 +184,7 @@ export default function OpsPage() {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
       setToast({ kind: 'ok', msg: 'Approval denied.' });
     },
-    onError: () => setToast({ kind: 'err', msg: 'Deny failed. Retry.' }),
+    onError: (err: unknown) => setToast({ kind: 'err', msg: apiErrorMessage(err, 'Deny failed. Retry.') }),
   });
 
   /* ---------- Derived: Activity Timeline ---------- */

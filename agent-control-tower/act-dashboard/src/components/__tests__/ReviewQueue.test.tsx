@@ -127,13 +127,13 @@ function ui() {
 describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
   beforeEach(() => {
     requests.length = 0;
-    sessionStorage.clear();
+    localStorage.clear();
     delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
   });
 
   afterEach(() => {
     client.defaults.adapter = originalAdapter;
-    sessionStorage.clear();
+    localStorage.clear();
     delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
   });
 
@@ -153,7 +153,7 @@ describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
 
   it('carries the operator session CSRF header on the native ask decision', async () => {
     serve([nativeAsk()]);
-    sessionStorage.setItem(
+    localStorage.setItem(
       OPERATOR_SESSION_STORAGE_KEY,
       JSON.stringify({
         csrfToken: 'csrf-fixture-token',
@@ -174,7 +174,7 @@ describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
 
   it('carries the operator session CSRF header on every decide, not only native asks', async () => {
     serve([gateAsk()]);
-    sessionStorage.setItem(
+    localStorage.setItem(
       OPERATOR_SESSION_STORAGE_KEY,
       JSON.stringify({
         csrfToken: 'csrf-fixture-token',
@@ -204,13 +204,13 @@ describe('ReviewQueue normalized native asks (Task 15 fix round 1)', () => {
 describe('ReviewQueue non-native rows (review-flow-ux Task 9)', () => {
   beforeEach(() => {
     requests.length = 0;
-    sessionStorage.clear();
+    localStorage.clear();
     delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
   });
 
   afterEach(() => {
     client.defaults.adapter = originalAdapter;
-    sessionStorage.clear();
+    localStorage.clear();
     delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
   });
 

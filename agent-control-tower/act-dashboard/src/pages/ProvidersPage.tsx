@@ -1,7 +1,6 @@
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { listAgents } from '../api/agents';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
-import { OperatorAccessPanel } from '../components/OperatorAccessPanel';
 import { RuntimeCredentialsCard } from '../components/RuntimeCredentialsCard';
 
 interface HealthBadgeProps {
@@ -48,9 +47,6 @@ export function ProvidersPage() {
       <div className="page-header">
         <h2>Agent Providers</h2>
       </div>
-
-      {/* Operator authority (spec 6.2): required before any operator-only action. */}
-      <OperatorAccessPanel />
 
       {/* Provider inventory */}
       {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading providers...</span></div>}

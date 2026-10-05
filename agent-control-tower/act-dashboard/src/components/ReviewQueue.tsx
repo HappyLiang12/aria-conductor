@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
-import { applyOperatorHeaders } from '../api/operatorSession';
+import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
 import DiffPreview from './DiffPreview';
 import {
   NativePermissionFacts,
@@ -23,6 +24,7 @@ function timeAgo(iso: string): string {
 
 export default function ReviewQueue({ runId }: { runId?: string } = {}) {
   const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const { data: approvals, isLoading, error } = useQuery({
     queryKey: ['approvals', 'PENDING', runId ?? 'all'],
@@ -37,9 +39,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
       return approveApproval(id);
     },
     onSuccess: () => {
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
+    onError: (err: unknown) => setActionError(apiErrorMessage(err, 'Approve failed.')),
   });
 
   const rejectMutation = useMutation({
@@ -48,9 +52,11 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
       return rejectApproval(id);
     },
     onSuccess: () => {
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
     },
+    onError: (err: unknown) => setActionError(apiErrorMessage(err, 'Reject failed.')),
   });
 
   const items = (approvals ?? []).filter((a) => !runId || a.runId === runId);
@@ -61,6 +67,9 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
         <span>Review Queue</span>
         <span className="accent">· {items.length} pending</span>
       </h2>
+      {actionError && (
+        <div className="error-state" role="alert">{actionError}</div>
+      )}
       <div className="queue">
         {isLoading && (
           <div style={{ padding: '8px 4px', color: 'var(--text-mute)', fontSize: 12 }}>

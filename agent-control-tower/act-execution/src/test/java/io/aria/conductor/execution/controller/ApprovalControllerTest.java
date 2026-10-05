@@ -52,9 +52,13 @@ class ApprovalControllerTest extends WebMvcTestBase {
             mock(io.aria.conductor.execution.security.OperatorSessionService.class);
     private final io.aria.conductor.execution.security.ActorTokenService actorTokens =
             mock(io.aria.conductor.execution.security.ActorTokenService.class);
+    /** The shared authority resolver wired around the same mocked services. */
+    private final io.aria.conductor.execution.security.OperatorAuthorityResolver operatorAuthority =
+            new io.aria.conductor.execution.security.OperatorAuthorityResolver(
+                    operatorSessions, actorTokens, "");
     private final MockMvc mvc = mockMvcFor(new ApprovalController(
             approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
-            permissionCoordinator, operatorSessions, actorTokens));
+            permissionCoordinator, operatorSessions, operatorAuthority));
 
     /** The configured operator bearer credential the boundary verifies. */
     private static final String OPERATOR_AUTHORIZATION = "Bearer operator-credential-1";
@@ -429,9 +433,16 @@ class ApprovalControllerTest extends WebMvcTestBase {
         verifyNoInteractions(approvalGate);
     }
 
+    /**
+     * An anonymous caller from a NON-loopback client is still 401. (From
+     * loopback an anonymous request is the local operator — see
+     * {@link #loopbackAnonymousDecisionIsAuthorized}.) MockMvc's default peer
+     * is loopback, so the address is pinned explicitly here.
+     */
     @Test
     void decideApproval_withoutAnyOperatorIdentity_returns401() throws Exception {
         mvc.perform(post("/api/v1/approvals/" + UUID.randomUUID() + "/decide")
+                        .with(request -> { request.setRemoteAddr("203.0.113.7"); return request; })
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("approved", true, "reason", "ok"))))
                 .andExpect(status().isUnauthorized())
@@ -456,6 +467,46 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.error").value("Operator authority required"));
 
         verifyNoInteractions(approvalGate, permissionCoordinator);
+    }
+
+    /** A fresh PENDING (non-native) gate approval id: the decide routes through the gate. */
+    private UUID pendingApprovalId() {
+        UUID id = UUID.randomUUID();
+        when(permissionCoordinator.isNativePermissionRequest(id)).thenReturn(false);
+        return id;
+    }
+
+    /**
+     * The local operator needs no credential at all: an anonymous request from
+     * loopback IS the single local operator (2026-10-05 local authority
+     * simplification), so the decision succeeds with no Authorization header.
+     */
+    @Test
+    void loopbackAnonymousDecisionIsAuthorized() throws Exception {
+        mvc.perform(post("/api/v1/approvals/{id}/decide", pendingApprovalId())
+                        .with(request -> { request.setRemoteAddr("127.0.0.1"); return request; })
+                        .contentType("application/json")
+                        .content("{\"approved\":true}"))
+                .andExpect(status().isOk());
+    }
+
+    /**
+     * A resolvable worker bearer is never promoted to operator -- not even from
+     * loopback (an unresolvable token is "no identity" and falls through to the
+     * loopback rule instead, so the worker token must be one the resolver can
+     * verify for this test to pin the 403 rule).
+     */
+    @Test
+    void workerBearerDecisionRemainsForbidden() throws Exception {
+        when(actorTokens.resolveBearer("Bearer worker-token"))
+                .thenReturn(Optional.of(io.aria.conductor.common.security.ActorPrincipal.worker(
+                        UUID.randomUUID(), java.time.Instant.parse("2026-09-22T12:10:00Z"))));
+        mvc.perform(post("/api/v1/approvals/{id}/decide", pendingApprovalId())
+                        .with(request -> { request.setRemoteAddr("127.0.0.1"); return request; })
+                        .header("Authorization", "Bearer worker-token")
+                        .contentType("application/json")
+                        .content("{\"approved\":true}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

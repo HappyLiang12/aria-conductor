@@ -12,10 +12,10 @@ import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.pipeline.ToolRiskResolver;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -38,7 +38,7 @@ public class ApprovalController {
     private final ApprovalAnswerService approvalAnswerService;
     private final PermissionCoordinator permissionCoordinator;
     private final OperatorSessionService operatorSessions;
-    private final ActorTokenService actorTokens;
+    private final OperatorAuthorityResolver operatorAuthority;
 
     /**
      * Convenience constructor for direct-instantiation tests: builds its own
@@ -50,11 +50,11 @@ public class ApprovalController {
                               ToolRiskResolver toolRiskResolver,
                               PermissionCoordinator permissionCoordinator,
                               OperatorSessionService operatorSessions,
-                              ActorTokenService actorTokens) {
+                              OperatorAuthorityResolver operatorAuthority) {
         this(approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
                 new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver),
                 new ApprovalAnswerService(approvalRepository), permissionCoordinator,
-                operatorSessions, actorTokens);
+                operatorSessions, operatorAuthority);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -66,7 +66,7 @@ public class ApprovalController {
                               ApprovalAnswerService approvalAnswerService,
                               PermissionCoordinator permissionCoordinator,
                               OperatorSessionService operatorSessions,
-                              ActorTokenService actorTokens) {
+                              OperatorAuthorityResolver operatorAuthority) {
         this.approvalRepository = approvalRepository;
         this.approvalGate = approvalGate;
         this.toolCallRepository = toolCallRepository;
@@ -75,7 +75,7 @@ public class ApprovalController {
         this.approvalAnswerService = approvalAnswerService;
         this.permissionCoordinator = permissionCoordinator;
         this.operatorSessions = operatorSessions;
-        this.actorTokens = actorTokens;
+        this.operatorAuthority = operatorAuthority;
     }
 
     /**
@@ -139,10 +139,12 @@ public class ApprovalController {
 
     /**
      * Decide an approval. This route is operator-only (spec §6.2): the caller's
-     * operator authority is resolved from the configured operator bearer
-     * credential or the operator session cookie (whose mutations must also pass
-     * Origin/CSRF validation). 401 without a verifiable identity, 403 when a
-     * valid worker credential or a failed CSRF/Origin check is presented.
+     * operator authority is resolved by {@link OperatorAuthorityResolver} from
+     * the configured operator bearer credential or the operator session cookie
+     * (whose mutations must also pass Origin/CSRF validation); an anonymous
+     * request from loopback is the local single operator. 401 without a
+     * verifiable identity, 403 when a valid worker credential or a failed
+     * CSRF/Origin check is presented.
      *
      * <p>A native permission ask is dispatched to the permission coordinator —
      * which re-checks operator authority, state and expiry inside one
@@ -152,16 +154,13 @@ public class ApprovalController {
     @PostMapping("/{id}/decide")
     public ResponseEntity<Map<String, Object>> decideApproval(
             @PathVariable UUID id,
-            @RequestBody DecideApprovalRequest request,
-            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @CookieValue(value = OperatorSessionService.COOKIE_NAME, required = false) String sessionId,
-            @RequestHeader(value = OperatorSessionService.CSRF_HEADER, required = false) String csrfToken,
-            @RequestHeader(value = HttpHeaders.ORIGIN, required = false) String origin) {
-        log.info("Approval decision: id={}, approved={}", id, request.approved());
+            @RequestBody DecideApprovalRequest body,
+            HttpServletRequest request) {
+        log.info("Approval decision: id={}, approved={}", id, body.approved());
 
         ActorPrincipal operator;
         try {
-            operator = requireOperator(authorization, sessionId, csrfToken, origin);
+            operator = operatorAuthority.resolveOperator(request, true);
         } catch (OperatorSessionService.ForbiddenMutationException e) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
         } catch (SecurityException e) {
@@ -171,53 +170,22 @@ public class ApprovalController {
         try {
             if (permissionCoordinator.isNativePermissionRequest(id)) {
                 permissionCoordinator.decide(id,
-                        request.approved() ? PermissionChoice.ALLOW_ONCE : PermissionChoice.DENY, operator);
+                        body.approved() ? PermissionChoice.ALLOW_ONCE : PermissionChoice.DENY, operator);
             } else {
-                approvalGate.decideApproval(id, request.approved(), request.reason());
+                approvalGate.decideApproval(id, body.approved(), body.reason());
             }
             return ResponseEntity.ok(Map.of(
                     "approvalId", id,
-                    "approved", request.approved(),
+                    "approved", body.approved(),
                     "status", "processed"
             ));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", e.getMessage()
-            ));
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (IllegalStateException e) {
-            // Settled or expired request: the decision is refused, nothing was delivered.
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
-                    "error", e.getMessage()
-            ));
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
         } catch (SecurityException e) {
-            // The operator identity went stale between resolution and the decision
-            // (e.g. the session TTL crossed): an authorization refusal, not a 500.
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
-                    "error", e.getMessage()
-            ));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", e.getMessage()));
         }
-    }
-
-    /**
-     * The operator boundary of this route. The transport owns the identity: the
-     * configured operator bearer credential, or the operator session cookie with
-     * Origin/CSRF validation. A verified worker credential is authenticated but
-     * never operator-authorized (403); anything unverifiable is 401.
-     */
-    private ActorPrincipal requireOperator(String authorization, String sessionId,
-                                           String csrfToken, String origin) {
-        if (operatorSessions.verifyOperatorCredential(authorization)) {
-            return ActorPrincipal.operator(null);
-        }
-        OperatorSessionService.OperatorSession session = operatorSessions.findSession(sessionId).orElse(null);
-        if (session != null) {
-            operatorSessions.validateMutation(session, csrfToken, origin);
-            return ActorPrincipal.operator(session.expiresAt());
-        }
-        if (actorTokens.resolveBearer(authorization).isPresent()) {
-            throw new OperatorSessionService.ForbiddenMutationException("Operator authority required");
-        }
-        throw new SecurityException("Operator session required");
     }
 
     private ApprovalDetail toDetail(Approval a, ToolCall tc) {

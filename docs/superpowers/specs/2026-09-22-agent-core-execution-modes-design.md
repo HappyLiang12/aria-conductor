@@ -358,3 +358,24 @@ The implementation plan must list file ownership, dependencies, independent work
 Verified inputs are the cited committed source/configuration, the historical committed spike, the metadata-only CLI observation above, and the user's explicit decisions. The four target runtime combinations, new authorization boundary, mock CLI/harness, revised pipeline, and deletion mechanism are **NOT IMPLEMENTED / NOT VERIFIED**.
 
 The next gate is user review of this written specification. Only after that approval should a new implementation plan replace the superseded sandbox-only plan. The approved implementation plan is [Cross-Core Host/Sandbox Execution Implementation Plan](../plans/2026-09-22-agent-core-execution-modes.md). No successful build, test suite, CI run, browser check, native-core permission enforcement, or data cleanup is claimed here.
+
+## 11. Amendment (2026-10-05): local authority simplification
+
+Amended by operator decision (2026-10-05); full rationale and design in
+[Local Authority Simplification](2026-10-05-local-authority-simplification-design.md).
+
+- Section 6.2 (operator-only approvals): loopback requests presenting no explicit identity
+  are granted operator authority automatically (single-operator localhost deployment).
+  Precedence is fixed: explicit bearer -> operator; explicit worker/run-scoped token ->
+  worker, never promoted; session cookie + CSRF -> operator; anonymous loopback ->
+  operator; anything else -> existing 401/403. Bearer auth is retained for CI and remote
+  deployments. The "no anonymous REST approval route" requirement is scoped to
+  non-loopback callers.
+- Section 6.1 (managed credentials, authenticated encryption): the Qoder runtime credential
+  moves to a plaintext `core_credentials` store handled like `llm_providers.api_key`
+  (masked reads, no dedicated encryption machinery, `ARIA_RUNTIME_CREDENTIAL_KEY`
+  removed). The fail-admission-clearly requirement on a missing credential is retained
+  unchanged.
+- Reason: operator ruling 2026-10-05 ("credential just follow llm-config way, no need over
+  complicated"); the governance cost (same-OS-user processes can act as operator) is
+  accepted and is consistent with Host-mode's stated trust model in section 6.2.

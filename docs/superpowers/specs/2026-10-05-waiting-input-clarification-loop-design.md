@@ -69,33 +69,44 @@ Root causes (investigated 2026-10-05):
 
 ### 2. Engine turn loop
 
-`AgentLoopEngine.executeCoreRun` (virtual thread per run,
-`AgentLoopEngine.java:141,310-323,429-457`) becomes a loop:
+**Mechanics correction (2026-10-05, during planning):** the original draft placed the park
+in the engine's `executeCoreRun`, but `CoreExecutionService.execute` finalizes the runtime
+(stop -> capture -> destroy -> release) inside itself before returning
+(`CoreExecutionService.java:165-218`) — a park after `launcher.execute` returns would find
+the core child already destroyed. The turn loop therefore lives INSIDE
+`CoreExecutionService.execute`, between the prompt completing and `finalizeRuntime`:
 
-1. Prompt the core (unchanged first turn).
+`AgentLoopEngine.executeCoreRun` (virtual thread per run,
+`AgentLoopEngine.java:141,310-323,429-457`) stays the driver; the loop is:
+
+1. Prompt the core (unchanged first turn, frozen binding deadline).
 2. On turn end, inspect `result.finalOutput()`.
 3. If the run was cancelled -> existing CANCELLED path (unchanged).
-4. If the turn ends with a clarification question (see detection): persist `WAITING_INPUT`
-   via `RunService`, create the CLARIFICATION ask (see ask plumbing), publish a
-   `RunWaitingForInputEvent`, then park the virtual thread on an answer future
-   (`RunContext.awaitResume` pattern, `RunContext.java:168-203`).
+4. If the turn ends with a clarification question (see detection): publish
+   `TurnCompletedEvent` (engine records usage/iteration/trajectory for the intermediate
+   turn), publish `RunWaitingForInputEvent`, then park the virtual thread on an answer
+   future held by a new `RunInputCoordinator` (`RunContext.awaitResume` pattern,
+   `RunContext.java:168-203`). The engine's event listener persists `WAITING_INPUT` and
+   creates the CLARIFICATION ask; no `RunCompletedEvent` is published, so the admission
+   permit stays held.
 5. Wake-up cases:
-   - Answer received -> record the answer as a `SessionTrajectory` row (role=user), settle
-     the ask with the answer text, compose a follow-up `CoreTask` with
-     `userPrompt = <answer>` (the ACP session carries conversation context; system prompt
-     and history are not re-sent, `CorePromptComposition.joined` composes only what is
-     given), re-prompt the SAME session via the existing `CoreExecutionService.execute`
-     machinery and loop back to step 2.
-   - Finalize signal (deny / manual finalize) -> loop exits to the existing
-     `completeRun(ctx, COMPLETED)` path with the question preserved in the outcome text.
-   - Cancel/abort -> existing paths (unchanged).
-6. Token usage and trajectory rows accumulate per turn (`recordTaskTrajectory`,
-   `AgentLoopEngine.java:1197-1210`; usage summed across turns into the run row).
+   - Answer received (`RunInputCoordinator.submitAnswer`) -> the coordinator publishes
+     `RunInputReceivedEvent` (engine flips the run back to RUNNING), records the answer as
+     a `SessionTrajectory` row is done by the answer service, composes a follow-up
+     `CoreTask` with `userPrompt = <answer>` and empty history (the ACP session carries
+     conversation context), re-prompts the SAME session, and loops back to step 2.
+   - Finalize signal (deny / manual finalize / external cancel) -> loop exits with the
+     question turn's result as the run's `CoreResult`; the existing finalize chain
+     (stop -> capture -> destroy -> release, `CoreExecutionService.java:460-473`) and
+     `completeRun` path run unchanged.
+6. Token usage and trajectory rows accumulate per turn (intermediate turns via the
+   `TurnCompletedEvent` listener, the final turn via the existing `executeCoreRun` code).
 
-The finalize chain (stop -> capture -> destroy -> release,
-`CoreExecutionService.java:460-497`) and `PermissionCoordinator` are untouched. A tool
-permission ask cannot overlap a waiting state by construction: permission asks block inside
-a turn; waiting happens between turns.
+Scope guard: the loop is gated to the Qoder core (`spec.coreId()`), and the
+`[NEED-INPUT]` seed rule is appended by `QoderCoreSession.prompt` — OpenCode runs are
+byte-identical to today. A follow-up turn gets a fresh per-turn deadline window (the
+frozen binding deadline is absolute and would be long expired after an unbounded wait);
+the PARK itself is unbounded per operator decision D3.
 
 ### 3. Detection
 

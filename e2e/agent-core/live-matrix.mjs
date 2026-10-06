@@ -162,13 +162,13 @@ class Api {
     this.trace = [];
   }
 
-  async call(method, path, body) {
+  async call(method, path, body, raw = false) {
     const headers = { Authorization: `Bearer ${this.operatorToken}`, Accept: 'application/json' };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (body !== undefined) headers['Content-Type'] = raw ? 'text/plain' : 'application/json';
     const response = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : (raw ? body : JSON.stringify(body)),
     });
     const text = await response.text();
     let json = null;
@@ -431,7 +431,6 @@ function startBackend(opts, backendLog) {
     ...process.env,
     SPRING_PROFILES_ACTIVE: 'h2',
     ARIA_OPERATOR_BEARER_TOKEN: opts.operatorToken,
-    ARIA_RUNTIME_CREDENTIAL_KEY: opts.credentialKey,
     ...pins,
   };
   if (opts.backendTaskDeadlineMinutes !== null) {
@@ -871,7 +870,7 @@ class Matrix {
   }
 
   async noFallbackCredential(agentId) {
-    const revocation = await this.api.call('DELETE', '/api/v1/adk/providers/qoder/credential');
+    const revocation = await this.api.call('DELETE', '/api/v1/cores/qoder/credential');
     capture(`no-fallback-credential: credential revoked (HTTP ${revocation.status})`);
     const prompt = 'Create the file aria-live-nocred.txt with the exact content nocred. Then reply DONE.';
     const runId = await this.dispatch(agentId, prompt, 'no-fallback-credential');
@@ -925,7 +924,6 @@ async function main() {
   for (const note of pre.notes) capture(`prerequisite ok: ${note}`);
 
   opts.operatorToken = process.env.ARIA_LIVE_OPERATOR_TOKEN || `live-matrix-operator-${randomBytes(12).toString('hex')}`;
-  opts.credentialKey = process.env.ARIA_RUNTIME_CREDENTIAL_KEY || randomBytes(32).toString('base64');
   const backendLog = evidencePath ? `${evidencePath}.backend.log` : join(REPO_ROOT, 'live-matrix-backend.log');
   row.backendLog = backendLog;
 
@@ -948,7 +946,9 @@ async function main() {
     if (opts.core === 'qoder') {
       const secret = readSecretFile(opts.patFile);
       if (!secret) throw new Error('qoder PAT disappeared between preflight and use');
-      const stored = await api.call('PUT', '/api/v1/adk/providers/qoder/credential', { secret });
+      // The core-credential surface reads the raw secret verbatim from a
+      // text/plain body (a JSON body would quote it into the stored value).
+      const stored = await api.call('PUT', '/api/v1/cores/qoder/credential', secret, true);
       capture(`qoder runtime credential stored (HTTP ${stored.status}); the secret is never printed`);
       if (stored.status >= 300) throw new Error(`credential store refused (HTTP ${stored.status})`);
     }

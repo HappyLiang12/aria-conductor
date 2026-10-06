@@ -196,7 +196,7 @@ test('the harness artifact is built, verified with tests enabled and downloaded 
     'start-stack must point the launcher at the extracted distribution (--e2e.assets)');
   assert.match(START_STACK, /--e2e\.sandbox-transport=process/,
     'the process-transport lane must select the deterministic transport explicitly');
-  for (const variable of ['ARIA_OPERATOR_BEARER_TOKEN', 'ARIA_PEER_CONTROL_TOKEN', 'ARIA_RUNTIME_CREDENTIAL_KEY']) {
+  for (const variable of ['ARIA_OPERATOR_BEARER_TOKEN', 'ARIA_PEER_CONTROL_TOKEN']) {
     assert.ok(START_STACK.includes(variable), `start-stack must supply ${variable}`);
   }
   assert.match(START_STACK, /CoreE2eSetup[\s\S]{0,300}?--base-url=/,

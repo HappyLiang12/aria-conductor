@@ -159,9 +159,12 @@ public class CoreRuntimeConfiguration {
             WorkspaceService workspaceService, RunFinalizer runFinalizer,
             RunRuntimeRegistry runRuntimeRegistry, PermissionCoordinator permissions,
             CoreCredentialService coreCredentials, ActorTokenService actorTokens,
-            RunExecutionBindingRepository bindings) {
+            RunExecutionBindingRepository bindings, RunInputCoordinator runInputCoordinator,
+            org.springframework.context.ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
-                permissions, coreCredentials, actorTokens, bindings);
+                permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
+                eventPublisher, taskDeadlines);
     }
 
     /**

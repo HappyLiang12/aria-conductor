@@ -8,13 +8,13 @@ import {
   type CredentialTestOutcome,
   type QoderCredentialMetadata,
 } from '../api/runtimeCredentials';
-import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { apiErrorMessage } from '../api/operatorSession';
 import { ConfirmDialog } from './ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
 
 /**
- * Managed Qoder runtime credential (spec §6.1) — masked metadata, an explicit
- * bounded test and (confirmed) removal.
+ * Managed Qoder runtime credential (plain core credential surface) — masked
+ * metadata, an explicit bounded test and (confirmed) removal.
  *
  * Reads are masked by the backend; the card additionally renders its own fixed
  * display mask and never paints `maskedSecret` (or anything else server-sent)
@@ -128,7 +128,7 @@ export function RuntimeCredentialsCard() {
     <div className="card" style={{ marginTop: 24 }} data-testid="runtime-credentials-card">
       <h3 className="form-title">Qoder runtime credential</h3>
       <p style={{ color: 'var(--text-dim)', fontSize: 12 }}>
-        Stored encrypted and injected only into Qoder runs. Reads are masked — the stored
+        Stored by the platform and injected only into Qoder runs. Reads are masked — the stored
         secret is never returned to the dashboard.
       </p>
 
@@ -142,17 +142,13 @@ export function RuntimeCredentialsCard() {
       {metadataQuery.isError && (
         <div className="error-state">
           <div>{apiErrorMessage(metadataQuery.error, 'Failed to load the Qoder runtime credential.')}</div>
-          {isOperatorRejection(metadataQuery.error) && (
-            <div>Operator-only surface — establish the operator session in the Operator access panel first.</div>
-          )}
         </div>
       )}
 
-      {/* A refused read must not keep painting the previously authorized
-          metadata next to the refusal: the mask and timestamp describe a read this
-          surface no longer has the authority to make. Any other failure keeps the
-          last known state and the controls — the error block above still shows it. */}
-      {metadata && !isOperatorRejection(metadataQuery.error) && (
+      {/* A failed read keeps the last known metadata and the controls: the
+          error block above shows what happened while the mask, timestamp and
+          actions stay usable instead of emptying the card. */}
+      {metadata && (
         <>
           <div className="rf-meta" style={{ marginBottom: 10 }}>
             {metadata.configured ? (
@@ -175,14 +171,6 @@ export function RuntimeCredentialsCard() {
               </>
             )}
           </div>
-
-          {!metadata.encryptionKeyConfigured && (
-            <div className="error-state" style={{ marginBottom: 10 }}>
-              {metadata.configured
-                ? 'Stored credential is unreadable — the credential encryption key is not configured.'
-                : 'The credential encryption key is not configured; storing a credential is refused.'}
-            </div>
-          )}
 
           <form onSubmit={submit}>
             <label
@@ -211,7 +199,6 @@ export function RuntimeCredentialsCard() {
                 onClick={() => {
                   setNotice(null);
                   setError(null);
-                  applyOperatorHeaders();
                   // A fresh test start clears the previous outcome so a stale
                   // result is never read as this call's result.
                   test.reset();
@@ -262,7 +249,6 @@ export function RuntimeCredentialsCard() {
         danger
         onConfirm={() => {
           setConfirmingRemove(false);
-          applyOperatorHeaders();
           remove.mutate();
         }}
         onCancel={() => setConfirmingRemove(false)}

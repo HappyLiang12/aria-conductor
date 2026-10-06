@@ -77,7 +77,9 @@ public class HousekeepingService {
     private static final Set<RunStatus> TERMINAL_RUNS = Set.of(
             RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
     private static final Set<RunStatus> ACTIVE_RUNS = Set.of(
-            RunStatus.RUNNING, RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.PAUSED);
+            RunStatus.RUNNING, RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.PAUSED,
+            // A run parked on a clarification question is a live run for housekeeping.
+            RunStatus.WAITING_INPUT);
 
     private final RunRepository runRepository;
     private final KanbanRepository kanbanRepository;

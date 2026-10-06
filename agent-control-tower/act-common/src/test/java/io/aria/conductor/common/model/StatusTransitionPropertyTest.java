@@ -45,8 +45,11 @@ class StatusTransitionPropertyTest {
         Map<RunStatus, Set<RunStatus>> run = new EnumMap<>(RunStatus.class);
         run.put(RunStatus.PENDING, EnumSet.of(RunStatus.INITIALIZING, RunStatus.CANCELLED));
         run.put(RunStatus.INITIALIZING, EnumSet.of(RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED));
-        run.put(RunStatus.RUNNING, EnumSet.of(RunStatus.PAUSED, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED));
+        run.put(RunStatus.RUNNING, EnumSet.of(RunStatus.PAUSED, RunStatus.WAITING_INPUT, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED));
         run.put(RunStatus.PAUSED, EnumSet.of(RunStatus.RUNNING, RunStatus.CANCELLED));
+        // WAITING_INPUT parks a live run on a clarification question: the operator's
+        // answer resumes it, and the run may still finalize from the parked state.
+        run.put(RunStatus.WAITING_INPUT, EnumSet.of(RunStatus.RUNNING, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED));
         run.put(RunStatus.COMPLETED, EnumSet.noneOf(RunStatus.class));
         run.put(RunStatus.FAILED, EnumSet.noneOf(RunStatus.class));
         run.put(RunStatus.CANCELLED, EnumSet.noneOf(RunStatus.class));

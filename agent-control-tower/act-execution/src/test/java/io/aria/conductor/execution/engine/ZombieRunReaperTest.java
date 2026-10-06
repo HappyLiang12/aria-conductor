@@ -117,6 +117,28 @@ class ZombieRunReaperTest {
     }
 
     @Test
+    void waitingInputRunsAreNeverReaped() {
+        // WAITING_INPUT is a parked-alive state, not a zombie: the run holds its
+        // runtime and waits for the operator's answer. The reaper queries RUNNING
+        // only, so a parked run is invisible to it by construction -- never
+        // queried, never saved.
+        Run waiting = new Run();
+        waiting.setId(UUID.randomUUID());
+        waiting.setAgentId(UUID.randomUUID());
+        waiting.setStatus(RunStatus.WAITING_INPUT);
+        waiting.setUpdatedAt(Instant.now().minus(48, ChronoUnit.HOURS));
+
+        when(runRepository.findByStatus(RunStatus.RUNNING)).thenReturn(List.of());
+
+        reaper.reapZombieRuns();
+
+        verify(runRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+        // The reaper queries RUNNING only; a WAITING_INPUT row is invisible to it by construction.
+        verify(runRepository, never()).findByStatus(RunStatus.WAITING_INPUT);
+    }
+
+    @Test
     void recentRun_shouldNotBeReaped() {
         Run run = runningRun(Instant.now().minus(5, ChronoUnit.MINUTES));
         when(runRepository.findByStatus(RunStatus.RUNNING)).thenReturn(List.of(run));

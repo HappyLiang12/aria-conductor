@@ -570,10 +570,12 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Startup recovery: mark runs left in RUNNING or INITIALIZING by a previous backend
-     * process (JVM crash/restart) as FAILED and publish {@link RunCompletedEvent} so
+     * Startup recovery: mark runs left in RUNNING, INITIALIZING or WAITING_INPUT by a
+     * previous backend process (JVM crash/restart) as FAILED and publish {@link RunCompletedEvent} so
      * downstream listeners (workflow chainer, kanban, WS broadcast) reconcile instead of
-     * leaving chains/boards stuck. Runs are saved individually so one failure cannot roll
+     * leaving chains/boards stuck. A WAITING_INPUT run is included because a parked run
+     * cannot be revived in-memory: its runtime died with the previous JVM, so startup
+     * adjudicates it. Runs are saved individually so one failure cannot roll
      * back the recovery of the others.
      */
     @Order(Ordered.HIGHEST_PRECEDENCE)
@@ -585,7 +587,7 @@ public class AgentLoopEngine {
     /** Extracted so tests can invoke recovery without firing Spring lifecycle events. */
     void recoverOrphanedRuns() {
         List<Run> orphaned = runRepository.findByStatusIn(
-                List.of(RunStatus.RUNNING, RunStatus.INITIALIZING));
+                List.of(RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT));
         if (orphaned.isEmpty()) {
             return;
         }

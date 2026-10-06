@@ -95,7 +95,8 @@ class OrphanedRunRecoveryTest {
     void runningAndInitializingRuns_shouldBeMarkedFailedAndPublishEvent() {
         Run running = run(RunStatus.RUNNING);
         Run initializing = run(RunStatus.INITIALIZING);
-        when(runRepository.findByStatusIn(List.of(RunStatus.RUNNING, RunStatus.INITIALIZING)))
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
                 .thenReturn(List.of(running, initializing));
 
         engine.recoverOrphanedRuns();
@@ -121,12 +122,37 @@ class OrphanedRunRecoveryTest {
 
     @Test
     void noOrphanedRuns_shouldDoNothing() {
-        when(runRepository.findByStatusIn(List.of(RunStatus.RUNNING, RunStatus.INITIALIZING)))
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
                 .thenReturn(List.of());
 
         engine.recoverOrphanedRuns();
 
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void waitingInputRunsAreAdjudicatedOnRestart() {
+        // A run parked for operator input cannot be revived in-memory after a JVM
+        // restart (its runtime died with the previous process), so startup
+        // recovery must adjudicate it too instead of leaving it parked forever.
+        Run parked = run(RunStatus.WAITING_INPUT);
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
+                .thenReturn(List.of(parked));
+
+        engine.recoverOrphanedRuns();
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(saved.getValue().getErrorMessage()).isEqualTo("Run orphaned by backend restart");
+        assertThat(saved.getValue().getCompletedAt()).isNotNull();
+
+        ArgumentCaptor<RunCompletedEvent> events = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(events.capture());
+        assertThat(events.getValue().getRunId()).isEqualTo(parked.getId());
+        assertThat(events.getValue().getStatus()).isEqualTo(RunStatus.FAILED);
     }
 }

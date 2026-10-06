@@ -169,6 +169,31 @@ class ApprovalGateTest {
                 .hasMessageContaining(unknownId.toString());
     }
 
+    /**
+     * Plan B task 2 pin: CLARIFICATION asks are provenance-stamped rows that are answered
+     * via {@code /approvals/{id}/answer} or the run finalize path — the legacy decide flow
+     * must refuse them outright instead of recording an approve/deny decision.
+     */
+    @Test
+    void decideRefusesClarificationAsks() {
+        Approval ask = Approval.builder()
+                .id(UUID.randomUUID())
+                .runId(UUID.randomUUID())
+                .status(ApprovalStatus.PENDING)
+                .askType(Approval.AskType.QUESTION)
+                .source(ApprovalSource.CLARIFICATION)
+                .build();
+        approvalStore.put(ask.getId(), ask);
+
+        assertThatThrownBy(() -> gate.decideApproval(ask.getId(), true, "why"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("/answer");
+
+        // Refused, not decided: the row stays untouched.
+        assertThat(ask.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(any());
+    }
+
     @Test
     void decideApproval_secondDecisionOnDecidedApproval_isIgnored() throws Exception {
         RunContext ctx = ctx();

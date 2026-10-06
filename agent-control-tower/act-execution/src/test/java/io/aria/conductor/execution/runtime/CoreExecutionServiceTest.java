@@ -7,7 +7,7 @@ import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReply;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
@@ -69,7 +69,7 @@ class CoreExecutionServiceTest {
 
     private final List<String> recordedSteps = new ArrayList<>();
     private final PermissionCoordinator permissions = mock(PermissionCoordinator.class);
-    private final RuntimeCredentialService credentials = mock(RuntimeCredentialService.class);
+    private final CoreCredentialService credentials = mock(CoreCredentialService.class);
     private final ActorTokenService actorTokens = mock(ActorTokenService.class);
     private final RunExecutionBindingRepository bindings = mock(RunExecutionBindingRepository.class);
     private final RunRuntimeRegistry runtimes = new RunRuntimeRegistry();

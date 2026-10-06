@@ -15,7 +15,7 @@ import io.aria.conductor.execution.approval.PermissionOption;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.approval.PermissionReplySink;
 import io.aria.conductor.execution.approval.PermissionTarget;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import lombok.extern.slf4j.Slf4j;
@@ -96,7 +96,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     private final RunFinalizer finalizer;
     private final RunRuntimeRegistry runtimes;
     private final PermissionCoordinator permissions;
-    private final RuntimeCredentialService credentials;
+    private final CoreCredentialService credentials;
     private final ActorTokenService actorTokens;
     private final RunExecutionBindingRepository bindings;
     private final Clock clock;
@@ -117,7 +117,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
 
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
-            PermissionCoordinator permissions, RuntimeCredentialService credentials,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
             ActorTokenService actorTokens, RunExecutionBindingRepository bindings) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials,
                 actorTokens, bindings, Clock.systemUTC(), Duration.ofMinutes(5));
@@ -132,7 +132,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      */
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
-            PermissionCoordinator permissions, RuntimeCredentialService credentials,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
             ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
             Clock clock, Duration cleanupWindow) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
@@ -146,7 +146,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      */
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
-            PermissionCoordinator permissions, RuntimeCredentialService credentials,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
             ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
             Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines) {
         this.backends = Objects.requireNonNull(backends, "Backend registry is required");

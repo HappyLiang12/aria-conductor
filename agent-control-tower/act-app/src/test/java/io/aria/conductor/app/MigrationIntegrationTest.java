@@ -23,7 +23,7 @@ class MigrationIntegrationTest extends BaseH2IntegrationTest {
 
     private static final List<String> KEY_TABLES = List.of(
             "agents", "runs", "approvals", "knowledge_items", "workflow_chains", "tool_definitions",
-            "runtime_credentials", "core_credentials", "acp_permission_request");
+            "core_credentials", "acp_permission_request");
 
     @Autowired
     Flyway flyway;

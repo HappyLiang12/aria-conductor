@@ -6,7 +6,7 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReplySink;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
@@ -158,10 +158,10 @@ public class CoreRuntimeConfiguration {
     public CoreExecutionService coreExecutionService(ExecutionBackendRegistry backends,
             WorkspaceService workspaceService, RunFinalizer runFinalizer,
             RunRuntimeRegistry runRuntimeRegistry, PermissionCoordinator permissions,
-            RuntimeCredentialService runtimeCredentials, ActorTokenService actorTokens,
+            CoreCredentialService coreCredentials, ActorTokenService actorTokens,
             RunExecutionBindingRepository bindings) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
-                permissions, runtimeCredentials, actorTokens, bindings);
+                permissions, coreCredentials, actorTokens, bindings);
     }
 
     /**

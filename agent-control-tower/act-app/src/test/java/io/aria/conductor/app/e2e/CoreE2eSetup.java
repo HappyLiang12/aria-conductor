@@ -33,22 +33,19 @@ import java.util.Map;
  *       {@code {"status":"UP"}};</li>
  *   <li>{@code POST /api/v1/maintenance/initialize-builtins} -- the production
  *       create-only built-in setup;</li>
- *   <li>{@code PUT /api/v1/adk/providers/qoder/credential} -- provisions the
+ *   <li>{@code PUT /api/v1/cores/qoder/credential} -- provisions the
  *       harness-scoped synthetic Qoder runtime credential through the production
- *       operator route (Task 19 fix round 1), so a qoder-placed run resolves it
- *       from the managed store instead of failing admission. The value comes
- *       from {@value #QODER_CREDENTIAL_ENV} and the step refuses without it; the
- *       step also refuses a response that reports the credential unusable or
- *       echoes a value;</li>
+ *       operator route (Task 19 fix round 1; 2026-10-05 simplification URL), so
+ *       a qoder-placed run resolves it from the managed store instead of failing
+ *       admission. The value comes from {@value #QODER_CREDENTIAL_ENV} and the
+ *       step refuses without it; the step also refuses a response that reports
+ *       the credential unusable or echoes a value;</li>
  *   <li>print every receipt so the caller records what setup actually did.</li>
  * </ol>
  *
- * <p>The harness therefore requires the app to be configured with the
- * production credential encryption key ({@code
- * aria.runtime-credentials.encryption-key} / {@code ARIA_RUNTIME_CREDENTIAL_KEY}):
- * without it the production service refuses to store the credential and this
- * setup fails with the service's own message. No key or credential value is
- * generated or defaulted here.</p>
+ * <p>The plain credential store needs no extra key material (2026-10-05
+ * simplification): the route stores the supplied value as given and answers
+ * masked only. No credential value is generated or defaulted here.</p>
  *
  * <p><b>Target URL resolution, in precedence order:</b> the
  * {@code --base-url=<url>} flag wins when given; with the flag absent the
@@ -73,8 +70,8 @@ public final class CoreE2eSetup {
      * Environment variable carrying the harness-scoped synthetic Qoder runtime
      * credential value (Task 19 fix round 1). The value is never generated,
      * defaulted, written into the repository or logged: the setup refuses
-     * without it, and the production credential route stores it encrypted under
-     * the configured {@code ARIA_RUNTIME_CREDENTIAL_KEY}.
+     * without it, and the production credential route stores it as given in the
+     * plain core credential store (masked on read; the value is never returned).
      */
     public static final String QODER_CREDENTIAL_ENV = "ARIA_E2E_QODER_CREDENTIAL";
 
@@ -82,7 +79,7 @@ public final class CoreE2eSetup {
     static final String HEALTH_PATH = "/actuator/health";
     static final String EXPECTED_HEALTH_BODY = "{\"status\":\"UP\"}";
     static final String BUILTINS_PATH = "/api/v1/maintenance/initialize-builtins";
-    static final String CREDENTIAL_PATH = "/api/v1/adk/providers/qoder/credential";
+    static final String CREDENTIAL_PATH = "/api/v1/cores/qoder/credential";
 
     static final String BASE_URL_ARG = "--base-url";
     static final String HEALTH_TIMEOUT_ARG = "--health-timeout-seconds";
@@ -133,13 +130,12 @@ public final class CoreE2eSetup {
 
     /**
      * Provisions the harness-scoped synthetic Qoder runtime credential through
-     * the production operator route ({@code PUT .../qoder/credential}) and pins
-     * the production service's masked answer: the credential must be stored
-     * ({@code configured=true}) under a usable configured key
-     * ({@code encryptionKeyConfigured=true}), bound to the recorded reference and
+     * the production operator route ({@code PUT .../cores/qoder/credential})
+     * and pins the production service's masked answer: the credential must be
+     * stored ({@code configured=true}) bound to the recorded reference and
      * environment variable, and answered masked only -- a response echoing any
-     * other value is refused. Every qoder-placed run resolves this stored row
-     * through {@code RuntimeCredentialService.resolve}; nothing here bypasses or
+     * value fragment is refused. Every qoder-placed run resolves this stored row
+     * through {@code CoreCredentialService.resolve}; nothing here bypasses or
      * replaces that resolution.
      */
     private static void provisionQoderCredential(HttpClient http, String baseUrl, String operatorToken)
@@ -151,18 +147,18 @@ public final class CoreE2eSetup {
                     + " runtime credential from the production store, and the harness never fabricates or"
                     + " defaults one");
         }
-        JsonNode provisioned = sendJson(http, "PUT", baseUrl + CREDENTIAL_PATH,
-                JSON.writeValueAsString(Map.of("secret", secret)), operatorToken, "runtime credential provisioning");
+        // The route reads the body as the raw credential value: no JSON envelope.
+        JsonNode provisioned = sendJson(http, "PUT", baseUrl + CREDENTIAL_PATH, secret, operatorToken,
+                "runtime credential provisioning");
+        String maskedSecret = provisioned.path("maskedSecret").asText("");
         boolean pinned = provisioned.path("configured").asBoolean(false)
-                && provisioned.path("encryptionKeyConfigured").asBoolean(false)
                 && "qoder:operator".equals(provisioned.path("credentialRef").asText(""))
                 && "qoder".equals(provisioned.path("coreId").asText(""))
                 && "QODER_PERSONAL_ACCESS_TOKEN".equals(provisioned.path("environmentVariable").asText(""))
-                && "********".equals(provisioned.path("maskedSecret").asText(""));
+                && maskedSecret.startsWith("****") && !maskedSecret.contains(secret);
         if (!pinned) {
             throw new SetupRefusal("the production credential service did not confirm the harness credential as"
-                    + " configured with a usable key (qoder:operator / QODER_PERSONAL_ACCESS_TOKEN, masked): "
-                    + provisioned);
+                    + " configured (qoder:operator / QODER_PERSONAL_ACCESS_TOKEN, masked): " + provisioned);
         }
         if (provisioned.toString().contains(secret)) {
             throw new SetupRefusal("the production credential service echoed the supplied secret value in its"

@@ -57,9 +57,7 @@ public class CoreCredentialService {
 
     public MaskedMetadata put(String coreId, String value, ActorPrincipal actor) {
         requireOperator(actor);
-        if (!QODER_CORE_ID.equals(coreId)) {
-            throw new IllegalArgumentException("Unsupported core credential: " + coreId);
-        }
+        requireSupportedCore(coreId);
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("A runtime credential value is required");
         }
@@ -77,6 +75,7 @@ public class CoreCredentialService {
     }
 
     public MaskedMetadata metadata(String coreId) {
+        requireSupportedCore(coreId);
         return credentials.findById(coreId)
                 .map(row -> new MaskedMetadata(credentialRefOf(row.getCoreId()), row.getCoreId(),
                         row.getEnvironmentVariable(), true, mask(row.getValue()), row.getUpdatedAt()))
@@ -86,7 +85,15 @@ public class CoreCredentialService {
 
     public void delete(String coreId, ActorPrincipal actor) {
         requireOperator(actor);
+        requireSupportedCore(coreId);
         credentials.deleteById(coreId);
+    }
+
+    /** Only the pinned Qoder core has a platform credential; anything else is a client error. */
+    private static void requireSupportedCore(String coreId) {
+        if (!QODER_CORE_ID.equals(coreId)) {
+            throw new IllegalArgumentException("Unsupported core credential: " + coreId);
+        }
     }
 
     private static String coreIdOf(String credentialRef) {

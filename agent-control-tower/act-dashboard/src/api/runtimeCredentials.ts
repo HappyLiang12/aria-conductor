@@ -74,9 +74,20 @@ export async function getQoderCredential(): Promise<QoderCredentialMetadata> {
 /**
  * Stores/replaces the credential: the raw secret travels as the request body,
  * exactly as the controller reads it. The secret is never echoed back.
+ *
+ * The body must be sent with a non-JSON content type. The shared client
+ * defaults to `Content-Type: application/json`, and axios's `transformRequest`
+ * runs string bodies with a JSON content type through `stringifySafely`, which
+ * JSON-quotes every secret that is not itself parseable JSON (and silently
+ * trims the ones that are) — a data-dependent corruption of the stored secret.
+ * `text/plain` falls through axios's transform untouched, so the controller's
+ * `@RequestBody String rawBody` reads the secret verbatim (Spring's string body
+ * reader does not require application/json).
  */
 export async function putQoderCredential(secret: string): Promise<QoderCredentialMetadata> {
-  const { data } = await client.put<QoderCredentialMetadata>(QODER_CREDENTIAL_PATH, secret);
+  const { data } = await client.put<QoderCredentialMetadata>(QODER_CREDENTIAL_PATH, secret, {
+    headers: { 'Content-Type': 'text/plain' },
+  });
   return data;
 }
 

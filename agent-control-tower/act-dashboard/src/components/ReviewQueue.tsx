@@ -130,28 +130,40 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
               )}
               {(approval.toolName === 'git_push' || approval.toolName === 'git_create_pr'
                 || approval.riskTier === 'PUSH') && <DiffPreview runId={approval.runId} />}
-              <div className="row">
-                <button
-                  className="btn primary"
-                  style={{ flex: 1 }}
-                  disabled={pending}
-                  onClick={() => approveMutation.mutate(approval.id)}
-                >
-                  {approveMutation.isPending && approveMutation.variables === approval.id
-                    ? 'Approving…'
-                    : 'Approve'}
-                </button>
-                <button
-                  className="btn danger"
-                  style={{ flex: 1 }}
-                  disabled={pending}
-                  onClick={() => rejectMutation.mutate(approval.id)}
-                >
-                  {rejectMutation.isPending && rejectMutation.variables === approval.id
-                    ? 'Denying…'
-                    : 'Deny'}
-                </button>
-              </div>
+              {approval.source === 'CLARIFICATION' ? (
+                // Waiting-input (2026-10-05): the backend refuses /decide on a
+                // CLARIFICATION ask (409 + hint) — it is answered (Answer &
+                // continue) or the run is finalized from the kanban card's
+                // decision panel, never approved/denied here. Point at that
+                // instead of offering buttons that can only fail.
+                <div className="ask-ctx">
+                  This ask is waiting on the run — answer it on the kanban card
+                  (Answer &amp; continue) or finalize the run from there.
+                </div>
+              ) : (
+                <div className="row">
+                  <button
+                    className="btn primary"
+                    style={{ flex: 1 }}
+                    disabled={pending}
+                    onClick={() => approveMutation.mutate(approval.id)}
+                  >
+                    {approveMutation.isPending && approveMutation.variables === approval.id
+                      ? 'Approving…'
+                      : 'Approve'}
+                  </button>
+                  <button
+                    className="btn danger"
+                    style={{ flex: 1 }}
+                    disabled={pending}
+                    onClick={() => rejectMutation.mutate(approval.id)}
+                  >
+                    {rejectMutation.isPending && rejectMutation.variables === approval.id
+                      ? 'Denying…'
+                      : 'Deny'}
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}

@@ -108,6 +108,9 @@ describe('DecisionPanel', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban'] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban-items'] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['approvals'] });
+      // Resolving changes run state too (approve resumes, an answer wakes a
+      // WAITING_INPUT run) — symmetry with the finalize mutation.
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['runs'] });
     });
   });
 });

@@ -250,3 +250,85 @@ describe('ReviewQueue non-native rows (review-flow-ux Task 9)', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Waiting-input (2026-10-05): a CLARIFICATION ask holds a run in WAITING_INPUT
+// and is answered on the kanban card's decision panel (Answer & continue) or
+// the run is finalized there — the backend refuses /decide on it with a 409.
+// The queue row must point at that instead of rendering Approve/Deny buttons
+// that can only fail; every other source keeps its decision buttons.
+// ---------------------------------------------------------------------------
+
+function clarificationAsk(): Approval {
+  return {
+    id: 'a-clarify',
+    runId: 'run-abc',
+    toolCallId: null,
+    status: 'PENDING',
+    reason: 'Which postgres version should I target for the migration?',
+    requestedAt: '2026-09-22T11:55:00Z',
+    decidedAt: null,
+    expiresAt: NATIVE_ASK_EXPIRES_AT,
+    askType: 'QUESTION',
+    source: 'CLARIFICATION',
+  } as Approval;
+}
+
+function legacyGateAsk(): Approval {
+  return {
+    id: 'a-legacy',
+    runId: 'run-abc',
+    toolCallId: 'tc-2',
+    status: 'PENDING',
+    reason: 'Task-level approval',
+    requestedAt: '2026-09-22T11:55:00Z',
+    decidedAt: null,
+    expiresAt: NATIVE_ASK_EXPIRES_AT,
+    askType: 'APPROVAL',
+    source: 'LEGACY_GATE',
+  } as Approval;
+}
+
+describe('ReviewQueue CLARIFICATION rows (waiting input)', () => {
+  beforeEach(() => {
+    requests.length = 0;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+    delete client.defaults.headers.common[OPERATOR_CSRF_HEADER];
+  });
+
+  it('replaces Approve/Deny with the answer-on-kanban hint for a CLARIFICATION ask', async () => {
+    serve([clarificationAsk()]);
+    ui();
+
+    expect(await screen.findByText(/This ask is waiting on the run/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/answer it on the kanban card \(Answer & continue\) or finalize the run from there\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull();
+  });
+
+  it('keeps Approve/Deny for a LEGACY_GATE ask', async () => {
+    serve([legacyGateAsk()]);
+    ui();
+
+    expect(await screen.findByText('Review')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+  });
+
+  it('still offers Approve/Deny next to the hint when a gate ask shares the queue', async () => {
+    serve([clarificationAsk(), legacyGateAsk()]);
+    ui();
+
+    expect(await screen.findByText(/This ask is waiting on the run/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
+  });
+});

@@ -75,6 +75,9 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       // Badge + Waiting-on-you staleness: cards carry pendingAskCount.
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      // Resolving changes run state too (approve resumes a paused run, an
+      // answer wakes a WAITING_INPUT run) — the same symmetry finalize has.
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
     },
     onError: (err: unknown) => {
       setOperatorRejected(isOperatorRejection(err));

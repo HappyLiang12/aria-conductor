@@ -11,6 +11,8 @@ const RUN_LIFECYCLE_TYPES = new Set([
   'run.iteration',
   // Waiting-input (2026-10-05): a run parking for operator input is a rare
   // lifecycle transition — lists must refresh so the parked run is visible.
+  // (Resume is intentionally event-less: whitelisted run.iteration self-heals
+  // the stale WAITING_INPUT badge within seconds.)
   'run.waiting_input',
 ]);
 

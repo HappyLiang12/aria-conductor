@@ -178,9 +178,12 @@ export default function KanbanBoard() {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
     }
     // Waiting-input (2026-10-05): the parked run's CLARIFICATION ask must reach
-    // the approvals surfaces (ReviewQueue shares this page) without a poll.
+    // the approvals surfaces (ReviewQueue shares this page) and the decision
+    // panels (TaskDrawer / ReviewWorkspace key their asks ['kanban', 'asks',
+    // itemId]) without a poll.
     if (t === 'run.waiting_input') {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban', 'asks'] });
     }
     // S6: flash the moved card so live agent moves are visible.
     if (t === 'kanban.transitioned') {

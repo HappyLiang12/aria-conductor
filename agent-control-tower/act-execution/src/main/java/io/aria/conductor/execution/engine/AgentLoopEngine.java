@@ -660,7 +660,7 @@ public class AgentLoopEngine {
             try {
                 updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
             } catch (Exception e) {
-                log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage());
+                log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
             }
             try {
                 String cardId = kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
@@ -1975,7 +1975,7 @@ public class AgentLoopEngine {
                 approvalRepository.save(ask);
             }
         } catch (Exception e) {
-            log.warn("Failed to settle clarification asks for {}: {}", ctx.getRunId(), e.getMessage());
+            log.warn("Failed to settle clarification asks for {}: {}", ctx.getRunId(), e.getMessage(), e);
         }
 
         // Cleanup per-run workspace

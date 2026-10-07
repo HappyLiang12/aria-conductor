@@ -56,7 +56,19 @@ public class RunInputCoordinator {
             return CompletableFuture.completedFuture(new OperatorInput(null, true));
         }
         CompletableFuture<OperatorInput> future = new CompletableFuture<>();
-        pending.put(runId, new PendingInput(future));
+        PendingInput entry = new PendingInput(future);
+        pending.put(runId, entry);
+        // Interleaving closure (park-vs-intent): an intent can land between the
+        // fast-path check above and the put. Re-checking here catches it; an
+        // intent landing after this re-check finds our entry via
+        // recordTerminationIntent's atomic remove-and-get and wakes us instead
+        // of adding an intent. Together every ordering ends with the run woken,
+        // never parked forever. Should the conditional remove lose our entry to
+        // a concurrent submitAnswer/requestFinalize/recordTerminationIntent, the
+        // taker completes our future, so falling through to the park is safe.
+        if (terminationIntent.remove(runId) && pending.remove(runId, entry)) {
+            return CompletableFuture.completedFuture(new OperatorInput(null, true));
+        }
         eventPublisher.publishEvent(new RunWaitingForInputEvent(this, runId, question));
         return future;
     }
@@ -86,13 +98,14 @@ public class RunInputCoordinator {
      * Records a termination intent for the run (Plan B task 6 ruling 1): a
      * parked run is woken exactly like {@link #requestFinalize}; a run that is
      * not (yet) parked gets a sticky intent, so the park call the loop is about
-     * to make returns the finalize signal instead of waiting forever.
+     * to make returns the finalize signal instead of waiting forever. The
+     * remove-and-get is atomic, so an entry put concurrently by
+     * {@link #requestInput} cannot be missed in favor of a stranded intent.
      */
     public void recordTerminationIntent(UUID runId) {
-        PendingInput waiting = pending.get(runId);
+        PendingInput waiting = pending.remove(runId);
         if (waiting != null) {
             waiting.future().complete(new OperatorInput(null, true));
-            pending.remove(runId, waiting);
             return;
         }
         terminationIntent.add(runId);

@@ -9,6 +9,7 @@ import io.aria.conductor.common.event.HousekeepingProgressEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
@@ -200,6 +201,11 @@ public class HousekeepingService {
     private List<CategoryItem> approvalsTargets(Exclusions ex, Instant now) {
         Instant cutoff = now.minus(APPROVAL_MAX_AGE);
         return approvalRepository.findByStatus(ApprovalStatus.PENDING).stream()
+                // Clarification asks (Plan B) are settled by completeRun/restart
+                // adjudication and answered via /approvals/{id}/answer; the legacy
+                // decide flow refuses them outright, so housekeeping must never
+                // target one (a terminal run here means the finalize sweep hiccupped).
+                .filter(a -> a.getSource() != ApprovalSource.CLARIFICATION)
                 .filter(a -> a.getRequestedAt() != null && a.getRequestedAt().isBefore(cutoff))
                 .filter(a -> !runIsActive(a.getRunId()))
                 .filter(a -> !ex.approvalIds().contains(a.getId().toString()))

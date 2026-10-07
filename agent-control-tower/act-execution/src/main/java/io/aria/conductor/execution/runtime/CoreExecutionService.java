@@ -644,8 +644,10 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         actorTokens.revokeRun(runId);
         // A run parked on the clarification loop wakes here and walks the normal
         // finalize chain with the question turn as its result; a run that is not
-        // waiting is unaffected (the coordinator reports false and does nothing).
-        inputs.requestFinalize(runId);
+        // waiting records a sticky termination intent instead, so a park call in
+        // the between-turns window returns the finalize signal at once rather
+        // than parking a run that is already terminal (Plan B task 6 ruling 1).
+        inputs.recordTerminationIntent(runId);
         return CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true));
     }
 

@@ -34,6 +34,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -72,7 +73,8 @@ class CoreExecutionServiceTest {
             + "\"workspaceMode\":\"DIRECT\",\"workspacePath\":\"C:/work\",\"workspaceBaseRef\":null}";
 
     private final List<String> recordedSteps = new ArrayList<>();
-    private final List<Object> publishedEvents = new ArrayList<>();
+    /** CopyOnWriteArrayList: the coordinator publishes from the parked run's thread (task 5 review hygiene). */
+    private final List<Object> publishedEvents = new CopyOnWriteArrayList<>();
     private final ApplicationEventPublisher eventPublisher = publishedEvents::add;
     private final RunInputCoordinator coordinator = new RunInputCoordinator(eventPublisher);
     private final TaskDeadlineProperties taskDeadlines = new TaskDeadlineProperties();

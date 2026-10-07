@@ -5,6 +5,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +31,17 @@ public class RunInputCoordinator {
 
     private final ApplicationEventPublisher eventPublisher;
     private final Map<UUID, PendingInput> pending = new ConcurrentHashMap<>();
+    /**
+     * Sticky termination intent (Plan B task 6): a cancel landing between the
+     * loop's turn result and the park call finds no pending entry, so
+     * {@link #requestFinalize} would return false and the run would park
+     * forever. The engine's CANCELLED listener (and the verified-stop hook)
+     * records the intent here instead; the loop's imminent
+     * {@link #requestInput} consumes it and returns the finalize signal
+     * immediately, without publishing a waiting event for a run that is
+     * already terminal in the database.
+     */
+    private final Set<UUID> terminationIntent = ConcurrentHashMap.newKeySet();
 
     public RunInputCoordinator(ApplicationEventPublisher eventPublisher) {
         this.eventPublisher = eventPublisher;
@@ -37,6 +49,12 @@ public class RunInputCoordinator {
 
     /** Publishes {@link RunWaitingForInputEvent} and returns the future the run parks on. */
     public CompletableFuture<OperatorInput> requestInput(UUID runId, String question) {
+        // A termination intent recorded while nobody was parked is consumed here:
+        // the run is already terminal, so it gets the finalize signal at once and
+        // no waiting event is published.
+        if (terminationIntent.remove(runId)) {
+            return CompletableFuture.completedFuture(new OperatorInput(null, true));
+        }
         CompletableFuture<OperatorInput> future = new CompletableFuture<>();
         pending.put(runId, new PendingInput(future));
         eventPublisher.publishEvent(new RunWaitingForInputEvent(this, runId, question));
@@ -62,5 +80,21 @@ public class RunInputCoordinator {
         waiting.future().complete(new OperatorInput(null, true));
         pending.remove(runId, waiting);
         return true;
+    }
+
+    /**
+     * Records a termination intent for the run (Plan B task 6 ruling 1): a
+     * parked run is woken exactly like {@link #requestFinalize}; a run that is
+     * not (yet) parked gets a sticky intent, so the park call the loop is about
+     * to make returns the finalize signal instead of waiting forever.
+     */
+    public void recordTerminationIntent(UUID runId) {
+        PendingInput waiting = pending.get(runId);
+        if (waiting != null) {
+            waiting.future().complete(new OperatorInput(null, true));
+            pending.remove(runId, waiting);
+            return;
+        }
+        terminationIntent.add(runId);
     }
 }

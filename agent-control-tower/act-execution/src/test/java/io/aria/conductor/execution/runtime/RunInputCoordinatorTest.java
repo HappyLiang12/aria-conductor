@@ -12,6 +12,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class RunInputCoordinatorTest {
@@ -85,5 +87,48 @@ class RunInputCoordinatorTest {
         assertThat(future.get(1, TimeUnit.SECONDS).finalizeRequested()).isTrue();
 
         assertThat(coordinator.requestFinalize(runId)).isFalse();
+    }
+
+    // ── sticky termination intent (Plan B task 6 ruling 1) ──────────────
+
+    @Test
+    void aRecordedTerminationIntentMakesTheNextRequestInputReturnTheFinalizeSignalWithoutPublishing() {
+        // A cancel landing between the loop's turn result and the park call finds
+        // no pending ask (requestFinalize would return false and the run would park
+        // forever). The sticky intent makes the imminent requestInput hand back the
+        // finalize signal immediately -- the run is already terminal in the DB, so
+        // no RunWaitingForInputEvent may be published.
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId);
+
+        CompletableFuture<RunInputCoordinator.OperatorInput> future = coordinator.requestInput(runId, "Which DB?");
+
+        assertThat(future).isCompleted();
+        assertThat(future.join().finalizeRequested()).isTrue();
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void theStickyTerminationIntentIsConsumedExactlyOnce() {
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId);
+        CompletableFuture<RunInputCoordinator.OperatorInput> first = coordinator.requestInput(runId, "q1?");
+        assertThat(first).isCompleted();
+
+        // The intent is spent: a genuine second park must behave like today.
+        CompletableFuture<RunInputCoordinator.OperatorInput> second = coordinator.requestInput(runId, "q2?");
+
+        assertThat(second).isNotDone();
+        verify(publisher, times(1)).publishEvent(any(RunWaitingForInputEvent.class));
+    }
+
+    @Test
+    void recordTerminationIntentWakesAParkedRunLikeRequestFinalize() throws Exception {
+        UUID runId = UUID.randomUUID();
+        CompletableFuture<RunInputCoordinator.OperatorInput> future = coordinator.requestInput(runId, "q?");
+
+        coordinator.recordTerminationIntent(runId);
+
+        assertThat(future.get(1, TimeUnit.SECONDS).finalizeRequested()).isTrue();
     }
 }

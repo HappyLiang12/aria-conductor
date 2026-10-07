@@ -223,7 +223,7 @@ class AgentLoopEngineCoreDispatchTest {
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
                 null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                unlimitedAdmission());
+                unlimitedAdmission(), null /* KanbanRepository */, null /* RunInputCoordinator */);
     }
 
     /**

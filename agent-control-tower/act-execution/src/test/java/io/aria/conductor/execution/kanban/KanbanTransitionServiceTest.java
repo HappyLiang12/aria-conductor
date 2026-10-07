@@ -430,6 +430,27 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
+    void leavingInProgressTowardsTodoCancelsAParkedWaitingInputRun() {
+        inProgressCard("00000000-0000-0000-0000-0000000000c1");
+        UUID parked = UUID.fromString("00000000-0000-0000-0000-0000000000c1");
+        when(runRepository.findById(parked))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(parked)
+                        .status(RunStatus.WAITING_INPUT).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.TODO).build());
+
+        // A run parked on a clarification question is a live run whose loop is
+        // parked on the operator's answer: stopping the card must cancel it, and
+        // the cancel's RunCompletedEvent(CANCELLED) wakes the parked loop through
+        // the coordinator's sticky termination intent.
+        verify(runService).cancelRun(parked);
+        verify(runService, never()).pauseRun(any());
+        assertThat(card.getLinkedRunId()).isNull();
+    }
+
+    @Test
     void detachClearsTheLinkEvenWhenTheRunIsGone() {
         inProgressCard("00000000-0000-0000-0000-0000000000af");
         when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000af")))

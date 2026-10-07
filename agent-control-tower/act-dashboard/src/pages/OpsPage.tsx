@@ -26,6 +26,7 @@ const STATUS_TONE: Record<RunStatus, { pill: string; dot: string; label: string 
   INITIALIZING: { pill: 'pill ba',   dot: 'var(--accent)',    label: 'Initializing' },
   RUNNING:      { pill: 'pill warn', dot: 'var(--amber)',     label: 'Running' },
   PAUSED:       { pill: 'pill warn', dot: 'var(--amber)',     label: 'Paused' },
+  WAITING_INPUT: { pill: 'pill warn', dot: 'var(--amber)',    label: 'Waiting for your answer' },
   COMPLETED:    { pill: 'pill ok',   dot: 'var(--green)',     label: 'Completed' },
   FAILED:       { pill: 'pill risk', dot: 'var(--red)',       label: 'Failed' },
   CANCELLED:    { pill: 'pill',      dot: 'var(--text-mute)', label: 'Cancelled' },

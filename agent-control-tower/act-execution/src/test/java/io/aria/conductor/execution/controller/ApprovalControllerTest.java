@@ -403,6 +403,21 @@ class ApprovalControllerTest extends WebMvcTestBase {
                         .value("An answer is required to continue a run waiting for input"));
     }
 
+    /**
+     * The ask detail exposes its provenance (2026-10-05): the dashboard routes a
+     * CLARIFICATION ask to Answer &amp; continue + Finalize instead of Approve/Deny.
+     */
+    @Test
+    void getApproval_clarificationAsk_exposesSource() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(clarificationAsk(id, UUID.randomUUID())));
+
+        mvc.perform(get("/api/v1/approvals/" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.askType").value("QUESTION"))
+                .andExpect(jsonPath("$.source").value("CLARIFICATION"));
+    }
+
     @Test
     void getApproval_returns200WithEnrichedDetail() throws Exception {
         UUID id = UUID.randomUUID();

@@ -107,6 +107,9 @@ public class ApprovalController {
             // options and recorded answer from these (kanban card surface).
             String kanbanItemId,
             String askType,
+            // Provenance (2026-10-05): the Review panel routes a CLARIFICATION ask
+            // to Answer & continue + Finalize instead of Approve/Deny.
+            String source,
             String contextMd,
             String optionsJson,
             String answer) {}
@@ -205,6 +208,7 @@ public class ApprovalController {
                 toolName, tc != null ? tc.getArguments() : null, riskTier,
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
+                a.getSource() == null ? null : a.getSource().name(),
                 a.getContextMd(), a.getOptionsJson(), a.getAnswer());
     }
 

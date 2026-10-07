@@ -9,6 +9,9 @@ const RUN_LIFECYCLE_TYPES = new Set([
   'run.completed',
   'run.failed',
   'run.iteration',
+  // Waiting-input (2026-10-05): a run parking for operator input is a rare
+  // lifecycle transition — lists must refresh so the parked run is visible.
+  'run.waiting_input',
 ]);
 
 export function isRunLifecycleEvent(type: string): boolean {

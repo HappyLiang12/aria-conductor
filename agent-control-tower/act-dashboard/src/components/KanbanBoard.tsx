@@ -177,6 +177,11 @@ export default function KanbanBoard() {
     if (isKanbanEvent(t) || isRunLifecycleEvent(t)) {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
     }
+    // Waiting-input (2026-10-05): the parked run's CLARIFICATION ask must reach
+    // the approvals surfaces (ReviewQueue shares this page) without a poll.
+    if (t === 'run.waiting_input') {
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+    }
     // S6: flash the moved card so live agent moves are visible.
     if (t === 'kanban.transitioned') {
       const payload = lastMessage.payload ?? {};

@@ -42,7 +42,8 @@ public class ApprovalController {
 
     /**
      * Convenience constructor for direct-instantiation tests: builds its own
-     * query service and takes the permission/identity collaborators explicitly.
+     * query service and takes the permission/identity and answer-path
+     * collaborators explicitly.
      */
     public ApprovalController(ApprovalRepository approvalRepository,
                               ApprovalGate approvalGate,
@@ -50,11 +51,14 @@ public class ApprovalController {
                               ToolRiskResolver toolRiskResolver,
                               PermissionCoordinator permissionCoordinator,
                               OperatorSessionService operatorSessions,
-                              OperatorAuthorityResolver operatorAuthority) {
+                              OperatorAuthorityResolver operatorAuthority,
+                              io.aria.conductor.execution.repository.SessionTrajectoryRepository trajectoryRepository,
+                              io.aria.conductor.execution.runtime.RunInputCoordinator runInputs,
+                              org.springframework.context.ApplicationEventPublisher events) {
         this(approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
                 new ApprovalQueryService(approvalRepository, toolCallRepository, toolRiskResolver),
-                new ApprovalAnswerService(approvalRepository), permissionCoordinator,
-                operatorSessions, operatorAuthority);
+                new ApprovalAnswerService(approvalRepository, runInputs, trajectoryRepository, events),
+                permissionCoordinator, operatorSessions, operatorAuthority);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -208,15 +212,30 @@ public class ApprovalController {
      * Records the operator's answer to a HITL QUESTION ask (spec 4.4): free-text
      * answer, optionally marking the ask APPROVED/DENIED. Delegates to
      * {@link ApprovalAnswerService} — lighter than the gate's decide flow (no
-     * run resume, no workflow side effects). Gate approvals (APPROVAL /
+     * gate resume, no workflow side effects). Gate approvals (APPROVAL /
      * REVIEW_REQUEST asks) must use {@code /decide} instead; only PENDING asks are
      * answerable here and a decided ask is rejected.
+     *
+     * <p>A CLARIFICATION ask (2026-10-05 spec §5) is the exception that wakes a
+     * parked run: the answer settles it APPROVED and the run re-prompts. When the
+     * run is not waiting for operator input in this process — already finalized, a
+     * concurrent answer won, or the park was lost to a restart — the settlement
+     * rolls back and this route answers 409 with the coordinator's refusal. This
+     * route is deliberately NOT operator-gated (spec D6): the local operator's
+     * loopback authority is automatic and remote callers use the system's
+     * existing auth posture.
      */
     @PostMapping("/{id}/answer")
-    public ResponseEntity<Approval> answer(@PathVariable UUID id,
-                                           @RequestBody AnswerRequest request) {
-        return ResponseEntity.ok(approvalAnswerService.answer(
-                id, request.answer(), request.approved(), request.reason()));
+    public ResponseEntity<Object> answer(@PathVariable UUID id,
+                                         @RequestBody AnswerRequest request) {
+        try {
+            return ResponseEntity.ok(approvalAnswerService.answer(
+                    id, request.answer(), request.approved(), request.reason()));
+        } catch (IllegalStateException e) {
+            // The wake refused after the transactional settlement rolled back:
+            // nothing was persisted, and the caller must not believe it landed.
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        }
     }
 
     public record AnswerRequest(String answer, Boolean approved, String reason) {}

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { SettingsPage } from '../pages/SettingsPage';
 import { SystemConfigPanel } from './SystemConfigPanel';
+import { RuntimeCredentialsCard } from './RuntimeCredentialsCard';
 import { listSkills } from '../api/skills';
 
 /**
@@ -212,6 +213,10 @@ export function ConfigureModal() {
           {activeTab === 'llm' && (
             <div style={{ padding: '0', margin: '0' }}>
               <SettingsPage />
+              {/* One-time Qoder runtime credential setup lives next to the LLM
+                  provider config; the card carries its own top-margin
+                  separation (matching the modal's margin-based block spacing). */}
+              <RuntimeCredentialsCard />
             </div>
           )}
           {activeTab === 'config' && (
@@ -226,7 +231,7 @@ export function ConfigureModal() {
               : activeTab === 'skills'
               ? `${skills.length} tools configured · ${skills.filter((s) => s.permission === 'RW').length} with full access`
               : activeTab === 'llm'
-              ? 'Configure LLM providers for AI capabilities'
+              ? 'Configure LLM providers and the one-time Qoder runtime credential'
               : 'Runtime settings stored in the database — changes take effect immediately'}
           </div>
           <div className="actions">

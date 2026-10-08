@@ -1,7 +1,6 @@
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { listAgents } from '../api/agents';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
-import { RuntimeCredentialsCard } from '../components/RuntimeCredentialsCard';
 
 interface HealthBadgeProps {
   healthy: boolean;
@@ -99,9 +98,6 @@ export function ProvidersPage() {
           </table>
         </div>
       )}
-
-      {/* Managed credential (spec 6.1) — masked metadata, explicit test, removal. */}
-      <RuntimeCredentialsCard />
 
       {/* Per-agent backend overview */}
       <div className="card" style={{ marginTop: 24 }}>

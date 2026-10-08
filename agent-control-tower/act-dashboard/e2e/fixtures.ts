@@ -73,7 +73,7 @@ export async function establishOperatorSession(page: Page) {
     return (await res.json()) as { csrfToken: string; expiresAt: string };
   }, OPERATOR_BEARER_TOKEN);
   await page.addInitScript(
-    ({ key, record }) => sessionStorage.setItem(key, JSON.stringify(record)),
+    ({ key, record }) => localStorage.setItem(key, JSON.stringify(record)),
     { key: OPERATOR_SESSION_STORAGE_KEY, record: session },
   );
   await page.reload();

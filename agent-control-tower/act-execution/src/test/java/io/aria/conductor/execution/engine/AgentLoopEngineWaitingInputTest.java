@@ -132,6 +132,24 @@ class AgentLoopEngineWaitingInputTest {
     }
 
     @Test
+    void waitingEventNeverOverwritesATerminalStatus() {
+        // Cancel-vs-park residue: the operator's cancel committed CANCELLED and
+        // the waiting listener's direct write races in behind it. A terminal
+        // state must never be overwritten by any direct status write — otherwise
+        // completeRun's external-cancel guard misses and the run ends COMPLETED
+        // despite the cancel.
+        UUID runId = UUID.randomUUID();
+        Run run = runIn(runId, UUID.randomUUID(), RunStatus.CANCELLED);
+        when(runRepository.findById(runId)).thenReturn(Optional.of(run));
+        engine.addToActiveContextsForTest(runId, run.getAgentId());
+
+        engine.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which DB?"));
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runRepository, org.mockito.Mockito.never()).save(any(Run.class));
+    }
+
+    @Test
     void turnCompletedAccumulatesUsageIterationAndTrajectory() {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());

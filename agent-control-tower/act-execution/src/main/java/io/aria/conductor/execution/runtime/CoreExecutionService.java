@@ -283,7 +283,13 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             // ends it besides an answer.
             RunInputCoordinator.OperatorInput input = inputs.requestInput(spec.runId(), question).join();
             if (input.finalizeRequested()) {
-                result = turnResult;
+                // The question turn was already accounted (usage, iteration,
+                // trajectory) when its TurnCompletedEvent was published above; the
+                // sticky termination intent wakes this same break, so this covers
+                // the finalize AND the cancel-while-waiting return. Mark the copy:
+                // the engine's final recording must not repeat the turn.
+                result = new CoreResult(turnResult.sessionId(), turnResult.finalOutput(),
+                        turnResult.usage(), turnResult.cancelled(), true);
                 break;
             }
             eventPublisher.publishEvent(new RunInputReceivedEvent(this, spec.runId()));
@@ -314,7 +320,8 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             throw new IllegalStateException("Run " + spec.runId() + " failed: " + failure);
         }
         boolean cancelled = STATE_CANCELLED.equals(state);
-        return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled);
+        return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled,
+                result.turnAlreadyAccounted());
     }
 
     /**

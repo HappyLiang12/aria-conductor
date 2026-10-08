@@ -469,13 +469,21 @@ public class AgentLoopEngine {
             Run run = runRepository.findById(ctx.getRunId())
                     .orElseThrow(() -> new ResourceNotFoundException("Run", ctx.getRunId()));
             CoreResult result = launcher.execute(run, agent, coreTask(ctx));
-            recordUsage(ctx, result);
-            ctx.incrementIteration();
+            // A finalized (or cancelled-while-waiting) question turn is returned as
+            // the result AND was already accounted when its TurnCompletedEvent was
+            // published; recording it again would double-count usage, iteration and
+            // the trajectory row, so the whole three-part recording is skipped for it.
+            if (!result.turnAlreadyAccounted()) {
+                recordUsage(ctx, result);
+                ctx.incrementIteration();
+            }
             String finalOutput = result.finalOutput();
             if (finalOutput != null && !finalOutput.isBlank()) {
                 ctx.setLastAssistantResponse(finalOutput);
-                recordTaskTrajectory(ctx, finalOutput, tokenCount(result.usage() == null ? null
-                        : result.usage().outputTokens()));
+                if (!result.turnAlreadyAccounted()) {
+                    recordTaskTrajectory(ctx, finalOutput, tokenCount(result.usage() == null ? null
+                            : result.usage().outputTokens()));
+                }
                 tryEmit(emitter, "message", Map.of("content", finalOutput));
             }
             tryEmit(emitter, "done", donePayload(ctx, null));
@@ -610,7 +618,9 @@ public class AgentLoopEngine {
      * leaving chains/boards stuck. A WAITING_INPUT run is included because a parked run
      * cannot be revived in-memory: its runtime died with the previous JVM, so startup
      * adjudicates it. Runs are saved individually so one failure cannot roll
-     * back the recovery of the others.
+     * back the recovery of the others. A WAITING_INPUT run's PENDING CLARIFICATION
+     * asks are settled DENIED ("run orphaned by restart") — no answer can ever
+     * arrive for them anymore.
      */
     @Order(Ordered.HIGHEST_PRECEDENCE)
     @EventListener(ApplicationReadyEvent.class)
@@ -628,15 +638,46 @@ public class AgentLoopEngine {
         log.info("Recovering {} orphaned run(s) left by backend restart", orphaned.size());
         for (Run run : orphaned) {
             try {
+                boolean wasWaitingForInput = run.getStatus() == RunStatus.WAITING_INPUT;
                 run.setStatus(RunStatus.FAILED);
                 run.setErrorMessage("Run orphaned by backend restart");
                 run.setCompletedAt(Instant.now());
                 runRepository.save(run);
+                // A parked run's PENDING CLARIFICATION ask can never be answered
+                // after the restart (its coordinator entry is gone), so recovery
+                // settles it exactly like completeRun's finalize-path sweep does.
+                if (wasWaitingForInput) {
+                    settleOrphanedClarificationAsks(run.getId());
+                }
                 eventPublisher.publishEvent(new RunCompletedEvent(
                         this, run.getId(), run.getAgentId(), RunStatus.FAILED, null));
             } catch (Exception e) {
                 log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
             }
+        }
+    }
+
+    /**
+     * Settles the parked run's PENDING CLARIFICATION asks on restart adjudication
+     * (Plan B): the run's runtime died with the previous JVM, so no answer can
+     * ever arrive — /answer refuses (the coordinator has no entry), /decide
+     * refuses the source, housekeeping skips CLARIFICATION — and without this
+     * sweep the operator would hold a ReviewQueue row whose every channel
+     * refuses. The same loop completeRun runs on the finalize path, with the
+     * honest reason; deliberately not merged with it because the reasons differ.
+     */
+    private void settleOrphanedClarificationAsks(UUID runId) {
+        try {
+            for (Approval ask : approvalRepository.findByRunIdAndStatusAndSource(
+                    runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION)) {
+                ask.setStatus(ApprovalStatus.DENIED);
+                ask.setReason("run orphaned by restart");
+                ask.setDecidedAt(Instant.now());
+                approvalRepository.save(ask);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to settle the orphaned clarification asks for run {}: {}",
+                    runId, e.getMessage(), e);
         }
     }
 
@@ -2067,9 +2108,24 @@ public class AgentLoopEngine {
 
     private void updateRunStatusDirect(UUID runId, RunStatus status) {
         runRepository.findById(runId).ifPresent(run -> {
+            // A terminal state is never overwritten by a direct write: the
+            // cancel-vs-park interleave (cancel commits CANCELLED, the waiting
+            // listener's write races in behind it) would otherwise resurrect the
+            // run and completeRun's external-cancel guard would miss.
+            if (isTerminalStatus(run.getStatus())) {
+                log.warn("Refusing to overwrite terminal status of run {}: persisted={}, requested={}",
+                        runId, run.getStatus(), status);
+                return;
+            }
             run.setStatus(status);
             runRepository.save(run);
         });
+    }
+
+    /** Terminal run states: no direct status write may ever overwrite one. */
+    private static boolean isTerminalStatus(RunStatus status) {
+        return status == RunStatus.COMPLETED || status == RunStatus.FAILED
+                || status == RunStatus.CANCELLED || status == RunStatus.ABORTED;
     }
 
     // ---- SSE helpers —

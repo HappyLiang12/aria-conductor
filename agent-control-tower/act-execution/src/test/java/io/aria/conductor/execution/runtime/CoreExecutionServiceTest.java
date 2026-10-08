@@ -852,6 +852,9 @@ class CoreExecutionServiceTest {
         answerer.join();
 
         assertThat(result.finalOutput()).isEqualTo("All done");
+        // The answer path's final result is the follow-up turn — a turn the
+        // engine has NOT seen before, so the final recording must include it.
+        assertThat(result.turnAlreadyAccounted()).isFalse();
         // One launch, one session, TWO prompts -- same session, no re-open, no finalize in between.
         assertThat(recordedSteps).containsSubsequence("launch", "open-session", "prompt", "prompt", "stop-writers");
         assertThat(recordedSteps.lastIndexOf("prompt")).isGreaterThan(recordedSteps.indexOf("open-session"));
@@ -883,6 +886,10 @@ class CoreExecutionServiceTest {
 
         assertThat(result.finalOutput()).contains("[NEED-INPUT] Continue?");
         assertThat(result.cancelled()).isFalse();
+        // The question turn was already accounted when its TurnCompletedEvent was
+        // published; the returned result IS that turn, so it must be marked — the
+        // engine's final recording must not repeat it.
+        assertThat(result.turnAlreadyAccounted()).isTrue();
         // The park really happened: the operator's finalize signal woke a run the engine
         // had announced as waiting, not a run that had already finished on its own.
         assertThat(published(RunWaitingForInputEvent.class)).isNotEmpty();

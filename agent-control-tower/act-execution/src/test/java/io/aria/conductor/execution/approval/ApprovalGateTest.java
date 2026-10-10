@@ -325,6 +325,33 @@ class ApprovalGateTest {
     }
 
     /**
+     * A CLARIFICATION ask is owned by the run-input lifecycle (the completion sweep,
+     * restart adjudication), never by this legacy broad sweep: a finalized waiting run
+     * must settle its question honestly ("finalized by operator" / "run cancelled")
+     * instead of this sweep's "Run cancelled" expiry, and the drill proved the broad
+     * sweep was winning the race against the completion sweep.
+     */
+    @Test
+    void cancelAllPendingForRun_leavesClarificationAsksAlive() {
+        RunContext ctx = ctx();
+        Approval clarification = Approval.builder().id(UUID.randomUUID()).runId(ctx.getRunId())
+                .status(ApprovalStatus.PENDING)
+                .askType(Approval.AskType.QUESTION)
+                .source(ApprovalSource.CLARIFICATION)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .content("Which database?")
+                .build();
+        approvalStore.put(clarification.getId(), clarification);
+        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(clarification));
+
+        gate.cancelAllPendingForRun(ctx.getRunId());
+
+        assertThat(clarification.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(clarification.getReason()).isNull();
+        verify(approvalRepository, never()).save(any());
+    }
+
+    /**
      * Task 3 pin: a native ask is stamped {@code ACP_PERMISSION} at registration
      * (PermissionCoordinator.register), so the legacy run-end sweep must leave it
      * to the ACP permission coordinator's own {@code cancelPendingForRun} — this

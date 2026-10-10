@@ -356,7 +356,9 @@ public class ApprovalGate {
      * lifecycle is governed by the spec-approval flow, not the originating run.
      *
      * <p>R20.5: ACP permission asks are likewise left alone — their lifecycle belongs to
-     * {@code AcpPermissionCoordinator.cancelPendingForRun}.
+     * {@code AcpPermissionCoordinator.cancelPendingForRun}. CLARIFICATION asks are left
+     * alone for the same ownership reason: the run-input lifecycle settles them
+     * (the completion sweep, restart adjudication), never this legacy broad sweep.
      *
      * <p>R-RFUX6/D6: each settled ask is an expiry, not a silent lapse — the same
      * {@link ApprovalExpiredEvent} the timeout and scheduled sweeps publish is emitted
@@ -368,6 +370,7 @@ public class ApprovalGate {
         approvalRepository.findByRunId(runId).stream()
                 .filter(a -> a.getStatus() == ApprovalStatus.PENDING)
                 .filter(a -> a.getSource() != ApprovalSource.ACP_PERMISSION)
+                .filter(a -> a.getSource() != ApprovalSource.CLARIFICATION)
                 .filter(a -> a.getApprovalType() == null
                         || a.getApprovalType() == Approval.ApprovalType.TOOL_CALL)
                 .forEach(a -> {

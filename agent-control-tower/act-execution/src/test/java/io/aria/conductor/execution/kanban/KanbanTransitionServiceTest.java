@@ -451,6 +451,25 @@ class KanbanTransitionServiceTest {
     }
 
     @Test
+    void cancellingAnInProgressCardCancelsAParkedWaitingInputRun() {
+        inProgressCard("00000000-0000-0000-0000-0000000000c1");
+        UUID parked = UUID.fromString("00000000-0000-0000-0000-0000000000c1");
+        when(runRepository.findById(parked))
+                .thenReturn(Optional.of(Run.builder()
+                        .id(parked)
+                        .status(RunStatus.WAITING_INPUT).build()));
+
+        service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.CANCELLED).build());
+
+        // The card's Cancel-task path is cancelLiveLinkedRun (a different sibling
+        // from the TODO/BACKLOG stop switch): a parked run is live there too, or
+        // the operator's cancel detaches the card and leaves the run parked
+        // forever with its question unanswered (drill step 3 found exactly that).
+        verify(runService).cancelRun(parked);
+    }
+
+    @Test
     void detachClearsTheLinkEvenWhenTheRunIsGone() {
         inProgressCard("00000000-0000-0000-0000-0000000000af");
         when(runRepository.findById(UUID.fromString("00000000-0000-0000-0000-0000000000af")))

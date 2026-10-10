@@ -208,4 +208,28 @@ class AgentLoopEngineWaitingInputTest {
             assertThat(a.getDecidedAt()).isNotNull();
         });
     }
+
+    @Test
+    void completeRunSettlesCancelledWaitingRunAsksWithTheCancelledReason() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        Approval ask = Approval.builder().runId(runId).status(ApprovalStatus.PENDING)
+                .askType(Approval.AskType.QUESTION).source(ApprovalSource.CLARIFICATION).build();
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of(ask));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        engine.completeRun(ctx, RunStatus.CANCELLED);
+
+        // A cancelled parked run's question is not "finalized by operator": the
+        // settle reason names the honest ending (drill step 2 showed the broad
+        // sweep's "Run cancelled" expiry winning over a finalize-only message).
+        ArgumentCaptor<Approval> saved = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository, atLeastOnce()).save(saved.capture());
+        assertThat(saved.getAllValues()).anySatisfy(a -> {
+            assertThat(a.getStatus()).isEqualTo(ApprovalStatus.DENIED);
+            assertThat(a.getReason()).isEqualTo("run cancelled");
+        });
+    }
 }

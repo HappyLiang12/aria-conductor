@@ -2007,11 +2007,18 @@ public class AgentLoopEngine {
         // signal, verified stop, failure). The asks have no expiresAt and are
         // invisible to housekeeping's decide flow, so this is their only closer
         // on the finalize path; restart adjudication covers the crash case.
+        // The reason names the honest ending: an operator finalize, an
+        // operator/scheduled cancel, or a failure is not the same event.
         try {
+            String settleReason = switch (finalStatus) {
+                case COMPLETED -> "finalized by operator";
+                case CANCELLED, ABORTED -> "run cancelled";
+                default -> "run ended without an answer";
+            };
             for (Approval ask : approvalRepository.findByRunIdAndStatusAndSource(
                     ctx.getRunId(), ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION)) {
                 ask.setStatus(ApprovalStatus.DENIED);
-                ask.setReason("finalized by operator");
+                ask.setReason(settleReason);
                 ask.setDecidedAt(Instant.now());
                 approvalRepository.save(ask);
             }

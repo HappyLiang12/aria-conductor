@@ -282,7 +282,8 @@ public class KanbanTransitionService {
     private void cancelLiveLinkedRun(KanbanItem item) {
         findRun(item).ifPresent(run -> {
             if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
-                    || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED) {
+                    || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED
+                    || run.getStatus() == RunStatus.WAITING_INPUT) {
                 runService.cancelRun(UUID.fromString(item.getLinkedRunId()));
             }
         });

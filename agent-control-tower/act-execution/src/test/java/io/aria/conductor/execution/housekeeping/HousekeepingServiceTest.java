@@ -6,6 +6,7 @@ import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
@@ -207,6 +208,29 @@ class HousekeepingServiceTest {
         assertThat(approvals.count()).isEqualTo(1);
         assertThat(approvals.preview()).extracting(HousekeepingModel.CategoryItem::id)
                 .containsExactly(oldTerminal.getId().toString());
+    }
+
+    @Test
+    void approvalsCategory_neverTargetsPendingClarificationAsks() {
+        // A clarification ask is settled by completeRun/restart-adjudication and
+        // answered via /approvals/{id}/answer — the legacy decide flow refuses it
+        // outright, so housekeeping must never even target it (the run can be
+        // terminal here if the finalize sweep hiccupped).
+        Instant now = Instant.now();
+        UUID terminalRun = UUID.randomUUID();
+        Approval clarification = new Approval();
+        clarification.setId(UUID.randomUUID());
+        clarification.setRunId(terminalRun);
+        clarification.setStatus(ApprovalStatus.PENDING);
+        clarification.setSource(ApprovalSource.CLARIFICATION);
+        clarification.setRequestedAt(now.minus(25, ChronoUnit.HOURS));
+        when(approvalRepository.findByStatus(ApprovalStatus.PENDING)).thenReturn(List.of(clarification));
+        // No run lookup is expected: the source filter excludes the ask before
+        // the active-run check would even run.
+
+        ScanResult res = service.scan(true, Exclusions.empty());
+
+        assertThat(cat(res, "approvals").count()).isZero();
     }
 
     @Test

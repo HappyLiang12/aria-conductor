@@ -8,6 +8,8 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.controller.MaintenanceController;
 import io.aria.conductor.execution.security.ActorAuthenticationFilter;
+import io.aria.conductor.execution.security.ActorTokenService;
+import io.aria.conductor.execution.security.OperatorAuthorityResolver;
 import io.aria.conductor.execution.security.OperatorSessionService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -41,8 +43,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The surviving maintenance surface against a disposable H2 database: the
  * explicit built-in setup it exposes (idempotent create, never repointing an
- * existing builtin) and the route's operator-auth semantics (401 without
- * identity, 403 worker). There is no startup, scheduler or event trigger for
+ * existing builtin) and the route's operator-auth semantics as resolved by the
+ * shared {@link OperatorAuthorityResolver} (401 for a non-loopback caller
+ * without identity, 403 worker, anonymous loopback is the local operator).
+ * There is no startup, scheduler or event trigger for
  * the setup: it executes only through the operator call.
  */
 @SpringBootTest
@@ -61,6 +65,7 @@ class MaintenanceControllerIntegrationTest {
     private final Clock clock = Clock.fixed(T0, ZoneOffset.UTC);
     private LegacySetupService setupService;
     private OperatorSessionService operatorSessions;
+    private ActorTokenService actorTokens;
     private MaintenanceController controller;
     private ActorPrincipal operator;
     private ActorPrincipal worker;
@@ -70,12 +75,13 @@ class MaintenanceControllerIntegrationTest {
         setupService = new LegacySetupService(agents, clock);
         operatorSessions = new OperatorSessionService("operator-secret", Duration.ofHours(8),
                 OperatorSessionService.DEFAULT_ALLOWED_ORIGINS, false, clock);
-        controller = new MaintenanceController(setupService, operatorSessions);
+        actorTokens = new ActorTokenService(clock);
+        controller = new MaintenanceController(setupService,
+                new OperatorAuthorityResolver(operatorSessions, actorTokens, ""));
         operator = ActorPrincipal.operator(null);
-        // The controller resolves credential expiry with the real clock (the
-        // fixed service clock is not the controller's), so the worker
-        // credential must not expire while the test runs.
-        worker = ActorPrincipal.worker(UUID.randomUUID(), Instant.now().plus(Duration.ofHours(1)));
+        // Only the service-level rejection takes a principal directly; against
+        // the fixed service clock this credential never expires mid-test.
+        worker = ActorPrincipal.worker(UUID.randomUUID(), T0.plus(Duration.ofHours(1)));
     }
 
     /* ------------------------------------------------------------------ */
@@ -158,6 +164,23 @@ class MaintenanceControllerIntegrationTest {
                 .containsExactlyInAnyOrder(BA_BUILTIN_ID, DEV_BUILTIN_ID, QA_BUILTIN_ID);
     }
 
+    /**
+     * The 2026-10-05 local authority simplification: an anonymous request from
+     * loopback IS the single local operator, so the setup succeeds with no
+     * credential at all (it needed 401 before the resolver existed).
+     */
+    @Test
+    void anonymousLoopbackCallerIsTheLocalOperator() {
+        MockHttpServletRequest loopback = anonymous("POST");
+        loopback.setRemoteAddr("127.0.0.1");
+
+        ResponseEntity<Object> setupResponse = controller.initializeBuiltins(loopback);
+
+        assertStatus(setupResponse, HttpStatus.OK);
+        assertThat(((LegacySetupService.SetupReceipt) setupResponse.getBody()).createdAgentIds())
+                .containsExactlyInAnyOrder(BA_BUILTIN_ID, DEV_BUILTIN_ID, QA_BUILTIN_ID);
+    }
+
     @Test
     void setupHasNoAutomaticExecutionPath() {
         for (Class<?> type : List.of(LegacySetupService.class, MaintenanceController.class)) {
@@ -193,8 +216,16 @@ class MaintenanceControllerIntegrationTest {
         return agents.findById(id).orElseThrow();
     }
 
+    /**
+     * An anonymous request from a NON-loopback client. MockMvc's default peer
+     * is 127.0.0.1, which the resolver now treats as the local operator, so
+     * the remote address is pinned explicitly for the 401 contract.
+     */
     private MockHttpServletRequest anonymous(String method) {
-        return new MockHttpServletRequest(method, "/api/v1/maintenance/initialize-builtins");
+        MockHttpServletRequest request =
+                new MockHttpServletRequest(method, "/api/v1/maintenance/initialize-builtins");
+        request.setRemoteAddr("203.0.113.7");
+        return request;
     }
 
     private MockHttpServletRequest operatorRequest() {
@@ -203,9 +234,11 @@ class MaintenanceControllerIntegrationTest {
         return request;
     }
 
+    /** A verifiable run-scoped worker bearer: authenticated, never operator. */
     private MockHttpServletRequest workerRequest() {
         MockHttpServletRequest request = anonymous("POST");
-        request.setAttribute(ActorAuthenticationFilter.ACTOR_ATTRIBUTE, worker);
+        String workerToken = actorTokens.issueWorker(UUID.randomUUID(), T0.plus(Duration.ofHours(1)));
+        request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer " + workerToken);
         return request;
     }
 

@@ -7,8 +7,12 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.agent.service.HarnessProfileService;
+import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
+import io.aria.conductor.common.event.RunInputReceivedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
+import io.aria.conductor.common.event.RunWaitingForInputEvent;
+import io.aria.conductor.common.event.TurnCompletedEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.exception.BudgetExceededException;
@@ -34,7 +38,10 @@ import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.dod.DoDService;
+import io.aria.conductor.execution.kanban.KanbanItem;
+import io.aria.conductor.execution.kanban.KanbanRepository;
 import io.aria.conductor.execution.kanban.KanbanService;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.llm.LlmToolCall;
@@ -137,6 +144,17 @@ public class AgentLoopEngine {
     private final RunAdmissionQueue admission;
     private final DoDService dodService;
     private final KanbanService kanbanService;
+    /**
+     * Card lookup for the clarification ask's kanban link (Plan B task 6): the
+     * card whose {@code linkedRunId} points at the parked run carries the ask.
+     */
+    private final KanbanRepository kanbanRepository;
+    /**
+     * The parking coordinator of the waiting-input loop (Plan B task 4): the
+     * CANCELLED listener records a termination intent through it so an
+     * externally cancelled run can never stay parked.
+     */
+    private final RunInputCoordinator inputCoordinator;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
@@ -168,7 +186,9 @@ public class AgentLoopEngine {
                            DoDService dodService,
                            KanbanService kanbanService,
                            ObjectProvider<CoreRunLauncher> coreRunLauncherProvider,
-                           RunAdmissionQueue admission) {
+                           RunAdmissionQueue admission,
+                           KanbanRepository kanbanRepository,
+                           RunInputCoordinator inputCoordinator) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
         this.adkProviderRegistry = adkProviderRegistry;
@@ -197,6 +217,20 @@ public class AgentLoopEngine {
         this.admission = admission;
         this.dodService = dodService;
         this.kanbanService = kanbanService;
+        this.kanbanRepository = kanbanRepository;
+        this.inputCoordinator = inputCoordinator;
+    }
+
+    /**
+     * Test seam (Plan B task 6): seeds a minimal active context exactly the way
+     * {@link #startRunInternal} builds one, without the DB round-trip.
+     */
+    RunContext addToActiveContextsForTest(UUID runId, UUID agentId) {
+        Agent agent = new Agent();
+        agent.setId(agentId);
+        RunContext ctx = new RunContext(runId, agentId, agent, null, 50, null);
+        activeContexts.put(runId, ctx);
+        return ctx;
     }
 
     /**
@@ -435,13 +469,21 @@ public class AgentLoopEngine {
             Run run = runRepository.findById(ctx.getRunId())
                     .orElseThrow(() -> new ResourceNotFoundException("Run", ctx.getRunId()));
             CoreResult result = launcher.execute(run, agent, coreTask(ctx));
-            recordUsage(ctx, result);
-            ctx.incrementIteration();
+            // A finalized (or cancelled-while-waiting) question turn is returned as
+            // the result AND was already accounted when its TurnCompletedEvent was
+            // published; recording it again would double-count usage, iteration and
+            // the trajectory row, so the whole three-part recording is skipped for it.
+            if (!result.turnAlreadyAccounted()) {
+                recordUsage(ctx, result);
+                ctx.incrementIteration();
+            }
             String finalOutput = result.finalOutput();
             if (finalOutput != null && !finalOutput.isBlank()) {
                 ctx.setLastAssistantResponse(finalOutput);
-                recordTaskTrajectory(ctx, finalOutput, tokenCount(result.usage() == null ? null
-                        : result.usage().outputTokens()));
+                if (!result.turnAlreadyAccounted()) {
+                    recordTaskTrajectory(ctx, finalOutput, tokenCount(result.usage() == null ? null
+                            : result.usage().outputTokens()));
+                }
                 tryEmit(emitter, "message", Map.of("content", finalOutput));
             }
             tryEmit(emitter, "done", donePayload(ctx, null));
@@ -570,11 +612,15 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Startup recovery: mark runs left in RUNNING or INITIALIZING by a previous backend
-     * process (JVM crash/restart) as FAILED and publish {@link RunCompletedEvent} so
+     * Startup recovery: mark runs left in RUNNING, INITIALIZING or WAITING_INPUT by a
+     * previous backend process (JVM crash/restart) as FAILED and publish {@link RunCompletedEvent} so
      * downstream listeners (workflow chainer, kanban, WS broadcast) reconcile instead of
-     * leaving chains/boards stuck. Runs are saved individually so one failure cannot roll
-     * back the recovery of the others.
+     * leaving chains/boards stuck. A WAITING_INPUT run is included because a parked run
+     * cannot be revived in-memory: its runtime died with the previous JVM, so startup
+     * adjudicates it. Runs are saved individually so one failure cannot roll
+     * back the recovery of the others. A WAITING_INPUT run's PENDING CLARIFICATION
+     * asks are settled DENIED ("run orphaned by restart") — no answer can ever
+     * arrive for them anymore.
      */
     @Order(Ordered.HIGHEST_PRECEDENCE)
     @EventListener(ApplicationReadyEvent.class)
@@ -585,22 +631,152 @@ public class AgentLoopEngine {
     /** Extracted so tests can invoke recovery without firing Spring lifecycle events. */
     void recoverOrphanedRuns() {
         List<Run> orphaned = runRepository.findByStatusIn(
-                List.of(RunStatus.RUNNING, RunStatus.INITIALIZING));
+                List.of(RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT));
         if (orphaned.isEmpty()) {
             return;
         }
         log.info("Recovering {} orphaned run(s) left by backend restart", orphaned.size());
         for (Run run : orphaned) {
             try {
+                boolean wasWaitingForInput = run.getStatus() == RunStatus.WAITING_INPUT;
                 run.setStatus(RunStatus.FAILED);
                 run.setErrorMessage("Run orphaned by backend restart");
                 run.setCompletedAt(Instant.now());
                 runRepository.save(run);
+                // A parked run's PENDING CLARIFICATION ask can never be answered
+                // after the restart (its coordinator entry is gone), so recovery
+                // settles it exactly like completeRun's finalize-path sweep does.
+                if (wasWaitingForInput) {
+                    settleOrphanedClarificationAsks(run.getId());
+                }
                 eventPublisher.publishEvent(new RunCompletedEvent(
                         this, run.getId(), run.getAgentId(), RunStatus.FAILED, null));
             } catch (Exception e) {
                 log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
             }
+        }
+    }
+
+    /**
+     * Settles the parked run's PENDING CLARIFICATION asks on restart adjudication
+     * (Plan B): the run's runtime died with the previous JVM, so no answer can
+     * ever arrive — /answer refuses (the coordinator has no entry), /decide
+     * refuses the source, housekeeping skips CLARIFICATION — and without this
+     * sweep the operator would hold a ReviewQueue row whose every channel
+     * refuses. The same loop completeRun runs on the finalize path, with the
+     * honest reason; deliberately not merged with it because the reasons differ.
+     */
+    private void settleOrphanedClarificationAsks(UUID runId) {
+        try {
+            for (Approval ask : approvalRepository.findByRunIdAndStatusAndSource(
+                    runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION)) {
+                ask.setStatus(ApprovalStatus.DENIED);
+                ask.setReason("run orphaned by restart");
+                ask.setDecidedAt(Instant.now());
+                approvalRepository.save(ask);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to settle the orphaned clarification asks for run {}: {}",
+                    runId, e.getMessage(), e);
+        }
+    }
+
+    // ---- waiting-input bookkeeping listeners (Plan B task 6) ----
+    // Every listener body is exception-proof (ruling: an escape would propagate
+    // out of publishEvent, through CoreExecutionService.execute, and leak the
+    // run's runtime before finalizeRuntime). Failures are logged with run
+    // context and never rethrown.
+
+    /**
+     * Parked-run bookkeeping (2026-10-05): the coordinator parked the run;
+     * persist it as WAITING_INPUT and raise the linked CLARIFICATION ask.
+     */
+    @EventListener
+    public void onRunWaitingForInput(RunWaitingForInputEvent event) {
+        try {
+            RunContext ctx = activeContexts.get(event.getRunId());
+            if (ctx == null) {
+                return;
+            }
+            try {
+                updateRunStatusDirect(event.getRunId(), RunStatus.WAITING_INPUT);
+            } catch (Exception e) {
+                log.warn("Failed to persist WAITING_INPUT for run {}: {}", event.getRunId(), e.getMessage(), e);
+            }
+            try {
+                String cardId = kanbanRepository.findByLinkedRunId(event.getRunId().toString()).stream()
+                        .findFirst().map(KanbanItem::getId).orElse(null);
+                Approval ask = Approval.builder()
+                        .runId(event.getRunId())
+                        .status(ApprovalStatus.PENDING)
+                        .approvalType(Approval.ApprovalType.TOOL_CALL)
+                        .askType(Approval.AskType.QUESTION)
+                        .source(ApprovalSource.CLARIFICATION)
+                        .kanbanItemId(cardId)
+                        .content(event.getQuestion())
+                        .build();
+                approvalRepository.save(ask);
+                eventPublisher.publishEvent(new ApprovalRequestedEvent(this, ask.getId(), event.getRunId(),
+                        null, Approval.ApprovalType.TOOL_CALL.name(), ApprovalSource.CLARIFICATION.name()));
+            } catch (Exception e) {
+                log.warn("Failed to create the clarification ask for {}: {}", event.getRunId(), e.getMessage());
+            }
+            log.info("Run {} waiting for operator input", event.getRunId());
+        } catch (Exception e) {
+            log.warn("waiting-input bookkeeping failed for run {}: {}", event.getRunId(), e.getMessage(), e);
+        }
+    }
+
+    /** The operator answered; the coordinator re-prompts — the run is live again. */
+    @EventListener
+    public void onRunInputReceived(RunInputReceivedEvent event) {
+        try {
+            if (activeContexts.containsKey(event.getRunId())) {
+                updateRunStatusDirect(event.getRunId(), RunStatus.RUNNING);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to flip run {} back to RUNNING after operator input: {}",
+                    event.getRunId(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Intermediate-turn accounting (2026-10-05): the final turn is recorded by
+     * executeCoreRun as today. The token arithmetic is recordUsage's, reused on
+     * a synthetic {@link CoreResult} so the totals cannot drift from it.
+     */
+    @EventListener
+    public void onTurnCompleted(TurnCompletedEvent event) {
+        try {
+            RunContext ctx = activeContexts.get(event.getRunId());
+            if (ctx == null) {
+                return;
+            }
+            recordUsage(ctx, new CoreResult(null, null,
+                    new UsageSnapshot(event.getInputTokens(), event.getOutputTokens(), null,
+                            event.getObservedModel()),
+                    false));
+            ctx.incrementIteration();
+            if (event.getFinalOutput() != null && !event.getFinalOutput().isBlank()) {
+                ctx.setLastAssistantResponse(event.getFinalOutput());
+                recordTaskTrajectory(ctx, event.getFinalOutput(), tokenCount(event.getOutputTokens()));
+            }
+        } catch (Exception e) {
+            log.warn("Turn accounting failed for run {}: {}", event.getRunId(), e.getMessage(), e);
+        }
+    }
+
+    /** An externally cancelled run must not stay parked: wake it so the finalize chain runs. */
+    @EventListener
+    public void onRunCompletedExternally(RunCompletedEvent event) {
+        if (event.getStatus() != RunStatus.CANCELLED) {
+            return;
+        }
+        try {
+            inputCoordinator.recordTerminationIntent(event.getRunId());
+        } catch (Exception e) {
+            log.warn("Failed to record the termination intent for cancelled run {}: {}",
+                    event.getRunId(), e.getMessage(), e);
         }
     }
 
@@ -1826,6 +2002,30 @@ public class AgentLoopEngine {
             log.warn("Failed to cancel pending approvals for {}: {}", ctx.getRunId(), e.getMessage());
         }
 
+        // Settle the run's own PENDING CLARIFICATION asks (Plan B task 6): the
+        // run finalized without the question ever being answered (finalize
+        // signal, verified stop, failure). The asks have no expiresAt and are
+        // invisible to housekeeping's decide flow, so this is their only closer
+        // on the finalize path; restart adjudication covers the crash case.
+        // The reason names the honest ending: an operator finalize, an
+        // operator/scheduled cancel, or a failure is not the same event.
+        try {
+            String settleReason = switch (finalStatus) {
+                case COMPLETED -> "finalized by operator";
+                case CANCELLED, ABORTED -> "run cancelled";
+                default -> "run ended without an answer";
+            };
+            for (Approval ask : approvalRepository.findByRunIdAndStatusAndSource(
+                    ctx.getRunId(), ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION)) {
+                ask.setStatus(ApprovalStatus.DENIED);
+                ask.setReason(settleReason);
+                ask.setDecidedAt(Instant.now());
+                approvalRepository.save(ask);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to settle clarification asks for {}: {}", ctx.getRunId(), e.getMessage(), e);
+        }
+
         // Cleanup per-run workspace
         try {
             workspaceManager.cleanup(ctx.getRunId());
@@ -1915,9 +2115,24 @@ public class AgentLoopEngine {
 
     private void updateRunStatusDirect(UUID runId, RunStatus status) {
         runRepository.findById(runId).ifPresent(run -> {
+            // A terminal state is never overwritten by a direct write: the
+            // cancel-vs-park interleave (cancel commits CANCELLED, the waiting
+            // listener's write races in behind it) would otherwise resurrect the
+            // run and completeRun's external-cancel guard would miss.
+            if (isTerminalStatus(run.getStatus())) {
+                log.warn("Refusing to overwrite terminal status of run {}: persisted={}, requested={}",
+                        runId, run.getStatus(), status);
+                return;
+            }
             run.setStatus(status);
             runRepository.save(run);
         });
+    }
+
+    /** Terminal run states: no direct status write may ever overwrite one. */
+    private static boolean isTerminalStatus(RunStatus status) {
+        return status == RunStatus.COMPLETED || status == RunStatus.FAILED
+                || status == RunStatus.CANCELLED || status == RunStatus.ABORTED;
     }
 
     // ---- SSE helpers —

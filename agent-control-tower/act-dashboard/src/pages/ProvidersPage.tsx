@@ -1,8 +1,6 @@
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { listAgents } from '../api/agents';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
-import { OperatorAccessPanel } from '../components/OperatorAccessPanel';
-import { RuntimeCredentialsCard } from '../components/RuntimeCredentialsCard';
 
 interface HealthBadgeProps {
   healthy: boolean;
@@ -48,9 +46,6 @@ export function ProvidersPage() {
       <div className="page-header">
         <h2>Agent Providers</h2>
       </div>
-
-      {/* Operator authority (spec 6.2): required before any operator-only action. */}
-      <OperatorAccessPanel />
 
       {/* Provider inventory */}
       {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading providers...</span></div>}
@@ -103,9 +98,6 @@ export function ProvidersPage() {
           </table>
         </div>
       )}
-
-      {/* Managed credential (spec 6.1) — masked metadata, explicit test, removal. */}
-      <RuntimeCredentialsCard />
 
       {/* Per-agent backend overview */}
       <div className="card" style={{ marginTop: 24 }}>

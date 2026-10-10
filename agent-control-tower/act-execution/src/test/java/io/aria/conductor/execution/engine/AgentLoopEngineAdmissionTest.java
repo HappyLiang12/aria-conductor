@@ -183,7 +183,7 @@ class AgentLoopEngineAdmissionTest {
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
                 null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                recordingQueue);
+                recordingQueue, null /* KanbanRepository */, null /* RunInputCoordinator */);
     }
 
     /** Stubs the post-admission run-loop plumbing both owned and not-owned runs walk through. */

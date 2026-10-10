@@ -246,7 +246,10 @@ public class ApprovalGate {
      * and the remaining callers are the platform's own sweeps (housekeeping
      * expiry/cancellation) rather than an external request. A decision for a
      * request that is no longer PENDING stays a no-op, preserving the existing
-     * idempotent behaviour for repeated delivery.
+     * idempotent behaviour for repeated delivery. A {@code CLARIFICATION} ask is
+     * refused outright (IllegalStateException, HTTP 409 at the REST boundary):
+     * its answer lives on the ask row via {@code /approvals/{id}/answer}, and
+     * run continuation is finalized via {@code /runs/{id}/finalize}.
      */
     @Transactional
     public void decideApproval(UUID approvalId, boolean approved, String reason) {
@@ -254,6 +257,14 @@ public class ApprovalGate {
 
         Approval approval = approvalRepository.findById(approvalId)
                 .orElseThrow(() -> new IllegalArgumentException("Approval not found: " + approvalId));
+
+        // Plan B task 2: CLARIFICATION asks are answered via /approvals/{id}/answer or the run
+        // finalize path — the legacy decide flow must never record an approve/deny for them
+        // (the controller surfaces this refusal as HTTP 409 on /decide).
+        if (approval.getSource() == ApprovalSource.CLARIFICATION) {
+            throw new IllegalStateException(
+                    "CLARIFICATION asks are answered via /approvals/{id}/answer or finalized via /runs/{id}/finalize");
+        }
 
         if (approval.getStatus() != ApprovalStatus.PENDING) {
             log.warn("Approval {} is already in status {}, ignoring decision", approvalId, approval.getStatus());
@@ -345,7 +356,9 @@ public class ApprovalGate {
      * lifecycle is governed by the spec-approval flow, not the originating run.
      *
      * <p>R20.5: ACP permission asks are likewise left alone — their lifecycle belongs to
-     * {@code AcpPermissionCoordinator.cancelPendingForRun}.
+     * {@code AcpPermissionCoordinator.cancelPendingForRun}. CLARIFICATION asks are left
+     * alone for the same ownership reason: the run-input lifecycle settles them
+     * (the completion sweep, restart adjudication), never this legacy broad sweep.
      *
      * <p>R-RFUX6/D6: each settled ask is an expiry, not a silent lapse — the same
      * {@link ApprovalExpiredEvent} the timeout and scheduled sweeps publish is emitted
@@ -357,6 +370,7 @@ public class ApprovalGate {
         approvalRepository.findByRunId(runId).stream()
                 .filter(a -> a.getStatus() == ApprovalStatus.PENDING)
                 .filter(a -> a.getSource() != ApprovalSource.ACP_PERMISSION)
+                .filter(a -> a.getSource() != ApprovalSource.CLARIFICATION)
                 .filter(a -> a.getApprovalType() == null
                         || a.getApprovalType() == Approval.ApprovalType.TOOL_CALL)
                 .forEach(a -> {

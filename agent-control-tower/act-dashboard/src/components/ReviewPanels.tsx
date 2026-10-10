@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
-import { answerAsk, approveApproval, rejectApproval } from '../api/approvals';
+import { answerAsk, approveApproval, finalizeRun, rejectApproval } from '../api/approvals';
 import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
 import { formatTimestamp } from '../utils/formatTime';
 import {
@@ -45,8 +45,12 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   // A native permission ask is authorizable exactly once, never in bulk: the
   // batch control below skips them so a batch action can never stand in for a
   // persistent native authorization (spec §6.3). They stay decidable one by one.
+  // A CLARIFICATION ask (waiting-input spec §5) is likewise never bulk-resolved:
+  // it is answered (which wakes the parked run), not approved.
   const nativeAsks = pendingAsks.filter((ask) => nativePermissionOf(ask) !== null);
-  const batchApprovable = pendingAsks.filter((ask) => nativePermissionOf(ask) === null);
+  const batchApprovable = pendingAsks.filter(
+    (ask) => nativePermissionOf(ask) === null && ask.source !== 'CLARIFICATION'
+  );
 
   const resolveAsk = useMutation({
     mutationFn: ({
@@ -71,11 +75,26 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       // Badge + Waiting-on-you staleness: cards carry pendingAskCount.
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      // Resolving changes run state too (approve resumes a paused run, an
+      // answer wakes a WAITING_INPUT run) — the same symmetry finalize has.
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
     },
     onError: (err: unknown) => {
       setOperatorRejected(isOperatorRejection(err));
       setError(apiErrorMessage(err, 'Action rejected — please retry.'));
     },
+  });
+  // Waiting-input (2026-10-05): end a run parked in WAITING_INPUT with the
+  // question preserved — the operator's alternative to answering it.
+  const finalize = useMutation({
+    mutationFn: (runId: string) => finalizeRun(runId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['kanban'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
+    onError: (err: unknown) => setError(apiErrorMessage(err, 'Finalize rejected — please retry.')),
   });
   // Card-level fallback (spec 10.1): send the whole card back to the agent
   // with feedback even while asks are still pending on it.
@@ -117,8 +136,33 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
             onChange={(e) => setAnswers((prev) => ({ ...prev, [ask.id]: e.target.value }))}
           />
           <div className="ask-actions">
-            <button className="btn primary" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] || undefined })}>Approve</button>
-            <button className="btn" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: false, answer: answers[ask.id] || undefined })}>Deny</button>
+            {ask.source === 'CLARIFICATION' ? (
+              <>
+                {/* Waiting-input (2026-10-05): the ask genuinely needs the operator.
+                    Answer & continue routes through /answer (approved=true + the
+                    answer) and wakes the parked run; Finalize ends the run with
+                    the question preserved and never requires an answer. */}
+                <button
+                  className="btn primary"
+                  disabled={resolveAsk.isPending || !(answers[ask.id] ?? '').trim()}
+                  onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] })}
+                >
+                  ▶ Answer &amp; continue
+                </button>
+                <button
+                  className="btn"
+                  disabled={finalize.isPending}
+                  onClick={() => finalize.mutate(ask.runId)}
+                >
+                  ■ Finalize
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="btn primary" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: true, answer: answers[ask.id] || undefined })}>Approve</button>
+                <button className="btn" disabled={resolveAsk.isPending} onClick={() => resolve({ ask, approved: false, answer: answers[ask.id] || undefined })}>Deny</button>
+              </>
+            )}
           </div>
         </div>
       ))}
@@ -222,7 +266,8 @@ export function runOutcomeFromStatus(status: RunStatus | null | undefined): Kanb
     case 'ABORTED':
       return 'CANCELLED';
     default:
-      // PENDING / INITIALIZING / RUNNING / PAUSED.
+      // PENDING / INITIALIZING / RUNNING / PAUSED / WAITING_INPUT — a run parked
+      // for operator input is still an in-flight (active) run.
       return 'ACTIVE';
   }
 }

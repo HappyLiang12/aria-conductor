@@ -7,7 +7,7 @@ import {
 } from '../api/ops';
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
-import { applyOperatorHeaders } from '../api/operatorSession';
+import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
 import {
   NativePermissionFacts,
   NativePermissionKindPill,
@@ -26,6 +26,7 @@ const STATUS_TONE: Record<RunStatus, { pill: string; dot: string; label: string 
   INITIALIZING: { pill: 'pill ba',   dot: 'var(--accent)',    label: 'Initializing' },
   RUNNING:      { pill: 'pill warn', dot: 'var(--amber)',     label: 'Running' },
   PAUSED:       { pill: 'pill warn', dot: 'var(--amber)',     label: 'Paused' },
+  WAITING_INPUT: { pill: 'pill warn', dot: 'var(--amber)',    label: 'Waiting for your answer' },
   COMPLETED:    { pill: 'pill ok',   dot: 'var(--green)',     label: 'Completed' },
   FAILED:       { pill: 'pill risk', dot: 'var(--red)',       label: 'Failed' },
   CANCELLED:    { pill: 'pill',      dot: 'var(--text-mute)', label: 'Cancelled' },
@@ -172,7 +173,7 @@ export default function OpsPage() {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
       setToast({ kind: 'ok', msg: 'Approval granted — agent unblocked.' });
     },
-    onError: () => setToast({ kind: 'err', msg: 'Approve failed. Retry.' }),
+    onError: (err: unknown) => setToast({ kind: 'err', msg: apiErrorMessage(err, 'Approve failed. Retry.') }),
   });
 
   const rejectM = useMutation({
@@ -184,7 +185,7 @@ export default function OpsPage() {
       qc.invalidateQueries({ queryKey: ['ops', 'approvals'] });
       setToast({ kind: 'ok', msg: 'Approval denied.' });
     },
-    onError: () => setToast({ kind: 'err', msg: 'Deny failed. Retry.' }),
+    onError: (err: unknown) => setToast({ kind: 'err', msg: apiErrorMessage(err, 'Deny failed. Retry.') }),
   });
 
   /* ---------- Derived: Activity Timeline ---------- */

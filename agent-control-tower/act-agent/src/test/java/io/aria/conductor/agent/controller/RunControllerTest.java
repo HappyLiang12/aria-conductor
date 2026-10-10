@@ -6,9 +6,11 @@ import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.port.RunInputPort;
 import io.aria.conductor.common.repository.RunProgressEventRepository;
 import io.aria.conductor.test.WebMvcTestBase;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -30,7 +32,11 @@ class RunControllerTest extends WebMvcTestBase {
 
     private final RunService runService = mock(RunService.class);
     private final RunProgressEventRepository progressRepository = mock(RunProgressEventRepository.class);
-    private final MockMvc mvc = mockMvcFor(new RunController(runService, progressRepository));
+    /** The run-input port the finalize route consults; the provider resolves it lazily. */
+    private final RunInputPort inputPort = mock(RunInputPort.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<RunInputPort> inputProvider = mock(ObjectProvider.class);
+    private final MockMvc mvc = mockMvcFor(new RunController(runService, progressRepository, inputProvider));
 
     private RunResponse run(UUID id, UUID agentId, RunStatus status) {
         return RunResponse.builder().id(id).agentId(agentId).status(status)
@@ -192,5 +198,40 @@ class RunControllerTest extends WebMvcTestBase {
 
         mvc.perform(post("/api/v1/runs/" + id + "/cancel"))
                 .andExpect(status().isConflict());
+    }
+
+    // ---------------------------------------------------------------------
+    // Finalize (2026-10-05 spec §5): the honest close for a run parked in
+    // WAITING_INPUT. 202 only when the parked run in this process actually
+    // received the finalize signal; 409 otherwise. Deliberately NOT
+    // operator-gated (spec D6).
+    // ---------------------------------------------------------------------
+
+    @Test
+    void finalizeReturnsAcceptedWhenTheRunIsWaitingAndConflictWhenNot() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(inputProvider.getIfAvailable()).thenReturn(inputPort);
+        when(inputPort.requestFinalize(id)).thenReturn(true);
+
+        mvc.perform(post("/api/v1/runs/{id}/finalize", id))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.runId").value(id.toString()))
+                .andExpect(jsonPath("$.status").value("finalizing"));
+
+        when(inputPort.requestFinalize(id)).thenReturn(false);
+        mvc.perform(post("/api/v1/runs/{id}/finalize", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("Run " + id + " is not waiting for operator input"));
+    }
+
+    /** No deployed input port (the legacy paths): the refusal must stay honest. */
+    @Test
+    void finalizeWithoutADeployedInputPort_returns409() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(inputProvider.getIfAvailable()).thenReturn(null);
+
+        mvc.perform(post("/api/v1/runs/{id}/finalize", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("Run " + id + " is not waiting for operator input"));
     }
 }

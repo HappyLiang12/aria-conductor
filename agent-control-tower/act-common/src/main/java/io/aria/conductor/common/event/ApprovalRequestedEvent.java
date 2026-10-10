@@ -39,7 +39,7 @@ public class ApprovalRequestedEvent extends ApplicationEvent {
         this.source = source;
     }
 
-    /** The persisted approval's source name ({@code LEGACY_GATE} or {@code ACP_PERMISSION}). */
+    /** The persisted approval's source name ({@code LEGACY_GATE}, {@code ACP_PERMISSION} or {@code CLARIFICATION}). */
     public String getApprovalSource() {
         return source;
     }

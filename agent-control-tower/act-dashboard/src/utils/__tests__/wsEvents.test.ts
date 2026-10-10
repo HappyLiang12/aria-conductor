@@ -11,6 +11,9 @@ describe('ws event whitelist (S1)', () => {
     expect(isRunLifecycleEvent('run.completed')).toBe(true);
     expect(isRunLifecycleEvent('run.failed')).toBe(true);
     expect(isRunLifecycleEvent('run.iteration')).toBe(true);
+    // waiting-input (2026-10-05): the park is a rare lifecycle transition —
+    // the runs list and the kanban board must refresh so it is visible.
+    expect(isRunLifecycleEvent('run.waiting_input')).toBe(true);
     // streaming / high-frequency types are excluded
     expect(isRunLifecycleEvent('run.progress')).toBe(false);
     expect(isRunLifecycleEvent('kanban.transitioned')).toBe(false);

@@ -6,6 +6,9 @@ import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.RunCompletedEvent;
+import io.aria.conductor.common.model.Approval;
+import io.aria.conductor.common.model.ApprovalSource;
+import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
@@ -95,7 +98,8 @@ class OrphanedRunRecoveryTest {
     void runningAndInitializingRuns_shouldBeMarkedFailedAndPublishEvent() {
         Run running = run(RunStatus.RUNNING);
         Run initializing = run(RunStatus.INITIALIZING);
-        when(runRepository.findByStatusIn(List.of(RunStatus.RUNNING, RunStatus.INITIALIZING)))
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
                 .thenReturn(List.of(running, initializing));
 
         engine.recoverOrphanedRuns();
@@ -121,12 +125,68 @@ class OrphanedRunRecoveryTest {
 
     @Test
     void noOrphanedRuns_shouldDoNothing() {
-        when(runRepository.findByStatusIn(List.of(RunStatus.RUNNING, RunStatus.INITIALIZING)))
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
                 .thenReturn(List.of());
 
         engine.recoverOrphanedRuns();
 
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void waitingInputRunsAreAdjudicatedOnRestart() {
+        // A run parked for operator input cannot be revived in-memory after a JVM
+        // restart (its runtime died with the previous process), so startup
+        // recovery must adjudicate it too instead of leaving it parked forever.
+        Run parked = run(RunStatus.WAITING_INPUT);
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
+                .thenReturn(List.of(parked));
+
+        engine.recoverOrphanedRuns();
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(saved.getValue().getErrorMessage()).isEqualTo("Run orphaned by backend restart");
+        assertThat(saved.getValue().getCompletedAt()).isNotNull();
+
+        ArgumentCaptor<RunCompletedEvent> events = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(events.capture());
+        assertThat(events.getValue().getRunId()).isEqualTo(parked.getId());
+        assertThat(events.getValue().getStatus()).isEqualTo(RunStatus.FAILED);
+    }
+
+    @Test
+    void waitingInputRunRecoveryAlsoSettlesItsPendingClarificationAsks() {
+        // A parked run's runtime died with the previous JVM: recovery adjudicates
+        // the run FAILED, and its PENDING CLARIFICATION ask can never be answered
+        // anymore (/answer 409s -- the coordinator has no entry after the restart,
+        // /decide refuses the source, housekeeping skips CLARIFICATION). Recovery
+        // must therefore settle the ask the way completeRun does, with the honest
+        // restart reason, so the operator's ReviewQueue row is resolvable.
+        Run parked = run(RunStatus.WAITING_INPUT);
+        when(runRepository.findByStatusIn(List.of(
+                RunStatus.RUNNING, RunStatus.INITIALIZING, RunStatus.WAITING_INPUT)))
+                .thenReturn(List.of(parked));
+        Approval ask = Approval.builder().runId(parked.getId()).status(ApprovalStatus.PENDING)
+                .askType(Approval.AskType.QUESTION).source(ApprovalSource.CLARIFICATION).build();
+        when(approvalRepository.findByRunIdAndStatusAndSource(
+                parked.getId(), ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of(ask));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        engine.recoverOrphanedRuns();
+
+        ArgumentCaptor<Approval> settled = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(settled.capture());
+        assertThat(settled.getValue().getStatus()).isEqualTo(ApprovalStatus.DENIED);
+        assertThat(settled.getValue().getReason()).isEqualTo("run orphaned by restart");
+        assertThat(settled.getValue().getDecidedAt()).isNotNull();
+        // The run itself is still adjudicated exactly as before.
+        assertThat(parked.getStatus()).isEqualTo(RunStatus.FAILED);
+        assertThat(parked.getErrorMessage()).isEqualTo("Run orphaned by backend restart");
     }
 }

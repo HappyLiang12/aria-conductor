@@ -14,15 +14,17 @@ vi.mock('../../api/approvals', () => ({
   answerAsk: vi.fn(),
   approveApproval: vi.fn(),
   rejectApproval: vi.fn(),
+  finalizeRun: vi.fn(),
 }));
 
 import { transitionKanbanItem } from '../../api/kanban';
-import { approveApproval, rejectApproval, answerAsk } from '../../api/approvals';
+import { approveApproval, rejectApproval, answerAsk, finalizeRun } from '../../api/approvals';
 
 const mockedTransition = vi.mocked(transitionKanbanItem);
 const mockedApprove = vi.mocked(approveApproval);
 const mockedReject = vi.mocked(rejectApproval);
 const mockedAnswer = vi.mocked(answerAsk);
+const mockedFinalize = vi.mocked(finalizeRun);
 
 const item = { id: 'k-1', title: 'add CSV export', status: 'REVIEW', assignee: 'dev-agent', linkedRunId: 'run-abc', runOutcome: 'COMPLETED' } as KanbanItem;
 
@@ -106,6 +108,9 @@ describe('DecisionPanel', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban'] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['kanban-items'] });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['approvals'] });
+      // Resolving changes run state too (approve resumes, an answer wakes a
+      // WAITING_INPUT run) — symmetry with the finalize mutation.
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['runs'] });
     });
   });
 });
@@ -286,5 +291,81 @@ describe('ShortApprovalView run outcome (Task 7)', () => {
     expect(screen.queryByText(/Run completed/i)).not.toBeInTheDocument();
     expect(screen.queryByText('UNKNOWN')).not.toBeInTheDocument();
     expect(screen.getByText('Quick decision')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Waiting-input (2026-10-05): a CLARIFICATION ask holds a run in WAITING_INPUT
+// and is answered, never approved/denied — Answer & continue (routes through
+// /answer, the Task 7 contract) + Finalize (POST /runs/{id}/finalize), and it
+// is excluded from the Approve-all batch like native permission asks.
+// ---------------------------------------------------------------------------
+
+function clarificationAsk(overrides: Partial<Approval> = {}): Approval {
+  return {
+    id: 'a1',
+    runId: 'r1',
+    toolCallId: null,
+    status: 'PENDING',
+    reason: 'Which database should the migration target?',
+    requestedAt: '2026-10-05T10:00:00Z',
+    decidedAt: null,
+    expiresAt: null,
+    askType: 'QUESTION',
+    content: 'Which database should the migration target?',
+    source: 'CLARIFICATION',
+    ...overrides,
+  } as Approval;
+}
+
+describe('DecisionPanel CLARIFICATION asks (waiting input)', () => {
+  it('renders Answer & continue + Finalize instead of Approve/Deny', () => {
+    renderPanel(<DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[clarificationAsk()]} />);
+    expect(screen.getByRole('button', { name: /answer & continue/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /finalize/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull();
+  });
+
+  it('Answer & continue stays disabled until the answer is non-blank, then routes through answerAsk', async () => {
+    mockedAnswer.mockResolvedValue(clarificationAsk({ status: 'APPROVED' }));
+    renderPanel(<DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[clarificationAsk()]} />);
+    const answerButton = screen.getByRole('button', { name: /answer & continue/i });
+    expect(answerButton).toBeDisabled();
+    // Finalize never requires an answer.
+    expect(screen.getByRole('button', { name: /finalize/i })).toBeEnabled();
+    await userEvent.type(screen.getByLabelText('Answer for ask a1'), 'postgres');
+    expect(answerButton).toBeEnabled();
+    await userEvent.click(answerButton);
+    await waitFor(() =>
+      expect(mockedAnswer).toHaveBeenCalledWith('a1', { approved: true, answer: 'postgres' }),
+    );
+    expect(mockedApprove).not.toHaveBeenCalled();
+  });
+
+  it('Finalize never requires an answer and calls finalizeRun with the ask runId', async () => {
+    mockedFinalize.mockResolvedValue(undefined);
+    renderPanel(<DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[clarificationAsk()]} />);
+    await userEvent.click(screen.getByRole('button', { name: /finalize/i }));
+    await waitFor(() => expect(mockedFinalize).toHaveBeenCalledWith('r1'));
+    expect(mockedAnswer).not.toHaveBeenCalled();
+  });
+
+  it('excludes CLARIFICATION asks from the Approve-all batch', async () => {
+    mockedApprove.mockResolvedValue({ approvalId: 'a-gate', approved: true, status: 'processed' });
+    renderPanel(
+      <DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[gateAsk(), clarificationAsk()]} />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /approve all/i }));
+    await waitFor(() => expect(mockedApprove).toHaveBeenCalledTimes(1));
+    expect(mockedApprove).toHaveBeenCalledWith('a-gate', undefined);
+    expect(mockedAnswer).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a retry error when finalize is rejected', async () => {
+    mockedFinalize.mockRejectedValue(new Error('boom'));
+    renderPanel(<DecisionPanel item={{ id: 'c1' } as KanbanItem} pendingAsks={[clarificationAsk()]} />);
+    await userEvent.click(screen.getByRole('button', { name: /finalize/i }));
+    expect(await screen.findByText('Finalize rejected — please retry.')).toBeInTheDocument();
   });
 });

@@ -48,3 +48,8 @@ export async function answerAsk(
   const { data } = await client.post<Approval>(`/api/v1/approvals/${id}/answer`, payload);
   return data;
 }
+
+/** Finalize a run parked in WAITING_INPUT (2026-10-05): ends it with the question preserved. */
+export async function finalizeRun(runId: string): Promise<void> {
+  await client.post(`/api/v1/runs/${runId}/finalize`);
+}

@@ -5,6 +5,7 @@ import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.AgentType;
@@ -49,6 +50,7 @@ import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
+import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.AgentToolResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
@@ -223,7 +225,7 @@ class AgentLoopEngineCoreDispatchTest {
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
                 null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                unlimitedAdmission());
+                unlimitedAdmission(), null /* KanbanRepository */, null /* RunInputCoordinator */);
     }
 
     /**
@@ -318,5 +320,48 @@ class AgentLoopEngineCoreDispatchTest {
                 .containsExactly(
                         tuple("user", "do the work"),
                         tuple("assistant", "the answer"));
+    }
+
+    /**
+     * Pin for the finalize path of the waiting-input loop (2026-10-05 review,
+     * finding 1): the coordinator published the question turn's TurnCompletedEvent
+     * and the engine's listener already accounted it (usage, iteration,
+     * trajectory); when the park ends in finalize the loop returns THAT SAME turn
+     * as the run's CoreResult. Marked with {@code turnAlreadyAccounted}, the
+     * engine's final recording must skip it — otherwise every finalized (or
+     * cancelled-while-waiting) run double-counts the turn: inflated tokens, a
+     * duplicated trajectory row and iteration +2.
+     */
+    @Test
+    void aFinalizedQuestionTurnMarkedAlreadyAccountedIsRecordedExactlyOnce() {
+        agent.setAdkProvider("opencode");
+        String questionTurn = "Partial progress\n[NEED-INPUT] Which database?";
+        AgentLoopEngine engine = engine();
+        when(coordinator.execute(any(), any(), any())).thenAnswer(inv -> {
+            // The real coordinator publishes the question turn through the event
+            // bus; Spring routes it synchronously to the engine's accounting
+            // listener — simulated here by invoking it inside the stub.
+            engine.onTurnCompleted(new TurnCompletedEvent(this, runId, questionTurn,
+                    10L, 5L, "qoder"));
+            return new CoreResult("session-1", questionTurn,
+                    new UsageSnapshot(10L, 5L, null, "qoder"), false, true);
+        });
+
+        engine.startRun(runId);
+
+        await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.COMPLETED);
+        // The run's totals carry the question turn exactly once (the listener),
+        // never twice (listener + final recording).
+        assertThat(run.getTotalTokensUsed()).isEqualTo(15L);
+        assertThat(run.getIterationCount()).isEqualTo(1);
+        // The trajectory holds the run's request and the question turn's answer —
+        // no duplicated assistant row for the same turn.
+        ArgumentCaptor<SessionTrajectory> rows = ArgumentCaptor.forClass(SessionTrajectory.class);
+        verify(trajectoryRepository, times(2)).save(rows.capture());
+        assertThat(rows.getAllValues())
+                .extracting(SessionTrajectory::getRole, SessionTrajectory::getContent)
+                .containsExactly(
+                        tuple("user", "do the work"),
+                        tuple("assistant", questionTurn));
     }
 }

@@ -536,7 +536,12 @@ class RunServiceTest {
             "COMPLETED,RUNNING",
             "FAILED,RUNNING",
             "CANCELLED,RUNNING",
-            "PAUSED,COMPLETED"
+            "PAUSED,COMPLETED",
+            "WAITING_INPUT,PAUSED",
+            "WAITING_INPUT,ABORTED",
+            "WAITING_INPUT,INITIALIZING",
+            "WAITING_INPUT,PENDING",
+            "PAUSED,WAITING_INPUT"
     })
     void updateRunStatus_invalidTransitions_areRejected(RunStatus from, RunStatus to) {
         UUID id = UUID.randomUUID();
@@ -556,7 +561,12 @@ class RunServiceTest {
             "RUNNING,PAUSED",
             "RUNNING,ABORTED",
             "PAUSED,RUNNING",
-            "ABORTED,CANCELLED"
+            "ABORTED,CANCELLED",
+            "RUNNING,WAITING_INPUT",
+            "WAITING_INPUT,RUNNING",
+            "WAITING_INPUT,COMPLETED",
+            "WAITING_INPUT,FAILED",
+            "WAITING_INPUT,CANCELLED"
     })
     void updateRunStatus_validTransitions_areAccepted(RunStatus from, RunStatus to) {
         UUID id = UUID.randomUUID();

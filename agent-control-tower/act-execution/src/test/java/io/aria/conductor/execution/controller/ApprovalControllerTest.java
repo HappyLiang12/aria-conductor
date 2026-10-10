@@ -52,9 +52,23 @@ class ApprovalControllerTest extends WebMvcTestBase {
             mock(io.aria.conductor.execution.security.OperatorSessionService.class);
     private final io.aria.conductor.execution.security.ActorTokenService actorTokens =
             mock(io.aria.conductor.execution.security.ActorTokenService.class);
+    private final io.aria.conductor.execution.repository.SessionTrajectoryRepository trajectoryRepository =
+            mock(io.aria.conductor.execution.repository.SessionTrajectoryRepository.class);
+    /**
+     * The real coordinator behind /answer's wake: a test that parks the run first
+     * (via {@code requestInput}) gets the true answered-wake behavior; one that
+     * does not gets the true not-waiting refusal.
+     */
+    private final io.aria.conductor.execution.runtime.RunInputCoordinator runInputs =
+            new io.aria.conductor.execution.runtime.RunInputCoordinator(event -> { });
+    /** The shared authority resolver wired around the same mocked services. */
+    private final io.aria.conductor.execution.security.OperatorAuthorityResolver operatorAuthority =
+            new io.aria.conductor.execution.security.OperatorAuthorityResolver(
+                    operatorSessions, actorTokens, "");
     private final MockMvc mvc = mockMvcFor(new ApprovalController(
             approvalRepository, approvalGate, toolCallRepository, toolRiskResolver,
-            permissionCoordinator, operatorSessions, actorTokens));
+            permissionCoordinator, operatorSessions, operatorAuthority,
+            trajectoryRepository, runInputs, event -> { }));
 
     /** The configured operator bearer credential the boundary verifies. */
     private static final String OPERATOR_AUTHORIZATION = "Bearer operator-credential-1";
@@ -301,6 +315,109 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.message").value("Approval not found: " + id));
     }
 
+    // ---------------------------------------------------------------------
+    // CLARIFICATION asks (2026-10-05 spec §5): the answer settles the ask and
+    // wakes the parked run; a run not parked in this process answers 409.
+    // These routes are deliberately NOT operator-gated (spec D6).
+    // ---------------------------------------------------------------------
+
+    /** A CLARIFICATION ask exactly as the engine's waiting-input bookkeeping creates it. */
+    private Approval clarificationAsk(UUID id, UUID runId) {
+        return Approval.builder()
+                .id(id).runId(runId)
+                .status(ApprovalStatus.PENDING)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .askType(Approval.AskType.QUESTION)
+                .source(io.aria.conductor.common.model.ApprovalSource.CLARIFICATION)
+                .content("Which database should the migration target?")
+                .build();
+    }
+
+    @Test
+    void answer_clarificationSettlesTheAskAndWakesTheParkedRun() throws Exception {
+        UUID id = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        Approval ask = clarificationAsk(id, runId);
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(ask));
+        when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(trajectoryRepository.findMaxTurnNumberByRunId(runId)).thenReturn(2);
+        // Park the run first: the coordinator now truly holds it in WAITING_INPUT.
+        java.util.concurrent.CompletableFuture<io.aria.conductor.execution.runtime.RunInputCoordinator.OperatorInput>
+                parked = runInputs.requestInput(runId, "Which database should the migration target?");
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "postgres", "approved", true))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id.toString()))
+                .andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.answer").value("postgres"))
+                .andExpect(jsonPath("$.reason").value("postgres"))
+                .andExpect(jsonPath("$.decidedAt").exists());
+
+        // The parked run thread actually received the operator's answer.
+        io.aria.conductor.execution.runtime.RunInputCoordinator.OperatorInput input = parked.join();
+        org.assertj.core.api.Assertions.assertThat(input.answer()).isEqualTo("postgres");
+        org.assertj.core.api.Assertions.assertThat(input.finalizeRequested()).isFalse();
+    }
+
+    @Test
+    void answer_clarificationOnAnUnparkedRun_returns409() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval ask = clarificationAsk(id, UUID.randomUUID());
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(ask));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "postgres", "approved", true))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("Run " + ask.getRunId()
+                        + " is not waiting for operator input"));
+    }
+
+    @Test
+    void answer_clarificationDenyIsRefused() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval ask = clarificationAsk(id, UUID.randomUUID());
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(ask));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "no", "approved", false))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value("Deny a waiting run via POST /runs/{id}/finalize, not /answer"));
+    }
+
+    @Test
+    void answer_clarificationBlankAnswerIsRefused() throws Exception {
+        UUID id = UUID.randomUUID();
+        Approval ask = clarificationAsk(id, UUID.randomUUID());
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(ask));
+
+        mvc.perform(post("/api/v1/approvals/" + id + "/answer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("answer", "   ", "approved", true))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message")
+                        .value("An answer is required to continue a run waiting for input"));
+    }
+
+    /**
+     * The ask detail exposes its provenance (2026-10-05): the dashboard routes a
+     * CLARIFICATION ask to Answer &amp; continue + Finalize instead of Approve/Deny.
+     */
+    @Test
+    void getApproval_clarificationAsk_exposesSource() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(approvalRepository.findById(id)).thenReturn(Optional.of(clarificationAsk(id, UUID.randomUUID())));
+
+        mvc.perform(get("/api/v1/approvals/" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.askType").value("QUESTION"))
+                .andExpect(jsonPath("$.source").value("CLARIFICATION"));
+    }
+
     @Test
     void getApproval_returns200WithEnrichedDetail() throws Exception {
         UUID id = UUID.randomUUID();
@@ -429,9 +546,16 @@ class ApprovalControllerTest extends WebMvcTestBase {
         verifyNoInteractions(approvalGate);
     }
 
+    /**
+     * An anonymous caller from a NON-loopback client is still 401. (From
+     * loopback an anonymous request is the local operator — see
+     * {@link #loopbackAnonymousDecisionIsAuthorized}.) MockMvc's default peer
+     * is loopback, so the address is pinned explicitly here.
+     */
     @Test
     void decideApproval_withoutAnyOperatorIdentity_returns401() throws Exception {
         mvc.perform(post("/api/v1/approvals/" + UUID.randomUUID() + "/decide")
+                        .with(request -> { request.setRemoteAddr("203.0.113.7"); return request; })
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("approved", true, "reason", "ok"))))
                 .andExpect(status().isUnauthorized())
@@ -456,6 +580,46 @@ class ApprovalControllerTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.error").value("Operator authority required"));
 
         verifyNoInteractions(approvalGate, permissionCoordinator);
+    }
+
+    /** A fresh PENDING (non-native) gate approval id: the decide routes through the gate. */
+    private UUID pendingApprovalId() {
+        UUID id = UUID.randomUUID();
+        when(permissionCoordinator.isNativePermissionRequest(id)).thenReturn(false);
+        return id;
+    }
+
+    /**
+     * The local operator needs no credential at all: an anonymous request from
+     * loopback IS the single local operator (2026-10-05 local authority
+     * simplification), so the decision succeeds with no Authorization header.
+     */
+    @Test
+    void loopbackAnonymousDecisionIsAuthorized() throws Exception {
+        mvc.perform(post("/api/v1/approvals/{id}/decide", pendingApprovalId())
+                        .with(request -> { request.setRemoteAddr("127.0.0.1"); return request; })
+                        .contentType("application/json")
+                        .content("{\"approved\":true}"))
+                .andExpect(status().isOk());
+    }
+
+    /**
+     * A resolvable worker bearer is never promoted to operator -- not even from
+     * loopback (an unresolvable token is "no identity" and falls through to the
+     * loopback rule instead, so the worker token must be one the resolver can
+     * verify for this test to pin the 403 rule).
+     */
+    @Test
+    void workerBearerDecisionRemainsForbidden() throws Exception {
+        when(actorTokens.resolveBearer("Bearer worker-token"))
+                .thenReturn(Optional.of(io.aria.conductor.common.security.ActorPrincipal.worker(
+                        UUID.randomUUID(), java.time.Instant.parse("2026-09-22T12:10:00Z"))));
+        mvc.perform(post("/api/v1/approvals/{id}/decide", pendingApprovalId())
+                        .with(request -> { request.setRemoteAddr("127.0.0.1"); return request; })
+                        .header("Authorization", "Bearer worker-token")
+                        .contentType("application/json")
+                        .content("{\"approved\":true}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

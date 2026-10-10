@@ -192,7 +192,7 @@ public class KanbanService {
             case COMPLETED -> "COMPLETED";
             case FAILED -> "FAILED";
             case CANCELLED, ABORTED -> "CANCELLED";
-            case RUNNING, PENDING, INITIALIZING, PAUSED -> "ACTIVE";
+            case RUNNING, PENDING, INITIALIZING, PAUSED, WAITING_INPUT -> "ACTIVE";
         };
     }
 
@@ -313,6 +313,8 @@ public class KanbanService {
      * Refuse DONE while the linked run is still active. Active includes PAUSED:
      * a paused run has not finished, and letting the card reach Done would orphan
      * it (cancel is the only path that terminates a paused run, and Done skips it).
+     * It also includes WAITING_INPUT: a run parked for operator input holds its
+     * runtime and is still answerable, so Done would orphan it the same way.
      *
      * <p>An unparseable link is history, not an active run — allowing DONE keeps a
      * blemished card closable rather than permanently stuck. A missing run is
@@ -332,7 +334,8 @@ public class KanbanService {
             if (status == RunStatus.PENDING
                     || status == RunStatus.INITIALIZING
                     || status == RunStatus.RUNNING
-                    || status == RunStatus.PAUSED) {
+                    || status == RunStatus.PAUSED
+                    || status == RunStatus.WAITING_INPUT) {
                 throw new PickupRejectedException("LINKED_RUN_ACTIVE",
                         "Cannot move to Done: linked run " + runId + " is still " + status
                                 + ". Complete or cancel the run first.",

@@ -1,5 +1,8 @@
 package io.aria.conductor.execution.runtime;
 
+import io.aria.conductor.common.event.RunInputReceivedEvent;
+import io.aria.conductor.common.event.RunWaitingForInputEvent;
+import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -7,12 +10,13 @@ import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReply;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.net.URI;
 import java.nio.file.Path;
@@ -30,6 +34,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -68,11 +73,23 @@ class CoreExecutionServiceTest {
             + "\"workspaceMode\":\"DIRECT\",\"workspacePath\":\"C:/work\",\"workspaceBaseRef\":null}";
 
     private final List<String> recordedSteps = new ArrayList<>();
+    /** CopyOnWriteArrayList: the coordinator publishes from the parked run's thread (task 5 review hygiene). */
+    private final List<Object> publishedEvents = new CopyOnWriteArrayList<>();
+    private final ApplicationEventPublisher eventPublisher = publishedEvents::add;
+    private final RunInputCoordinator coordinator = new RunInputCoordinator(eventPublisher);
+    private final TaskDeadlineProperties taskDeadlines = new TaskDeadlineProperties();
     private final PermissionCoordinator permissions = mock(PermissionCoordinator.class);
-    private final RuntimeCredentialService credentials = mock(RuntimeCredentialService.class);
+    private final CoreCredentialService credentials = mock(CoreCredentialService.class);
     private final ActorTokenService actorTokens = mock(ActorTokenService.class);
     private final RunExecutionBindingRepository bindings = mock(RunExecutionBindingRepository.class);
     private final RunRuntimeRegistry runtimes = new RunRuntimeRegistry();
+    /** The non-qoder adapter the no-parking gate is asserted against. */
+    private final CoreAdapter opencodeAdapter = new RecordingAdapter() {
+        @Override
+        public String coreId() {
+            return "opencode";
+        }
+    };
 
     private RecordingBackend backend;
     private RecordingWorkspace workspaces;
@@ -176,6 +193,9 @@ class CoreExecutionServiceTest {
 
     private final class RecordingSession implements CoreSession {
         CoreTask prompted;
+        CoreTask secondPrompt;
+        /** Turn results the clarification loop consumes in order; null falls back to the default completion. */
+        Deque<CoreResult> scriptedResults;
         final List<CoreEvent> events = new ArrayList<>();
         final List<PermissionReply> decided = new ArrayList<>();
         final Deque<ControlAck> pauseAcks = new ArrayDeque<>();
@@ -191,7 +211,11 @@ class CoreExecutionServiceTest {
         @Override
         public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> consumer) {
             recordedSteps.add("prompt");
-            prompted = task;
+            if (prompted == null) {
+                prompted = task;
+            } else if (secondPrompt == null) {
+                secondPrompt = task;
+            }
             events.forEach(consumer);
             if (duringPrompt != null) {
                 duringPrompt.run();
@@ -199,8 +223,14 @@ class CoreExecutionServiceTest {
             if (promptFailure != null) {
                 return CompletableFuture.failedFuture(promptFailure);
             }
-            return CompletableFuture.completedFuture(new CoreResult("session-1", "final output",
-                    new UsageSnapshot(12L, 7L, null, "efficient"), false));
+            return CompletableFuture.completedFuture(nextResult());
+        }
+
+        /** The next scripted turn result, or the default completion when nothing (more) is scripted. */
+        private CoreResult nextResult() {
+            CoreResult scripted = scriptedResults == null ? null : scriptedResults.poll();
+            return scripted != null ? scripted
+                    : new CoreResult("session-1", "final output", usage(), false);
         }
 
         @Override
@@ -231,7 +261,7 @@ class CoreExecutionServiceTest {
         }
     }
 
-    private final class RecordingAdapter implements CoreAdapter {
+    private class RecordingAdapter implements CoreAdapter {
         @Override
         public String coreId() {
             return "qoder";
@@ -290,18 +320,26 @@ class CoreExecutionServiceTest {
      * timer, so a test fires the target exactly when the run's deadline elapses.
      */
     private static final class ManualDeadlineScheduler extends ScheduledThreadPoolExecutor {
+        private final List<Instant> scheduledInstants = new ArrayList<>();
+        private final Clock instantClock;
         private Runnable target;
         private long delayMillis;
         private volatile boolean cancelled;
 
         ManualDeadlineScheduler() {
+            this(Clock.systemUTC());
+        }
+
+        ManualDeadlineScheduler(Clock instantClock) {
             super(1);
+            this.instantClock = instantClock;
         }
 
         @Override
         public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
             this.target = command;
             this.delayMillis = unit.toMillis(delay);
+            this.scheduledInstants.add(instantClock.instant().plusMillis(this.delayMillis));
             return new ScheduledFuture<Object>() {
                 @Override
                 public long getDelay(TimeUnit unit) {
@@ -346,6 +384,11 @@ class CoreExecutionServiceTest {
             cancelled = false;
             target.run();
         }
+
+        /** Every instant a deadline was armed at, in scheduling order (clock + delay). */
+        List<Instant> scheduledInstants() {
+            return List.copyOf(scheduledInstants);
+        }
     }
 
     // ------------------------------------------------------------------ fixture
@@ -368,7 +411,8 @@ class CoreExecutionServiceTest {
                 Map.of("QODER_PERSONAL_ACCESS_TOKEN", "secret")));
         service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
                 new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
-                CLOCK, Duration.ofMinutes(5));
+                CLOCK, Duration.ofMinutes(5), new ManualDeadlineScheduler(), coordinator, eventPublisher,
+                taskDeadlines);
     }
 
     private ExecutionSpec spec() {
@@ -379,6 +423,22 @@ class CoreExecutionServiceTest {
     private CoreTask task() {
         return new CoreTask("system prompt", List.of(LlmMessage.user("first"), LlmMessage.assistant("answer")),
                 "do the work");
+    }
+
+    /** The usage snapshot the recording session reports for every turn. */
+    private static UsageSnapshot usage() {
+        return new UsageSnapshot(12L, 7L, null, "efficient");
+    }
+
+    /** The non-qoder spec the no-parking gate is asserted against (binding coreId is set to match). */
+    private ExecutionSpec opencodeSpec() {
+        return new ExecutionSpec(RUN, AGENT, "opencode", ExecutionMode.HOST, SETTINGS,
+                "qoder:operator", "rev-1", DEADLINE);
+    }
+
+    /** The recorded events of one type, in publication order. */
+    private List<Object> published(Class<?> type) {
+        return publishedEvents.stream().filter(type::isInstance).toList();
     }
 
     /** The pre-prompt half of {@link CoreExecutionService#execute}: a live run-owned runtime. */
@@ -771,6 +831,116 @@ class CoreExecutionServiceTest {
         assertThat(observed).containsExactly(
                 new CoreEvent("session.update", RUN, "session-1", "1", "{\"seq\":1}"),
                 new CoreEvent("prompt.result", RUN, "session-1", "1", "{\"stopReason\":\"end\"}"));
+    }
+
+    // ------------------------------------------------------------------ clarification waiting loop
+
+    @Test
+    void questionEndingTurnParksForTheAnswerAndRepromptsTheSameSessionWithoutFinalizing() throws Exception {
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Partial progress\n[NEED-INPUT] Which database?", usage(), false),
+                new CoreResult("session-1", "All done", usage(), false)));
+
+        // The answer arrives from another thread, as the REST route would.
+        Thread answerer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> !published(RunWaitingForInputEvent.class).isEmpty());
+            coordinator.submitAnswer(RUN, "postgres");
+        });
+        answerer.start();
+        CoreResult result = service.execute(spec(), adapter, task());
+        answerer.join();
+
+        assertThat(result.finalOutput()).isEqualTo("All done");
+        // The answer path's final result is the follow-up turn — a turn the
+        // engine has NOT seen before, so the final recording must include it.
+        assertThat(result.turnAlreadyAccounted()).isFalse();
+        // One launch, one session, TWO prompts -- same session, no re-open, no finalize in between.
+        assertThat(recordedSteps).containsSubsequence("launch", "open-session", "prompt", "prompt", "stop-writers");
+        assertThat(recordedSteps.lastIndexOf("prompt")).isGreaterThan(recordedSteps.indexOf("open-session"));
+        assertThat(backend.launchCalls).isEqualTo(1);
+        assertThat(recordedSteps).containsExactlyInAnyOrder("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "prompt", "prompt", "stop-writers", "capture", "destroy", "release");
+        // The follow-up task is the bare answer: session context, no re-sent system/history.
+        assertThat(session.secondPrompt.userPrompt()).isEqualTo("postgres");
+        assertThat(session.secondPrompt.systemPrompt()).isBlank();
+        assertThat(session.secondPrompt.history()).isEmpty();
+        // The engine was told about the waiting state, the intermediate turn and the answer.
+        assertThat(published(RunWaitingForInputEvent.class)).isNotEmpty();
+        assertThat(published(TurnCompletedEvent.class)).isNotEmpty();
+        assertThat(published(RunInputReceivedEvent.class)).isNotEmpty();
+    }
+
+    @Test
+    void finalizeSignalEndsTheRunWithTheQuestionTurnAsTheResult() throws Exception {
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Hmm\n[NEED-INPUT] Continue?", usage(), false)));
+        Thread finalizer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> !published(RunWaitingForInputEvent.class).isEmpty());
+            coordinator.requestFinalize(RUN);
+        });
+        finalizer.start();
+        CoreResult result = service.execute(spec(), adapter, task());
+        finalizer.join();
+
+        assertThat(result.finalOutput()).contains("[NEED-INPUT] Continue?");
+        assertThat(result.cancelled()).isFalse();
+        // The question turn was already accounted when its TurnCompletedEvent was
+        // published; the returned result IS that turn, so it must be marked — the
+        // engine's final recording must not repeat it.
+        assertThat(result.turnAlreadyAccounted()).isTrue();
+        // The park really happened: the operator's finalize signal woke a run the engine
+        // had announced as waiting, not a run that had already finished on its own.
+        assertThat(published(RunWaitingForInputEvent.class)).isNotEmpty();
+        // The parked run's runtime walks the normal finalize chain: stop, capture, destroy, release.
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "prompt", "stop-writers", "capture", "destroy", "release");
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+    }
+
+    @Test
+    void nonQoderCoresNeverParkEvenOnQuestionShapedOutput() {
+        binding.setCoreId("opencode");
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Should I proceed?", usage(), false)));
+
+        CoreResult result = service.execute(opencodeSpec(), opencodeAdapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("Should I proceed?");
+        // One prompt, no park, no waiting events: other cores keep today's single-turn behavior.
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "prompt", "stop-writers", "capture", "destroy", "release");
+        assertThat(published(RunWaitingForInputEvent.class)).isEmpty();
+        assertThat(published(TurnCompletedEvent.class)).isEmpty();
+    }
+
+    @Test
+    void aFollowUpTurnGetsAFreshPerTurnDeadlineWindow() throws Exception {
+        // The follow-up turn's window is armed from the task deadline policy (60 minutes here),
+        // not from the run's frozen deadline (45 minutes past the fixed clock's now): the second
+        // armed instant is strictly later than the first even on this fixed clock.
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
+        turnDeadlines.setDeadlineMinutes(60);
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
+        service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, turnDeadlines);
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "[NEED-INPUT] q?", usage(), false),
+                new CoreResult("session-1", "done", usage(), false)));
+        Thread answerer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> !published(RunWaitingForInputEvent.class).isEmpty());
+            coordinator.submitAnswer(RUN, "yes");
+        });
+        answerer.start();
+        service.execute(spec(), adapter, task());
+        answerer.join();
+
+        assertThat(scheduler.scheduledInstants()).hasSize(2);
+        assertThat(scheduler.scheduledInstants().get(1))
+                .isAfter(scheduler.scheduledInstants().get(0));
     }
 
     // ------------------------------------------------------------------ recovery

@@ -51,14 +51,11 @@ jobs:
             echo "NOT VERIFIED: the live tier needs workflow_dispatch with live=true AND the DEEPSEEK_API_KEY secret."
           fi
 
-      - name: Generate the synthetic operator credential and the runtime-credential key
+      - name: Generate the synthetic operator credential
         if: steps.live.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          {
-            echo "ARIA_OPERATOR_BEARER_TOKEN=nightly-operator-$(openssl rand -hex 16)"
-            echo "ARIA_RUNTIME_CREDENTIAL_KEY=$(openssl rand -base64 32 | tr -d '\n')"
-          } >> "$GITHUB_ENV"
+          echo "ARIA_OPERATOR_BEARER_TOKEN=nightly-operator-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         if: steps.live.outputs.enabled == 'true'

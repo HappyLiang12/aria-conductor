@@ -10,7 +10,9 @@ import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.port.RunBindingReaderPort;
 import io.aria.conductor.common.port.RunRuntimeControlPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -20,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -56,23 +59,34 @@ public class RunService {
      * recorded transition.
      */
     private final ObjectProvider<RunRuntimeControlPort> runtimeControlProvider;
+    /**
+     * The run's frozen-binding reader (Fleet Runtime Governance), optional and
+     * resolved as a nullable dependency: the binding repository lives in the
+     * execution module, so the run store reads it through the act-common port
+     * served there. A deployment that does not serve the port (or a legacy run
+     * without a binding row) maps to null coreId/executionMode -- never an
+     * invented runtime snapshot.
+     */
+    private final RunBindingReaderPort bindingReader;
 
-    /** Direct-instantiation (test) constructor: no runtime-control port, the recorded transition stands. */
+    /** Direct-instantiation (test) constructor: no runtime-control port, no binding reader. */
     public RunService(RunRepository runRepository,
                       AgentService agentService,
                       ApplicationEventPublisher eventPublisher) {
-        this(runRepository, agentService, eventPublisher, null);
+        this(runRepository, agentService, eventPublisher, null, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public RunService(RunRepository runRepository,
                       AgentService agentService,
                       ApplicationEventPublisher eventPublisher,
-                      ObjectProvider<RunRuntimeControlPort> runtimeControlProvider) {
+                      ObjectProvider<RunRuntimeControlPort> runtimeControlProvider,
+                      @org.springframework.lang.Nullable RunBindingReaderPort bindingReader) {
         this.runRepository = runRepository;
         this.agentService = agentService;
         this.eventPublisher = eventPublisher;
         this.runtimeControlProvider = runtimeControlProvider;
+        this.bindingReader = bindingReader;
     }
 
     @Transactional
@@ -108,30 +122,22 @@ public class RunService {
 
     @Transactional(readOnly = true)
     public List<RunResponse> listRuns() {
-        return runRepository.findAll().stream()
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return toResponses(runRepository.findAll());
     }
 
     @Transactional(readOnly = true)
     public List<RunResponse> listRunsByAgent(UUID agentId) {
-        return runRepository.findByAgentId(agentId).stream()
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return toResponses(runRepository.findByAgentId(agentId));
     }
 
     @Transactional(readOnly = true)
     public List<RunResponse> listRunsByStatus(RunStatus status) {
-        return runRepository.findByStatus(status).stream()
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return toResponses(runRepository.findByStatus(status));
     }
 
     @Transactional(readOnly = true)
     public List<RunResponse> listRunsByAgentAndStatus(UUID agentId, RunStatus status) {
-        return runRepository.findByAgentIdAndStatus(agentId, status).stream()
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return toResponses(runRepository.findByAgentIdAndStatus(agentId, status));
     }
 
     @Transactional(readOnly = true)
@@ -251,6 +257,44 @@ public class RunService {
     }
 
     private RunResponse toResponse(Run run) {
+        return toResponse(run, bindingFor(run));
+    }
+
+    /** The run's frozen binding, or null when no reader is served or the run has no row. */
+    private RunExecutionBinding bindingFor(Run run) {
+        if (bindingReader == null || run.getId() == null) {
+            return null;
+        }
+        return bindingReader.findByRunId(run.getId()).orElse(null);
+    }
+
+    /**
+     * List mapping resolves the runs' frozen bindings in ONE batched lookup:
+     * the run list is a dashboard page, and a per-run binding query would make
+     * it O(runs) round trips (N+1). Absent runs simply have no entry.
+     */
+    private List<RunResponse> toResponses(List<Run> runs) {
+        Map<UUID, RunExecutionBinding> bindings = bindingsByRunId(runs);
+        return runs.stream()
+                .map(run -> toResponse(run, bindings.get(run.getId())))
+                .collect(Collectors.toList());
+    }
+
+    private Map<UUID, RunExecutionBinding> bindingsByRunId(List<Run> runs) {
+        if (bindingReader == null || runs.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> runIds = runs.stream().map(Run::getId).filter(Objects::nonNull).toList();
+        if (runIds.isEmpty()) {
+            return Map.of();
+        }
+        return bindingReader.findByRunIdIn(runIds).stream()
+                .filter(binding -> binding != null && binding.getRunId() != null)
+                .collect(Collectors.toMap(RunExecutionBinding::getRunId, Function.identity(),
+                        (first, second) -> first));
+    }
+
+    private RunResponse toResponse(Run run, RunExecutionBinding binding) {
         return RunResponse.builder()
                 .id(run.getId())
                 .agentId(run.getAgentId())
@@ -261,6 +305,9 @@ public class RunService {
                 .iterationCount(run.getIterationCount())
                 .errorMessage(run.getErrorMessage())
                 .finalOutput(run.getFinalOutput())
+                .coreId(binding == null ? null : binding.getCoreId())
+                .executionMode(binding == null || binding.getExecutionMode() == null
+                        ? null : binding.getExecutionMode().name())
                 .createdAt(run.getCreatedAt())
                 .updatedAt(run.getUpdatedAt())
                 .completedAt(run.getCompletedAt())

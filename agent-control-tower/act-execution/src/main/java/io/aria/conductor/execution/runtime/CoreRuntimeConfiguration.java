@@ -111,6 +111,17 @@ public class CoreRuntimeConfiguration {
         return new CoordinatedRunRuntimeControl(coordinator);
     }
 
+    /**
+     * The run store's read-only view of the frozen bindings (Fleet Runtime
+     * Governance): the dashboard run responses badge the core/mode each run was
+     * dispatched with, read through this port so the run store (act-agent)
+     * never depends on the execution module's binding repository.
+     */
+    @Bean
+    public RepositoryRunBindingReader runBindingReaderPort(RunExecutionBindingRepository bindings) {
+        return new RepositoryRunBindingReader(bindings);
+    }
+
     @Bean
     public ExecutionBackend hostExecutionBackend() {
         return HostExecutionBackend.forCurrentPlatform();

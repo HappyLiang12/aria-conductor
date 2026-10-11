@@ -25,6 +25,7 @@ import io.aria.conductor.common.repository.RoleToolTemplateRepository;
 import io.aria.conductor.common.repository.RoleSkillTemplateRepository;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.service.SkillContextProvider;
 import io.aria.conductor.common.model.SkillContext;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
@@ -37,6 +38,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -92,6 +94,11 @@ public class AgentService {
     @Transactional
     public AgentResponse createAgent(CreateAgentRequest request) {
         log.info("Creating agent: name={}, type={}", request.getName(), request.getAgentType());
+
+        // Fleet runtime uniformity (2026-10-11): a create must not introduce a second
+        // (core, mode) pair. Omitted selection fields are normalized to the documented
+        // defaults inside the guard (the row itself is still stored as supplied below).
+        assertNoRuntimeMix(request.getAdkProvider(), request.getExecutionMode());
 
         Agent agent = Agent.builder()
                 .name(request.getName())
@@ -162,6 +169,14 @@ public class AgentService {
             agent.setPickupEnabled(request.getPickupEnabled());
         }
 
+        // Fleet runtime uniformity (2026-10-11): the null selection fields above kept the
+        // agent's current values, so a partial update is judged on the runtime the row will
+        // actually carry (nulls normalized to the documented defaults inside the guard) --
+        // and every per-agent write on an already-mixed fleet is refused (the batch runtime
+        // endpoint is the only converging action). Runs before admission and persistence;
+        // retirement is exempt because retireAgent never reaches this.
+        assertNoRuntimeMix(agent.getAdkProvider(), agent.getExecutionMode());
+
         // Write-time admission for a selection change (Task 18 fix round 1): only when
         // this request touches the execution selection, so an unrelated edit of a legacy
         // row (e.g. renaming an agent stored on a removed core) is never blocked by a
@@ -184,6 +199,40 @@ public class AgentService {
         executionPolicy.normalize(new AgentExecutionSettings(agent.getAdkProvider(),
                 agent.getExecutionMode(), agent.getWorkspaceMode(), agent.getWorkspacePath(),
                 agent.getWorkspaceBaseRef()));
+    }
+
+    /**
+     * Fleet runtime uniformity (2026-10-11 fleet runtime governance): the fleet
+     * runs ONE (core, mode) pair. A write that would introduce a second pair is
+     * refused; on an already-mixed fleet every per-agent write is refused -- the
+     * batch runtime endpoint is the only converging action. Retirement is exempt.
+     *
+     * <p>Both sides of the comparison are normalized to the documented defaults
+     * ({@code opencode} + {@code SANDBOX}, the same defaults the admission policy
+     * applies at run time): a create/update that omits the selection would
+     * otherwise store a row whose raw pair (e.g. {@code opencode/null}) never
+     * matches the effective pair it will actually run on. The emergent runtime is
+     * the distinct set of effective (adkProvider, executionMode) over non-retired
+     * agents, mirroring how the fleet is listed/filtered everywhere else
+     * ({@code findByHealthStatusNot(HealthStatus.RETIRED)}, pickup eligibility).
+     * An empty fleet (brand-new deployment) allows any first core/mode.
+     */
+    void assertNoRuntimeMix(String adkProvider, ExecutionMode executionMode) {
+        String incoming = (adkProvider != null ? adkProvider : "opencode")
+                + "/" + (executionMode != null ? executionMode : ExecutionMode.SANDBOX);
+        Set<String> runtimes = agentRepository.findAll().stream()
+                .filter(a -> a.getHealthStatus() != HealthStatus.RETIRED)
+                .map(a -> (a.getAdkProvider() != null ? a.getAdkProvider() : "opencode")
+                        + "/" + (a.getExecutionMode() != null ? a.getExecutionMode() : ExecutionMode.SANDBOX))
+                .collect(Collectors.toSet());
+        if (runtimes.size() > 1) {
+            throw new IllegalStateException(
+                    "The fleet runtime is mixed; converge it first via PUT /api/v1/agents/runtime");
+        }
+        if (!runtimes.isEmpty() && !runtimes.contains(incoming)) {
+            throw new IllegalStateException("Runtime mixing is not allowed: the fleet runs "
+                    + runtimes.iterator().next() + "; use PUT /api/v1/agents/runtime to change it fleet-wide");
+        }
     }
 
     /** Whether this update request carries any execution-selection field. */

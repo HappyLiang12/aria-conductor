@@ -248,4 +248,126 @@ class AgentServiceTest {
         assertThat(response.getName()).isEqualTo("renamed");
         verifyNoInteractions(executionPolicy);
     }
+
+    // ---- Fleet runtime governance (2026-10-11): the fleet runs ONE (core, mode) pair ----
+
+    private Agent fleetAgent(String adkProvider, ExecutionMode executionMode) {
+        return Agent.builder().id(UUID.randomUUID()).name("worker-" + adkProvider)
+                .agentType(AgentType.NATIVE).adkProvider(adkProvider).executionMode(executionMode)
+                .healthStatus(HealthStatus.HEALTHY).pickupEnabled(Boolean.TRUE).build();
+    }
+
+    private CreateAgentRequest aCreateRequest(String adkProvider, ExecutionMode executionMode) {
+        return CreateAgentRequest.builder().name("new-worker").agentType(AgentType.NATIVE)
+                .adkProvider(adkProvider).executionMode(executionMode).build();
+    }
+
+    private UpdateAgentRequest anUpdateRequest(String adkProvider, ExecutionMode executionMode) {
+        return UpdateAgentRequest.builder().adkProvider(adkProvider)
+                .executionMode(executionMode).build();
+    }
+
+    @Test
+    void creatingAnAgentWithTheFleetRuntimeIsAllowed() {
+        // uniform fleet: opencode/SANDBOX; the write carries the same pair
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(aCreateRequest("opencode", ExecutionMode.SANDBOX));
+
+        assertThat(response.getAdkProvider()).isEqualTo("opencode");
+        assertThat(response.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+    }
+
+    @Test
+    void creatingAnAgentOnAnEmptyFleetIsAllowed() {
+        // a brand-new fleet (zero agents) allows any first core/mode
+        when(agentRepository.findAll()).thenReturn(List.of());
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST));
+
+        assertThat(response.getAdkProvider()).isEqualTo("qoder");
+    }
+
+    @Test
+    void secondDefaultCreateOnAFleetOfDefaultCreatedAgentsIsAllowed() {
+        // A default create stores the row with a NULL execution mode (the selection is
+        // persisted as supplied; admission applies the documented defaults later). The
+        // guard compares EFFECTIVE pairs on both sides, so the next default create on
+        // such a fleet must not be refused as an off-fleet write.
+        when(agentRepository.findAll()).thenReturn(List.of(
+                Agent.builder().id(UUID.randomUUID()).name("seed").agentType(AgentType.NATIVE)
+                        .adkProvider("opencode").healthStatus(HealthStatus.HEALTHY).build()));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(CreateAgentRequest.builder()
+                .name("second-default").agentType(AgentType.NATIVE).build());
+
+        assertThat(response.getAdkProvider()).isEqualTo("opencode");
+    }
+
+    @Test
+    void creatingAnAgentOffTheFleetRuntimeIsRejected() {
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+
+        assertThatThrownBy(() -> service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Runtime mixing is not allowed")
+                .hasMessageContaining("PUT /api/v1/agents/runtime");
+        verify(agentRepository, never()).save(any());
+    }
+
+    @Test
+    void updatingAnAgentIntoAMixedFleetIsRejected() {
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.findAll()).thenReturn(List.of(
+                fleetAgent("opencode", ExecutionMode.SANDBOX),
+                fleetAgent("qoder", ExecutionMode.HOST))); // fleet already mixed
+
+        assertThatThrownBy(() -> service.updateAgent(agentId, anUpdateRequest("opencode", ExecutionMode.HOST)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("The fleet runtime is mixed");
+        verify(agentRepository, never()).save(any());
+    }
+
+    @Test
+    void updatingAnAgentOnAUniformFleetToTheFleetRuntimeIsAllowed() {
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.updateAgent(agentId, anUpdateRequest("opencode", ExecutionMode.SANDBOX));
+
+        assertThat(response.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+    }
+
+    @Test
+    void nameOnlyUpdateOnAUniformFleetKeepsTheCurrentRuntimeAndPasses() {
+        // Partial update: null adkProvider/executionMode resolve to the agent's CURRENT
+        // values before the guard runs, so an unrelated edit never introduces a mix.
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.updateAgent(agentId, UpdateAgentRequest.builder()
+                .name("renamed").build());
+
+        assertThat(response.getName()).isEqualTo("renamed");
+    }
+
+    @Test
+    void retiringAnAgentNeverTriggersTheGuard() {
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.retireAgent(agentId); // retirement is exempt per spec
+
+        assertThat(response.getHealthStatus()).isEqualTo(HealthStatus.RETIRED);
+        verify(agentRepository, never()).findAll(); // the uniformity guard never ran
+    }
 }

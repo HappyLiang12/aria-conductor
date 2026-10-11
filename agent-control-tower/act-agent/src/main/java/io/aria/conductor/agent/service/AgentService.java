@@ -3,6 +3,7 @@ package io.aria.conductor.agent.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.dto.AgentResponse;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.dto.UpdateAgentRequest;
 import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
@@ -233,6 +234,47 @@ public class AgentService {
             throw new IllegalStateException("Runtime mixing is not allowed: the fleet runs "
                     + runtimes.iterator().next() + "; use PUT /api/v1/agents/runtime to change it fleet-wide");
         }
+    }
+
+    /**
+     * Fleet runtime governance (2026-10-11): the ONE converging action for the
+     * fleet's single (core, mode) pair (spec section 3). Deliberately bypasses
+     * {@link #assertNoRuntimeMix}: the guard refuses any per-agent write that
+     * would introduce a second pair and directs the operator to THIS endpoint --
+     * running the guard here would refuse the very action that cures a mixed
+     * fleet. Do NOT "unify" the two; they are intentionally different
+     * (per-agent guard vs the batch convergence write).
+     *
+     * <p>Provider-inventory validation comes first: the requested pair must be
+     * declared by the production core catalog behind {@code GET /api/v1/adk/providers}
+     * -- enforced through the shared {@link AgentExecutionPolicy} admission whose
+     * production implementation validates against that same catalog. An undeclared
+     * core or unsupported mode is refused with {@link IllegalArgumentException}
+     * (400) before any agent row is read or written. The policy's normalized
+     * settings are then applied EXPLICITLY to every non-retired agent (no null
+     * selections are stored, so the uniformity guard's default normalization
+     * never has to interpret a batched row), and retired agents are neither
+     * touched nor counted (same retired predicate as the guard:
+     * {@code healthStatus != RETIRED}). One transaction: all agents converge
+     * atomically or not at all.
+     */
+    @Transactional
+    public ApplyRuntimeResult applyRuntimeToAll(String adkProvider, ExecutionMode executionMode) {
+        AgentExecutionSettings applied = executionPolicy.normalize(
+                new AgentExecutionSettings(adkProvider, executionMode, null, null, null));
+
+        List<Agent> fleet = agentRepository.findAll().stream()
+                .filter(a -> a.getHealthStatus() != HealthStatus.RETIRED)
+                .toList();
+        for (Agent agent : fleet) {
+            agent.setAdkProvider(applied.coreId());
+            agent.setExecutionMode(applied.executionMode());
+        }
+        agentRepository.saveAll(fleet);
+
+        log.info("Fleet runtime applied: core={}, mode={}, updated={} agent(s) (retired agents untouched)",
+                applied.coreId(), applied.executionMode(), fleet.size());
+        return new ApplyRuntimeResult(applied.coreId(), applied.executionMode(), fleet.size());
     }
 
     /** Whether this update request carries any execution-selection field. */

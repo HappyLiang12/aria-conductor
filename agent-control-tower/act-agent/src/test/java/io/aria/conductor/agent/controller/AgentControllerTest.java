@@ -1,11 +1,14 @@
 package io.aria.conductor.agent.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.agent.dto.ApplyRuntimeRequest;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
 import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.agent.service.AgentTemplateService;
 import io.aria.conductor.common.model.SkillContext;
 import io.aria.conductor.common.model.ToolDefinition;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -124,5 +127,23 @@ class AgentControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.tools[0].name").value("read_file"))
                 .andExpect(jsonPath("$.skills[0].id").value("s1"));
+    }
+
+    // ---- Task 2 (2026-10-11): fleet runtime batch endpoint ----
+
+    @Test
+    void applyRuntime_returnsOkWithRuntimeAndUpdatedCount() throws Exception {
+        when(agentService.applyRuntimeToAll("qoder", ExecutionMode.HOST))
+                .thenReturn(new ApplyRuntimeResult("qoder", ExecutionMode.HOST, 3));
+
+        mockMvc.perform(put("/api/v1/agents/runtime")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new ApplyRuntimeRequest("qoder", ExecutionMode.HOST))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runtime.adkProvider").value("qoder"))
+                .andExpect(jsonPath("$.runtime.executionMode").value("HOST"))
+                .andExpect(jsonPath("$.updated").value(3));
+        verify(agentService).applyRuntimeToAll(eq("qoder"), eq(ExecutionMode.HOST));
     }
 }

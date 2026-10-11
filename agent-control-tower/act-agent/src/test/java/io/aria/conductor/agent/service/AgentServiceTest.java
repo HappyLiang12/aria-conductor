@@ -1,6 +1,7 @@
 package io.aria.conductor.agent.service;
 
 import io.aria.conductor.agent.dto.AgentResponse;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
 import io.aria.conductor.agent.dto.UpdateAgentRequest;
@@ -36,6 +37,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -369,5 +371,65 @@ class AgentServiceTest {
 
         assertThat(response.getHealthStatus()).isEqualTo(HealthStatus.RETIRED);
         verify(agentRepository, never()).findAll(); // the uniformity guard never ran
+    }
+
+    // ---- Task 2 (2026-10-11): PUT /api/v1/agents/runtime — the converging batch action ----
+
+    @Test
+    void applyRuntimeUpdatesEveryNonRetiredAgentInOneCall() {
+        Agent live1 = fleetAgent("opencode", ExecutionMode.SANDBOX);
+        Agent live2 = fleetAgent("qoder", ExecutionMode.HOST);
+        Agent retired = fleetAgent("opencode", ExecutionMode.SANDBOX);
+        retired.setName("retired-worker"); // distinct name for the batch-membership assertion
+        retired.setHealthStatus(HealthStatus.RETIRED);
+        when(agentRepository.findAll()).thenReturn(List.of(live1, live2, retired));
+        when(executionPolicy.normalize(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(agentRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ApplyRuntimeResult result = service.applyRuntimeToAll("qoder", ExecutionMode.HOST);
+
+        assertThat(result.adkProvider()).isEqualTo("qoder");
+        assertThat(result.executionMode()).isEqualTo(ExecutionMode.HOST);
+        assertThat(result.updated()).isEqualTo(2); // retired agent untouched
+        // exactly the two live agents were persisted, both converged to qoder/HOST
+        verify(agentRepository).saveAll(argThat((Iterable<Agent> batch) -> {
+            List<Agent> rows = StreamSupport.stream(batch.spliterator(), false).toList();
+            return rows.size() == 2
+                    && rows.stream().noneMatch(a -> "retired-worker".equals(a.getName()))
+                    && rows.stream().allMatch(a -> "qoder".equals(a.getAdkProvider())
+                            && a.getExecutionMode() == ExecutionMode.HOST);
+        }));
+        assertThat(live1.getAdkProvider()).isEqualTo("qoder");
+        assertThat(live1.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        assertThat(live2.getAdkProvider()).isEqualTo("qoder");
+        assertThat(live2.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        // the retired row is neither mutated nor counted
+        assertThat(retired.getAdkProvider()).isEqualTo("opencode");
+        assertThat(retired.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+    }
+
+    @Test
+    void applyRuntimeRejectsAnUndeclaredCore() {
+        when(executionPolicy.normalize(any()))
+                .thenThrow(new IllegalArgumentException("Unsupported agent core: nonexistent"));
+
+        assertThatThrownBy(() -> service.applyRuntimeToAll("nonexistent", ExecutionMode.HOST))
+                .isInstanceOf(IllegalArgumentException.class) // surfaces as 400
+                .hasMessageContaining("Unsupported agent core");
+        // inventory validation runs BEFORE any fleet read or mutation
+        verify(agentRepository, never()).findAll();
+        verify(agentRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void applyRuntimeRejectsAnUnsupportedModeOnADeclaredCore() {
+        when(executionPolicy.normalize(any()))
+                .thenThrow(new IllegalArgumentException("Unsupported execution mode: opencode/HOST"));
+
+        assertThatThrownBy(() -> service.applyRuntimeToAll("opencode", ExecutionMode.HOST))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported execution mode");
+        verify(agentRepository, never()).findAll();
+        verify(agentRepository, never()).saveAll(any());
     }
 }

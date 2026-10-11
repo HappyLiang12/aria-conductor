@@ -379,3 +379,22 @@ Amended by operator decision (2026-10-05); full rationale and design in
 - Reason: operator ruling 2026-10-05 ("credential just follow llm-config way, no need over
   complicated"); the governance cost (same-OS-user processes can act as operator) is
   accepted and is consistent with Host-mode's stated trust model in section 6.2.
+
+## 12. Amendment (2026-10-11): fleet runtime governance
+
+Amended by operator decision (2026-10-11); full rationale and design in
+[Fleet Runtime Governance](2026-10-11-fleet-runtime-governance-design.md). Fleet uniformity
+is now enforced at agent create/update: the fleet runs exactly one (adkProvider,
+executionMode) pair, and the enforcement matrix of the Fleet Runtime Governance design
+(its section 3) refuses any per-agent write that would introduce a second pair (and, on an
+already-mixed fleet, any per-agent write at all) with 409, retirement exempt. The one
+converging action is the new batch endpoint
+`PUT /api/v1/agents/runtime`, which validates the requested pair against the ADK provider
+inventory (400 on an undeclared core or unsupported mode) and applies it atomically to every
+non-retired agent; it is deliberately exempt from the per-agent uniformity guard because it
+IS the convergence action the guard directs operators to. Per-agent core/mode editing is
+removed from the dashboard UI accordingly — runtime selection is fleet-wide only, configured
+once and applied to all agents. Parked and waiting runs continue across a core cutover via
+trajectory re-seed: the run's frozen binding migrates to the new fleet runtime when it
+resumes, with context re-seeded from the durable trajectory (see
+[Fleet Runtime Governance](2026-10-11-fleet-runtime-governance-design.md), section 4).

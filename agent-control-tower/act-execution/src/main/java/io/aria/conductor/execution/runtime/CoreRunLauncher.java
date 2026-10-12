@@ -140,6 +140,42 @@ public class CoreRunLauncher {
         return coordinator.execute(spec, adapters.require(coreId), task);
     }
 
+    /**
+     * Re-freezes a parked run's binding onto a superseding core selection (fleet
+     * runtime governance 4.4): the operator changed the agent's core/mode while
+     * the run waited for input, and the run coordinator migrates the run at
+     * answer time. Exactly the superseded fields are rewritten -- core, mode,
+     * credential reference, configuration revision and deadline; the frozen
+     * settings snapshot and the workspace references are carried over untouched,
+     * and the first-freeze idempotency guard of {@link #execute} does not apply
+     * (a migration supersedes the run's own binding deliberately).
+     *
+     * <p>Static rather than an instance seam: the coordinator cannot hold the
+     * launcher without a construction cycle (the launcher holds the coordinator).
+     *
+     * @param deadline the superseding frozen deadline, already truncated to the
+     *                 persistence granularity by the caller so the migrated spec
+     *                 and the row cannot disagree on the round trip
+     * @param reason   the migration reason recorded with the log line
+     * @return the saved superseding row, the authority the migrated attempt's
+     *         spec is built from
+     */
+    static RunExecutionBinding refreezeBinding(RunExecutionBindingRepository bindings, UUID runId,
+            Agent agent, Instant deadline, String reason) {
+        RunExecutionBinding row = bindings.findById(runId)
+                .orElseThrow(() -> new IllegalStateException("Run " + runId
+                        + " has no frozen execution binding to supersede"));
+        String coreId = agent.getAdkProvider();
+        row.setCoreId(coreId);
+        row.setExecutionMode(agent.getExecutionMode());
+        row.setCredentialRef(credentialReference(coreId));
+        row.setConfigurationRevision(configurationRevision(agent));
+        row.setDeadline(deadline);
+        bindings.save(row);
+        log.info("Migrated run {} to core {}/{} ({})", runId, coreId, agent.getExecutionMode(), reason);
+        return row;
+    }
+
     private AgentExecutionSettings frozenSettings(RunExecutionBinding binding) {
         String json = binding.getSettingsJson();
         if (json == null || json.isBlank()) {

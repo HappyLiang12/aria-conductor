@@ -10,6 +10,7 @@ import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
+import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
 import io.aria.conductor.execution.runtime.core.QoderCoreAdapter;
 import io.aria.conductor.execution.runtime.host.HostExecutionBackend;
@@ -172,10 +173,12 @@ public class CoreRuntimeConfiguration {
             CoreCredentialService coreCredentials, ActorTokenService actorTokens,
             RunExecutionBindingRepository bindings, RunInputCoordinator runInputCoordinator,
             org.springframework.context.ApplicationEventPublisher eventPublisher,
-            TaskDeadlineProperties taskDeadlines) {
+            TaskDeadlineProperties taskDeadlines,
+            io.aria.conductor.agent.repository.AgentRepository agentRepository,
+            SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
                 permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
-                eventPublisher, taskDeadlines);
+                eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters);
     }
 
     /**

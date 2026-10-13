@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SettingsPage } from '../pages/SettingsPage';
 import { SystemConfigPanel } from './SystemConfigPanel';
 import { RuntimeCredentialsCard } from './RuntimeCredentialsCard';
+import { ConfirmDialog } from './ConfirmDialog';
 import { listSkills } from '../api/skills';
+import { applyFleetRuntime, listAgents } from '../api/agents';
+import { listAdkProviders } from '../api/adk';
+import { composeRuntimes } from '../utils/runtimeComposition';
+import type { ExecutionMode } from '../types';
 
 /**
  * Pipeline stages shown in the Approval Gates tab.
@@ -66,9 +71,9 @@ interface SkillRow {
 
 const PERMISSION_OPTIONS: Permission[] = ['RO', 'USE', 'RW'];
 
-export function ConfigureModal() {
+export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string } = {}) {
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'gates' | 'skills' | 'llm' | 'config'>('gates');
+  const [activeTab, setActiveTab] = useState<string>(initialTab);
   const [gates, setGates] = useState<Gate[]>(() => DEFAULT_GATES.map((g) => ({ ...g })));
   const [skills, setSkills] = useState<SkillRow[]>([]);
 
@@ -197,6 +202,14 @@ export function ConfigureModal() {
           >
             ⚙️ System Config
           </div>
+          <div
+            className={`tab${activeTab === 'runtime' ? ' active' : ''}`}
+            role="tab"
+            aria-selected={activeTab === 'runtime'}
+            onClick={() => setActiveTab('runtime')}
+          >
+            🧩 Runtime
+          </div>
         </div>
 
         <div className="tab-body">
@@ -222,6 +235,9 @@ export function ConfigureModal() {
           {activeTab === 'config' && (
             <SystemConfigPanel />
           )}
+          {activeTab === 'runtime' && (
+            <RuntimePane />
+          )}
         </div>
 
         <footer>
@@ -232,6 +248,8 @@ export function ConfigureModal() {
               ? `${skills.length} tools configured · ${skills.filter((s) => s.permission === 'RW').length} with full access`
               : activeTab === 'llm'
               ? 'Configure LLM providers and the one-time Qoder runtime credential'
+              : activeTab === 'runtime'
+              ? 'One runtime for the whole fleet - applying updates every agent'
               : 'Runtime settings stored in the database — changes take effect immediately'}
           </div>
           <div className="actions">
@@ -465,3 +483,152 @@ function SkillsPane({ skills, onChange }: SkillsPaneProps) {
 }
 
 export default ConfigureModal;
+
+/** The documented placement pair; a core's declared list wins over it. */
+const RUNTIME_DOCUMENTED_MODES: ExecutionMode[] = ['SANDBOX', 'HOST'];
+
+const RUNTIME_MODE_LABELS: Record<ExecutionMode, string> = {
+  SANDBOX: 'Sandbox',
+  HOST: 'Host',
+};
+
+/**
+ * Fleet runtime governance (2026-10-11): ONE core/mode pair for every agent.
+ * There is deliberately no per-agent editing here — the operator picks a pair
+ * and applies it to the whole fleet; the backend hard-rejects any per-agent
+ * write that would mix the fleet (409), so this pane is the only converging
+ * action.
+ */
+function RuntimePane() {
+  const queryClient = useQueryClient();
+  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const { data: providers } = useQuery({
+    queryKey: ['adk-providers'],
+    queryFn: listAdkProviders,
+  });
+  const [coreId, setCoreId] = useState('');
+  const [mode, setMode] = useState<ExecutionMode | ''>('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const liveAgents = agents ?? [];
+  const composition = composeRuntimes(liveAgents);
+  const selectedProvider = (providers ?? []).find((p) => p.id === coreId);
+  const modes: ExecutionMode[] =
+    selectedProvider?.executionModes && selectedProvider.executionModes.length > 0
+      ? selectedProvider.executionModes
+      : RUNTIME_DOCUMENTED_MODES;
+
+  const apply = useMutation({
+    mutationFn: () => applyFleetRuntime(coreId, mode as ExecutionMode),
+    onSuccess: () => {
+      setConfirmOpen(false);
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+      void queryClient.invalidateQueries({ queryKey: ['runs'] });
+      void queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
+    },
+    onError: (err: unknown) => setError(`Apply failed: ${String((err as Error)?.message ?? err)}`),
+  });
+
+  const canApply = coreId !== '' && mode !== '';
+  const targetLabel = `${coreId}/${RUNTIME_MODE_LABELS[mode as ExecutionMode] ?? mode}`;
+  const compositionText =
+    liveAgents.length === 0
+      ? 'No agents yet - the first agent defines the fleet runtime.'
+      : composition.length <= 1
+        ? `Fleet runtime: ${composition[0].runtime} - ${composition[0].count} agent${composition[0].count === 1 ? '' : 's'} (uniform)`
+        : `Mixed runtime - ${composition.map((c) => `${c.runtime} x${c.count}`).join(' - ')}; applying a pair below converges every agent.`;
+
+  return (
+    <div style={{ padding: '0', margin: '0' }}>
+      <div
+        style={{
+          background: composition.length <= 1 ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)',
+          border: `1px solid ${composition.length <= 1 ? '#22c55e' : 'var(--amber, #f59e0b)'}`,
+          borderRadius: 6,
+          padding: '8px 10px',
+          fontSize: 12,
+          marginBottom: 12,
+        }}
+      >
+        {compositionText}
+      </div>
+      <div className="form-grid">
+        <div className="form-field">
+          <label htmlFor="runtime-core">Core</label>
+          <select
+            id="runtime-core"
+            value={coreId}
+            onChange={(e) => {
+              setCoreId(e.target.value);
+              setMode('');
+            }}
+          >
+            <option value="">Select a core...</option>
+            {(providers ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.displayName} ({p.id})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="form-field">
+          <label htmlFor="runtime-mode">Execution mode</label>
+          <select
+            id="runtime-mode"
+            value={mode}
+            disabled={coreId === ''}
+            onChange={(e) => setMode(e.target.value as ExecutionMode)}
+          >
+            <option value="">Select a mode...</option>
+            {modes.map((m) => (
+              <option key={m} value={m}>
+                {RUNTIME_MODE_LABELS[m]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+        Changes apply to every agent and take effect on new runs. A running or waiting run
+        keeps the runtime it was frozen with; answering a waiting run continues it on the
+        agent&apos;s current core.
+      </p>
+      {error && (
+        <div style={{ color: '#f87171', fontSize: 12, marginBottom: 8 }}>{error}</div>
+      )}
+      <button
+        type="button"
+        className="btn primary"
+        disabled={!canApply || apply.isPending}
+        onClick={() => setConfirmOpen(true)}
+      >
+        Apply to all agents
+      </button>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Apply runtime - confirmation required"
+        message={
+          <>
+            Every agent will run <strong>{targetLabel}</strong>. Current composition:{' '}
+            {composition.length <= 1
+              ? `${composition[0]?.runtime ?? 'none'} x${composition[0]?.count ?? 0}`
+              : composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}
+            . New runs start on the new runtime immediately; running runs finish on the one
+            they were frozen with.
+          </>
+        }
+        danger={composition.length > 1}
+        onConfirm={() => {
+          if (!canApply) return;
+          apply.mutate();
+        }}
+        onCancel={() => setConfirmOpen(false)}
+      />
+    </div>
+  );
+}
+

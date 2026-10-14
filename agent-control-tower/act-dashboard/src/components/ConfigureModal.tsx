@@ -88,9 +88,15 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
     })));
   }, [realSkills]);
 
-  // Listen for the rail-nav custom event that opens the modal.
+  // Listen for the rail-nav custom event that opens the modal. The event may
+  // carry { detail: { tab } } to open directly on a specific tab (the Overview
+  // runtime card uses it).
   useEffect(() => {
-    const handler = () => setOpen(true);
+    const handler = (e: Event) => {
+      setOpen(true);
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      if (tab) setActiveTab(tab);
+    };
     window.addEventListener('act:open-configure', handler);
     return () => window.removeEventListener('act:open-configure', handler);
   }, []);

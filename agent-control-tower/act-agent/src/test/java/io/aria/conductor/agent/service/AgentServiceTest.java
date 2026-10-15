@@ -43,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -57,12 +58,19 @@ class AgentServiceTest {
     @Mock AgentToolRepository agentToolRepository;
     @Mock ToolDefinitionRepository toolDefinitionRepository;
     @Mock SkillContextProvider skillProvider;
-    @Mock AgentSkillRepository agentSkillRepository;
-    @Mock RoleToolTemplateRepository roleToolTemplateRepository;
+    @Mock AgentSkillRepository agentSkillRepository;    @Mock RoleToolTemplateRepository roleToolTemplateRepository;
     @Mock RoleSkillTemplateRepository roleSkillTemplateRepository;
     @Mock AgentExecutionPolicy executionPolicy;
     @Spy AgentPickupEligibility eligibility = new AgentPickupEligibility();
     @InjectMocks AgentService service;
+
+    // The @Value switch defaults to false under plain Mockito injection; the
+    // fleet contract is what these pins test, so every test runs enforcement ON
+    // except the one pinning the harness kill-switch.
+    @org.junit.jupiter.api.BeforeEach
+    void enforcementOn() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "enforceUniformity", Boolean.TRUE);
+    }
 
     private final UUID agentId = UUID.randomUUID();
 
@@ -290,6 +298,23 @@ class AgentServiceTest {
         AgentResponse response = service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST));
 
         assertThat(response.getAdkProvider()).isEqualTo("qoder");
+    }
+
+    @Test
+    void enforcementSwitchOffAllowsTheMixedSeedTheE2EHarnessNeeds() {
+        // The deterministic core E2E harness runs with
+        // aria.runtime.enforce-uniformity=false: it exercises BOTH cores side by
+        // side, which the production uniformity contract forbids.
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "enforceUniformity", Boolean.FALSE);
+        // The short-circuited guard never reads the fleet; lenient keeps the
+        // strict-stubs check honest about that.
+        lenient().when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST));
+
+        assertThat(response.getAdkProvider()).isEqualTo("qoder");
+        assertThat(response.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
     }
 
     @Test

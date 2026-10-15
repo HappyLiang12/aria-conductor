@@ -65,6 +65,14 @@ public class AgentService {
      * refusal is added, so admission keeps applying the documented defaults.
      */
     private final AgentExecutionPolicy executionPolicy;
+    /**
+     * Fleet runtime uniformity enforcement (fleet runtime governance): ON for
+     * every production deployment. The deterministic core E2E harness turns it
+     * OFF -- its purpose is exercising BOTH cores side by side, which the
+     * uniformity contract forbids production configurations to mix.
+     */
+    @org.springframework.beans.factory.annotation.Value("${aria.runtime.enforce-uniformity:true}")
+    private boolean enforceUniformity;
 
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
@@ -219,6 +227,9 @@ public class AgentService {
      * An empty fleet (brand-new deployment) allows any first core/mode.
      */
     void assertNoRuntimeMix(String adkProvider, ExecutionMode executionMode) {
+        if (!enforceUniformity) {
+            return; // the deterministic core E2E harness exercises both cores side by side
+        }
         String incoming = (adkProvider != null ? adkProvider : "opencode")
                 + "/" + (executionMode != null ? executionMode : ExecutionMode.SANDBOX);
         Set<String> runtimes = agentRepository.findAll().stream()

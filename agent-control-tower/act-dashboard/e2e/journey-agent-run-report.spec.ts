@@ -45,7 +45,7 @@ test('2. run starts and reaches a real state (fails fast without a key)', async 
   await page.waitForLoadState('networkidle');
   const row = page.locator('.data-table tbody tr').filter({ hasText: agentName }).first();
   await expect(row).toBeVisible({ timeout: 20_000 });
-  await expect(row.locator('td').nth(2)).toContainText(/RUNNING|FAILED|COMPLETED|CANCELLED/);
+  await expect(row.locator('td').nth(3)).toContainText(/RUNNING|FAILED|COMPLETED|CANCELLED/);
 });
 
 test('3. approvals surface stays consistent with the API', async ({ page, request }) => {

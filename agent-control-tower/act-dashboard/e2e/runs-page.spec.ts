@@ -40,7 +40,7 @@ test.describe('Runs page', () => {
     await expect(page.locator('.form-card')).toHaveCount(0, { timeout: 20_000 });
     const row = page.locator('.data-table tbody tr').filter({ hasText: agent.name }).first();
     await expect(row).toBeVisible({ timeout: 20_000 });
-    await expect(row.locator('td').nth(2)).toContainText(
+    await expect(row.locator('td').nth(3)).toContainText(
       /PENDING|INITIALIZING|RUNNING|PAUSED|COMPLETED|FAILED|CANCELLED/,
     );
   });

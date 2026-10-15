@@ -98,7 +98,10 @@ describe('ConfigureModal runtime tab', () => {
     ]);
     await renderOpenedModal();
 
-    expect(screen.getByText(/Fleet runtime: qoder\/HOST - 2 agents \(uniform\)/)).toBeTruthy();
+    // findBy: the agents query resolves asynchronously (slower under coverage).
+    expect(
+      await screen.findByText(/Fleet runtime: qoder\/HOST - 2 agents \(uniform\)/),
+    ).toBeTruthy();
   });
 
   it('lists only the selected core\u2019s declared modes', async () => {

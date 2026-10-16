@@ -230,6 +230,18 @@ public class AgentService {
         if (!enforceUniformity) {
             return; // the deterministic core E2E harness exercises both cores side by side
         }
+        // The guard's fleet read shares the convergence monitor: without this, an
+        // apply's findAll/saveAll could interleave with this read and the create
+        // would land on the pre-apply fleet.
+        synchronized (FLEET_RUNTIME_LOCK) {
+            doAssertNoRuntimeMix(adkProvider, executionMode);
+        }
+    }
+
+    /** Monitor shared by the guard read and the convergence write (see applyRuntimeToAll). */
+    private static final Object FLEET_RUNTIME_LOCK = new Object();
+
+    private void doAssertNoRuntimeMix(String adkProvider, ExecutionMode executionMode) {
         String incoming = (adkProvider != null ? adkProvider : "opencode")
                 + "/" + (executionMode != null ? executionMode : ExecutionMode.SANDBOX);
         Set<String> runtimes = agentRepository.findAll().stream()
@@ -269,38 +281,46 @@ public class AgentService {
      * {@code healthStatus != RETIRED}). One transaction: all agents converge
      * atomically or not at all.
      */
-    @Transactional
     /**
      * Single-JVM mutual exclusion for the convergence write: two concurrent
      * applies are last-writer-wins uniform either way, but an apply racing a
      * per-agent create could interleave findAll/save into a mixed fleet. This
-     * monolith runs as one process (no distributed lock exists anywhere), so a
-     * monitor on this class closes that window; a multi-instance deployment
-     * would need a DB-level guard first.
+     * monolith runs as one process (no distributed lock exists anywhere), so the
+     * convergence write and the guard's fleet read SHARE the monitor below — a
+     * create's guard read can no longer interleave with an apply's read/write
+     * phase. RESIDUAL WINDOW, stated honestly: the Spring transaction commits
+     * AFTER this method returns and the monitor is released, so a create whose
+     * guard read lands inside that commit gap still sees the pre-commit fleet;
+     * the operator UI is single-writer, which makes the gap negligible here. A
+     * multi-instance deployment would need a DB-level guard first.
      */
-    public synchronized ApplyRuntimeResult applyRuntimeToAll(String adkProvider, ExecutionMode executionMode) {
-        AgentExecutionSettings applied = executionPolicy.normalize(
-                new AgentExecutionSettings(adkProvider, executionMode, null, null, null));
+    @Transactional
+    public ApplyRuntimeResult applyRuntimeToAll(String adkProvider, ExecutionMode executionMode) {
+        // Shared monitor with the guard's fleet read (see assertNoRuntimeMix).
+        synchronized (FLEET_RUNTIME_LOCK) {
+            AgentExecutionSettings applied = executionPolicy.normalize(
+                    new AgentExecutionSettings(adkProvider, executionMode, null, null, null));
 
-        List<Agent> fleet = agentRepository.findAll().stream()
-                .filter(a -> a.getHealthStatus() != HealthStatus.RETIRED)
-                .toList();
-        for (Agent agent : fleet) {
-            agent.setAdkProvider(applied.coreId());
-            agent.setExecutionMode(applied.executionMode());
+            List<Agent> fleet = agentRepository.findAll().stream()
+                    .filter(a -> a.getHealthStatus() != HealthStatus.RETIRED)
+                    .toList();
+            for (Agent agent : fleet) {
+                agent.setAdkProvider(applied.coreId());
+                agent.setExecutionMode(applied.executionMode());
+            }
+            agentRepository.saveAll(fleet);
+
+            // Audit trail: the convergence rewrites every agent's governed runtime
+            // selection at once — exactly the action the review required to be
+            // observable alongside the per-agent audit events.
+            eventPublisher.publishEvent(new io.aria.conductor.common.event.AuditLogEvent(
+                    this, "AGENT_RUNTIME_APPLIED", "AGENT", "fleet", "apply-runtime",
+                    "core=" + applied.coreId() + ", mode=" + applied.executionMode()
+                            + ", agents=" + fleet.size(), null));
+            log.info("Fleet runtime applied: core={}, mode={}, updated={} agent(s) (retired agents untouched)",
+                    applied.coreId(), applied.executionMode(), fleet.size());
+            return new ApplyRuntimeResult(applied.coreId(), applied.executionMode(), fleet.size());
         }
-        agentRepository.saveAll(fleet);
-
-        // Audit trail: the convergence rewrites every agent's governed runtime
-        // selection at once — exactly the action the review required to be
-        // observable alongside the per-agent audit events.
-        eventPublisher.publishEvent(new io.aria.conductor.common.event.AuditLogEvent(
-                this, "AGENT_RUNTIME_APPLIED", "AGENT", "fleet", "apply-runtime",
-                "core=" + applied.coreId() + ", mode=" + applied.executionMode()
-                        + ", agents=" + fleet.size(), null));
-        log.info("Fleet runtime applied: core={}, mode={}, updated={} agent(s) (retired agents untouched)",
-                applied.coreId(), applied.executionMode(), fleet.size());
-        return new ApplyRuntimeResult(applied.coreId(), applied.executionMode(), fleet.size());
     }
 
     /** Whether this update request carries any execution-selection field. */

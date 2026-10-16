@@ -107,6 +107,10 @@ export default function ExecutiveSummary() {
       !TERMINAL_RUN_STATUSES.includes(r.status) &&
       r.coreId != null &&
       r.executionMode != null &&
+      // An agent absent from the list (e.g. retired) gives no comparable
+      // runtime — a run frozen on a removed agent is not "draining", it has
+      // nothing to migrate to; counting it would flag forever.
+      runtimeByAgentId.has(r.agentId) &&
       runtimeByAgentId.get(r.agentId) !== `${r.coreId}/${r.executionMode}`,
   ).length;
   const runtimeUniform = composition.length <= 1;

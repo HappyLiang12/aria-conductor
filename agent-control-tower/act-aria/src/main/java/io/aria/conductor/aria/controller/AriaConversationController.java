@@ -32,17 +32,20 @@ public class AriaConversationController {
     private final AuditEventRepository auditEventRepository;
     private final ToolCallRepository toolCallRepository;
     private final AriaService ariaService;
+    private final io.aria.conductor.agent.service.RunService runService;
 
     public AriaConversationController(RunRepository runRepository,
                                        SessionTrajectoryRepository trajectoryRepository,
                                        AuditEventRepository auditEventRepository,
                                        ToolCallRepository toolCallRepository,
-                                       AriaService ariaService) {
+                                       AriaService ariaService,
+                                       io.aria.conductor.agent.service.RunService runService) {
         this.runRepository = runRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.auditEventRepository = auditEventRepository;
         this.toolCallRepository = toolCallRepository;
         this.ariaService = ariaService;
+        this.runService = runService;
     }
 
     /**

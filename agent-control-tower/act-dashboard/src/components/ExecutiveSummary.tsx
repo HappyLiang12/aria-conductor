@@ -5,7 +5,7 @@ import { listRuns } from '../api/runs';
 import { listKnowledge } from '../api/knowledge';
 import { listAgents } from '../api/agents';
 import { dispatchOpenTaskDrawer } from './DrawerContext';
-import { composeRuntimes } from '../utils/runtimeComposition';
+import { composeRuntimes, effectiveRuntimeOf } from '../utils/runtimeComposition';
 import type { KanbanItem, RunStatus } from '../types';
 
 /** The run statuses after which no core/mode migration is ever relevant. */
@@ -100,7 +100,7 @@ export default function ExecutiveSummary() {
   const liveAgentCount = (agents ?? []).filter((a) => a.healthStatus !== 'RETIRED').length;
   const composition = composeRuntimes(agents ?? []);
   const runtimeByAgentId = new Map(
-    (agents ?? []).map((a) => [a.id, `${a.adkProvider ?? '?'}/${a.executionMode ?? '?'}`]),
+    (agents ?? []).map((a) => [a.id, effectiveRuntimeOf(a)]),
   );
   const draining = (runs ?? []).filter(
     (r) =>

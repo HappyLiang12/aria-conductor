@@ -53,7 +53,8 @@ public class OperatorSessionService {
 
     private final String operatorCredential;
     private final Duration sessionTtl;
-    private final Set<String> allowedOrigins;
+    /** The one origin parser/matcher, shared with every other guarded layer. */
+    private final io.aria.conductor.common.security.OperatorOriginGuard originGuard;
     private final boolean cookieSecure;
     private final Clock clock;
     private final ConcurrentHashMap<String, OperatorSession> sessions = new ConcurrentHashMap<>();
@@ -74,12 +75,8 @@ public class OperatorSessionService {
         this.sessionTtl = sessionTtl == null ? DEFAULT_SESSION_TTL : sessionTtl;
         this.cookieSecure = cookieSecure;
         this.clock = Objects.requireNonNull(clock, "clock");
-        Set<String> origins = new LinkedHashSet<>();
-        if (allowedOrigins != null) {
-            Arrays.stream(allowedOrigins.split(",")).map(String::trim)
-                    .filter(origin -> !origin.isEmpty()).forEach(origins::add);
-        }
-        this.allowedOrigins = Set.copyOf(origins);
+        this.originGuard = new io.aria.conductor.common.security.OperatorOriginGuard(
+                allowedOrigins == null ? "" : allowedOrigins);
     }
 
     /** True when the operator credential is provisioned; otherwise every session request is 401. */
@@ -152,6 +149,10 @@ public class OperatorSessionService {
      * @throws ForbiddenMutationException when either check fails (HTTP 403 at the boundary)
      */
     public void validateMutation(OperatorSession session, String csrfHeader, String origin) {
+        // The session-cookie contract is STRICTER than the loopback/ungated one:
+        // a cookie is browser-present by definition, so the Origin is REQUIRED
+        // and must be allowed (the null-Origin local-tool exemption does not
+        // apply — a missing Origin here is itself a forged request).
         if (!isAllowedOrigin(origin)) {
             throw new ForbiddenMutationException("Cross-origin operator mutation rejected");
         }
@@ -161,30 +162,30 @@ public class OperatorSessionService {
     }
 
     /**
-     * Exact match, or a configured {@code http://host:*} entry whose host matches
-     * and whose port is numeric — a suffix that merely looks like a port (or a host
-     * that merely starts with the pattern's host) is not a match.
+     * Refuses a MUTATION whose Origin names a web page rather than a local tool
+     * (fleet runtime governance review): every browser POST carries an Origin
+     * header, local tools send none — so an Origin that is present but not one
+     * of the operator's trusted front ends means a cross-site page the operator
+     * had open forged the request (CORS cannot block a "simple" POST, and not
+     * reading the response is no protection). A MISSING Origin is allowed: that
+     * is the local-tool path the loopback contract exists for. Used by the
+     * loopback auto-authority branch AND by the deliberately unauthenticated
+     * operator routes (/answer, /finalize) as their only browser-grade defense.
+     * The session-cookie path keeps its stricter contract (Origin REQUIRED and
+     * allowed, plus CSRF) via {@link #validateMutation}.
      */
-    private boolean isAllowedOrigin(String origin) {
+    public void rejectCrossSiteOrigin(String origin) {
         if (origin == null) {
-            return false;
+            return; // local tools send no Origin: the loopback contract's audience
         }
-        String candidate = origin.trim();
-        return allowedOrigins.contains(candidate)
-                || allowedOrigins.stream().anyMatch(pattern -> matchesPortPattern(pattern, candidate));
+        if (!isAllowedOrigin(origin)) {
+            throw new ForbiddenMutationException("Cross-origin operator mutation rejected");
+        }
     }
 
-    private static boolean matchesPortPattern(String pattern, String origin) {
-        int star = pattern.lastIndexOf(":*");
-        if (star != pattern.length() - 2 || star < 0) {
-            return false;
-        }
-        String prefix = pattern.substring(0, star + 1);
-        if (!origin.startsWith(prefix)) {
-            return false;
-        }
-        String port = origin.substring(prefix.length());
-        return !port.isEmpty() && port.length() <= 5 && port.chars().allMatch(Character::isDigit);
+    /** Whether an Origin header names an operator-trusted front end (null never does). */
+    public boolean isAllowedOrigin(String origin) {
+        return originGuard.isAllowed(origin);
     }
 
     public boolean isCookieSecure() {

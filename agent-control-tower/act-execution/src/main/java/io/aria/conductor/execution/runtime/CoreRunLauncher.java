@@ -7,6 +7,8 @@ import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
+import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -171,9 +173,43 @@ public class CoreRunLauncher {
         row.setCredentialRef(credentialReference(coreId));
         row.setConfigurationRevision(configurationRevision(agent));
         row.setDeadline(deadline);
+        // A cross-mode migration genuinely changes the workspace contract: the
+        // frozen-match check compares the row's recorded kind against the new
+        // mode's expectation, so the row must record the new mode's kind or the
+        // relaunch would refuse its own superseded binding.
+        row.setWorkspaceKind(expectedWorkspaceKind(coreId, agent.getExecutionMode(), row.getSettingsJson()));
         bindings.save(row);
         log.info("Migrated run {} to core {}/{} ({})", runId, coreId, agent.getExecutionMode(), reason);
         return row;
+    }
+
+    /**
+     * The workspace kind the migrated binding must record for the superseding
+     * mode: SANDBOX snapshots for SANDBOX; HOST falls back to the documented
+     * DIRECT default unless the frozen settings select a workspace mode (the
+     * same fallback admission applies to a silent selection).
+     */
+    private static WorkspaceKind expectedWorkspaceKind(String coreId, ExecutionMode mode, String settingsJson) {
+        if (mode == ExecutionMode.SANDBOX) {
+            return WorkspaceKind.SANDBOX_SNAPSHOT;
+        }
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return WorkspaceKind.DIRECT;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode settings =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(settingsJson);
+            String workspaceMode = settings.path("workspaceMode").asText(null);
+            if ("WORKTREE".equals(workspaceMode)) {
+                return WorkspaceKind.WORKTREE;
+            }
+            if ("DIRECT".equals(workspaceMode)) {
+                return WorkspaceKind.DIRECT;
+            }
+        } catch (java.io.IOException e) {
+            // Unreadable frozen settings fall back like a silent selection.
+        }
+        return WorkspaceKind.DIRECT;
     }
 
     private AgentExecutionSettings frozenSettings(RunExecutionBinding binding) {

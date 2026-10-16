@@ -231,7 +231,11 @@ public class ApprovalController {
      */
     @PostMapping("/{id}/answer")
     public ResponseEntity<Object> answer(@PathVariable UUID id,
-                                         @RequestBody AnswerRequest request) {
+                                         @RequestBody AnswerRequest request,
+                                         jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // D6: deliberately unauthenticated — but a browser-grade defense still
+        // applies: a cross-site page's forged POST carries a foreign Origin.
+        operatorSessions.rejectCrossSiteOrigin(httpRequest.getHeader("Origin"));
         try {
             return ResponseEntity.ok(approvalAnswerService.answer(
                     id, request.answer(), request.approved(), request.reason()));

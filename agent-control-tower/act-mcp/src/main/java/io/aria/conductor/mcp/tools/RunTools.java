@@ -34,7 +34,8 @@ import java.util.UUID;
 public class RunTools implements McpTool {
 
     private static final Set<RunStatus> ACTIVE_STATUSES =
-            Set.of(RunStatus.RUNNING, RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.PAUSED);
+            Set.of(RunStatus.RUNNING, RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.PAUSED,
+            RunStatus.WAITING_INPUT);
 
     private final RunService runService;
     private final ApprovalRepository approvalRepository;

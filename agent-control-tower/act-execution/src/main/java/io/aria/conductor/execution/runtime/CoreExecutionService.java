@@ -377,14 +377,17 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             eventPublisher.publishEvent(new RunInputReceivedEvent(this, spec.runId()));
             // The agent's CURRENT selection decides the continuation (fleet runtime
             // governance 4.4): the comparison is loop-side, made here after the
-            // parked loop woke on an answer and before it re-prompts. A missing or
-            // incomplete agent record cannot be read as a change, so it keeps the
-            // same-core continuation.
+            // parked loop woke on an answer and before it re-prompts. It compares
+            // against the loop's LIVE selection (`current`), never the dispatch
+            // snapshot: a qoder->SANDBOX->qoder round-trip must still re-migrate on
+            // the second answer, or the run stays parked on a placement its agent
+            // no longer declares. A missing or incomplete agent record cannot be
+            // read as a change, so it keeps the same-core continuation.
             Agent agent = agents == null ? null : agents.findById(spec.agentId()).orElse(null);
             if (agent != null && agent.getAdkProvider() != null && !agent.getAdkProvider().isBlank()
                     && agent.getExecutionMode() != null
-                    && (!spec.coreId().equals(agent.getAdkProvider())
-                        || spec.mode() != agent.getExecutionMode())) {
+                    && (!current.coreId().equals(agent.getAdkProvider())
+                        || current.mode() != agent.getExecutionMode())) {
                 // Operator-driven runtime migration: the agent's core/mode changed
                 // while the run waited for input, so the answer continues on the new
                 // core -- finalize the old runtime (the one verified-stop teardown),
@@ -393,20 +396,32 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                 // verbatim: the frozen settings are asserted against the binding row
                 // and are never re-resolved from the agent's mutable settings -- only
                 // the governed core/mode selection supersedes.
+                //
+                // Once the old runtime is finalized the run can no longer continue
+                // on it, so every migration failure leaves the run FAILED: revoke
+                // the actor token, restore the binding to the selection the run
+                // actually ran on (the row was already superseded) and rethrow --
+                // the engine completes the run and its sweeps settle the asks.
                 finalizeRuntime(runtime);
-                // The superseding deadline freezes at the persistence granularity, the
-                // same shape the launcher's own freeze uses: a finer value cannot
-                // survive a TIMESTAMP round trip and would refuse the relaunch.
-                Instant migratedDeadline = clock.instant().plus(taskDeadlines.deadline())
-                        .truncatedTo(ChronoUnit.SECONDS);
-                RunExecutionBinding superseding = CoreRunLauncher.refreezeBinding(bindings, spec.runId(),
-                        agent, migratedDeadline, "operator runtime migration");
-                ExecutionSpec migrated = new ExecutionSpec(spec.runId(), spec.agentId(),
-                        agent.getAdkProvider(), agent.getExecutionMode(), spec.settings(),
-                        superseding.getCredentialRef(), superseding.getConfigurationRevision(),
-                        migratedDeadline);
-                current = migrated;
-                runtime = openRuntime(migrated, adapters.require(migrated.coreId()));
+                try {
+                    // The superseding deadline freezes at the persistence granularity, the
+                    // same shape the launcher's own freeze uses: a finer value cannot
+                    // survive a TIMESTAMP round trip and would refuse the relaunch.
+                    Instant migratedDeadline = clock.instant().plus(taskDeadlines.deadline())
+                            .truncatedTo(ChronoUnit.SECONDS);
+                    RunExecutionBinding superseding = CoreRunLauncher.refreezeBinding(bindings, spec.runId(),
+                            agent, migratedDeadline, "operator runtime migration");
+                    ExecutionSpec migrated = new ExecutionSpec(spec.runId(), spec.agentId(),
+                            agent.getAdkProvider(), agent.getExecutionMode(), spec.settings(),
+                            superseding.getCredentialRef(), superseding.getConfigurationRevision(),
+                            migratedDeadline);
+                    current = migrated;
+                    runtime = openRuntime(migrated, adapters.require(migrated.coreId()));
+                } catch (RuntimeException migrationFailure) {
+                    actorTokens.revokeRun(spec.runId());
+                    restoreBinding(spec, "migration failure restore");
+                    throw migrationFailure;
+                }
                 nextTask = new CoreTask("", trajectoryHistory(spec.runId()), input.answer());
             } else {
                 // Same-session continuation: the bare answer is the whole next turn.
@@ -439,6 +454,28 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         boolean cancelled = STATE_CANCELLED.equals(state);
         return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled,
                 result.turnAlreadyAccounted());
+    }
+
+    /**
+     * Restores a run's binding to the selection it actually ran on (fleet runtime
+     * governance): after a failed migration the superseded row would otherwise
+     * name a core the run never started on. Exact field restore from the
+     * dispatch-time spec -- the frozen settings and workspace references were
+     * never touched by the migration and need no restore.
+     */
+    private void restoreBinding(ExecutionSpec spec, String reason) {
+        RunExecutionBinding row = bindings.findById(spec.runId()).orElse(null);
+        if (row == null) {
+            return;
+        }
+        row.setCoreId(spec.coreId());
+        row.setExecutionMode(spec.mode());
+        row.setCredentialRef(spec.credentialRef());
+        row.setConfigurationRevision(spec.configurationRevision());
+        row.setDeadline(spec.deadline());
+        bindings.save(row);
+        log.info("Restored run {} binding to core {}/{} ({})", spec.runId(), spec.coreId(),
+                spec.mode(), reason);
     }
 
     /**

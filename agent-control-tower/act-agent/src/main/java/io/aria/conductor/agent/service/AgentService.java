@@ -270,7 +270,15 @@ public class AgentService {
      * atomically or not at all.
      */
     @Transactional
-    public ApplyRuntimeResult applyRuntimeToAll(String adkProvider, ExecutionMode executionMode) {
+    /**
+     * Single-JVM mutual exclusion for the convergence write: two concurrent
+     * applies are last-writer-wins uniform either way, but an apply racing a
+     * per-agent create could interleave findAll/save into a mixed fleet. This
+     * monolith runs as one process (no distributed lock exists anywhere), so a
+     * monitor on this class closes that window; a multi-instance deployment
+     * would need a DB-level guard first.
+     */
+    public synchronized ApplyRuntimeResult applyRuntimeToAll(String adkProvider, ExecutionMode executionMode) {
         AgentExecutionSettings applied = executionPolicy.normalize(
                 new AgentExecutionSettings(adkProvider, executionMode, null, null, null));
 
@@ -283,6 +291,13 @@ public class AgentService {
         }
         agentRepository.saveAll(fleet);
 
+        // Audit trail: the convergence rewrites every agent's governed runtime
+        // selection at once — exactly the action the review required to be
+        // observable alongside the per-agent audit events.
+        eventPublisher.publishEvent(new io.aria.conductor.common.event.AuditLogEvent(
+                this, "AGENT_RUNTIME_APPLIED", "AGENT", "fleet", "apply-runtime",
+                "core=" + applied.coreId() + ", mode=" + applied.executionMode()
+                        + ", agents=" + fleet.size(), null));
         log.info("Fleet runtime applied: core={}, mode={}, updated={} agent(s) (retired agents untouched)",
                 applied.coreId(), applied.executionMode(), fleet.size());
         return new ApplyRuntimeResult(applied.coreId(), applied.executionMode(), fleet.size());

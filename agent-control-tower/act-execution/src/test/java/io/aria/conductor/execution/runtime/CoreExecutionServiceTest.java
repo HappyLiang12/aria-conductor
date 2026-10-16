@@ -117,10 +117,12 @@ class CoreExecutionServiceTest {
         int launchCalls;
         boolean destroyed;
         Runnable duringStopWriters;
+        /** Overridden per test: the round-trip migration pin needs a SANDBOX twin. */
+        ExecutionMode declaredMode = ExecutionMode.HOST;
 
         @Override
         public ExecutionMode mode() {
-            return ExecutionMode.HOST;
+            return declaredMode;
         }
 
         @Override
@@ -203,6 +205,7 @@ class CoreExecutionServiceTest {
     private final class RecordingSession implements CoreSession {
         CoreTask prompted;
         CoreTask secondPrompt;
+        CoreTask thirdPrompt;
         /** Turn results the clarification loop consumes in order; null falls back to the default completion. */
         Deque<CoreResult> scriptedResults;
         final List<CoreEvent> events = new ArrayList<>();
@@ -224,6 +227,8 @@ class CoreExecutionServiceTest {
                 prompted = task;
             } else if (secondPrompt == null) {
                 secondPrompt = task;
+            } else if (thirdPrompt == null) {
+                thirdPrompt = task;
             }
             events.forEach(consumer);
             if (duringPrompt != null) {
@@ -1037,6 +1042,69 @@ class CoreExecutionServiceTest {
         // The follow-up turn ran under a fresh per-turn window, not the frozen deadline.
         assertThat(scheduler.scheduledInstants()).hasSize(2);
         assertThat(scheduler.scheduledInstants().get(1)).isAfter(scheduler.scheduledInstants().get(0));
+        assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+    }
+
+    @Test
+    void aCoreRoundTripStillMigratesOnTheSecondAnswer() throws Exception {
+        // qoder/HOST frozen -> answer 1 with the agent moved to qoder/SANDBOX
+        // (migrate; the SANDBOX twin backend is registered below) -> the agent
+        // moves BACK to qoder/HOST -> turn 2 ends with a question again -> answer
+        // 2 with the agent on qoder/HOST. The old dispatch-snapshot comparison
+        // saw spec(qoder/HOST)==agent(qoder/HOST) and took the same-session
+        // branch, leaving the run parked on a placement its agent no longer
+        // declares. The live selection (`current`) is what the comparison must
+        // track. Both pairs stay qoder so the parking gate keeps firing (parking
+        // is a qoder-core behavior).
+        RecordingBackend sandboxTwin = new RecordingBackend();
+        sandboxTwin.declaredMode = ExecutionMode.SANDBOX;
+        when(agents.findById(AGENT)).thenReturn(
+                Optional.of(agentWithCurrentRuntime("qoder", ExecutionMode.SANDBOX)),
+                Optional.of(agentWithCurrentRuntime("qoder", ExecutionMode.HOST)));
+        when(trajectories.findByRunIdOrderByTurnNumberAsc(RUN)).thenReturn(List.of(
+                SessionTrajectory.builder().runId(RUN).turnNumber(1).role("user").content("seed").build()));
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
+        turnDeadlines.setDeadlineMinutes(60);
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
+        service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend, sandboxTwin)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, turnDeadlines,
+                agents, trajectories, new CoreAdapters(List.of(adapter)));
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Working\n[NEED-INPUT] q1?", usage(), false),
+                new CoreResult("session-1", "Still stuck\n[NEED-INPUT] q2?", usage(), false),
+                new CoreResult("session-1", "All done", usage(), false)));
+        Thread answerer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> published(RunWaitingForInputEvent.class).size() >= 1);
+            coordinator.submitAnswer(RUN, "answer-1");
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> published(RunWaitingForInputEvent.class).size() >= 2);
+            coordinator.submitAnswer(RUN, "answer-2");
+        });
+        answerer.start();
+        CoreResult result = service.execute(spec(), adapter, task());
+        answerer.join();
+
+        // Three launches (qoder/HOST -> qoder/SANDBOX -> qoder/HOST): the middle
+        // one lands on the SANDBOX twin, the outer two on the HOST backend.
+        assertThat(backend.launchCalls).isEqualTo(2);
+        assertThat(sandboxTwin.launchCalls).isEqualTo(1);
+        assertThat(recordedSteps).containsSubsequence(
+                "launch", "open-session", "prompt",
+                "stop-writers", "capture", "destroy", "release",
+                "launch", "open-session", "prompt",
+                "stop-writers", "capture", "destroy", "release",
+                "launch", "open-session", "prompt");
+        // The binding ends on the restored qoder/HOST selection.
+        assertThat(binding.getCoreId()).isEqualTo("qoder");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        // The third prompt is the re-seeded task: the answer as user prompt over
+        // the durable trajectory history -- not the bare-answer task.
+        assertThat(session.thirdPrompt.userPrompt()).isEqualTo("answer-2");
+        assertThat(session.thirdPrompt.history()).isNotEmpty();
+        assertThat(result.finalOutput()).isEqualTo("All done");
+        assertThat(result.turnAlreadyAccounted()).isFalse();
         assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
     }
 

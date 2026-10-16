@@ -111,6 +111,8 @@ describe('ConfigureModal runtime tab', () => {
     ]);
     await renderOpenedModal();
 
+    // findBy: the providers query resolves asynchronously (slower under coverage).
+    await screen.findByText('Qoder (qoder)');
     await userEvent.selectOptions(screen.getByLabelText('Core'), 'qoder');
     const modeSelect = screen.getByLabelText('Execution mode') as HTMLSelectElement;
     const optionTexts = Array.from(modeSelect.options).map((o) => o.text);

@@ -45,12 +45,14 @@ class AriaConversationControllerTest {
     private final AuditEventRepository auditEventRepository = mock(AuditEventRepository.class);
     private final ToolCallRepository toolCallRepository = mock(ToolCallRepository.class);
     private final AriaService ariaService = mock(AriaService.class);
+    private final io.aria.conductor.agent.service.RunService runService =
+            mock(io.aria.conductor.agent.service.RunService.class);
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new AriaConversationController(
                 runRepository, trajectoryRepository, auditEventRepository, toolCallRepository,
-                ariaService)).build();
+                ariaService, runService)).build();
     }
 
     private Run run(String conversationId, RunStatus status, Instant createdAt) {

@@ -3,12 +3,13 @@
 # Task C6b — qoder credential preflight + PAT redaction rules (brief §"Env
 # contract" / §"PAT redaction rules").
 #
-# The B8 API surface (agent-control-tower/.../execution/controller/
-# QoderCredentialController.java):
-#   GET  /api/v1/adk/providers/qoder/credential        -> {providerId, configured,
-#        patMasked, updatedAt, model}   (503 KEY_NOT_CONFIGURED when the store
-#        cannot encrypt/decrypt because PACK_CREDENTIAL_KEY is missing)
-#   PUT  /api/v1/adk/providers/qoder/credential {"pat":...} -> same masked shape
+# The plain core-credential surface (agent-control-tower/.../execution/
+# controller/CoreCredentialController.java, 2026-10-05 simplification):
+#   GET  /api/v1/cores/qoder/credential           -> {credentialRef, coreId,
+#        environmentVariable, configured, maskedSecret, updatedAt, testSupported}
+#        (401 for a non-operator caller, 400 for an unknown core id)
+#   PUT  /api/v1/cores/qoder/credential  (raw secret as the text/plain body)
+#        -> same masked metadata shape
 #
 # Hard rules implemented here:
 #   - the PAT never reaches argv (the PUT body is piped via stdin: `printf ...
@@ -19,15 +20,16 @@
 #     count only) and fails the run when any count is non-zero.
 # =============================================================================
 
-credential_url() { printf '%s/api/v1/adk/providers/qoder/credential' "$API_URL"; }
+credential_url() { printf '%s/api/v1/cores/qoder/credential' "$API_URL"; }
 
-# PUT QODER_E2E_PAT into the runtime credential store. Prints the HTTP code.
-# The PAT travels on stdin only (brief's exact pipe form).
+# PUT QODER_E2E_PAT into the plain core credential store. Prints the HTTP code.
+# The PAT travels on stdin only (brief's exact pipe form); the surface reads the
+# body verbatim, so it is sent as text/plain — a JSON body would quote it.
 put_pat() { # outfile
   local out="$1"
-  printf '{"pat":"%s"}' "$QODER_E2E_PAT" | curl -sS --connect-timeout 10 --max-time 60 \
+  printf '%s' "$QODER_E2E_PAT" | curl -sS --connect-timeout 10 --max-time 60 \
     -o "$out" -w '%{http_code}' \
-    -X PUT -H 'Content-Type: application/json' --data-binary @- "$(credential_url)"
+    -X PUT -H 'Content-Type: text/plain' --data-binary @- "$(credential_url)"
 }
 
 # Fails (dies) when the given response body contains the PAT. Never prints body.
@@ -54,9 +56,7 @@ assert_body_free_of_pat() { # file, what
 # brief (env/preflight failures are the only mid-plan aborts).
 preflight_checks() {
   local wf="$WORK_DIR/preflight" rc=0
-  local cred_file
   mkdir -p "$wf"
-  cred_file="$wf/cred0.json"
 
   # ---- 1. stack health ------------------------------------------------------
   log_cmd "GET $API_URL/actuator/health (expect '\"status\":\"UP\"')"
@@ -91,12 +91,8 @@ preflight_checks() {
   log_cmd "GET $(credential_url) (masked status)"
   code="$(curl -sS --connect-timeout 10 --max-time 30 -o "$wf/cred0.json" -w '%{http_code}' "$(credential_url)" || true)"
   step_note "credential status: HTTP ${code:-<transport error>} body=$(head -c 300 "$wf/cred0.json" 2>/dev/null)"
-  if [ "$code" = "503" ]; then
-    step_fail "credential store unreachable (HTTP 503 KEY_NOT_CONFIGURED): PACK_CREDENTIAL_KEY is missing — the B8 store refuses the development fallback; set the key and restart the backend"
-    return 1
-  fi
   if [ "$code" != "200" ]; then
-    step_fail "credential status answered HTTP ${code:-transport-error} (expected 200; a 404 usually means the running backend predates the B8 credential API — restart it with the documented command below)"
+    step_fail "credential status answered HTTP ${code:-transport-error} (expected 200; a 404 usually means the running backend predates the plain core-credential API — restart it with the documented command below)"
     print_start_command_hint
     return 1
   fi
@@ -104,7 +100,7 @@ preflight_checks() {
 
   local configured masked want_masked reloaded=""
   configured="$(json_get "$wf/cred0.json" configured)"
-  masked="$(json_get "$wf/cred0.json" patMasked)"
+  masked="$(json_get "$wf/cred0.json" maskedSecret)"
   # The store must hold THIS run's PAT, not merely some credential: a leftover
   # credential would make S6's mask assertion fail even though masking works.
   # Compare tails only — the value and the tail are never logged.
@@ -124,7 +120,6 @@ preflight_checks() {
     code="$(curl -sS --connect-timeout 10 --max-time 30 -o "$wf/cred1.json" -w '%{http_code}' "$(credential_url)" || true)"
     assert_body_free_of_pat "$wf/cred1.json" "the credential re-GET response" || return 1
     configured="$(json_get "$wf/cred1.json" configured)"
-    cred_file="$wf/cred1.json"
     step_note "credential re-check: HTTP ${code:-<transport error>} configured=$configured"
     if [ -n "$reloaded" ]; then
       step_note "credential store did not hold the run PAT — reloaded (value never logged)"
@@ -135,17 +130,21 @@ preflight_checks() {
     return 1
   fi
 
-  # ---- 3. live model must be a zero-credit pin ------------------------------
-  LIVE_MODEL="$(json_get "$cred_file" model)"
-  step_note "live configured model: QODER_MODEL='$LIVE_MODEL'"
-  log_cmd "live model pin check: '$LIVE_MODEL' in {efficient, lite} (plan Global Constraint)"
-  case "$LIVE_MODEL" in
+  # ---- 3. zero-credit model pin ----------------------------------------------
+  # The plain core-credential surface no longer exposes the running model, so
+  # this guard checks the REQUESTED pin (QODER_E2E_MODEL — the value run-all.sh
+  # exports and restarts the stack with) instead of the live configuration.
+  log_cmd "requested model pin check: '${QODER_E2E_MODEL:-}' in {efficient, lite} (plan Global Constraint)"
+  case "${QODER_E2E_MODEL:-}" in
     efficient | lite) : ;;
+    "")
+      warn "QODER_E2E_MODEL is not set; the zero-credit guard cannot verify the model pin"
+      ;;
     *)
       if [ "${QODER_E2E_ALLOW_PAID:-}" = "1" ]; then
-        warn "live model '$LIVE_MODEL' is not zero-credit — continuing because QODER_E2E_ALLOW_PAID=1"
+        warn "requested model '$QODER_E2E_MODEL' is not zero-credit — continuing because QODER_E2E_ALLOW_PAID=1"
       else
-        step_fail "the RUNNING backend is configured with model '$LIVE_MODEL', not a zero-credit model (efficient|lite). The plan's zero-credit Global Constraint forbids this run: restart the stack with QODER_MODEL=efficient. Set QODER_E2E_ALLOW_PAID=1 only to use a paid model explicitly."
+        step_fail "requested model '$QODER_E2E_MODEL' is not a zero-credit model (efficient|lite). The plan's zero-credit Global Constraint forbids this run: start the stack with QODER_MODEL=efficient or set QODER_E2E_MODEL=efficient. Set QODER_E2E_ALLOW_PAID=1 only to use a paid model explicitly."
         return 1
       fi
       ;;
@@ -156,10 +155,10 @@ preflight_checks() {
 
 print_start_command_hint() {
   step_note "stack is not up — documented start command (from the repository root):"
-  step_note "  PACK_CREDENTIAL_KEY=... APPROVALS_TIMEOUT_MS=120000 QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
-  step_note "  PACK_CREDENTIAL_KEY is required for the credential API (without it every credential route answers 503 KEY_NOT_CONFIGURED)"
+  step_note "  APPROVALS_TIMEOUT_MS=120000 QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
+  step_note "  the Qoder credential is loaded through the core-credential REST surface (preflight loads QODER_E2E_PAT)"
   step_note "  APPROVALS_TIMEOUT_MS must be <= 180000 for S4 (the expiry scenario needs a short approval TTL)"
-  err "start the stack first (from the repository root): PACK_CREDENTIAL_KEY=... APPROVALS_TIMEOUT_MS=120000 QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
+  err "start the stack first (from the repository root): APPROVALS_TIMEOUT_MS=120000 QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder"
 }
 
 # ---------------------------------------------------------------------------

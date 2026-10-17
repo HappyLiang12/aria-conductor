@@ -32,8 +32,11 @@ public class RunService {
         Map<RunStatus, Set<RunStatus>> transitions = new EnumMap<>(RunStatus.class);
         transitions.put(RunStatus.PENDING, EnumSet.of(RunStatus.INITIALIZING, RunStatus.CANCELLED));
         transitions.put(RunStatus.INITIALIZING, EnumSet.of(RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED));
-        transitions.put(RunStatus.RUNNING, EnumSet.of(RunStatus.PAUSED, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED));
+        transitions.put(RunStatus.RUNNING, EnumSet.of(RunStatus.PAUSED, RunStatus.WAITING_INPUT, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED));
         transitions.put(RunStatus.PAUSED, EnumSet.of(RunStatus.RUNNING, RunStatus.CANCELLED));
+        // A run parked on a clarification question is alive, not terminal: the
+        // operator's answer resumes it, and it may still finalize from the parked state.
+        transitions.put(RunStatus.WAITING_INPUT, EnumSet.of(RunStatus.RUNNING, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED));
         transitions.put(RunStatus.COMPLETED, EnumSet.noneOf(RunStatus.class));
         transitions.put(RunStatus.FAILED, EnumSet.noneOf(RunStatus.class));
         transitions.put(RunStatus.CANCELLED, EnumSet.noneOf(RunStatus.class));

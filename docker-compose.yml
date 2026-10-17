@@ -65,6 +65,22 @@ services:
       # are IPv4-only, so pin the stack to IPv4 to avoid intermittent connect
       # failures on direct execd URLs.
       JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
+      # Operator authority (2026-10-05 simplification): a request from loopback is
+      # the local operator with no token, and ARIA_OPERATOR_BEARER_TOKEN (when set)
+      # authenticates non-loopback callers as the operator. The containerized
+      # frontend nginx proxies /api to this backend, so the backend's direct peer
+      # is the frontend container -- not the operator's browser -- and loopback
+      # auto-authority does not apply to those forwarded requests. Trusting the
+      # proxy needs an exact peer address in ARIA_OPERATOR_TRUSTED_PROXIES, but
+      # Docker assigns the frontend container a dynamic IP (a compose service name
+      # never appears in getRemoteAddr(), and the resolver deliberately supports no
+      # CIDR), so the compose stack cannot enable it by default -- the variable
+      # stays empty here and proxied deployments must pin the frontend's static IP
+      # and list it explicitly. See README "Configuration / Environment Variables".
+      ARIA_OPERATOR_TRUSTED_PROXIES: ${ARIA_OPERATOR_TRUSTED_PROXIES:-}
+      # Remote/compose deployments: a request presenting this bearer credential is
+      # the operator (loopback needs no token).
+      ARIA_OPERATOR_BEARER_TOKEN: ${ARIA_OPERATOR_BEARER_TOKEN:-}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     healthcheck:

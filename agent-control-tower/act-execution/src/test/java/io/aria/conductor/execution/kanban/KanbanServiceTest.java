@@ -225,6 +225,28 @@ class KanbanServiceTest {
     }
 
     @Test
+    void runOutcomeMapsWaitingInputToActive() {
+        // A parked run is alive, not settled: its card still shows ACTIVE while
+        // it waits for the operator's answer.
+        assertThat(KanbanService.runOutcome(RunStatus.WAITING_INPUT)).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void doneIsRejectedWhileTheLinkedRunIsWaitingInput() {
+        // A run parked for operator input is still alive: it holds its runtime
+        // and is answerable, so Done would orphan it exactly like PAUSED does.
+        when(runRepository.findById(LINKED_RUN_ID)).thenReturn(Optional.of(
+                Run.builder().id(LINKED_RUN_ID).status(RunStatus.WAITING_INPUT).build()));
+
+        assertThatThrownBy(() -> service.guardLinkedRunNotActive(LINKED_RUN_ID.toString()))
+                .isInstanceOf(PickupRejectedException.class)
+                .satisfies(e -> assertThat(((PickupRejectedException) e).code()).isEqualTo("LINKED_RUN_ACTIVE"))
+                .satisfies(e -> assertThat(((PickupRejectedException) e).details())
+                        .containsEntry("runId", LINKED_RUN_ID.toString())
+                        .containsEntry("runStatus", "WAITING_INPUT"));
+    }
+
+    @Test
     void doneIsRejectedWhileTheLinkedRunIsStillActive() {
         // Pins the whole active set: dropping any of these silently re-opens
         // DONE-orphans-a-live-run.

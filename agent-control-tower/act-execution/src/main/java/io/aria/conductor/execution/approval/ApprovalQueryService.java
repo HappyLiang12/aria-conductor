@@ -76,6 +76,7 @@ public class ApprovalQueryService {
                 toolName, tc != null ? tc.getArguments() : null, riskTier,
                 a.getKanbanItemId(),
                 a.getAskType() != null ? a.getAskType().name() : null,
+                a.getSource() == null ? null : a.getSource().name(),
                 a.getContextMd(), a.getOptionsJson(), a.getAnswer());
     }
 }

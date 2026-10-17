@@ -7,7 +7,7 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.runtime.ArtifactBundle;
 import io.aria.conductor.execution.runtime.ControlAck;
@@ -111,7 +111,7 @@ class CoreBindingPersistIntegrationTest extends BaseH2IntegrationTest {
     }
 
     private final PermissionCoordinator permissions = mock(PermissionCoordinator.class);
-    private final RuntimeCredentialService credentials = mock(RuntimeCredentialService.class);
+    private final CoreCredentialService credentials = mock(CoreCredentialService.class);
     private final ActorTokenService actorTokens = mock(ActorTokenService.class);
     private final RunRuntimeRegistry runtimes = new RunRuntimeRegistry();
     private final RecordingBackend backend = new RecordingBackend();

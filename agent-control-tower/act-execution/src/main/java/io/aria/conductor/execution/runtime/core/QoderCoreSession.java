@@ -64,6 +64,18 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /**
+     * The clarification contract is Qoder-specific (2026-10-05 spec §3): the
+     * core is told exactly how to mark a turn that needs operator input, so
+     * the coordinator can park instead of finalizing. Other cores are
+     * untouched. Appended to every Qoder prompt by design -- any turn may need
+     * input.
+     */
+    static final String CLARIFICATION_SEED_RULE =
+            "If you need the operator's answer to a clarifying question before you can"
+                    + " continue, end your turn with the question as the final line starting with"
+                    + " [NEED-INPUT]. Never use [NEED-INPUT] for anything else.";
+
     private final ExecutionSpec spec;
     private final QoderBridgeClient client;
     private final String model;
@@ -135,6 +147,7 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
             output = new StringBuilder();
         }
         String text = CorePromptComposition.joined(task.systemPrompt(), task.history(), task.userPrompt());
+        text = text + (text.isBlank() ? "" : "\n\n") + CLARIFICATION_SEED_RULE;
         try {
             // The reader start belongs to the guarded block: an unreachable
             // bridge must fail this prompt as a stage -- and must clear the

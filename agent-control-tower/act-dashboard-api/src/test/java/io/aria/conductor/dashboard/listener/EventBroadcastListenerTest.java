@@ -19,6 +19,7 @@ import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.RunProgressEventEntity;
@@ -187,6 +188,37 @@ class EventBroadcastListenerTest {
         WsBroadcastEvent event = captureBroadcast();
         assertThat(event.data()).doesNotContainKey("finalOutput");
         assertThat(event.data()).containsEntry("status", "FAILED");
+    }
+
+    // Waiting-input (2026-10-05): the park broadcast carries the clarification
+    // question so the operator sees what is being asked without a poll.
+    @Test
+    void onRunWaitingForInput_broadcastsRunIdAndQuestion() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.waiting_input");
+        assertThat(event.data()).containsEntry("runId", runId.toString())
+                .containsEntry("question", "Which database?");
+    }
+
+    @Test
+    void onRunWaitingForInput_truncatesLongQuestion() {
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, UUID.randomUUID(), "q".repeat(600)));
+
+        WsBroadcastEvent event = captureBroadcast();
+        String question = (String) event.data().get("question");
+        assertThat(question).hasSize(503).endsWith("...");
+    }
+
+    @Test
+    void onRunWaitingForInput_nullQuestion_serializesAsNull() {
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, UUID.randomUUID()));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.waiting_input");
+        assertThat(event.data()).containsEntry("question", null);
     }
 
     @Test

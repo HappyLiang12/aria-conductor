@@ -3,6 +3,8 @@ package io.aria.conductor.execution.runtime;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.event.RunInputReceivedEvent;
+import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -15,10 +17,11 @@ import io.aria.conductor.execution.approval.PermissionOption;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.approval.PermissionReplySink;
 import io.aria.conductor.execution.approval.PermissionTarget;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -91,18 +94,24 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     static final String STATE_FAILED = "FAILED";
     static final String STATE_CANCELLED = "CANCELLED";
 
+    /** A publisher that discards every event: the default when no application context is wired. */
+    private static final ApplicationEventPublisher NOOP_PUBLISHER = event -> { };
+
     private final ExecutionBackendRegistry backends;
     private final WorkspaceService workspaces;
     private final RunFinalizer finalizer;
     private final RunRuntimeRegistry runtimes;
     private final PermissionCoordinator permissions;
-    private final RuntimeCredentialService credentials;
+    private final CoreCredentialService credentials;
     private final ActorTokenService actorTokens;
     private final RunExecutionBindingRepository bindings;
     private final Clock clock;
     private final Duration cleanupWindow;
     private final ScheduledExecutorService deadlines;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final RunInputCoordinator inputs;
+    private final ApplicationEventPublisher eventPublisher;
+    private final TaskDeadlineProperties taskDeadlines;
 
     /**
      * One monitor per run around the binding row's read-modify-write of the
@@ -117,7 +126,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
 
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
-            PermissionCoordinator permissions, RuntimeCredentialService credentials,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
             ActorTokenService actorTokens, RunExecutionBindingRepository bindings) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials,
                 actorTokens, bindings, Clock.systemUTC(), Duration.ofMinutes(5));
@@ -132,7 +141,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      */
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
-            PermissionCoordinator permissions, RuntimeCredentialService credentials,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
             ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
             Clock clock, Duration cleanupWindow) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
@@ -146,9 +155,48 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      */
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
-            PermissionCoordinator permissions, RuntimeCredentialService credentials,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
             ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
             Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                clock, cleanupWindow, deadlines, new RunInputCoordinator(NOOP_PUBLISHER), NOOP_PUBLISHER,
+                new TaskDeadlineProperties());
+    }
+
+    /**
+     * The production constructor: the run's own control timestamps, cleanup
+     * window and deadline scheduler keep their documented defaults, while the
+     * clarification waiting loop's collaborators are wired explicitly (the
+     * coordinator that publishes {@code RunWaitingForInputEvent} and parks the
+     * run, the application event publisher for the loop's turn events and the
+     * per-turn follow-up deadline policy).
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines);
+    }
+
+    /**
+     * @param deadlines      the scheduler each run's deadline task is armed on
+     * @param inputs         the waiting-input coordinator the clarification loop
+     *                       parks on for the operator's answer or finalize signal
+     * @param eventPublisher the application event publisher the loop's turn
+     *                       events are published through
+     * @param taskDeadlines  the deadline policy a follow-up turn of the
+     *                       clarification loop gets as a fresh window from now
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines) {
         this.backends = Objects.requireNonNull(backends, "Backend registry is required");
         this.workspaces = Objects.requireNonNull(workspaces, "Workspace service is required");
         this.finalizer = Objects.requireNonNull(finalizer, "Run finalizer is required");
@@ -160,6 +208,9 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         this.clock = Objects.requireNonNull(clock, "Clock is required");
         this.cleanupWindow = Objects.requireNonNull(cleanupWindow, "Cleanup window is required");
         this.deadlines = Objects.requireNonNull(deadlines, "Deadline scheduler is required");
+        this.inputs = Objects.requireNonNull(inputs, "Run input coordinator is required");
+        this.eventPublisher = Objects.requireNonNull(eventPublisher, "Event publisher is required");
+        this.taskDeadlines = Objects.requireNonNull(taskDeadlines, "Task deadline properties are required");
     }
 
     // ------------------------------------------------------------------ execute
@@ -167,8 +218,17 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     /**
      * Executes one run-owned attempt of the frozen spec and finalizes it.
      *
-     * @return the core's terminal result; {@code cancelled} is true exactly when
-     *         a verified stop had already ended the run's writers
+     * <p>The turn loop: for the qoder core, a turn that ends with a
+     * clarification question ({@link ClarificationQuestions#awaitingInput})
+     * publishes the turn and parks unbounded on the waiting-input coordinator
+     * (operator decision D3 -- no timeout by design), until the operator's
+     * answer arrives (the bare answer becomes the next turn's whole prompt --
+     * the session already holds the context) or a finalize signal ends the run
+     * with the question turn as its result. Other cores run exactly one turn:
+     * their behavior is unchanged.
+     *
+     * @return the LAST turn's terminal result; {@code cancelled} is true
+     *         exactly when a verified stop had already ended the run's writers
      * @throws IllegalStateException when the binding is missing/mismatched, the
      *         launch fails, the prompt fails or the stop cannot be verified
      */
@@ -178,18 +238,64 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         Objects.requireNonNull(task, "Core task is required");
 
         RunRuntimeRegistry.RunRuntime runtime = openRuntime(spec, adapter);
-        ScheduledFuture<?> deadlineTask = scheduleDeadline(runtime);
         CoreResult result = null;
         String failure = null;
-        try {
-            result = runtime.session().prompt(task, event -> handleEvent(runtime, event))
-                    .toCompletableFuture().join();
-        } catch (CompletionException e) {
-            failure = messageOf(e.getCause());
-        } catch (RuntimeException e) {
-            failure = messageOf(e);
-        } finally {
-            deadlineTask.cancel(false);
+        CoreTask nextTask = task;
+        boolean firstTurn = true;
+        while (true) {
+            // The first turn aims at the run's frozen deadline; a follow-up turn
+            // gets a fresh per-turn window from now. Each window only bounds its
+            // own in-flight prompt and is disarmed as soon as that prompt ends.
+            ScheduledFuture<?> deadlineTask = firstTurn
+                    ? scheduleDeadline(runtime)
+                    : scheduleDeadline(runtime, clock.instant().plus(taskDeadlines.deadline()));
+            CoreResult turnResult;
+            try {
+                turnResult = runtime.session().prompt(nextTask, event -> handleEvent(runtime, event))
+                        .toCompletableFuture().join();
+            } catch (CompletionException e) {
+                failure = messageOf(e.getCause());
+                break;
+            } catch (RuntimeException e) {
+                failure = messageOf(e);
+                break;
+            } finally {
+                deadlineTask.cancel(false);
+            }
+            if (turnResult.cancelled()) {
+                result = turnResult;
+                break;
+            }
+            String question = "qoder".equals(spec.coreId())
+                    ? ClarificationQuestions.awaitingInput(turnResult.finalOutput())
+                    : null;
+            if (question == null) {
+                result = turnResult;
+                break;
+            }
+            eventPublisher.publishEvent(new TurnCompletedEvent(this, spec.runId(),
+                    turnResult.finalOutput(),
+                    turnResult.usage() == null ? null : turnResult.usage().inputTokens(),
+                    turnResult.usage() == null ? null : turnResult.usage().outputTokens(),
+                    turnResult.usage() == null ? null : turnResult.usage().observedModel()));
+            // Parks this (virtual) thread unbounded -- D3: the wait is the
+            // operator's decision; a verified stop or finalize signal is what
+            // ends it besides an answer.
+            RunInputCoordinator.OperatorInput input = inputs.requestInput(spec.runId(), question).join();
+            if (input.finalizeRequested()) {
+                // The question turn was already accounted (usage, iteration,
+                // trajectory) when its TurnCompletedEvent was published above; the
+                // sticky termination intent wakes this same break, so this covers
+                // the finalize AND the cancel-while-waiting return. Mark the copy:
+                // the engine's final recording must not repeat the turn.
+                result = new CoreResult(turnResult.sessionId(), turnResult.finalOutput(),
+                        turnResult.usage(), turnResult.cancelled(), true);
+                break;
+            }
+            eventPublisher.publishEvent(new RunInputReceivedEvent(this, spec.runId()));
+            // Same-session continuation: the bare answer is the whole next turn.
+            nextTask = new CoreTask("", List.of(), input.answer());
+            firstTurn = false;
         }
 
         try {
@@ -214,7 +320,8 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             throw new IllegalStateException("Run " + spec.runId() + " failed: " + failure);
         }
         boolean cancelled = STATE_CANCELLED.equals(state);
-        return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled);
+        return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled,
+                result.turnAlreadyAccounted());
     }
 
     /**
@@ -542,6 +649,12 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         runtime.recordVerifiedStop(STATE_CANCELLED);
         persistState(runtime, STATE_CANCELLED);
         actorTokens.revokeRun(runId);
+        // A run parked on the clarification loop wakes here and walks the normal
+        // finalize chain with the question turn as its result; a run that is not
+        // waiting records a sticky termination intent instead, so a park call in
+        // the between-turns window returns the finalize signal at once rather
+        // than parking a run that is already terminal (Plan B task 6 ruling 1).
+        inputs.recordTerminationIntent(runId);
         return CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true));
     }
 
@@ -739,14 +852,24 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     // ------------------------------------------------------------------ deadline
 
     private ScheduledFuture<?> scheduleDeadline(RunRuntimeRegistry.RunRuntime runtime) {
+        return scheduleDeadline(runtime, runtime.spec().deadline());
+    }
+
+    /**
+     * Arms the run-deadline enforcement against an explicit instant: the first
+     * turn targets the run's frozen deadline, a follow-up turn of the
+     * clarification loop gets a fresh window from now. The armed target behaves
+     * identically -- pending asks expire at their own window, then the run is
+     * stopped through the verified cancel path -- only the armed instant differs.
+     */
+    private ScheduledFuture<?> scheduleDeadline(RunRuntimeRegistry.RunRuntime runtime, Instant deadline) {
         UUID runId = runtime.spec().runId();
         long delayMillis = Math.max(0,
-                Duration.between(clock.instant(), runtime.spec().deadline()).toMillis());
+                Duration.between(clock.instant(), deadline).toMillis());
         return deadlines.schedule(() -> {
             try {
                 if (runtimes.find(runId).isPresent() && !runtimes.writersStopped(runId)) {
-                    Instant deadline = runtime.spec().deadline();
-                    log.warn("Run {} reached its frozen deadline {}; its pending native asks expire at their"
+                    log.warn("Run {} reached its deadline {}; its pending native asks expire at their"
                             + " own window and the in-flight prompt is cancelled", runId, deadline);
                     // The ask's own expiry is the same frozen deadline (`register`
                     // freezes `expiresAt = runtime.spec().deadline()`), so the

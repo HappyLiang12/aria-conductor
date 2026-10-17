@@ -7,7 +7,7 @@ import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,7 +35,7 @@ import java.util.UUID;
 public class CoreRunLauncher {
 
     /** The runtime credential reference of the Qoder core. */
-    public static final String QODER_CREDENTIAL_REFERENCE = RuntimeCredentialService.QODER_CREDENTIAL_REFERENCE;
+    public static final String QODER_CREDENTIAL_REFERENCE = CoreCredentialService.QODER_CREDENTIAL_REFERENCE;
 
     private final AgentExecutionPolicy policy;
     private final CoreAdapters adapters;

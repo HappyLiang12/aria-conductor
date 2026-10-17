@@ -213,27 +213,25 @@ async function cardLinkedAsks(request: Parameters<typeof seedAdkAgent>[0], cardI
   return (data as any[] | null) ?? [];
 }
 
-test('without operator authority the decision is refused and the ask stays PENDING', async ({ request }) => {
+test('an unverifiable bearer falls through to loopback authority', async ({ request }) => {
   const { card, ask } = await dispatchAsk(request);
 
-  // No identity at all: 401, exact refusal, nothing processed.
-  const anonymous = await apiCall(request, 'POST', `/approvals/${ask.id}/decide`, {
-    approved: true,
-    reason: 'unauthenticated attempt',
-  });
-  expect(anonymous.status).toBe(401);
-  expect(anonymous.data?.error).toBe('Operator session required');
-
-  // An unverifiable bearer credential is no identity either: 401, not 403.
+  // An unverifiable bearer credential counts as "no identity presented" and
+  // falls through to the loopback/401 rules (local-authority simplification).
+  // The e2e harness calls the backend from loopback, so the local operator
+  // authority applies and the decision is processed. The non-loopback refusal
+  // is pinned at the MockMvc and integration tiers (ApprovalFlowIntegrationTest
+  // forwards an X-Forwarded-For client through a trusted proxy for it).
   const forged = await request.fetch(`${BACKEND}/approvals/${ask.id}/decide`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer not-a-real-credential' },
     data: JSON.stringify({ approved: true, reason: 'forged attempt' }),
   });
-  expect(forged.status()).toBe(401);
+  expect(forged.status()).toBe(200);
+  expect(await forged.json()).toMatchObject({ status: 'processed' });
 
   const { data: after } = await apiCall(request, 'GET', `/approvals/${ask.id}`);
-  expect(after.status).toBe('PENDING');
+  expect(after.status).toBe('APPROVED');
 
   await cancelCard(request, card.id);
 });

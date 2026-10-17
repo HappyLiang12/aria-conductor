@@ -282,7 +282,8 @@ public class KanbanTransitionService {
     private void cancelLiveLinkedRun(KanbanItem item) {
         findRun(item).ifPresent(run -> {
             if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
-                    || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED) {
+                    || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED
+                    || run.getStatus() == RunStatus.WAITING_INPUT) {
                 runService.cancelRun(UUID.fromString(item.getLinkedRunId()));
             }
         });
@@ -308,6 +309,11 @@ public class KanbanTransitionService {
         }
         switch (run.getStatus()) {
             case RUNNING -> runService.pauseRun(runId);
+            // A run parked on a clarification question (Plan B) is a live run
+            // whose loop waits on the operator's answer: cancelling it publishes
+            // RunCompletedEvent(CANCELLED), which wakes the parked loop through
+            // the input coordinator's sticky termination intent.
+            case WAITING_INPUT -> runService.cancelRun(runId);
             case PENDING, INITIALIZING -> runService.cancelRun(runId);
             default -> { }
         }

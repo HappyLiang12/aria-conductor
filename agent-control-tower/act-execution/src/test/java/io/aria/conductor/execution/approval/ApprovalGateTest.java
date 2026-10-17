@@ -169,6 +169,31 @@ class ApprovalGateTest {
                 .hasMessageContaining(unknownId.toString());
     }
 
+    /**
+     * Plan B task 2 pin: CLARIFICATION asks are provenance-stamped rows that are answered
+     * via {@code /approvals/{id}/answer} or the run finalize path — the legacy decide flow
+     * must refuse them outright instead of recording an approve/deny decision.
+     */
+    @Test
+    void decideRefusesClarificationAsks() {
+        Approval ask = Approval.builder()
+                .id(UUID.randomUUID())
+                .runId(UUID.randomUUID())
+                .status(ApprovalStatus.PENDING)
+                .askType(Approval.AskType.QUESTION)
+                .source(ApprovalSource.CLARIFICATION)
+                .build();
+        approvalStore.put(ask.getId(), ask);
+
+        assertThatThrownBy(() -> gate.decideApproval(ask.getId(), true, "why"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("/answer");
+
+        // Refused, not decided: the row stays untouched.
+        assertThat(ask.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(any());
+    }
+
     @Test
     void decideApproval_secondDecisionOnDecidedApproval_isIgnored() throws Exception {
         RunContext ctx = ctx();
@@ -296,6 +321,33 @@ class ApprovalGateTest {
 
         assertThat(acpAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(acpAsk.getReason()).isEqualTo("ACP permission request: mcp__aria__write_file");
+        verify(approvalRepository, never()).save(any());
+    }
+
+    /**
+     * A CLARIFICATION ask is owned by the run-input lifecycle (the completion sweep,
+     * restart adjudication), never by this legacy broad sweep: a finalized waiting run
+     * must settle its question honestly ("finalized by operator" / "run cancelled")
+     * instead of this sweep's "Run cancelled" expiry, and the drill proved the broad
+     * sweep was winning the race against the completion sweep.
+     */
+    @Test
+    void cancelAllPendingForRun_leavesClarificationAsksAlive() {
+        RunContext ctx = ctx();
+        Approval clarification = Approval.builder().id(UUID.randomUUID()).runId(ctx.getRunId())
+                .status(ApprovalStatus.PENDING)
+                .askType(Approval.AskType.QUESTION)
+                .source(ApprovalSource.CLARIFICATION)
+                .approvalType(Approval.ApprovalType.TOOL_CALL)
+                .content("Which database?")
+                .build();
+        approvalStore.put(clarification.getId(), clarification);
+        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(clarification));
+
+        gate.cancelAllPendingForRun(ctx.getRunId());
+
+        assertThat(clarification.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        assertThat(clarification.getReason()).isNull();
         verify(approvalRepository, never()).save(any());
     }
 

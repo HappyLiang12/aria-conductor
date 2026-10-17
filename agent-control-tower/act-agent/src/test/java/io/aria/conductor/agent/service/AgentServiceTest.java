@@ -1,6 +1,7 @@
 package io.aria.conductor.agent.service;
 
 import io.aria.conductor.agent.dto.AgentResponse;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
 import io.aria.conductor.agent.dto.UpdateAgentRequest;
@@ -36,11 +37,13 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.StreamSupport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -55,12 +58,19 @@ class AgentServiceTest {
     @Mock AgentToolRepository agentToolRepository;
     @Mock ToolDefinitionRepository toolDefinitionRepository;
     @Mock SkillContextProvider skillProvider;
-    @Mock AgentSkillRepository agentSkillRepository;
-    @Mock RoleToolTemplateRepository roleToolTemplateRepository;
+    @Mock AgentSkillRepository agentSkillRepository;    @Mock RoleToolTemplateRepository roleToolTemplateRepository;
     @Mock RoleSkillTemplateRepository roleSkillTemplateRepository;
     @Mock AgentExecutionPolicy executionPolicy;
     @Spy AgentPickupEligibility eligibility = new AgentPickupEligibility();
     @InjectMocks AgentService service;
+
+    // The @Value switch defaults to false under plain Mockito injection; the
+    // fleet contract is what these pins test, so every test runs enforcement ON
+    // except the one pinning the harness kill-switch.
+    @org.junit.jupiter.api.BeforeEach
+    void enforcementOn() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "enforceUniformity", Boolean.TRUE);
+    }
 
     private final UUID agentId = UUID.randomUUID();
 
@@ -247,5 +257,204 @@ class AgentServiceTest {
 
         assertThat(response.getName()).isEqualTo("renamed");
         verifyNoInteractions(executionPolicy);
+    }
+
+    // ---- Fleet runtime governance (2026-10-11): the fleet runs ONE (core, mode) pair ----
+
+    private Agent fleetAgent(String adkProvider, ExecutionMode executionMode) {
+        return Agent.builder().id(UUID.randomUUID()).name("worker-" + adkProvider)
+                .agentType(AgentType.NATIVE).adkProvider(adkProvider).executionMode(executionMode)
+                .healthStatus(HealthStatus.HEALTHY).pickupEnabled(Boolean.TRUE).build();
+    }
+
+    private CreateAgentRequest aCreateRequest(String adkProvider, ExecutionMode executionMode) {
+        return CreateAgentRequest.builder().name("new-worker").agentType(AgentType.NATIVE)
+                .adkProvider(adkProvider).executionMode(executionMode).build();
+    }
+
+    private UpdateAgentRequest anUpdateRequest(String adkProvider, ExecutionMode executionMode) {
+        return UpdateAgentRequest.builder().adkProvider(adkProvider)
+                .executionMode(executionMode).build();
+    }
+
+    @Test
+    void creatingAnAgentWithTheFleetRuntimeIsAllowed() {
+        // uniform fleet: opencode/SANDBOX; the write carries the same pair
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(aCreateRequest("opencode", ExecutionMode.SANDBOX));
+
+        assertThat(response.getAdkProvider()).isEqualTo("opencode");
+        assertThat(response.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+    }
+
+    @Test
+    void creatingAnAgentOnAnEmptyFleetIsAllowed() {
+        // a brand-new fleet (zero agents) allows any first core/mode
+        when(agentRepository.findAll()).thenReturn(List.of());
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST));
+
+        assertThat(response.getAdkProvider()).isEqualTo("qoder");
+    }
+
+    @Test
+    void enforcementSwitchOffAllowsTheMixedSeedTheE2EHarnessNeeds() {
+        // The deterministic core E2E harness runs with
+        // aria.runtime.enforce-uniformity=false: it exercises BOTH cores side by
+        // side, which the production uniformity contract forbids.
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "enforceUniformity", Boolean.FALSE);
+        // The short-circuited guard never reads the fleet; lenient keeps the
+        // strict-stubs check honest about that.
+        lenient().when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST));
+
+        assertThat(response.getAdkProvider()).isEqualTo("qoder");
+        assertThat(response.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+    }
+
+    @Test
+    void secondDefaultCreateOnAFleetOfDefaultCreatedAgentsIsAllowed() {
+        // A default create stores the row with a NULL execution mode (the selection is
+        // persisted as supplied; admission applies the documented defaults later). The
+        // guard compares EFFECTIVE pairs on both sides, so the next default create on
+        // such a fleet must not be refused as an off-fleet write.
+        when(agentRepository.findAll()).thenReturn(List.of(
+                Agent.builder().id(UUID.randomUUID()).name("seed").agentType(AgentType.NATIVE)
+                        .adkProvider("opencode").healthStatus(HealthStatus.HEALTHY).build()));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.createAgent(CreateAgentRequest.builder()
+                .name("second-default").agentType(AgentType.NATIVE).build());
+
+        assertThat(response.getAdkProvider()).isEqualTo("opencode");
+    }
+
+    @Test
+    void creatingAnAgentOffTheFleetRuntimeIsRejected() {
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+
+        assertThatThrownBy(() -> service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Runtime mixing is not allowed")
+                .hasMessageContaining("PUT /api/v1/agents/runtime");
+        verify(agentRepository, never()).save(any());
+    }
+
+    @Test
+    void updatingAnAgentIntoAMixedFleetIsRejected() {
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.findAll()).thenReturn(List.of(
+                fleetAgent("opencode", ExecutionMode.SANDBOX),
+                fleetAgent("qoder", ExecutionMode.HOST))); // fleet already mixed
+
+        assertThatThrownBy(() -> service.updateAgent(agentId, anUpdateRequest("opencode", ExecutionMode.HOST)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("The fleet runtime is mixed");
+        verify(agentRepository, never()).save(any());
+    }
+
+    @Test
+    void updatingAnAgentOnAUniformFleetToTheFleetRuntimeIsAllowed() {
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.updateAgent(agentId, anUpdateRequest("opencode", ExecutionMode.SANDBOX));
+
+        assertThat(response.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+    }
+
+    @Test
+    void nameOnlyUpdateOnAUniformFleetKeepsTheCurrentRuntimeAndPasses() {
+        // Partial update: null adkProvider/executionMode resolve to the agent's CURRENT
+        // values before the guard runs, so an unrelated edit never introduces a mix.
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.updateAgent(agentId, UpdateAgentRequest.builder()
+                .name("renamed").build());
+
+        assertThat(response.getName()).isEqualTo("renamed");
+    }
+
+    @Test
+    void retiringAnAgentNeverTriggersTheGuard() {
+        when(agentRepository.findById(agentId))
+                .thenReturn(Optional.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
+        when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentResponse response = service.retireAgent(agentId); // retirement is exempt per spec
+
+        assertThat(response.getHealthStatus()).isEqualTo(HealthStatus.RETIRED);
+        verify(agentRepository, never()).findAll(); // the uniformity guard never ran
+    }
+
+    // ---- Task 2 (2026-10-11): PUT /api/v1/agents/runtime — the converging batch action ----
+
+    @Test
+    void applyRuntimeUpdatesEveryNonRetiredAgentInOneCall() {
+        Agent live1 = fleetAgent("opencode", ExecutionMode.SANDBOX);
+        Agent live2 = fleetAgent("qoder", ExecutionMode.HOST);
+        Agent retired = fleetAgent("opencode", ExecutionMode.SANDBOX);
+        retired.setName("retired-worker"); // distinct name for the batch-membership assertion
+        retired.setHealthStatus(HealthStatus.RETIRED);
+        when(agentRepository.findAll()).thenReturn(List.of(live1, live2, retired));
+        when(executionPolicy.normalize(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(agentRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ApplyRuntimeResult result = service.applyRuntimeToAll("qoder", ExecutionMode.HOST);
+
+        assertThat(result.adkProvider()).isEqualTo("qoder");
+        assertThat(result.executionMode()).isEqualTo(ExecutionMode.HOST);
+        assertThat(result.updated()).isEqualTo(2); // retired agent untouched
+        // exactly the two live agents were persisted, both converged to qoder/HOST
+        verify(agentRepository).saveAll(argThat((Iterable<Agent> batch) -> {
+            List<Agent> rows = StreamSupport.stream(batch.spliterator(), false).toList();
+            return rows.size() == 2
+                    && rows.stream().noneMatch(a -> "retired-worker".equals(a.getName()))
+                    && rows.stream().allMatch(a -> "qoder".equals(a.getAdkProvider())
+                            && a.getExecutionMode() == ExecutionMode.HOST);
+        }));
+        assertThat(live1.getAdkProvider()).isEqualTo("qoder");
+        assertThat(live1.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        assertThat(live2.getAdkProvider()).isEqualTo("qoder");
+        assertThat(live2.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        // the retired row is neither mutated nor counted
+        assertThat(retired.getAdkProvider()).isEqualTo("opencode");
+        assertThat(retired.getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
+    }
+
+    @Test
+    void applyRuntimeRejectsAnUndeclaredCore() {
+        when(executionPolicy.normalize(any()))
+                .thenThrow(new IllegalArgumentException("Unsupported agent core: nonexistent"));
+
+        assertThatThrownBy(() -> service.applyRuntimeToAll("nonexistent", ExecutionMode.HOST))
+                .isInstanceOf(IllegalArgumentException.class) // surfaces as 400
+                .hasMessageContaining("Unsupported agent core");
+        // inventory validation runs BEFORE any fleet read or mutation
+        verify(agentRepository, never()).findAll();
+        verify(agentRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void applyRuntimeRejectsAnUnsupportedModeOnADeclaredCore() {
+        when(executionPolicy.normalize(any()))
+                .thenThrow(new IllegalArgumentException("Unsupported execution mode: opencode/HOST"));
+
+        assertThatThrownBy(() -> service.applyRuntimeToAll("opencode", ExecutionMode.HOST))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported execution mode");
+        verify(agentRepository, never()).findAll();
+        verify(agentRepository, never()).saveAll(any());
     }
 }

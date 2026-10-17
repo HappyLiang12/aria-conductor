@@ -71,6 +71,10 @@ export interface Run {
   finalOutput: string | null;
   createdAt: string;
   completedAt: string | null;
+  /** The frozen core the run was dispatched on (absent on an older backend or a run without a binding). */
+  coreId?: string | null;
+  /** The frozen execution mode alongside the frozen core; nullability matches coreId. */
+  executionMode?: string | null;
 }
 
 export interface Approval {

@@ -36,7 +36,10 @@ class RunControllerTest extends WebMvcTestBase {
     private final RunInputPort inputPort = mock(RunInputPort.class);
     @SuppressWarnings("unchecked")
     private final ObjectProvider<RunInputPort> inputProvider = mock(ObjectProvider.class);
-    private final MockMvc mvc = mockMvcFor(new RunController(runService, progressRepository, inputProvider));
+    /** The guard behind the finalize route's browser-grade Origin defense. */
+    private final io.aria.conductor.common.security.OperatorOriginGuard originGuard =
+            new io.aria.conductor.common.security.OperatorOriginGuard("http://localhost:*,http://127.0.0.1:*");
+    private final MockMvc mvc = mockMvcFor(new RunController(runService, progressRepository, inputProvider, originGuard));
 
     private RunResponse run(UUID id, UUID agentId, RunStatus status) {
         return RunResponse.builder().id(id).agentId(agentId).status(status)

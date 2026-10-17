@@ -133,12 +133,16 @@ preflight_checks() {
   # ---- 3. zero-credit model pin ----------------------------------------------
   # The plain core-credential surface no longer exposes the running model, so
   # this guard checks the REQUESTED pin (QODER_E2E_MODEL — the value run-all.sh
-  # exports and restarts the stack with) instead of the live configuration.
+  # exports and restarts the stack with, which pins the live configuration by
+  # construction). An unset pin means the zero-credit constraint CANNOT be
+  # verified: refuse the run rather than silently going green (plan Global
+  # Constraint — a guard that cannot verify must not pass).
   log_cmd "requested model pin check: '${QODER_E2E_MODEL:-}' in {efficient, lite} (plan Global Constraint)"
   case "${QODER_E2E_MODEL:-}" in
     efficient | lite) : ;;
     "")
-      warn "QODER_E2E_MODEL is not set; the zero-credit guard cannot verify the model pin"
+      step_fail "QODER_E2E_MODEL is not set - the zero-credit guard cannot verify the model pin, so the run is refused (start the stack with QODER_E2E_MODEL=efficient)"
+      return 1
       ;;
     *)
       if [ "${QODER_E2E_ALLOW_PAID:-}" = "1" ]; then

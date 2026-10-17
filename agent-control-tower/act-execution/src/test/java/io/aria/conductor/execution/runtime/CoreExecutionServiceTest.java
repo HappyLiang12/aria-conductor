@@ -1,9 +1,12 @@
 package io.aria.conductor.execution.runtime;
 
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.event.RunInputReceivedEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunExecutionBinding;
+import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
@@ -12,7 +15,9 @@ import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
+import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +30,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -48,6 +54,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -82,6 +89,8 @@ class CoreExecutionServiceTest {
     private final CoreCredentialService credentials = mock(CoreCredentialService.class);
     private final ActorTokenService actorTokens = mock(ActorTokenService.class);
     private final RunExecutionBindingRepository bindings = mock(RunExecutionBindingRepository.class);
+    private final AgentRepository agents = mock(AgentRepository.class);
+    private final SessionTrajectoryRepository trajectories = mock(SessionTrajectoryRepository.class);
     private final RunRuntimeRegistry runtimes = new RunRuntimeRegistry();
     /** The non-qoder adapter the no-parking gate is asserted against. */
     private final CoreAdapter opencodeAdapter = new RecordingAdapter() {
@@ -108,10 +117,12 @@ class CoreExecutionServiceTest {
         int launchCalls;
         boolean destroyed;
         Runnable duringStopWriters;
+        /** Overridden per test: the round-trip migration pin needs a SANDBOX twin. */
+        ExecutionMode declaredMode = ExecutionMode.HOST;
 
         @Override
         public ExecutionMode mode() {
-            return ExecutionMode.HOST;
+            return declaredMode;
         }
 
         @Override
@@ -194,6 +205,7 @@ class CoreExecutionServiceTest {
     private final class RecordingSession implements CoreSession {
         CoreTask prompted;
         CoreTask secondPrompt;
+        CoreTask thirdPrompt;
         /** Turn results the clarification loop consumes in order; null falls back to the default completion. */
         Deque<CoreResult> scriptedResults;
         final List<CoreEvent> events = new ArrayList<>();
@@ -215,6 +227,8 @@ class CoreExecutionServiceTest {
                 prompted = task;
             } else if (secondPrompt == null) {
                 secondPrompt = task;
+            } else if (thirdPrompt == null) {
+                thirdPrompt = task;
             }
             events.forEach(consumer);
             if (duringPrompt != null) {
@@ -941,6 +955,198 @@ class CoreExecutionServiceTest {
         assertThat(scheduler.scheduledInstants()).hasSize(2);
         assertThat(scheduler.scheduledInstants().get(1))
                 .isAfter(scheduler.scheduledInstants().get(0));
+    }
+
+    /**
+     * The service wired with the migration collaborators (fleet runtime
+     * governance 4.4) and a clock-aligned scheduler; both production adapters
+     * are registered so a migrated attempt can resolve the NEW core's adapter.
+     */
+    private CoreExecutionService migrationAwareService(ManualDeadlineScheduler scheduler,
+            TaskDeadlineProperties turnDeadlines) {
+        return new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, turnDeadlines,
+                agents, trajectories, new CoreAdapters(List.of(adapter, opencodeAdapter)));
+    }
+
+    /** The agent's current runtime selection as the answer path reads it. */
+    private static Agent agentWithCurrentRuntime(String coreId, ExecutionMode mode) {
+        return Agent.builder().id(AGENT).name("fleet-agent")
+                .adkProvider(coreId).executionMode(mode)
+                .updatedAt(Instant.parse("2026-10-11T09:00:00Z")).build();
+    }
+
+    @Test
+    void answeringAfterTheAgentCoreChangedMigratesTheRunToTheNewCore() throws Exception {
+        // The agent's CURRENT config is opencode/HOST while the run was frozen for
+        // qoder/HOST: the operator moved the fleet while this run waited for input.
+        when(agents.findById(AGENT)).thenReturn(Optional.of(agentWithCurrentRuntime("opencode", ExecutionMode.HOST)));
+        when(trajectories.findByRunIdOrderByTurnNumberAsc(RUN)).thenReturn(List.of(
+                SessionTrajectory.builder().runId(RUN).turnNumber(1).role("user")
+                        .content("please do the work").build(),
+                SessionTrajectory.builder().runId(RUN).turnNumber(2).role("assistant")
+                        .content("Editing the schema")
+                        .toolCalls("[{\"id\":\"call-1\",\"name\":\"write_file\",\"arguments\":\"{}\"}]").build(),
+                SessionTrajectory.builder().runId(RUN).turnNumber(3).role("tool")
+                        .content("file written").toolCallId("call-1").build()));
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
+        turnDeadlines.setDeadlineMinutes(60);
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
+        service = migrationAwareService(scheduler, turnDeadlines);
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Working\n[NEED-INPUT] Which database?", usage(), false),
+                new CoreResult("session-1", "All done on the new core", usage(), false)));
+        Thread answerer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> !published(RunWaitingForInputEvent.class).isEmpty());
+            coordinator.submitAnswer(RUN, "postgres");
+        });
+        answerer.start();
+        CoreResult result = service.execute(spec(), adapter, task());
+        answerer.join();
+
+        // The loop tore down the old runtime (verified stop -> capture -> destroy ->
+        // release) and relaunched on the NEW core before re-prompting.
+        assertThat(recordedSteps).containsExactly(
+                "acquire", "prepare", "launch-profile", "launch", "open-session", "prompt",
+                "stop-writers", "capture", "destroy", "release",
+                "acquire", "prepare", "launch-profile", "launch", "open-session", "prompt",
+                "stop-writers", "capture", "destroy", "release");
+        assertThat(backend.launchCalls).isEqualTo(2);
+        // The re-seed task carries the trajectory history and the answer as the user
+        // prompt -- NOT the bare-answer task of the same-core path.
+        assertThat(session.secondPrompt.userPrompt()).isEqualTo("postgres");
+        assertThat(session.secondPrompt.systemPrompt()).isBlank();
+        assertThat(session.secondPrompt.history()).containsExactly(
+                LlmMessage.user("please do the work"),
+                LlmMessage.assistant("Editing the schema",
+                        List.of(new LlmToolCall("call-1", "write_file", "{}"))),
+                LlmMessage.tool("file written", "call-1"));
+        assertThat(result.finalOutput()).isEqualTo("All done on the new core");
+        assertThat(result.turnAlreadyAccounted()).isFalse();
+        // A superseding binding is recorded: the new core, its credential reference,
+        // the agent's current configuration revision and a fresh frozen deadline.
+        assertThat(binding.getCoreId()).isEqualTo("opencode");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        assertThat(binding.getCredentialRef()).isNull();
+        assertThat(binding.getConfigurationRevision())
+                .isEqualTo(AGENT + "@" + Instant.parse("2026-10-11T09:00:00Z"));
+        assertThat(binding.getDeadline())
+                .isEqualTo(NOW.plus(turnDeadlines.deadline()).truncatedTo(ChronoUnit.SECONDS));
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+        // The run stayed observable end to end: waiting, question turn, answer.
+        assertThat(published(RunWaitingForInputEvent.class)).isNotEmpty();
+        assertThat(published(TurnCompletedEvent.class)).isNotEmpty();
+        assertThat(published(RunInputReceivedEvent.class)).isNotEmpty();
+        // The follow-up turn ran under a fresh per-turn window, not the frozen deadline.
+        assertThat(scheduler.scheduledInstants()).hasSize(2);
+        assertThat(scheduler.scheduledInstants().get(1)).isAfter(scheduler.scheduledInstants().get(0));
+        assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+    }
+
+    @Test
+    void aCoreRoundTripStillMigratesOnTheSecondAnswer() throws Exception {
+        // qoder/HOST frozen -> answer 1 with the agent moved to qoder/SANDBOX
+        // (migrate; the SANDBOX twin backend is registered below) -> the agent
+        // moves BACK to qoder/HOST -> turn 2 ends with a question again -> answer
+        // 2 with the agent on qoder/HOST. The old dispatch-snapshot comparison
+        // saw spec(qoder/HOST)==agent(qoder/HOST) and took the same-session
+        // branch, leaving the run parked on a placement its agent no longer
+        // declares. The live selection (`current`) is what the comparison must
+        // track. Both pairs stay qoder so the parking gate keeps firing (parking
+        // is a qoder-core behavior).
+        RecordingBackend sandboxTwin = new RecordingBackend();
+        sandboxTwin.declaredMode = ExecutionMode.SANDBOX;
+        when(agents.findById(AGENT)).thenReturn(
+                Optional.of(agentWithCurrentRuntime("qoder", ExecutionMode.SANDBOX)),
+                Optional.of(agentWithCurrentRuntime("qoder", ExecutionMode.HOST)));
+        when(trajectories.findByRunIdOrderByTurnNumberAsc(RUN)).thenReturn(List.of(
+                SessionTrajectory.builder().runId(RUN).turnNumber(1).role("user").content("seed").build()));
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
+        turnDeadlines.setDeadlineMinutes(60);
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
+        service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend, sandboxTwin)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, turnDeadlines,
+                agents, trajectories, new CoreAdapters(List.of(adapter)));
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Working\n[NEED-INPUT] q1?", usage(), false),
+                new CoreResult("session-1", "Still stuck\n[NEED-INPUT] q2?", usage(), false),
+                new CoreResult("session-1", "All done", usage(), false)));
+        Thread answerer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> published(RunWaitingForInputEvent.class).size() >= 1);
+            coordinator.submitAnswer(RUN, "answer-1");
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> published(RunWaitingForInputEvent.class).size() >= 2);
+            coordinator.submitAnswer(RUN, "answer-2");
+        });
+        answerer.start();
+        CoreResult result = service.execute(spec(), adapter, task());
+        answerer.join();
+
+        // Three launches (qoder/HOST -> qoder/SANDBOX -> qoder/HOST): the middle
+        // one lands on the SANDBOX twin, the outer two on the HOST backend.
+        assertThat(backend.launchCalls).isEqualTo(2);
+        assertThat(sandboxTwin.launchCalls).isEqualTo(1);
+        assertThat(recordedSteps).containsSubsequence(
+                "launch", "open-session", "prompt",
+                "stop-writers", "capture", "destroy", "release",
+                "launch", "open-session", "prompt",
+                "stop-writers", "capture", "destroy", "release",
+                "launch", "open-session", "prompt");
+        // The binding ends on the restored qoder/HOST selection.
+        assertThat(binding.getCoreId()).isEqualTo("qoder");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        // The third prompt is the re-seeded task: the answer as user prompt over
+        // the durable trajectory history -- not the bare-answer task.
+        assertThat(session.thirdPrompt.userPrompt()).isEqualTo("answer-2");
+        assertThat(session.thirdPrompt.history()).isNotEmpty();
+        assertThat(result.finalOutput()).isEqualTo("All done");
+        assertThat(result.turnAlreadyAccounted()).isFalse();
+        assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+    }
+
+    @Test
+    void answeringWithAnUnchangedCoreKeepsTheSameSessionBehavior() throws Exception {
+        // The agent store is wired and the agent's CURRENT config still agrees with
+        // the frozen spec (qoder/HOST): the answer path must stay byte-for-byte the
+        // same-core continuation -- bare answer, no history, no teardown between
+        // turns, and the trajectory store is never consulted.
+        when(agents.findById(AGENT)).thenReturn(Optional.of(agentWithCurrentRuntime("qoder", ExecutionMode.HOST)));
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
+        turnDeadlines.setDeadlineMinutes(60);
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
+        service = migrationAwareService(scheduler, turnDeadlines);
+        session.scriptedResults = new ArrayDeque<>(List.of(
+                new CoreResult("session-1", "Working\n[NEED-INPUT] Which database?", usage(), false),
+                new CoreResult("session-1", "All done", usage(), false)));
+        Thread answerer = new Thread(() -> {
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5))
+                    .until(() -> !published(RunWaitingForInputEvent.class).isEmpty());
+            coordinator.submitAnswer(RUN, "postgres");
+        });
+        answerer.start();
+        CoreResult result = service.execute(spec(), adapter, task());
+        answerer.join();
+
+        assertThat(result.finalOutput()).isEqualTo("All done");
+        assertThat(result.turnAlreadyAccounted()).isFalse();
+        // One launch, one session, TWO prompts -- same session, no re-open, no finalize in between.
+        assertThat(backend.launchCalls).isEqualTo(1);
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "prompt", "prompt", "stop-writers", "capture", "destroy", "release");
+        // The follow-up task is the bare answer: session context, no re-sent system/history.
+        assertThat(session.secondPrompt.userPrompt()).isEqualTo("postgres");
+        assertThat(session.secondPrompt.systemPrompt()).isBlank();
+        assertThat(session.secondPrompt.history()).isEmpty();
+        // The frozen binding was never rewritten by the unchanged answer path.
+        assertThat(binding.getCoreId()).isEqualTo("qoder");
+        assertThat(binding.getExecutionMode()).isEqualTo(ExecutionMode.HOST);
+        assertThat(binding.getCredentialRef()).isEqualTo("qoder:operator");
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+        verifyNoInteractions(trajectories);
     }
 
     // ------------------------------------------------------------------ recovery

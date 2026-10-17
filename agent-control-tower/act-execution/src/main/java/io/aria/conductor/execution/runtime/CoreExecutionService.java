@@ -5,11 +5,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.RunInputReceivedEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
+import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunExecutionBinding;
+import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.execution.approval.NativePermission;
 import io.aria.conductor.execution.approval.PermissionChoice;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
@@ -18,7 +21,10 @@ import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.approval.PermissionReplySink;
 import io.aria.conductor.execution.approval.PermissionTarget;
 import io.aria.conductor.execution.credential.CoreCredentialService;
+import io.aria.conductor.execution.llm.LlmMessage;
+import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
+import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -26,6 +32,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -112,6 +119,18 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     private final RunInputCoordinator inputs;
     private final ApplicationEventPublisher eventPublisher;
     private final TaskDeadlineProperties taskDeadlines;
+    /**
+     * The agent store the answer path consults for the agent's CURRENT core/mode
+     * (fleet runtime governance 4.4): an answer for a parked run whose agent's
+     * selection diverged from the frozen spec migrates the run onto the new
+     * core. Absent (test conveniences only), the loop cannot observe a config
+     * change and keeps the same-core continuation for every answer.
+     */
+    private final AgentRepository agents;
+    /** The durable trajectory the migration re-seeds the new session's history from. */
+    private final SessionTrajectoryRepository trajectories;
+    /** The core registry the migrated attempt resolves the NEW core's adapter from. */
+    private final CoreAdapters adapters;
 
     /**
      * One monitor per run around the binding row's read-modify-write of the
@@ -164,12 +183,12 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     }
 
     /**
-     * The production constructor: the run's own control timestamps, cleanup
-     * window and deadline scheduler keep their documented defaults, while the
-     * clarification waiting loop's collaborators are wired explicitly (the
-     * coordinator that publishes {@code RunWaitingForInputEvent} and parks the
-     * run, the application event publisher for the loop's turn events and the
-     * per-turn follow-up deadline policy).
+     * The clarification-loop constructor with default control timestamps: the
+     * run's own control timestamps, cleanup window and deadline scheduler keep
+     * their documented defaults, while the loop's collaborators are wired
+     * explicitly. It wires no migration collaborators, so the answer path keeps
+     * the same-core continuation for every answer; production wiring (and any
+     * test pinning answer-time migration) uses the migration-aware constructor.
      */
     public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
             RunFinalizer finalizer, RunRuntimeRegistry runtimes,
@@ -179,6 +198,26 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             TaskDeadlineProperties taskDeadlines) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
                 Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines);
+    }
+
+    /**
+     * The production constructor (fleet runtime governance 4.4): the
+     * clarification loop's collaborators wired explicitly plus the migration
+     * collaborators -- the agent store the answer path consults, the trajectory
+     * store the re-seed reads and the core registry the migrated attempt
+     * resolves -- while the run's own control timestamps, cleanup window and
+     * deadline scheduler keep their documented defaults.
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines,
+                agents, trajectories, adapters);
     }
 
     /**
@@ -197,6 +236,37 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines,
             RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
             TaskDeadlineProperties taskDeadlines) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                clock, cleanupWindow, deadlines, inputs, eventPublisher, taskDeadlines, null, null, null);
+    }
+
+    /**
+     * The migration-aware constructor (fleet runtime governance 4.4): on top of
+     * the clarification loop's collaborators, the answer path consults the
+     * agent's CURRENT configuration through {@code agents} and, when the agent's
+     * core/mode diverged from the run's frozen spec, tears the runtime down,
+     * supersedes the frozen binding and relaunches on the new core, re-seeding
+     * the session history from {@code trajectories}.
+     *
+     * @param agents       the agent store answering "what does the agent run on
+     *                     now"; without it the loop keeps the same-core
+     *                     continuation for every answer (the test conveniences
+     *                     above pass none)
+     * @param trajectories the run trajectory store the migrated session's
+     *                     history is re-seeded from (consulted on the migration
+     *                     path only)
+     * @param adapters     the core registry the migrated attempt resolves the
+     *                     new core's adapter from (consulted on the migration
+     *                     path only)
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters) {
         this.backends = Objects.requireNonNull(backends, "Backend registry is required");
         this.workspaces = Objects.requireNonNull(workspaces, "Workspace service is required");
         this.finalizer = Objects.requireNonNull(finalizer, "Run finalizer is required");
@@ -211,6 +281,9 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         this.inputs = Objects.requireNonNull(inputs, "Run input coordinator is required");
         this.eventPublisher = Objects.requireNonNull(eventPublisher, "Event publisher is required");
         this.taskDeadlines = Objects.requireNonNull(taskDeadlines, "Task deadline properties are required");
+        this.agents = agents;
+        this.trajectories = trajectories;
+        this.adapters = adapters;
     }
 
     // ------------------------------------------------------------------ execute
@@ -242,6 +315,11 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         String failure = null;
         CoreTask nextTask = task;
         boolean firstTurn = true;
+        // The loop's view of the runtime selection: the frozen spec at dispatch, and
+        // the migrated (superseding) spec after an answer-time core migration. Every
+        // core-dependent loop decision (the parking gate below) consults the CURRENT
+        // selection, never the one the run was dispatched with.
+        ExecutionSpec current = spec;
         while (true) {
             // The first turn aims at the run's frozen deadline; a follow-up turn
             // gets a fresh per-turn window from now. Each window only bounds its
@@ -249,9 +327,13 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             ScheduledFuture<?> deadlineTask = firstTurn
                     ? scheduleDeadline(runtime)
                     : scheduleDeadline(runtime, clock.instant().plus(taskDeadlines.deadline()));
+            // The lambda below captures the runtime this turn runs on; the
+            // answer-time migration may reassign the loop's runtime field for the
+            // NEXT turn, so the turn runs on an effectively-final snapshot.
+            RunRuntimeRegistry.RunRuntime turnRuntime = runtime;
             CoreResult turnResult;
             try {
-                turnResult = runtime.session().prompt(nextTask, event -> handleEvent(runtime, event))
+                turnResult = turnRuntime.session().prompt(nextTask, event -> handleEvent(turnRuntime, event))
                         .toCompletableFuture().join();
             } catch (CompletionException e) {
                 failure = messageOf(e.getCause());
@@ -266,7 +348,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                 result = turnResult;
                 break;
             }
-            String question = "qoder".equals(spec.coreId())
+            String question = "qoder".equals(current.coreId())
                     ? ClarificationQuestions.awaitingInput(turnResult.finalOutput())
                     : null;
             if (question == null) {
@@ -293,8 +375,58 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                 break;
             }
             eventPublisher.publishEvent(new RunInputReceivedEvent(this, spec.runId()));
-            // Same-session continuation: the bare answer is the whole next turn.
-            nextTask = new CoreTask("", List.of(), input.answer());
+            // The agent's CURRENT selection decides the continuation (fleet runtime
+            // governance 4.4): the comparison is loop-side, made here after the
+            // parked loop woke on an answer and before it re-prompts. It compares
+            // against the loop's LIVE selection (`current`), never the dispatch
+            // snapshot: a qoder->SANDBOX->qoder round-trip must still re-migrate on
+            // the second answer, or the run stays parked on a placement its agent
+            // no longer declares. A missing or incomplete agent record cannot be
+            // read as a change, so it keeps the same-core continuation.
+            Agent agent = agents == null ? null : agents.findById(spec.agentId()).orElse(null);
+            if (agent != null && agent.getAdkProvider() != null && !agent.getAdkProvider().isBlank()
+                    && agent.getExecutionMode() != null
+                    && (!current.coreId().equals(agent.getAdkProvider())
+                        || current.mode() != agent.getExecutionMode())) {
+                // Operator-driven runtime migration: the agent's core/mode changed
+                // while the run waited for input, so the answer continues on the new
+                // core -- finalize the old runtime (the one verified-stop teardown),
+                // supersede the frozen binding, relaunch and re-seed the session from
+                // the durable trajectory. The settings snapshot is carried over
+                // verbatim: the frozen settings are asserted against the binding row
+                // and are never re-resolved from the agent's mutable settings -- only
+                // the governed core/mode selection supersedes.
+                //
+                // Once the old runtime is finalized the run can no longer continue
+                // on it, so every migration failure leaves the run FAILED: revoke
+                // the actor token, restore the binding to the selection the run
+                // actually ran on (the row was already superseded) and rethrow --
+                // the engine completes the run and its sweeps settle the asks.
+                finalizeRuntime(runtime);
+                try {
+                    // The superseding deadline freezes at the persistence granularity, the
+                    // same shape the launcher's own freeze uses: a finer value cannot
+                    // survive a TIMESTAMP round trip and would refuse the relaunch.
+                    Instant migratedDeadline = clock.instant().plus(taskDeadlines.deadline())
+                            .truncatedTo(ChronoUnit.SECONDS);
+                    RunExecutionBinding superseding = CoreRunLauncher.refreezeBinding(bindings, spec.runId(),
+                            agent, migratedDeadline, "operator runtime migration");
+                    ExecutionSpec migrated = new ExecutionSpec(spec.runId(), spec.agentId(),
+                            agent.getAdkProvider(), agent.getExecutionMode(), spec.settings(),
+                            superseding.getCredentialRef(), superseding.getConfigurationRevision(),
+                            migratedDeadline);
+                    current = migrated;
+                    runtime = openRuntime(migrated, adapters.require(migrated.coreId()));
+                } catch (RuntimeException migrationFailure) {
+                    actorTokens.revokeRun(spec.runId());
+                    restoreBinding(spec, "migration failure restore");
+                    throw migrationFailure;
+                }
+                nextTask = new CoreTask("", trajectoryHistory(spec.runId()), input.answer());
+            } else {
+                // Same-session continuation: the bare answer is the whole next turn.
+                nextTask = new CoreTask("", List.of(), input.answer());
+            }
             firstTurn = false;
         }
 
@@ -322,6 +454,84 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         boolean cancelled = STATE_CANCELLED.equals(state);
         return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled,
                 result.turnAlreadyAccounted());
+    }
+
+    /**
+     * Restores a run's binding to the selection it actually ran on (fleet runtime
+     * governance): after a failed migration the superseded row would otherwise
+     * name a core the run never started on. Exact field restore from the
+     * dispatch-time spec -- the frozen settings and workspace references were
+     * never touched by the migration and need no restore.
+     */
+    private void restoreBinding(ExecutionSpec spec, String reason) {
+        RunExecutionBinding row = bindings.findById(spec.runId()).orElse(null);
+        if (row == null) {
+            return;
+        }
+        row.setCoreId(spec.coreId());
+        row.setExecutionMode(spec.mode());
+        row.setCredentialRef(spec.credentialRef());
+        row.setConfigurationRevision(spec.configurationRevision());
+        row.setDeadline(spec.deadline());
+        bindings.save(row);
+        log.info("Restored run {} binding to core {}/{} ({})", spec.runId(), spec.coreId(),
+                spec.mode(), reason);
+    }
+
+    /**
+     * The run's durable trajectory as the re-seeded conversation history (fleet
+     * runtime governance 4.4): every recorded turn in turn order, mapped to the
+     * message representation the core task carries -- the same role mapping the
+     * engine's accepted-history build uses. The operator's answer is not part of
+     * it; it travels as the re-seeded task's user prompt.
+     */
+    private List<LlmMessage> trajectoryHistory(UUID runId) {
+        List<LlmMessage> history = new ArrayList<>();
+        for (SessionTrajectory turn : trajectories.findByRunIdOrderByTurnNumberAsc(runId)) {
+            String role = turn.getRole() == null ? "" : turn.getRole();
+            switch (role) {
+                case "user" -> history.add(LlmMessage.user(turn.getContent()));
+                case "assistant" -> {
+                    List<LlmToolCall> toolCalls = parseTrajectoryToolCalls(turn.getToolCalls());
+                    history.add(toolCalls.isEmpty()
+                            ? LlmMessage.assistant(turn.getContent())
+                            : LlmMessage.assistant(turn.getContent(), toolCalls));
+                }
+                case "tool" -> history.add(LlmMessage.tool(turn.getContent(), turn.getToolCallId()));
+                case "system" -> history.add(LlmMessage.system(turn.getContent()));
+                default -> { }
+            }
+        }
+        return List.copyOf(history);
+    }
+
+    /**
+     * The recorded tool_calls JSON of a trajectory row as the tool calls the
+     * message carries -- the same reconstruction the engine performs for its
+     * accepted history, kept local so the runtime package does not depend on the
+     * engine. A row that cannot be parsed keeps its plain content and loses only
+     * the call structure; it is never dropped.
+     */
+    private List<LlmToolCall> parseTrajectoryToolCalls(String toolCallsJson) {
+        if (toolCallsJson == null || toolCallsJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode array = mapper.readTree(toolCallsJson);
+            if (!array.isArray()) {
+                return List.of();
+            }
+            List<LlmToolCall> calls = new ArrayList<>();
+            for (JsonNode node : array) {
+                calls.add(new LlmToolCall(node.path("id").asText(""), node.path("name").asText(""),
+                        node.path("arguments").asText("{}")));
+            }
+            return calls;
+        } catch (JsonProcessingException e) {
+            log.warn("Run trajectory carries an unreadable tool_calls record; the turn is carried"
+                    + " without its tool call structure: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     /**

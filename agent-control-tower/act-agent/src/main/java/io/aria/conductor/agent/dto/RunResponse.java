@@ -24,6 +24,14 @@ public class RunResponse {
     private int iterationCount;
     private String errorMessage;
     private String finalOutput;
+    /**
+     * The frozen runtime of the run (Fleet Runtime Governance): the core and
+     * placement the run was dispatched with, read from its immutable
+     * {@code RunExecutionBinding} row. Null when the run has no binding (legacy
+     * runs, or runs not yet dispatched) -- the dashboard renders '-'.
+     */
+    private String coreId;
+    private String executionMode;
     private Instant createdAt;
     private Instant updatedAt;
     private Instant completedAt;

@@ -149,7 +149,8 @@ public class RunToolHandler implements ToolHandler {
     private String listRunningRuns() {
         List<Run> runs = runRepository.findAll().stream()
             .filter(r -> r.getStatus() == RunStatus.RUNNING || r.getStatus() == RunStatus.PENDING
-                || r.getStatus() == RunStatus.INITIALIZING || r.getStatus() == RunStatus.PAUSED)
+                || r.getStatus() == RunStatus.INITIALIZING || r.getStatus() == RunStatus.PAUSED
+                || r.getStatus() == RunStatus.WAITING_INPUT)
             .toList();
         if (runs.isEmpty()) return "No running runs.";
         StringBuilder sb = new StringBuilder("Running runs (" + runs.size() + " total):\n");

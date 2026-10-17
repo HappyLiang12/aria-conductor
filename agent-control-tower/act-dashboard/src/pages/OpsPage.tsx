@@ -402,29 +402,36 @@ export default function OpsPage() {
                         </div>
                       )}
 
-                      <div className="row">
-                        <button
-                          className="btn"
-                          style={{
-                            flex: 1,
-                            background: 'rgba(54,211,153,.10)',
-                            borderColor: 'rgba(54,211,153,.45)',
-                            color: '#6fe2b6',
-                          }}
-                          disabled={busy}
-                          onClick={() => approveM.mutate(a.id)}
-                        >
-                          ✓ Approve
-                        </button>
-                        <button
-                          className="btn danger"
-                          style={{ flex: 1 }}
-                          disabled={busy}
-                          onClick={() => rejectM.mutate(a.id)}
-                        >
-                          ✕ Deny
-                        </button>
-                      </div>
+                      {a.source === 'CLARIFICATION' ? (
+                        <div className="row" style={{ color: 'var(--text-mute)', fontSize: 12 }}>
+                          This ask is waiting on the run - answer it on the kanban card (Answer &amp;
+                          continue) or finalize the run from there.
+                        </div>
+                      ) : (
+                        <div className="row">
+                          <button
+                            className="btn"
+                            style={{
+                              flex: 1,
+                              background: 'rgba(54,211,153,.10)',
+                              borderColor: 'rgba(54,211,153,.45)',
+                              color: '#6fe2b6',
+                            }}
+                            disabled={busy}
+                            onClick={() => approveM.mutate(a.id)}
+                          >
+                            ✓ Approve
+                          </button>
+                          <button
+                            className="btn danger"
+                            style={{ flex: 1 }}
+                            disabled={busy}
+                            onClick={() => rejectM.mutate(a.id)}
+                          >
+                            ✕ Deny
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -78,6 +78,18 @@ public class OperatorAuthorityResolver {
             throw new OperatorSessionService.ForbiddenMutationException("Operator authority required");
         }
         if (isLoopbackClient(request)) {
+            // Loopback auto-authority for a MUTATION must still refuse a
+            // browser-driven cross-site request: every browser POST carries an
+            // Origin header, while local tools (curl, SDKs, the CLI) send none.
+            // A cross-site page can fire a "simple" POST that CORS cannot block
+            // and whose response it cannot read -- so the response being unread
+            // is no protection. An Origin that is present but not ours means the
+            // request was forged by a web page the operator had open: refuse it.
+            // Authenticated identities above are already validated (session
+            // mutations re-check CSRF/Origin; bearer holders are not web pages).
+            if (mutation) {
+                operatorSessions.rejectCrossSiteOrigin(request.getHeader(HttpHeaders.ORIGIN));
+            }
             return ActorPrincipal.operator(null);
         }
         throw new SecurityException("Operator session required");

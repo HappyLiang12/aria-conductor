@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAgent } from '../api/agents';
 import { listRuns, getRunProgress, pauseRun, resumeRun, cancelRun, injectRunMessage } from '../api/runs';
+import { RuntimeBadge } from './RuntimeBadge';
 import { useDrawerContext } from './DrawerContext';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
@@ -421,6 +422,7 @@ export function AgentDrawer() {
                 : 'Select an agent'}
             </div>
             <h3>{agent?.name ?? '—'}</h3>
+            {agent && <RuntimeBadge core={agent.adkProvider} mode={agent.executionMode} />}
           </div>
           {agent && (
             <span className="live-pill">

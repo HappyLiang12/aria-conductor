@@ -3,8 +3,13 @@ import { getSummary } from '../api/dashboard';
 import { listKanbanItems } from '../api/kanban';
 import { listRuns } from '../api/runs';
 import { listKnowledge } from '../api/knowledge';
+import { listAgents } from '../api/agents';
 import { dispatchOpenTaskDrawer } from './DrawerContext';
-import type { KanbanItem } from '../types';
+import { composeRuntimes, effectiveRuntimeOf } from '../utils/runtimeComposition';
+import type { KanbanItem, RunStatus } from '../types';
+
+/** The run statuses after which no core/mode migration is ever relevant. */
+const TERMINAL_RUN_STATUSES: RunStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED', 'ABORTED'];
 
 interface StatCellProps {
   label: string;
@@ -69,6 +74,12 @@ export default function ExecutiveSummary() {
     refetchInterval: 60000,
   });
 
+  const { data: agents } = useQuery({
+    queryKey: ['agents'],
+    queryFn: listAgents,
+    refetchInterval: 30000,
+  });
+
   const tasksInProgress = (kanbanItems ?? []).filter(
     (item) => item.status === 'IN_PROGRESS'
   ).length;
@@ -83,6 +94,40 @@ export default function ExecutiveSummary() {
   const waitingAsks = cardsWithAsks.reduce((sum, i) => sum + (i.pendingAskCount ?? 0), 0);
   const firstCardWithAsks: KanbanItem | undefined = cardsWithAsks[0];
 
+  // Fleet runtime governance: the composition over non-retired agents, and the
+  // runs still working on a runtime their agent has moved off (they drain to
+  // completion or migrate at their next answer — no operator action needed).
+  const liveAgentCount = (agents ?? []).filter((a) => a.healthStatus !== 'RETIRED').length;
+  const composition = composeRuntimes(agents ?? []);
+  const runtimeByAgentId = new Map(
+    (agents ?? []).map((a) => [a.id, effectiveRuntimeOf(a)]),
+  );
+  const draining = (runs ?? []).filter(
+    (r) =>
+      !TERMINAL_RUN_STATUSES.includes(r.status) &&
+      r.coreId != null &&
+      r.executionMode != null &&
+      // An agent absent from the list (e.g. retired) gives no comparable
+      // runtime — a run frozen on a removed agent is not "draining", it has
+      // nothing to migrate to; counting it would flag forever.
+      runtimeByAgentId.has(r.agentId) &&
+      runtimeByAgentId.get(r.agentId) !== `${r.coreId}/${r.executionMode}`,
+  ).length;
+  const runtimeUniform = composition.length <= 1;
+  const runtimeLabel =
+    liveAgentCount === 0
+      ? '—'
+      : runtimeUniform
+        ? composition[0].runtime
+        : 'Mixed';
+  const runtimeDetail =
+    liveAgentCount === 0
+      ? 'No agents'
+      : runtimeUniform
+        ? `${composition[0].count} agent${composition[0].count === 1 ? '' : 's'}${draining > 0 ? ` · ${draining} draining` : ''}`
+        : `${composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}${draining > 0 ? ` · ${draining} draining` : ''}`;
+
+
   return (
     <section className="panel" id="panel-exec">
       <h2>
@@ -90,6 +135,17 @@ export default function ExecutiveSummary() {
         <span className="accent">· Live</span>
       </h2>
       <div className="summary">
+        <StatCell
+          label="Runtime"
+          value={runtimeLabel}
+          detail={runtimeDetail}
+          variant={runtimeUniform ? 'green' : 'amber'}
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent('act:open-configure', { detail: { tab: 'runtime' } }),
+            )
+          }
+        />
         <StatCell
           label="Active Agents"
           value={summary?.activeAgents ?? '—'}

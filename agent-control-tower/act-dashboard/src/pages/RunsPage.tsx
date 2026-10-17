@@ -6,6 +6,7 @@ import { listAgents } from '../api/agents';
 import { useWebSocketContext } from '../components/Layout';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import { StatusBadge } from '../components/StatusBadge';
+import { RuntimeBadge } from '../components/RuntimeBadge';
 import type { CreateRunRequest, RunStatus, SessionTrajectory, ToolCall } from '../types';
 
 export function RunsPage() {
@@ -192,6 +193,7 @@ export function RunsPage() {
               <tr>
                 <th>ID</th>
                 <th>Agent</th>
+                <th>Runtime</th>
                 <th>Status</th>
                 <th>Iterations</th>
                 <th>Tokens</th>
@@ -206,6 +208,7 @@ export function RunsPage() {
                   <tr className={expandedRun === run.id ? 'row-expanded' : ''}>
                     <td className="cell-mono">{run.id.slice(0, 8)}</td>
                     <td>{agentMap.get(run.agentId)?.name ?? run.agentId.slice(0, 8)}</td>
+                    <td><RuntimeBadge core={run.coreId} mode={run.executionMode} /></td>
                     <td><StatusBadge status={run.status} /></td>
                     <td>{run.iterationCount}/{run.maxIterations}</td>
                     <td>{run.totalTokensUsed.toLocaleString()}</td>

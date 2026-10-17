@@ -21,6 +21,25 @@ export async function updateAgent(id: string, req: Partial<CreateAgentRequest>):
   return data;
 }
 
+/** The response of the fleet-wide runtime apply (fleet runtime governance). */
+export interface ApplyRuntimeResult {
+  runtime: { adkProvider: string; executionMode: string };
+  updated: number;
+}
+
+/** Converges every non-retired agent onto one core/mode pair (the only
+ *  action that may cross the fleet's uniform runtime). */
+export async function applyFleetRuntime(
+  adkProvider: string,
+  executionMode: 'HOST' | 'SANDBOX',
+): Promise<ApplyRuntimeResult> {
+  const { data } = await client.put<ApplyRuntimeResult>('/api/v1/agents/runtime', {
+    adkProvider,
+    executionMode,
+  });
+  return data;
+}
+
 export async function retireAgent(id: string): Promise<void> {
   await client.post(`/api/v1/agents/${id}/retire`);
 }

@@ -9,6 +9,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.port.SchedulerPort;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.AdkProvider;
 import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.llm.LlmResponse;
@@ -56,7 +57,10 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
                 .thenReturn(new LlmResponse("I can help you manage agents.", 10, 20, "stop", List.of()));
         when(mockAdkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
 
-        // Ensure Aria agent exists (cleanup-all.sql runs after ApplicationRunner and wipes it)
+        // Ensure Aria agent exists (cleanup-all.sql runs after ApplicationRunner and wipes it).
+        // Seeded on the production built-in pair (opencode/SANDBOX, LegacySetupService
+        // BUILTIN_CORE/BUILTIN_MODE) so the fleet-runtime uniformity guard sees a uniform
+        // fleet; "langchain" is a removed core and would make every API create a 409.
         UUID ariaId = UUID.fromString("00000000-0000-0000-0000-000000000001");
         if (agentRepository.findById(ariaId).isEmpty()) {
             Agent aria = Agent.builder()
@@ -64,7 +68,8 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
                     .name("Aria")
                     .role("AI operator assistant")
                     .agentType(AgentType.NATIVE)
-                    .adkProvider("langchain")
+                    .adkProvider("opencode")
+                    .executionMode(ExecutionMode.SANDBOX)
                     .config("{\"maxToolCallRounds\":15}")
                     .healthStatus(HealthStatus.HEALTHY)
                     .build();

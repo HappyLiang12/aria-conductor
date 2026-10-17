@@ -34,18 +34,22 @@ public class RunController {
      * honest 409 refusal.
      */
     private final ObjectProvider<RunInputPort> runInputProvider;
+    /** The browser-grade defense for the deliberately unauthenticated finalize route. */
+    private final io.aria.conductor.common.security.OperatorOriginGuard originGuard;
 
     /** Direct-instantiation (test) constructor: no run-input port, finalize honestly refuses. */
     public RunController(RunService runService, RunProgressEventRepository progressRepository) {
-        this(runService, progressRepository, null);
+        this(runService, progressRepository, null, new io.aria.conductor.common.security.OperatorOriginGuard(""));
     }
 
     @Autowired
     public RunController(RunService runService, RunProgressEventRepository progressRepository,
-                         ObjectProvider<RunInputPort> runInputProvider) {
+                         ObjectProvider<RunInputPort> runInputProvider,
+                         io.aria.conductor.common.security.OperatorOriginGuard originGuard) {
         this.runService = runService;
         this.progressRepository = progressRepository;
         this.runInputProvider = runInputProvider;
+        this.originGuard = originGuard;
     }
 
     @PostMapping
@@ -117,7 +121,14 @@ public class RunController {
      * existing auth posture.
      */
     @PostMapping("/{id}/finalize")
-    public ResponseEntity<Object> finalizeRun(@PathVariable UUID id) {
+    public ResponseEntity<Object> finalizeRun(@PathVariable UUID id,
+                                              jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // D6: deliberately unauthenticated — but a browser-grade defense still
+        // applies: a cross-site page's forged POST carries a foreign Origin.
+        if (originGuard.isCrossSite(httpRequest.getHeader("Origin"))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "Cross-origin operator mutation rejected"));
+        }
         RunInputPort inputPort = runInputProvider == null ? null : runInputProvider.getIfAvailable();
         if (inputPort == null || !inputPort.requestFinalize(id)) {
             return ResponseEntity.status(HttpStatus.CONFLICT)

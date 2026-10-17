@@ -32,17 +32,20 @@ public class AriaConversationController {
     private final AuditEventRepository auditEventRepository;
     private final ToolCallRepository toolCallRepository;
     private final AriaService ariaService;
+    private final io.aria.conductor.agent.service.RunService runService;
 
     public AriaConversationController(RunRepository runRepository,
                                        SessionTrajectoryRepository trajectoryRepository,
                                        AuditEventRepository auditEventRepository,
                                        ToolCallRepository toolCallRepository,
-                                       AriaService ariaService) {
+                                       AriaService ariaService,
+                                       io.aria.conductor.agent.service.RunService runService) {
         this.runRepository = runRepository;
         this.trajectoryRepository = trajectoryRepository;
         this.auditEventRepository = auditEventRepository;
         this.toolCallRepository = toolCallRepository;
         this.ariaService = ariaService;
+        this.runService = runService;
     }
 
     /**
@@ -151,6 +154,13 @@ public class AriaConversationController {
             if (status == RunStatus.RUNNING || status == RunStatus.PENDING) {
                 run.setStatus(RunStatus.CANCELLED);
                 runRepository.save(run);
+            } else if (status == RunStatus.WAITING_INPUT) {
+                // A parked run must be WOKEN, not just relabelled: the loop thread
+                // sits on the coordinator future, so cancelRun publishes the
+                // RunCompletedEvent(CANCELLED) that completes it. A direct status
+                // write here would strand the run parked with its history deleted
+                // below — an unreachable run plus a destroyed re-seed source.
+                runService.cancelRun(run.getId());
             }
         }
 

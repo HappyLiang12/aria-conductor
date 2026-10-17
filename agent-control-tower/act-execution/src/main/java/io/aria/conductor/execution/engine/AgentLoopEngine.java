@@ -719,7 +719,14 @@ public class AgentLoopEngine {
                 eventPublisher.publishEvent(new ApprovalRequestedEvent(this, ask.getId(), event.getRunId(),
                         null, Approval.ApprovalType.TOOL_CALL.name(), ApprovalSource.CLARIFICATION.name()));
             } catch (Exception e) {
-                log.warn("Failed to create the clarification ask for {}: {}", event.getRunId(), e.getMessage());
+                // The parked run is UNREACHABLE without its ask (no card to answer
+                // from, /decide refuses the source, housekeeping skips it) — a
+                // swallowed failure here would park it forever with the operator
+                // seeing nothing. Wake it instead: the finalize path ends the run
+                // honestly and the completion sweep settles any partial state.
+                log.error("Failed to create the clarification ask for {} - waking the parked run"
+                        + " so it does not strand unreachable: {}", event.getRunId(), e.getMessage(), e);
+                inputCoordinator.recordTerminationIntent(event.getRunId());
             }
             log.info("Run {} waiting for operator input", event.getRunId());
         } catch (Exception e) {

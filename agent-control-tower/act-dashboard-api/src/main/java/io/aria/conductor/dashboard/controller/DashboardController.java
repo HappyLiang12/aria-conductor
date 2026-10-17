@@ -48,7 +48,10 @@ public class DashboardController {
     public DashboardSummary getSummary() {
         long healthyAgents = agentRepository.countByHealthStatus(HealthStatus.HEALTHY);
         long degradedAgents = agentRepository.countByHealthStatus(HealthStatus.DEGRADED);
-        long runningRuns = runRepository.countByStatus(RunStatus.RUNNING);
+        // A parked (WAITING_INPUT) run still holds its admission slot and live
+        // runtime, so the KPI counts it as live work, not as finished.
+        long runningRuns = runRepository.countByStatus(RunStatus.RUNNING)
+                + runRepository.countByStatus(RunStatus.WAITING_INPUT);
         long pendingApprovals = approvalRepository.findByStatus(ApprovalStatus.PENDING).size();
         long totalTokensBurned = promptCallRepository.findAll()
                 .stream()

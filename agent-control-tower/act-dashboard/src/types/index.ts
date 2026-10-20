@@ -1,7 +1,7 @@
 // === Enums ===
 export type AgentType = 'ADK';
 export type AgentHealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'RETIRED';
-export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABORTED';
+export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'WAITING_INPUT' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABORTED';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
 export type ApprovalType = 'TOOL_CALL' | 'SPEC_REVIEW';
 export type ContentKind = 'MARKDOWN' | 'HTML';
@@ -70,6 +70,10 @@ export interface Run {
   finalOutput: string | null;
   createdAt: string;
   completedAt: string | null;
+  /** The frozen core the run was dispatched on (absent on an older backend or a run without a binding). */
+  coreId?: string | null;
+  /** The frozen execution mode alongside the frozen core; nullability matches coreId. */
+  executionMode?: string | null;
 }
 
 export interface Approval {
@@ -98,6 +102,12 @@ export interface Approval {
   // card as APPROVAL / QUESTION / REVIEW_REQUEST with rich context + answer.
   kanbanItemId?: string | null;
   askType?: 'APPROVAL' | 'QUESTION' | 'REVIEW_REQUEST';
+  /**
+   * Ask provenance (2026-10-05): a CLARIFICATION ask holds a run in
+   * WAITING_INPUT and is answered (Answer & continue + Finalize), never
+   * approved/denied. Optional: absent on responses from an older backend.
+   */
+  source?: 'LEGACY_GATE' | 'ACP_PERMISSION' | 'CLARIFICATION';
   contextMd?: string | null;
   optionsJson?: string | null;
   answer?: string | null;

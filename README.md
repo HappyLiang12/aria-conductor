@@ -294,8 +294,8 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `OPENCODE_SANDBOX_SERVER_URL` | `http://127.0.0.1:8090` | OpenSandbox server URL |
 | `OPENSANDBOX_API_KEY` | — | OpenSandbox API key (empty = insecure mode) |
 | `DEEPSEEK_API_KEY` | — | Injected into sandbox for opencode agents |
-| `ARIA_OPERATOR_BEARER_TOKEN` | — | Single-operator credential for operator-only surfaces (approval decisions, per-agent core/mode, the Qoder runtime credential). Paste the same value into the dashboard's "Operator access" panel; with it unset every operator route answers 401 |
-| `ARIA_RUNTIME_CREDENTIAL_KEY` | — | AES key encrypting the stored Qoder runtime credential. Must stay stable across restarts, or an already stored credential becomes unreadable |
+| `ARIA_OPERATOR_BEARER_TOKEN` | — | Operator credential for CI and remote/non-loopback deployments: a request that presents it as a Bearer credential is the operator. Local/loopback deployments need no token — the dashboard is authorized automatically |
+| `ARIA_OPERATOR_TRUSTED_PROXIES` | — | Comma-separated exact peer addresses whose `X-Forwarded-For` is honored (rightmost entry wins). Exact match only: no CIDR, no hostnames. Only relevant to proxied containerized deployments — see the note below |
 | `ARIA_CORES_QODER_EXECUTABLE` | `qoder` (on `PATH`) | Absolute path of the pinned Qoder CLI; Host-mode runs need it |
 | `ARIA_CORES_QODER_MODEL` | `efficient` | Reviewed model pin of a Qoder run |
 | `DB_HOST` | `mariadb` | Database host (Docker) |
@@ -303,6 +303,26 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 | `DB_NAME` | `aria_conductor` | Database name |
 | `CONTAINER_RUNTIME` | auto-detect | Container runtime: `docker` or `podman`. Unset: `scripts/start.ps1` prefers podman, the Linux/macOS `.sh` scripts auto-detect docker first; an explicit value always wins |
 | `SANDBOX_SOCKET` | `/var/run/docker.sock` | Host container-engine socket mounted into the OpenSandbox server |
+
+#### Operator authority and the Qoder credential
+
+- **Local/loopback deployments** (the default `scripts/start-backend.ps1` / dev flow): no operator
+  token needed. An anonymous request from `127.0.0.1`/`::1` is the local operator, so the dashboard
+  is authorized automatically.
+- **CI and remote/non-loopback deployments**: set `ARIA_OPERATOR_BEARER_TOKEN`; a request that
+  presents it as a Bearer credential is the operator.
+- **Proxied containerized deployments** (`docker compose`): the frontend nginx proxies `/api` to the
+  backend, so the backend's direct peer is the frontend container, not the browser. Docker assigns
+  that container a dynamic IP, and `ARIA_OPERATOR_TRUSTED_PROXIES` matches exact peer addresses only
+  (no CIDR, no service names), so the compose stack does not grant loopback-style authority to
+  forwarded browser sessions out of the box. Practical paths: run the operator's browser against a
+  non-containerized backend (loopback auto-authority applies), pin a static IP for the frontend and
+  list that exact IP in `ARIA_OPERATOR_TRUSTED_PROXIES` (the forwarded client address then depends
+  on the container runtime's NAT and is typically not loopback — verify against your setup), or use
+  `ARIA_OPERATOR_BEARER_TOKEN` for non-dashboard clients.
+- **Qoder credential**: stored plainly in the `core_credentials` table — no operator-managed
+  encryption key — and always masked on read (`****` + last 4) on the dashboard's `/providers` page
+  and via `GET /api/v1/cores/qoder/credential`. Runs receive it as `QODER_PERSONAL_ACCESS_TOKEN`.
 
 ### Spring Profiles
 

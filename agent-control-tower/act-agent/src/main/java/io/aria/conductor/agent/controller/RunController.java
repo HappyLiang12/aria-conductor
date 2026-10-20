@@ -5,14 +5,18 @@ import io.aria.conductor.agent.dto.RunProgressEventDto;
 import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.service.RunService;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.port.RunInputPort;
 import io.aria.conductor.common.repository.RunProgressEventRepository;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Validated
@@ -22,10 +26,30 @@ public class RunController {
 
     private final RunService runService;
     private final RunProgressEventRepository progressRepository;
+    /**
+     * The run-input port (2026-10-05 spec §5), optional and resolved lazily:
+     * when the execution runtime owns the parked run, finalize is delivered
+     * through this port and 202 is answered only for a run actually parked in
+     * this process; a run no deployment owns (the legacy paths) keeps the
+     * honest 409 refusal.
+     */
+    private final ObjectProvider<RunInputPort> runInputProvider;
+    /** The browser-grade defense for the deliberately unauthenticated finalize route. */
+    private final io.aria.conductor.common.security.OperatorOriginGuard originGuard;
 
+    /** Direct-instantiation (test) constructor: no run-input port, finalize honestly refuses. */
     public RunController(RunService runService, RunProgressEventRepository progressRepository) {
+        this(runService, progressRepository, null, new io.aria.conductor.common.security.OperatorOriginGuard(""));
+    }
+
+    @Autowired
+    public RunController(RunService runService, RunProgressEventRepository progressRepository,
+                         ObjectProvider<RunInputPort> runInputProvider,
+                         io.aria.conductor.common.security.OperatorOriginGuard originGuard) {
         this.runService = runService;
         this.progressRepository = progressRepository;
+        this.runInputProvider = runInputProvider;
+        this.originGuard = originGuard;
     }
 
     @PostMapping
@@ -84,5 +108,33 @@ public class RunController {
     @PostMapping("/{id}/cancel")
     public ResponseEntity<RunResponse> cancelRun(@PathVariable UUID id) {
         return ResponseEntity.ok(runService.cancelRun(id));
+    }
+
+    /**
+     * Finalizes a run parked in WAITING_INPUT (2026-10-05 spec §5): the parked
+     * thread is woken with the finalize signal and the run's own finalize path
+     * settles it honestly. 202 means the signal was delivered to a run parked
+     * in this process; 409 means it was not (already finalized, no such park,
+     * or no deployment owns the run) — nothing is claimed for a run the port
+     * refused. Deliberately NOT operator-gated (spec D6): the local operator's
+     * loopback authority is automatic and remote callers use the system's
+     * existing auth posture.
+     */
+    @PostMapping("/{id}/finalize")
+    public ResponseEntity<Object> finalizeRun(@PathVariable UUID id,
+                                              jakarta.servlet.http.HttpServletRequest httpRequest) {
+        // D6: deliberately unauthenticated — but a browser-grade defense still
+        // applies: a cross-site page's forged POST carries a foreign Origin.
+        if (originGuard.isCrossSite(httpRequest.getHeader("Origin"))) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "Cross-origin operator mutation rejected"));
+        }
+        RunInputPort inputPort = runInputProvider == null ? null : runInputProvider.getIfAvailable();
+        if (inputPort == null || !inputPort.requestFinalize(id)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "Run " + id + " is not waiting for operator input"));
+        }
+        return ResponseEntity.accepted()
+                .body(Map.of("runId", id.toString(), "status", "finalizing"));
     }
 }

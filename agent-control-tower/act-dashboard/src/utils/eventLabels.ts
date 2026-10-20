@@ -3,6 +3,7 @@ const LABELS: Record<string, string> = {
   'run.completed': 'Run Completed',
   'run.iteration': 'Agent Iteration',
   'run.failed': 'Run Failed',
+  'run.waiting_input': 'Run Waiting For Input',
   'approval.requested': 'Approval Needed',
   'approval.decided': 'Approval Decided',
   'approval.expired': 'Approval Expired',

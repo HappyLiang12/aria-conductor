@@ -90,7 +90,7 @@ test('deploy from the Crew catalog, then start a run from the Runs page', async 
   // The run surfaces in the table with a real, non-placeholder status.
   const row = page.locator('.data-table tbody tr').filter({ hasText: run.id.slice(0, 8) }).first();
   await expect(row).toBeVisible({ timeout: 30_000 });
-  await expect(row.locator('td').nth(2)).toContainText(
+  await expect(row.locator('td').nth(3)).toContainText(
     /PENDING|INITIALIZING|RUNNING|PAUSED|COMPLETED|FAILED|CANCELLED/,
   );
 });

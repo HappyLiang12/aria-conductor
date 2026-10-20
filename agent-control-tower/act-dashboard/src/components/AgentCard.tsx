@@ -1,5 +1,6 @@
 import type { Agent, AgentTelemetry } from '../types';
 import { dispatchOpenAgentDrawer } from './DrawerContext';
+import { RuntimeBadge } from './RuntimeBadge';
 import { estimateCost } from '../utils/pricing';
 
 /**
@@ -127,6 +128,7 @@ export function AgentCard({ agent, telemetry, selected, onSelect }: AgentCardPro
           <span className="nm" title={agent.name}>{agent.name}</span>
           <span className="role-tag" title={role || 'agent'}>{role || 'agent'}</span>
         </div>
+        <RuntimeBadge core={agent.adkProvider} mode={agent.executionMode} />
         {onSelect && (
           <input
             type="checkbox"

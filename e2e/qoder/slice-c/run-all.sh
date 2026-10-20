@@ -153,8 +153,8 @@ add_step() { # id, cmd-text, cwd, label
 }
 
 add_step preflight \
-  "curl GET $API_URL/actuator/health + GET $BASE_URL + GET $OPENSANDBOX_URL/health + GET/PUT $API_URL/api/v1/adk/providers/qoder/credential (masked; PAT piped via stdin)" \
-  "$REPO_ROOT" "stack health + qoder credential + live zero-credit model pin"
+  "curl GET $API_URL/actuator/health + GET $BASE_URL + GET $OPENSANDBOX_URL/health + GET/PUT $API_URL/api/v1/cores/qoder/credential (masked; PAT piped via stdin)" \
+  "$REPO_ROOT" "stack health + qoder credential + zero-credit model pin"
 add_step rebuild-image \
   "$CONTAINER_RUNTIME build -t $QODER_SANDBOX_IMAGE agent-control-tower/qoder-sandbox" \
   "$REPO_ROOT" "rebuild the pinned qoder sandbox image (plan Step 2 / C2 R13)"

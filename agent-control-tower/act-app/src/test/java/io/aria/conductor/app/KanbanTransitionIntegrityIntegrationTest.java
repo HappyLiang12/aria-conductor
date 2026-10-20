@@ -126,8 +126,26 @@ class KanbanTransitionIntegrityIntegrationTest {
     }
 
     @AfterEach
-    void releaseRunExecution() {
+    void releaseRunExecution() throws InterruptedException {
         holdExecution.countDown();
+        // The released engine thread must fully unwind through the spied
+        // execute before the next test re-stubs it: a stubbing started while
+        // the previous invocation is still returning inside the interceptor
+        // collides (UnfinishedStubbingException). The run reaching a terminal
+        // state is exactly that unwind having finished.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (System.nanoTime() < deadline) {
+            boolean anyActive = runRepository.findAll().stream().anyMatch(run -> {
+                RunStatus status = run.getStatus();
+                return status == RunStatus.PENDING || status == RunStatus.INITIALIZING
+                        || status == RunStatus.RUNNING || status == RunStatus.PAUSED
+                        || status == RunStatus.WAITING_INPUT;
+            });
+            if (!anyActive) {
+                break;
+            }
+            TimeUnit.MILLISECONDS.sleep(50);
+        }
         // The class shares one agent pool across its tests: a test that made the
         // pool ineligible must leave it eligible again for the others.
         List<Agent> agents = agentRepository.findByHealthStatusNot(HealthStatus.RETIRED);

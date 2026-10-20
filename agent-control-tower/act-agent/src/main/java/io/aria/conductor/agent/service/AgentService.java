@@ -3,6 +3,7 @@ package io.aria.conductor.agent.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.agent.dto.AgentResponse;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.dto.UpdateAgentRequest;
 import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
@@ -17,6 +18,7 @@ import io.aria.conductor.common.repository.AgentSkillRepository;
 import io.aria.conductor.common.repository.RoleSkillTemplateRepository;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.service.SkillContextProvider;
 import io.aria.conductor.common.model.SkillContext;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
@@ -29,6 +31,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -50,6 +53,14 @@ public class AgentService {
      * refusal is added, so admission keeps applying the documented defaults.
      */
     private final AgentExecutionPolicy executionPolicy;
+    /**
+     * Fleet runtime uniformity enforcement (fleet runtime governance): ON for
+     * every production deployment. The deterministic core E2E harness turns it
+     * OFF -- its purpose is exercising BOTH cores side by side, which the
+     * uniformity contract forbids production configurations to mix.
+     */
+    @org.springframework.beans.factory.annotation.Value("${aria.runtime.enforce-uniformity:true}")
+    private boolean enforceUniformity;
 
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
@@ -72,6 +83,11 @@ public class AgentService {
     @Transactional
     public AgentResponse createAgent(CreateAgentRequest request) {
         log.info("Creating agent: name={}, type={}", request.getName(), request.getAgentType());
+
+        // Fleet runtime uniformity (2026-10-11): a create must not introduce a second
+        // (core, mode) pair. Omitted selection fields are normalized to the documented
+        // defaults inside the guard (the row itself is still stored as supplied below).
+        assertNoRuntimeMix(request.getAdkProvider(), request.getExecutionMode());
 
         Agent agent = Agent.builder()
                 .name(request.getName())
@@ -142,6 +158,14 @@ public class AgentService {
             agent.setPickupEnabled(request.getPickupEnabled());
         }
 
+        // Fleet runtime uniformity (2026-10-11): the null selection fields above kept the
+        // agent's current values, so a partial update is judged on the runtime the row will
+        // actually carry (nulls normalized to the documented defaults inside the guard) --
+        // and every per-agent write on an already-mixed fleet is refused (the batch runtime
+        // endpoint is the only converging action). Runs before admission and persistence;
+        // retirement is exempt because retireAgent never reaches this.
+        assertNoRuntimeMix(agent.getAdkProvider(), agent.getExecutionMode());
+
         // Write-time admission for a selection change (Task 18 fix round 1): only when
         // this request touches the execution selection, so an unrelated edit of a row
         // stored on a removed core is never blocked by a selection the row already carried.
@@ -163,6 +187,119 @@ public class AgentService {
         executionPolicy.normalize(new AgentExecutionSettings(agent.getAdkProvider(),
                 agent.getExecutionMode(), agent.getWorkspaceMode(), agent.getWorkspacePath(),
                 agent.getWorkspaceBaseRef()));
+    }
+
+    /**
+     * Fleet runtime uniformity (2026-10-11 fleet runtime governance): the fleet
+     * runs ONE (core, mode) pair. A write that would introduce a second pair is
+     * refused; on an already-mixed fleet every per-agent write is refused -- the
+     * batch runtime endpoint is the only converging action. Retirement is exempt.
+     *
+     * <p>Both sides of the comparison are normalized to the documented defaults
+     * ({@code opencode} + {@code SANDBOX}, the same defaults the admission policy
+     * applies at run time): a create/update that omits the selection would
+     * otherwise store a row whose raw pair (e.g. {@code opencode/null}) never
+     * matches the effective pair it will actually run on. The emergent runtime is
+     * the distinct set of effective (adkProvider, executionMode) over non-retired
+     * agents, mirroring how the fleet is listed/filtered everywhere else
+     * ({@code findByHealthStatusNot(HealthStatus.RETIRED)}, pickup eligibility).
+     * An empty fleet (brand-new deployment) allows any first core/mode.
+     */
+    void assertNoRuntimeMix(String adkProvider, ExecutionMode executionMode) {
+        if (!enforceUniformity) {
+            return; // the deterministic core E2E harness exercises both cores side by side
+        }
+        // The guard's fleet read shares the convergence monitor: without this, an
+        // apply's findAll/saveAll could interleave with this read and the create
+        // would land on the pre-apply fleet.
+        synchronized (FLEET_RUNTIME_LOCK) {
+            doAssertNoRuntimeMix(adkProvider, executionMode);
+        }
+    }
+
+    /** Monitor shared by the guard read and the convergence write (see applyRuntimeToAll). */
+    private static final Object FLEET_RUNTIME_LOCK = new Object();
+
+    private void doAssertNoRuntimeMix(String adkProvider, ExecutionMode executionMode) {
+        String incoming = (adkProvider != null ? adkProvider : "opencode")
+                + "/" + (executionMode != null ? executionMode : ExecutionMode.SANDBOX);
+        Set<String> runtimes = agentRepository.findAll().stream()
+                .filter(a -> a.getHealthStatus() != HealthStatus.RETIRED)
+                .map(a -> (a.getAdkProvider() != null ? a.getAdkProvider() : "opencode")
+                        + "/" + (a.getExecutionMode() != null ? a.getExecutionMode() : ExecutionMode.SANDBOX))
+                .collect(Collectors.toSet());
+        if (runtimes.size() > 1) {
+            throw new IllegalStateException(
+                    "The fleet runtime is mixed; converge it first via PUT /api/v1/agents/runtime");
+        }
+        if (!runtimes.isEmpty() && !runtimes.contains(incoming)) {
+            throw new IllegalStateException("Runtime mixing is not allowed: the fleet runs "
+                    + runtimes.iterator().next() + "; use PUT /api/v1/agents/runtime to change it fleet-wide");
+        }
+    }
+
+    /**
+     * Fleet runtime governance (2026-10-11): the ONE converging action for the
+     * fleet's single (core, mode) pair (spec section 3). Deliberately bypasses
+     * {@link #assertNoRuntimeMix}: the guard refuses any per-agent write that
+     * would introduce a second pair and directs the operator to THIS endpoint --
+     * running the guard here would refuse the very action that cures a mixed
+     * fleet. Do NOT "unify" the two; they are intentionally different
+     * (per-agent guard vs the batch convergence write).
+     *
+     * <p>Provider-inventory validation comes first: the requested pair must be
+     * declared by the production core catalog behind {@code GET /api/v1/adk/providers}
+     * -- enforced through the shared {@link AgentExecutionPolicy} admission whose
+     * production implementation validates against that same catalog. An undeclared
+     * core or unsupported mode is refused with {@link IllegalArgumentException}
+     * (400) before any agent row is read or written. The policy's normalized
+     * settings are then applied EXPLICITLY to every non-retired agent (no null
+     * selections are stored, so the uniformity guard's default normalization
+     * never has to interpret a batched row), and retired agents are neither
+     * touched nor counted (same retired predicate as the guard:
+     * {@code healthStatus != RETIRED}). One transaction: all agents converge
+     * atomically or not at all.
+     */
+    /**
+     * Single-JVM mutual exclusion for the convergence write: two concurrent
+     * applies are last-writer-wins uniform either way, but an apply racing a
+     * per-agent create could interleave findAll/save into a mixed fleet. This
+     * monolith runs as one process (no distributed lock exists anywhere), so the
+     * convergence write and the guard's fleet read SHARE the monitor below — a
+     * create's guard read can no longer interleave with an apply's read/write
+     * phase. RESIDUAL WINDOW, stated honestly: the Spring transaction commits
+     * AFTER this method returns and the monitor is released, so a create whose
+     * guard read lands inside that commit gap still sees the pre-commit fleet;
+     * the operator UI is single-writer, which makes the gap negligible here. A
+     * multi-instance deployment would need a DB-level guard first.
+     */
+    @Transactional
+    public ApplyRuntimeResult applyRuntimeToAll(String adkProvider, ExecutionMode executionMode) {
+        // Shared monitor with the guard's fleet read (see assertNoRuntimeMix).
+        synchronized (FLEET_RUNTIME_LOCK) {
+            AgentExecutionSettings applied = executionPolicy.normalize(
+                    new AgentExecutionSettings(adkProvider, executionMode, null, null, null));
+
+            List<Agent> fleet = agentRepository.findAll().stream()
+                    .filter(a -> a.getHealthStatus() != HealthStatus.RETIRED)
+                    .toList();
+            for (Agent agent : fleet) {
+                agent.setAdkProvider(applied.coreId());
+                agent.setExecutionMode(applied.executionMode());
+            }
+            agentRepository.saveAll(fleet);
+
+            // Audit trail: the convergence rewrites every agent's governed runtime
+            // selection at once — exactly the action the review required to be
+            // observable alongside the per-agent audit events.
+            eventPublisher.publishEvent(new io.aria.conductor.common.event.AuditLogEvent(
+                    this, "AGENT_RUNTIME_APPLIED", "AGENT", "fleet", "apply-runtime",
+                    "core=" + applied.coreId() + ", mode=" + applied.executionMode()
+                            + ", agents=" + fleet.size(), null));
+            log.info("Fleet runtime applied: core={}, mode={}, updated={} agent(s) (retired agents untouched)",
+                    applied.coreId(), applied.executionMode(), fleet.size());
+            return new ApplyRuntimeResult(applied.coreId(), applied.executionMode(), fleet.size());
+        }
     }
 
     /** Whether this update request carries any execution-selection field. */

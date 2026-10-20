@@ -34,7 +34,8 @@ import java.util.UUID;
 public class RunTools implements McpTool {
 
     private static final Set<RunStatus> ACTIVE_STATUSES =
-            Set.of(RunStatus.RUNNING, RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.PAUSED);
+            Set.of(RunStatus.RUNNING, RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.PAUSED,
+            RunStatus.WAITING_INPUT);
 
     private final RunService runService;
     private final ApprovalRepository approvalRepository;
@@ -92,7 +93,7 @@ public class RunTools implements McpTool {
     }
 
     @Tool(name = "list_runs",
-            description = "List runs. Optional agentId (UUID) filters by agent and optional status (PENDING/INITIALIZING/RUNNING/PAUSED/COMPLETED/FAILED/CANCELLED/ABORTED) filters by status; blank means no filter.")
+            description = "List runs. Optional agentId (UUID) filters by agent and optional status (PENDING/INITIALIZING/RUNNING/PAUSED/WAITING_INPUT/COMPLETED/FAILED/CANCELLED/ABORTED) filters by status; blank means no filter.")
     public String listRuns(
             @ToolParam(description = "Agent id (UUID) or blank for all agents", required = false) String agentId,
             @ToolParam(description = "RunStatus name or blank for all statuses", required = false) String status) {
@@ -118,7 +119,7 @@ public class RunTools implements McpTool {
     }
 
     @Tool(name = "list_running_runs",
-            description = "List runs that are still active: RUNNING, PENDING, INITIALIZING or PAUSED.")
+            description = "List runs that are still active: RUNNING, PENDING, INITIALIZING, PAUSED or WAITING_INPUT.")
     public String listRunningRuns() {
         try {
             List<RunResponse> runs = runService.listRuns().stream()
@@ -208,7 +209,7 @@ public class RunTools implements McpTool {
             return RunStatus.valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Invalid status '" + raw
-                    + "'. Valid: PENDING, INITIALIZING, RUNNING, PAUSED, COMPLETED, FAILED, CANCELLED, ABORTED");
+                    + "'. Valid: PENDING, INITIALIZING, RUNNING, PAUSED, WAITING_INPUT, COMPLETED, FAILED, CANCELLED, ABORTED");
         }
     }
 }

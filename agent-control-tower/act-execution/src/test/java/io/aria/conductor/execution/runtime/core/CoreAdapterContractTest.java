@@ -135,9 +135,11 @@ class CoreAdapterContractTest {
 
             // The exact native prompt body: the bridge echoes the received text
             // in prompt.started, so a single-turn task with no system material
-            // and no history must arrive verbatim.
+            // and no history must arrive verbatim -- plus the clarification seed
+            // rule the session appends to every Qoder prompt by design.
             JsonNode started = firstFrameOfType(events, "prompt.started");
-            assertThat(started.path("text").asText()).isEqualTo("Reply with the fixture completion");
+            assertThat(started.path("text").asText())
+                    .isEqualTo("Reply with the fixture completion" + "\n\n" + QoderCoreSession.CLARIFICATION_SEED_RULE);
             assertThat(started.path("sessionId").asText()).isEqualTo(recordedSessionId);
 
             // Streamed payloads: the bridge's session.update frames reach the
@@ -210,8 +212,9 @@ class CoreAdapterContractTest {
                     .prompt(new CoreTask(null, List.of(), nonceFirst), event -> { })
                     .toCompletableFuture().get(120, TimeUnit.SECONDS);
             assertThat(first.finalOutput())
-                    .as("a single-turn task with no history is sent verbatim")
-                    .isEqualTo(nonceFirst);
+                    .as("a single-turn task with no history is sent verbatim, plus the session's"
+                            + " clarification seed rule")
+                    .isEqualTo(nonceFirst + "\n\n" + QoderCoreSession.CLARIFICATION_SEED_RULE);
 
             List<CoreEvent> secondEvents = new CopyOnWriteArrayList<>();
             CoreResult second = run.session()
@@ -222,7 +225,8 @@ class CoreAdapterContractTest {
             String expected = system + "\n\n"
                     + "user: " + nonceFirst + "\n"
                     + "assistant: " + nonceFirst + "\n\n"
-                    + nonceSecond;
+                    + nonceSecond
+                    + "\n\n" + QoderCoreSession.CLARIFICATION_SEED_RULE;
             assertThat(second.finalOutput())
                     .as("the core must receive system input, ordered history and the current request")
                     .isEqualTo(expected);

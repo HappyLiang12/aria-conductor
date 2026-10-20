@@ -9,6 +9,7 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.port.SchedulerPort;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -34,7 +35,10 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
 
     @org.junit.jupiter.api.BeforeEach
     void seedAriaAgent() {
-        // Ensure Aria agent exists (cleanup-all.sql runs after ApplicationRunner and wipes it)
+        // Ensure Aria agent exists (cleanup-all.sql runs after ApplicationRunner and wipes it).
+        // Seeded on the production built-in pair (opencode/SANDBOX, LegacySetupService
+        // BUILTIN_CORE/BUILTIN_MODE) so the fleet-runtime uniformity guard sees a uniform
+        // fleet; "langchain" is a removed core and would make every API create a 409.
         UUID ariaId = UUID.fromString("00000000-0000-0000-0000-000000000001");
         if (agentRepository.findById(ariaId).isEmpty()) {
             Agent aria = Agent.builder()
@@ -42,6 +46,8 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
                     .name("Aria")
                     .role("AI operator assistant")
                     .agentType(AgentType.ADK)
+                    .adkProvider("opencode")
+                    .executionMode(ExecutionMode.SANDBOX)
                     .config("{\"maxToolCallRounds\":15}")
                     .healthStatus(HealthStatus.HEALTHY)
                     .build();

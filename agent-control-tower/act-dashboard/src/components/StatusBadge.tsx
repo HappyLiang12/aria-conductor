@@ -15,6 +15,7 @@ const statusColors: Record<string, string> = {
   RUNNING: '#4caf50',
   EXECUTING: '#ff9800',
   PAUSED: '#ff9800',
+  WAITING_INPUT: '#ffb74d',
   COMPLETED: '#66bb6a',
   FAILED: '#f44336',
   CANCELLED: '#9e9e9e',

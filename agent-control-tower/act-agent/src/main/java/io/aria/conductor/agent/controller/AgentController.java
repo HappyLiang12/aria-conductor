@@ -2,6 +2,8 @@ package io.aria.conductor.agent.controller;
 
 import io.aria.conductor.agent.dto.AgentResponse;
 import io.aria.conductor.agent.dto.AgentTemplateDTO;
+import io.aria.conductor.agent.dto.ApplyRuntimeRequest;
+import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
 import io.aria.conductor.agent.dto.AssignSkillRequest;
 import io.aria.conductor.agent.dto.IdListRequest;
@@ -17,6 +19,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Validated
@@ -52,6 +55,27 @@ public class AgentController {
     public ResponseEntity<AgentResponse> updateAgent(@PathVariable UUID id,
                                                      @Valid @RequestBody UpdateAgentRequest request) {
         return ResponseEntity.ok(agentService.updateAgent(id, request));
+    }
+
+    /**
+     * Fleet runtime governance (2026-10-11): the ONE converging action for the
+     * fleet's single (core, mode) pair (spec section 3). Deliberately bypasses the
+     * per-agent uniformity guard ({@code AgentService.assertNoRuntimeMix}): the
+     * guard refuses any per-agent write that would introduce a second pair and
+     * directs the operator to THIS endpoint -- so running the guard here would
+     * refuse the very action that cures a mixed fleet. Do NOT "unify" the two;
+     * they are intentionally different (per-agent guard vs the batch convergence
+     * write).
+     */
+    @PutMapping("/runtime")
+    public Map<String, Object> applyRuntime(@RequestBody ApplyRuntimeRequest request) {
+        ApplyRuntimeResult result =
+                agentService.applyRuntimeToAll(request.adkProvider(), request.executionMode());
+        return Map.of(
+                "runtime", Map.of(
+                        "adkProvider", result.adkProvider(),
+                        "executionMode", result.executionMode().name()),
+                "updated", result.updated());
     }
 
     @PostMapping("/{id}/retire")

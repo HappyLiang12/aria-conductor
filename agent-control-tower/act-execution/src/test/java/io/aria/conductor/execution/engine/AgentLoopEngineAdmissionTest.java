@@ -146,7 +146,8 @@ class AgentLoopEngineAdmissionTest {
                 permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
                 workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
-                coreRunLauncherProvider, recordingQueue);
+                coreRunLauncherProvider, recordingQueue, null /* KanbanRepository */,
+                null /* RunInputCoordinator */);
     }
 
     /** Stubs the post-admission run-loop plumbing both owned and not-owned runs walk through. */

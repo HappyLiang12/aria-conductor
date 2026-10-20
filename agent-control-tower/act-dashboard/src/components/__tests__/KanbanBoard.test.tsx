@@ -140,6 +140,32 @@ describe('KanbanBoard WS invalidation whitelist (S1)', () => {
     const kanbanCalls = spy.mock.calls.filter((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['kanban-items']));
     expect(kanbanCalls.length).toBeGreaterThanOrEqual(2);
   });
+
+  // Waiting-input (2026-10-05): the parked run's CLARIFICATION ask must reach
+  // the decision panels too — TaskDrawer / ReviewWorkspace key their asks
+  // ['kanban', 'asks', itemId], so the branch must invalidate that prefix as
+  // well, not only the ReviewQueue's ['approvals'].
+  it('run.waiting_input refreshes approvals and the decision-panel asks queries', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    const { rerender } = ui(qc);
+
+    act(() => {
+      mockCtx = { lastMessage: { type: 'run.waiting_input', payload: { runId: 'r-1', question: 'Which DB?' }, timestamp: 't' }, isConnected: true };
+      rerender(
+        <QueryClientProvider client={qc}>
+          <DrawerProvider>
+            <KanbanBoard />
+          </DrawerProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    const approvalsCalls = spy.mock.calls.filter((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['approvals']));
+    const asksCalls = spy.mock.calls.filter((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['kanban', 'asks']));
+    expect(approvalsCalls).toHaveLength(1);
+    expect(asksCalls).toHaveLength(1);
+  });
 });
 
 describe('KanbanBoard card click opens the TaskDrawer (regression)', () => {

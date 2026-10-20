@@ -76,6 +76,10 @@ public final class CoreE2eApplication {
         new SpringApplicationBuilder(ActApplication.class, CoreE2eConfiguration.class)
                 .profiles("h2", "core-e2e")
                 .properties("approvals.timeout-ms=" + DEFAULT_APPROVALS_TIMEOUT_MS)
+                // The harness exercises BOTH cores side by side (core-execution-modes
+                // specs seed qoder/HOST against opencode/SANDBOX built-ins), so the
+                // fleet uniformity contract is explicitly off in this harness only.
+                .properties("aria.runtime.enforce-uniformity=false")
                 .initializers(ctx -> disableRunAdmissionLimit(ctx.getEnvironment()))
                 .run(args);
     }

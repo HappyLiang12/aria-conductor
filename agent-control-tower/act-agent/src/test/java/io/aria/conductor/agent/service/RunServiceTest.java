@@ -10,8 +10,11 @@ import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.port.RunBindingReaderPort;
 import io.aria.conductor.common.port.RunRuntimeControlPort;
+import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,6 +48,7 @@ class RunServiceTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock org.springframework.beans.factory.ObjectProvider<RunRuntimeControlPort> runtimeControlProvider;
     @Mock RunRuntimeControlPort runtimeControl;
+    @Mock RunBindingReaderPort bindingReader;
     @InjectMocks RunService service;
 
     private Agent healthyAgent(UUID id) {
@@ -270,6 +274,66 @@ class RunServiceTest {
         assertThatThrownBy(() -> service.getRun(id))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(id.toString());
+    }
+
+    // ---------------------------------------------------------------------
+    // frozen runtime on the response (Fleet Runtime Governance)
+    // ---------------------------------------------------------------------
+
+    @Test
+    void runResponseCarriesTheFrozenRuntime() {
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
+        when(bindingReader.findByRunId(id)).thenReturn(Optional.of(RunExecutionBinding.builder()
+                .runId(id).coreId("qoder").executionMode(ExecutionMode.HOST).build()));
+
+        RunResponse response = service.getRun(id);
+
+        assertThat(response.getCoreId()).isEqualTo("qoder");
+        assertThat(response.getExecutionMode()).isEqualTo("HOST");
+    }
+
+    @Test
+    void runResponseWithoutABindingCarriesNullRuntime() {
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
+        when(bindingReader.findByRunId(id)).thenReturn(Optional.empty());
+
+        RunResponse response = service.getRun(id);
+
+        assertThat(response.getCoreId()).isNull();
+        assertThat(response.getExecutionMode()).isNull();
+    }
+
+    @Test
+    void runResponseOfARunWithNoBindingReaderAvailable_carriesNullRuntime() {
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
+        RunService readerless = new RunService(runRepository, agentService, eventPublisher);
+
+        RunResponse response = readerless.getRun(id);
+
+        assertThat(response.getCoreId()).isNull();
+        assertThat(response.getExecutionMode()).isNull();
+    }
+
+    @Test
+    void listRuns_batchesTheBindingLookupIntoOneQuery() {
+        Run a = TestDataBuilder.aRun().withPromptSeed("a").build();
+        Run b = TestDataBuilder.aRun().withPromptSeed("b").build();
+        when(runRepository.findAll()).thenReturn(List.of(a, b));
+        when(bindingReader.findByRunIdIn(List.of(a.getId(), b.getId())))
+                .thenReturn(List.of(RunExecutionBinding.builder()
+                        .runId(a.getId()).coreId("qoder").executionMode(ExecutionMode.SANDBOX).build()));
+
+        List<RunResponse> result = service.listRuns();
+
+        assertThat(result).extracting(RunResponse::getCoreId).containsExactly("qoder", null);
+        verify(bindingReader).findByRunIdIn(List.of(a.getId(), b.getId()));
+        verify(bindingReader, never()).findByRunId(any());
     }
 
     // ---------------------------------------------------------------------
@@ -609,7 +673,12 @@ class RunServiceTest {
             "COMPLETED,RUNNING",
             "FAILED,RUNNING",
             "CANCELLED,RUNNING",
-            "PAUSED,COMPLETED"
+            "PAUSED,COMPLETED",
+            "WAITING_INPUT,PAUSED",
+            "WAITING_INPUT,ABORTED",
+            "WAITING_INPUT,INITIALIZING",
+            "WAITING_INPUT,PENDING",
+            "PAUSED,WAITING_INPUT"
     })
     void updateRunStatus_invalidTransitions_areRejected(RunStatus from, RunStatus to) {
         UUID id = UUID.randomUUID();
@@ -629,7 +698,12 @@ class RunServiceTest {
             "RUNNING,PAUSED",
             "RUNNING,ABORTED",
             "PAUSED,RUNNING",
-            "ABORTED,CANCELLED"
+            "ABORTED,CANCELLED",
+            "RUNNING,WAITING_INPUT",
+            "WAITING_INPUT,RUNNING",
+            "WAITING_INPUT,COMPLETED",
+            "WAITING_INPUT,FAILED",
+            "WAITING_INPUT,CANCELLED"
     })
     void updateRunStatus_validTransitions_areAccepted(RunStatus from, RunStatus to) {
         UUID id = UUID.randomUUID();

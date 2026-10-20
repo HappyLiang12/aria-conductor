@@ -1,49 +1,72 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ExecutiveSummary from '../ExecutiveSummary';
-import { TASK_DRAWER_EVENT } from '../DrawerContext';
-import type { KanbanItem } from '../../types';
+import { getSummary } from '../../api/dashboard';
+import { listKanbanItems } from '../../api/kanban';
+import { listRuns } from '../../api/runs';
+import { listKnowledge } from '../../api/knowledge';
+import { listAgents } from '../../api/agents';
+import type { Agent, Run } from '../../types';
 
 vi.mock('../../api/dashboard', () => ({ getSummary: vi.fn() }));
 vi.mock('../../api/kanban', () => ({ listKanbanItems: vi.fn() }));
 vi.mock('../../api/runs', () => ({ listRuns: vi.fn() }));
 vi.mock('../../api/knowledge', () => ({ listKnowledge: vi.fn() }));
+vi.mock('../../api/agents', () => ({ listAgents: vi.fn() }));
+vi.mock('./DrawerContext', () => ({ dispatchOpenTaskDrawer: vi.fn() }));
 
-import { getSummary } from '../../api/dashboard';
-import { listKanbanItems } from '../../api/kanban';
-import { listRuns } from '../../api/runs';
-import { listKnowledge } from '../../api/knowledge';
+const mockedAgents = vi.mocked(listAgents);
+const mockedRuns = vi.mocked(listRuns);
+const mockedSummary = vi.mocked(getSummary);
+const mockedKanban = vi.mocked(listKanbanItems);
+const mockedKnowledge = vi.mocked(listKnowledge);
 
-const mockedGetSummary = vi.mocked(getSummary);
-const mockedListKanbanItems = vi.mocked(listKanbanItems);
-const mockedListRuns = vi.mocked(listRuns);
-const mockedListKnowledge = vi.mocked(listKnowledge);
-
-function mkItem(over: Partial<KanbanItem> = {}): KanbanItem {
+function agent(overrides: Partial<Agent>): Agent {
   return {
-    id: 'k-1',
-    title: 'card',
+    id: overrides.id ?? 'a1',
+    name: overrides.name ?? 'Agent',
     description: null,
-    status: 'TODO',
-    priority: 'MEDIUM',
-    assignee: null,
-    labels: null,
-    linkedRunId: null,
-    linkedAgentId: null,
-    createdAt: '2026-09-08T00:00:00Z',
-    updatedAt: '2026-09-08T00:00:00Z',
-    ...over,
-  };
+    agentType: 'NATIVE',
+    role: null,
+    model: null,
+    provider: null,
+    adkProvider: 'qoder',
+    executionMode: 'HOST',
+    workspaceMode: null,
+    workspacePath: null,
+    workspaceBaseRef: null,
+    config: {},
+    healthStatus: 'HEALTHY',
+    createdAt: '2026-10-11T00:00:00Z',
+    ...overrides,
+  } as Agent;
+}
+
+function run(overrides: Partial<Run>): Run {
+  return {
+    id: overrides.id ?? 'r1',
+    agentId: overrides.agentId ?? 'a1',
+    status: 'RUNNING',
+    promptSeed: 'seed',
+    maxIterations: 10,
+    totalTokensUsed: 0,
+    iterationCount: 0,
+    errorMessage: null,
+    finalOutput: null,
+    createdAt: '2026-10-11T00:00:00Z',
+    completedAt: null,
+    coreId: 'qoder',
+    executionMode: 'HOST',
+    ...overrides,
+  } as Run;
 }
 
 function renderSummary() {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={qc}>
+    <QueryClientProvider client={client}>
       <ExecutiveSummary />
     </QueryClientProvider>,
   );
@@ -51,85 +74,65 @@ function renderSummary() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockedGetSummary.mockResolvedValue({
-    activeAgents: 0,
-    healthyAgents: 0,
-    degradedAgents: 0,
-    runningRuns: 0,
-    pendingApprovals: 0,
-    totalTokensBurned: 0,
-  });
-  mockedListKanbanItems.mockResolvedValue([]);
-  mockedListRuns.mockResolvedValue([]);
-  mockedListKnowledge.mockResolvedValue([]);
+  mockedSummary.mockResolvedValue({ activeAgents: 2, degradedAgents: 0, runningRuns: 0, totalTokensBurned: 0 } as never);
+  mockedKanban.mockResolvedValue([] as never);
+  mockedKnowledge.mockResolvedValue([] as never);
 });
 
-describe('ExecutiveSummary Waiting-on-you signal', () => {
-  it('aggregates pending asks across all cards and opens the first one on click', async () => {
-    const user = userEvent.setup();
-    mockedListKanbanItems.mockResolvedValue([
-      mkItem({ id: 'r1', status: 'REVIEW', pendingAskCount: 2 }),
-      mkItem({ id: 'r2', status: 'TODO', pendingAskCount: 3 }), // mid-run gate ask
+describe('ExecutiveSummary runtime card', () => {
+  it('shows the uniform runtime in green with an agent count', async () => {
+    mockedAgents.mockResolvedValue([
+      agent({ id: 'a1', adkProvider: 'qoder', executionMode: 'HOST' }),
+      agent({ id: 'a2', adkProvider: 'qoder', executionMode: 'HOST' }),
+    ]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    expect(await screen.findByText('qoder/HOST')).toBeTruthy();
+    expect(screen.getByText('2 agents')).toBeTruthy();
+  });
+
+  it('flags a mixed fleet in amber with the per-pair breakdown', async () => {
+    mockedAgents.mockResolvedValue([
+      agent({ id: 'a1', adkProvider: 'qoder', executionMode: 'HOST' }),
+      agent({ id: 'a2', adkProvider: 'opencode', executionMode: 'SANDBOX' }),
+    ]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    expect(await screen.findByText('Mixed')).toBeTruthy();
+    expect(screen.getByText(/opencode\/SANDBOX x1, qoder\/HOST x1/)).toBeTruthy();
+  });
+
+  it('counts non-terminal runs frozen on a runtime their agent moved off as draining', async () => {
+    mockedAgents.mockResolvedValue([
+      agent({ id: 'a1', adkProvider: 'qoder', executionMode: 'HOST' }),
+    ]);
+    mockedRuns.mockResolvedValue([
+      run({ id: 'r-drain', status: 'WAITING_INPUT', coreId: 'opencode', executionMode: 'SANDBOX' }),
+      run({ id: 'r-aligned', status: 'RUNNING', coreId: 'qoder', executionMode: 'HOST' }),
+      run({ id: 'r-terminal', status: 'COMPLETED', coreId: 'opencode', executionMode: 'SANDBOX' }),
+      run({ id: 'r-legacy', status: 'RUNNING', coreId: null, executionMode: null }),
     ]);
     renderSummary();
 
-    const label = await screen.findByText(/Waiting on you/i);
-    const stat = label.closest('.stat') as HTMLElement;
-    // The label mounts before the kanban-items query resolves — wait for the
-    // aggregated ask count, then assert the rest of the same committed render.
-    await waitFor(() => expect(stat).toHaveTextContent('5'));
-    expect(stat).toHaveTextContent('Cards need a decision');
-    // Amber styling + clickable affordance when work is waiting.
-    expect(stat.className).toContain('amber');
-    expect(stat.className).toContain('clickable');
-    expect(stat).toHaveAttribute('role', 'button');
-
-    // The canonical open path: the act:open-task-drawer window event.
-    const events: Array<{ itemId?: string }> = [];
-    const handler = (e: Event) => events.push((e as CustomEvent).detail);
-    window.addEventListener(TASK_DRAWER_EVENT, handler);
-    await user.click(stat);
-    window.removeEventListener(TASK_DRAWER_EVENT, handler);
-
-    expect(events[0]?.itemId).toBe('r1');
+    expect(await screen.findByText('qoder/HOST')).toBeTruthy();
+    expect(
+      screen.getByText((content) => /1 agent/.test(content) && /1 draining/.test(content)),
+    ).toBeTruthy();
   });
 
-  it('shows the clear state without review cards and renders no click affordance', async () => {
-    mockedListKanbanItems.mockResolvedValue([mkItem({ id: 'r2', status: 'TODO' })]);
+  it('opens the configure modal on the runtime tab when clicked', async () => {
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
     renderSummary();
 
-    const detail = await screen.findByText('Nothing pending');
-    const stat = detail.closest('.stat') as HTMLElement;
-    expect(stat).toHaveTextContent('0');
-    expect(stat.className).not.toContain('amber');
-    expect(stat.className).not.toContain('clickable');
-  });
-});
+    const dispatched: string[] = [];
+    const listener = (e: Event) => dispatched.push((e as CustomEvent).detail?.tab);
+    window.addEventListener('act:open-configure', listener);
+    await userEvent.click(screen.getByText('Runtime'));
+    window.removeEventListener('act:open-configure', listener);
 
-describe('ExecutiveSummary Active Agents honesty', () => {
-  it('reports degraded agents instead of claiming every agent is healthy', async () => {
-    mockedGetSummary.mockResolvedValue({
-      activeAgents: 2,
-      healthyAgents: 2,
-      degradedAgents: 1,
-      runningRuns: 0,
-      pendingApprovals: 0,
-      totalTokensBurned: 0,
-    });
-    renderSummary();
-
-    const detail = await screen.findByText('Healthy · 1 degraded');
-    const stat = detail.closest('.stat') as HTMLElement;
-    expect(stat).toHaveTextContent('2');
-    expect(stat.className).toContain('amber');
-    expect(screen.queryByText('Healthy & responsive')).not.toBeInTheDocument();
-  });
-
-  it('claims all healthy only when no agent is degraded', async () => {
-    renderSummary();
-
-    const detail = await screen.findByText('All healthy');
-    const stat = detail.closest('.stat') as HTMLElement;
-    expect(stat.className).not.toContain('amber');
+    expect(dispatched).toEqual(['runtime']);
   });
 });

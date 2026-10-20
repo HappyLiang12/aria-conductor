@@ -35,7 +35,6 @@ const CONFIGURED: QoderCredentialMetadata = {
   coreId: 'qoder',
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: true,
-  encryptionKeyConfigured: true,
   testSupported: true,
   maskedSecret: 'fixture-secret-value',
   updatedAt: '2026-09-22T12:00:00Z',
@@ -46,7 +45,6 @@ const UNCONFIGURED: QoderCredentialMetadata = {
   coreId: 'qoder',
   environmentVariable: 'QODER_PERSONAL_ACCESS_TOKEN',
   configured: false,
-  encryptionKeyConfigured: true,
   testSupported: true,
   maskedSecret: null,
   updatedAt: null,
@@ -108,14 +106,12 @@ describe('RuntimeCredentialsCard', () => {
     expect(await screen.findByText('••••••••')).toBeInTheDocument();
   });
 
-  it('reports an unconfigured credential and an unusable key explicitly', async () => {
-    mockedGet.mockResolvedValue({ ...UNCONFIGURED, encryptionKeyConfigured: false });
+  it('reports an unconfigured credential explicitly', async () => {
+    mockedGet.mockResolvedValue(UNCONFIGURED);
     ui();
     expect(await screen.findByText('Not configured')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        'The credential encryption key is not configured; storing a credential is refused.',
-      ),
+      screen.getByText('Qoder runs fail admission until an operator stores the runtime credential.'),
     ).toBeInTheDocument();
     expect(screen.queryByText('••••••••')).not.toBeInTheDocument();
   });
@@ -216,36 +212,29 @@ describe('RuntimeCredentialsCard', () => {
     expect(mockedTest).not.toHaveBeenCalled();
   });
 
-  it('surfaces the backend operator rejection verbatim', async () => {
+  it('surfaces a read rejection verbatim from the backend', async () => {
     mockedGet.mockRejectedValue({
       response: { status: 401, data: { error: 'Operator credential required' } },
     });
     ui();
     expect(await screen.findByText('Operator credential required')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Operator-only surface — establish the operator session in the Operator access panel first.',
-      ),
-    ).toBeInTheDocument();
+    expect(screen.queryByText('••••••••')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Test credential' })).not.toBeInTheDocument();
   });
 
-  it('does not append the operator-session hint to a non-operator read failure', async () => {
+  it('surfaces a non-rejection read failure verbatim', async () => {
     mockedGet.mockRejectedValue({
       response: { status: 503, data: { error: 'Credential store unavailable' } },
     });
     ui();
     expect(await screen.findByText('Credential store unavailable')).toBeInTheDocument();
-    expect(
-      screen.queryByText(
-        'Operator-only surface — establish the operator session in the Operator access panel first.',
-      ),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('••••••••')).not.toBeInTheDocument();
   });
 
   it('keeps the retained metadata and controls when a background refetch fails', async () => {
-    // Only a refusal hides the last known state: any other failure (503, network)
-    // must leave the mask and the controls usable instead of emptying the card,
-    // because nothing refetches it back on its own.
+    // Any failure (401, 503, network) leaves the last known mask and the
+    // controls usable instead of emptying the card, because nothing refetches
+    // it back on its own; the error block shows what happened.
     mockedGet
       .mockResolvedValueOnce(CONFIGURED)
       .mockRejectedValueOnce({ response: { status: 503, data: {} } });
@@ -262,11 +251,6 @@ describe('RuntimeCredentialsCard', () => {
     expect(screen.getByText('••••••••')).toBeInTheDocument();
     expect(screen.getByLabelText('Runtime credential')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove credential' })).toBeInTheDocument();
-    expect(
-      screen.queryByText(
-        'Operator-only surface — establish the operator session in the Operator access panel first.',
-      ),
-    ).not.toBeInTheDocument();
   });
 
   it('removes the credential only after the operator confirms', async () => {

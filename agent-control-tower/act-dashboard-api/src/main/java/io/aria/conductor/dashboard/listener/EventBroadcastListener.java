@@ -18,6 +18,7 @@ import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.event.AuditLogEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.model.RunProgressEventEntity;
@@ -78,6 +79,19 @@ public class EventBroadcastListener {
             data.put("finalOutput", output.length() > 500 ? output.substring(0, 500) + "..." : output);
         }
         broadcast("run.completed", data);
+    }
+
+    /**
+     * Waiting-input (2026-10-05): a run parked for operator input reaches the
+     * dashboard live, so the Answer &amp; continue panel surfaces without a poll.
+     */
+    @EventListener
+    public void onRunWaitingForInput(RunWaitingForInputEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("runId", event.getRunId().toString());
+        String question = event.getQuestion();
+        data.put("question", question != null && question.length() > 500 ? question.substring(0, 500) + "..." : question);
+        broadcast("run.waiting_input", data);
     }
 
     @EventListener

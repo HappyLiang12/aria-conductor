@@ -48,16 +48,14 @@ runs:
         test -f extracted/bridge/main.js
         test -f extracted/scenarios.json
     - name: Generate the synthetic harness credentials
-      # Never repository secrets: the operator bearer token, the peer control
-      # token and the runtime-credential encryption key (a base64 32-byte key)
-      # are generated per run and exported for the launcher and the specs.
+      # Never repository secrets: the operator bearer token and the peer control
+      # token are generated per run and exported for the launcher and the specs.
       shell: bash
       run: |
         set -euo pipefail
         {
           echo "ARIA_OPERATOR_BEARER_TOKEN=ci-operator-$(openssl rand -hex 16)"
           echo "ARIA_PEER_CONTROL_TOKEN=ci-peer-$(openssl rand -hex 16)"
-          echo "ARIA_RUNTIME_CREDENTIAL_KEY=$(openssl rand -base64 32 | tr -d '\n')"
           echo "ARIA_E2E_QODER_CREDENTIAL=ci-qoder-$(openssl rand -hex 16)"
         } >> "$GITHUB_ENV"
     - name: Start the deterministic core E2E harness (H2, process transport)

@@ -39,11 +39,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * pending approval triplet is seeded through the repositories against a REST-created
  * agent, and the journey continues over the real endpoints from there.
  * <p>
- * The decision route is operator-only (spec §6.2): every decision here presents the
- * separately configured operator bearer credential — a worker credential would be 403.
+ * The decision route is operator-only (spec §6.2): the journeys present the
+ * separately configured operator bearer credential — a worker credential would
+ * be 403, and an anonymous or unverifiable-bearer request from the loopback
+ * harness resolves as the operator by design (loopback auto-authority); a
+ * forwarded non-loopback client is still 401.
  */
 @Import(NoopLlmTestConfig.class)
-@TestPropertySource(properties = "aria.operator.bearer-token=" + ApprovalFlowIntegrationTest.OPERATOR_CREDENTIAL)
+@TestPropertySource(properties = {
+        "aria.operator.bearer-token=" + ApprovalFlowIntegrationTest.OPERATOR_CREDENTIAL,
+        // The loopback harness peer is a trusted proxy so a test can forward an
+        // X-Forwarded-For client address and exercise the non-loopback refusal.
+        "aria.operator.trusted-proxies=127.0.0.1"
+})
 class ApprovalFlowIntegrationTest extends BaseH2IntegrationTest {
 
     static final String OPERATOR_CREDENTIAL = "approval-flow-operator-credential";
@@ -193,19 +201,73 @@ class ApprovalFlowIntegrationTest extends BaseH2IntegrationTest {
         assertThat(response.getBody().get("error")).asString().contains("Approval not found");
     }
 
-    /** Without the operator credential the decision route is closed (401). */
+    /**
+     * An explicit but unverifiable bearer counts as "no identity presented"
+     * (local-authority simplification): from the loopback harness it falls
+     * through to the loopback operator rule and the decision is processed.
+     */
     @Test
-    void decide_withoutOperatorCredential_returns401() {
+    void decide_withAnUnverifiableBearerFallsThroughToLoopbackAuthority() {
+        Approval approval = seedPendingApproval("shell_exec", "{\"cmd\":\"ls\"}");
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth("not-a-real-credential");
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<Map> response = restTemplate.exchange(
+                "/api/v1/approvals/" + approval.getId() + "/decide", HttpMethod.POST,
+                new HttpEntity<>(Map.of("approved", true, "reason", "forged attempt"), headers), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("status")).isEqualTo("processed");
+        Approval decided = approvalRepository.findById(approval.getId()).orElseThrow();
+        assertThat(decided.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+    }
+
+    /**
+     * A request forwarded from a trusted loopback proxy for a non-loopback
+     * client has no identity at all: the decision route is closed (401) and the
+     * ask stays untouched. This is the tier that pins the refusal for callers
+     * outside the local operator's machine.
+     */
+    @Test
+    void decide_fromANonLoopbackClientWithoutCredentials_returns401AndLeavesTheAskPending() {
+        Approval approval = seedPendingApproval("shell_exec", "{\"cmd\":\"ls\"}");
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth("not-a-real-credential");
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Forwarded-For", "203.0.113.7");
+        ResponseEntity<Map> response = restTemplate.exchange(
+                "/api/v1/approvals/" + approval.getId() + "/decide", HttpMethod.POST,
+                new HttpEntity<>(Map.of("approved", true, "reason", "forged attempt"), headers), Map.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody().get("error")).isEqualTo("Operator session required");
+        assertThat(approvalRepository.findById(approval.getId()).orElseThrow().getStatus())
+                .isEqualTo(ApprovalStatus.PENDING);
+    }
+
+    /**
+     * Loopback auto-authority (local-authority simplification): an anonymous
+     * request from the loopback harness resolves as the operator by design, so
+     * the decision is processed at the integration tier.
+     */
+    @Test
+    void decide_fromLoopbackWithoutCredentials_isOperatorAuthorized() {
         Approval approval = seedPendingApproval("shell_exec", "{\"cmd\":\"ls\"}");
 
         ResponseEntity<Map> response = restTemplate.postForEntity(
                 "/api/v1/approvals/" + approval.getId() + "/decide",
                 Map.of("approved", true, "reason", "anonymous"), Map.class);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
-        assertThat(response.getBody().get("error")).isEqualTo("Operator session required");
-        assertThat(approvalRepository.findById(approval.getId()).orElseThrow().getStatus())
-                .isEqualTo(ApprovalStatus.PENDING);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().get("approvalId")).isEqualTo(approval.getId().toString());
+        assertThat(response.getBody().get("approved")).isEqualTo(true);
+        assertThat(response.getBody().get("status")).isEqualTo("processed");
+
+        Approval decided = approvalRepository.findById(approval.getId()).orElseThrow();
+        assertThat(decided.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(decided.getDecidedAt()).isNotNull();
     }
 
     /** A valid worker credential is authenticated but never operator-authorized (403). */

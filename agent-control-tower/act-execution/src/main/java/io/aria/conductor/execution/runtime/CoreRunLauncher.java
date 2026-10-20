@@ -7,7 +7,9 @@ import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.common.runtime.WorkspaceKind;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,7 +37,7 @@ import java.util.UUID;
 public class CoreRunLauncher {
 
     /** The runtime credential reference of the Qoder core. */
-    public static final String QODER_CREDENTIAL_REFERENCE = RuntimeCredentialService.QODER_CREDENTIAL_REFERENCE;
+    public static final String QODER_CREDENTIAL_REFERENCE = CoreCredentialService.QODER_CREDENTIAL_REFERENCE;
 
     private final AgentExecutionPolicy policy;
     private final CoreAdapters adapters;
@@ -138,6 +140,76 @@ public class CoreRunLauncher {
         ExecutionSpec spec = new ExecutionSpec(run.getId(), agent.getId(), coreId, mode, settings,
                 credentialRef, configurationRevision, deadline);
         return coordinator.execute(spec, adapters.require(coreId), task);
+    }
+
+    /**
+     * Re-freezes a parked run's binding onto a superseding core selection (fleet
+     * runtime governance 4.4): the operator changed the agent's core/mode while
+     * the run waited for input, and the run coordinator migrates the run at
+     * answer time. Exactly the superseded fields are rewritten -- core, mode,
+     * credential reference, configuration revision and deadline; the frozen
+     * settings snapshot and the workspace references are carried over untouched,
+     * and the first-freeze idempotency guard of {@link #execute} does not apply
+     * (a migration supersedes the run's own binding deliberately).
+     *
+     * <p>Static rather than an instance seam: the coordinator cannot hold the
+     * launcher without a construction cycle (the launcher holds the coordinator).
+     *
+     * @param deadline the superseding frozen deadline, already truncated to the
+     *                 persistence granularity by the caller so the migrated spec
+     *                 and the row cannot disagree on the round trip
+     * @param reason   the migration reason recorded with the log line
+     * @return the saved superseding row, the authority the migrated attempt's
+     *         spec is built from
+     */
+    static RunExecutionBinding refreezeBinding(RunExecutionBindingRepository bindings, UUID runId,
+            Agent agent, Instant deadline, String reason) {
+        RunExecutionBinding row = bindings.findById(runId)
+                .orElseThrow(() -> new IllegalStateException("Run " + runId
+                        + " has no frozen execution binding to supersede"));
+        String coreId = agent.getAdkProvider();
+        row.setCoreId(coreId);
+        row.setExecutionMode(agent.getExecutionMode());
+        row.setCredentialRef(credentialReference(coreId));
+        row.setConfigurationRevision(configurationRevision(agent));
+        row.setDeadline(deadline);
+        // A cross-mode migration genuinely changes the workspace contract: the
+        // frozen-match check compares the row's recorded kind against the new
+        // mode's expectation, so the row must record the new mode's kind or the
+        // relaunch would refuse its own superseded binding.
+        row.setWorkspaceKind(expectedWorkspaceKind(coreId, agent.getExecutionMode(), row.getSettingsJson()));
+        bindings.save(row);
+        log.info("Migrated run {} to core {}/{} ({})", runId, coreId, agent.getExecutionMode(), reason);
+        return row;
+    }
+
+    /**
+     * The workspace kind the migrated binding must record for the superseding
+     * mode: SANDBOX snapshots for SANDBOX; HOST falls back to the documented
+     * DIRECT default unless the frozen settings select a workspace mode (the
+     * same fallback admission applies to a silent selection).
+     */
+    private static WorkspaceKind expectedWorkspaceKind(String coreId, ExecutionMode mode, String settingsJson) {
+        if (mode == ExecutionMode.SANDBOX) {
+            return WorkspaceKind.SANDBOX_SNAPSHOT;
+        }
+        if (settingsJson == null || settingsJson.isBlank()) {
+            return WorkspaceKind.DIRECT;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode settings =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(settingsJson);
+            String workspaceMode = settings.path("workspaceMode").asText(null);
+            if ("WORKTREE".equals(workspaceMode)) {
+                return WorkspaceKind.WORKTREE;
+            }
+            if ("DIRECT".equals(workspaceMode)) {
+                return WorkspaceKind.DIRECT;
+            }
+        } catch (java.io.IOException e) {
+            // Unreadable frozen settings fall back like a silent selection.
+        }
+        return WorkspaceKind.DIRECT;
     }
 
     private AgentExecutionSettings frozenSettings(RunExecutionBinding binding) {

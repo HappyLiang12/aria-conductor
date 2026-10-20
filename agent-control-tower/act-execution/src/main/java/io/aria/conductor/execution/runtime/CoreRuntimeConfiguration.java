@@ -6,10 +6,11 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReplySink;
-import io.aria.conductor.execution.credential.RuntimeCredentialService;
+import io.aria.conductor.execution.credential.CoreCredentialService;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
+import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
 import io.aria.conductor.execution.runtime.core.QoderCoreAdapter;
 import io.aria.conductor.execution.runtime.host.HostExecutionBackend;
@@ -111,6 +112,17 @@ public class CoreRuntimeConfiguration {
         return new CoordinatedRunRuntimeControl(coordinator);
     }
 
+    /**
+     * The run store's read-only view of the frozen bindings (Fleet Runtime
+     * Governance): the dashboard run responses badge the core/mode each run was
+     * dispatched with, read through this port so the run store (act-agent)
+     * never depends on the execution module's binding repository.
+     */
+    @Bean
+    public RepositoryRunBindingReader runBindingReaderPort(RunExecutionBindingRepository bindings) {
+        return new RepositoryRunBindingReader(bindings);
+    }
+
     @Bean
     public ExecutionBackend hostExecutionBackend() {
         return HostExecutionBackend.forCurrentPlatform();
@@ -158,10 +170,15 @@ public class CoreRuntimeConfiguration {
     public CoreExecutionService coreExecutionService(ExecutionBackendRegistry backends,
             WorkspaceService workspaceService, RunFinalizer runFinalizer,
             RunRuntimeRegistry runRuntimeRegistry, PermissionCoordinator permissions,
-            RuntimeCredentialService runtimeCredentials, ActorTokenService actorTokens,
-            RunExecutionBindingRepository bindings) {
+            CoreCredentialService coreCredentials, ActorTokenService actorTokens,
+            RunExecutionBindingRepository bindings, RunInputCoordinator runInputCoordinator,
+            org.springframework.context.ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines,
+            io.aria.conductor.agent.repository.AgentRepository agentRepository,
+            SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
-                permissions, runtimeCredentials, actorTokens, bindings);
+                permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
+                eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters);
     }
 
     /**

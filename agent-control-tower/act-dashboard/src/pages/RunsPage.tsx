@@ -47,19 +47,28 @@ export function RunsPage() {
 
   const cancelMutation = useMutation({
     mutationFn: cancelRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
     onError: (err: unknown) => setActionError(presentError(err, 'The cancel request was refused.')),
   });
 
   const pauseMutation = useMutation({
     mutationFn: pauseRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
     onError: (err: unknown) => setActionError(presentError(err, 'The pause request was refused.')),
   });
 
   const resumeMutation = useMutation({
     mutationFn: resumeRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
     onError: (err: unknown) => setActionError(presentError(err, 'The resume request was refused.')),
   });
 

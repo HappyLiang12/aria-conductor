@@ -48,6 +48,15 @@ class NotificationTriggerListenerTest {
     }
 
     @Test
+    void onRunCompleted_withCompletedStatusAndNonFatalErrorsKeepsTheSuccessBodyClean() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.COMPLETED, null,
+                "Action run_agent failed: transient tool timeout"));
+        verify(notificationService).create("run.completed", "Run completed successfully",
+                "Run " + runId + " finished with status COMPLETED.", "RUN", runId.toString());
+    }
+
+    @Test
     void onApprovalRequested() {
         UUID approvalId = UUID.randomUUID();
         listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, UUID.randomUUID(), UUID.randomUUID()));

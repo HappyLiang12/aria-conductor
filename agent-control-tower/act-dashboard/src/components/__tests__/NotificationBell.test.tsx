@@ -110,6 +110,33 @@ describe('NotificationBell one-click synthesis', () => {
     }
   });
 
+  it('keeps a mark-read rejection visible when the compose call itself succeeds', async () => {
+    const batch = notification({
+      id: 'n-batch',
+      type: 'run.batch.completed',
+      resourceId: 'conv-42',
+    });
+    mockComposeSynthesis.mockResolvedValue({ prompt: 'composed synthesis prompt' });
+    mockMarkRead.mockRejectedValue({
+      response: { data: { message: 'Notification read state could not be saved.' } },
+    });
+
+    const events: CustomEvent<{ prompt: string }>[] = [];
+    const listener = (e: Event) => events.push(e as CustomEvent<{ prompt: string }>);
+    window.addEventListener('aria:compose', listener);
+    try {
+      await openDropdown([batch]);
+      fireEvent.click(screen.getByRole('button', { name: '彙整' }));
+
+      await waitFor(() => expect(events).toHaveLength(1));
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Notification read state could not be saved.',
+      );
+    } finally {
+      window.removeEventListener('aria:compose', listener);
+    }
+  });
+
   it('does not render the 彙整 action for other notification types', async () => {
     await openDropdown([notification({ type: 'run.completed' })]);
     expect(await screen.findByText('Run completed')).toBeInTheDocument();

@@ -38,6 +38,7 @@ const CATEGORIES: CategoryDef[] = [
       { key: 'circuit.breaker.max.iterations', label: 'Max Iterations', min: 1, max: 500, step: 1 },
       { key: 'circuit.breaker.error.rate.threshold', label: 'Error Rate Threshold', min: 0, max: 1, step: 0.01 },
       { key: 'circuit.breaker.max.iteration.latency.ms', label: 'Max Iteration Latency', min: 10000, max: 3_600_000, step: 1000, unit: 'ms' },
+      { key: 'circuit.breaker.max.run.duration.ms', label: 'Max Run Duration', min: 60_000, max: 86_400_000, step: 60_000, unit: 'ms' },
     ],
   },
   {

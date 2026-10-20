@@ -132,12 +132,19 @@ public class KnowledgeController {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException e) {
-        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        return ResponseEntity.badRequest().body(Map.of("error", messageOf(e, "Invalid workflow request.")));
     }
 
     /** State errors from template instantiation (e.g. template/version state mismatch). */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, String>> handleIllegalState(IllegalStateException e) {
-        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        return ResponseEntity.badRequest()
+                .body(Map.of("error", messageOf(e, "The workflow template is not in a valid state.")));
+    }
+
+    /** Map.of rejects null values, so a message-less exception must not turn a 400 into a 500. */
+    private static String messageOf(RuntimeException e, String fallback) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? fallback : message;
     }
 }

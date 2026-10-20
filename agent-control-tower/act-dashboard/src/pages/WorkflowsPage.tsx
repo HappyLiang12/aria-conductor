@@ -239,19 +239,28 @@ export function WorkflowsPage() {
   // Mutations
   const cancelMutation = useMutation({
     mutationFn: (id: string) => cancelWorkflow(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
     onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Cancel failed.')),
   });
 
   const retryMutation = useMutation({
     mutationFn: ({ id, stepIndex }: { id: string; stepIndex: number }) => retryWorkflow(id, stepIndex),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
     onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Retry step failed.')),
   });
 
   const resubmitMutation = useMutation({
     mutationFn: (id: string) => resubmitApproval(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
     onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Resubmit failed.')),
   });
 
@@ -276,6 +285,7 @@ export function WorkflowsPage() {
   const mergeMutation = useMutation({
     mutationFn: ({ sourceIds, name }: { sourceIds: string[]; name: string }) => mergeWorkflows(sourceIds, name),
     onSuccess: () => {
+      setDeleteError(null);
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       setSelectedIds([]);
     },
@@ -284,7 +294,10 @@ export function WorkflowsPage() {
 
   const executeYamlMutation = useMutation({
     mutationFn: (yamlContent: string) => executeYaml(yamlContent),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
     onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'YAML execution failed.')),
   });
 

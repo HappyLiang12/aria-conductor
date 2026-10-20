@@ -583,6 +583,18 @@ class KnowledgeControllerTest extends WebMvcTestBase {
     }
 
     @Test
+    void instantiateWorkflow_messageLessRejection_returns400WithTheFallback() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(workflowTemplateService.instantiateTemplate(eq(id), anyMap()))
+                .thenThrow(new IllegalArgumentException());
+        mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
+                        .contentType("application/json")
+                        .content("{\"parameters\":{}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Invalid workflow request."));
+    }
+
+    @Test
     void getStats_returnsAggregatedCounts() throws Exception {
         when(knowledgeService.getStats()).thenReturn(KnowledgeStatsResponse.builder()
                 .totalItems(5)

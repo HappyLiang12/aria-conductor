@@ -88,7 +88,7 @@ test('a worktree request over a non-git directory is refused, never downgraded',
   const refused = await pollRunTerminal(request, created.data.id);
   expect(refused.status).toBe('FAILED');
   expect(refused.errorMessage).toBe(
-    `Worktree workspace requires a git repository: ${nonGitDirectory}`
+    `Worktree workspace requires a git repository: ${nonGitDirectory}.`
       + " Edit the agent's workspace settings in Crew.",
   );
 });

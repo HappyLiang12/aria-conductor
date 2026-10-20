@@ -81,7 +81,8 @@ class AgentExecutionPolicyTest {
         assertThatThrownBy(() -> policy().normalize(
                 new AgentExecutionSettings("", ExecutionMode.HOST, null, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageStartingWith(UNSUPPORTED_CORE);
+                .hasMessage("Unsupported agent core: . Supported cores: opencode, qoder."
+                        + " Select one in Configure > Runtime.");
     }
 
     @Test

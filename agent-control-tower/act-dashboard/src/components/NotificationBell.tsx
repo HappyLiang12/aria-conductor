@@ -96,9 +96,12 @@ export function NotificationBell() {
     try {
       const { prompt } = await composeSynthesis(notification.resourceId);
       if (!notification.isRead) {
+        // handleMarkRead owns its failure notice; clearing it here would hide a
+        // mark-read rejection every time the compose call itself succeeds.
         await handleMarkRead(notification.id);
+      } else {
+        setActionError(null);
       }
-      setActionError(null);
       window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt } }));
     } catch (err) {
       setActionError(apiErrorMessage(err, 'The synthesis prompt could not be composed.'));

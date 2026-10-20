@@ -27,7 +27,7 @@ test.describe('Runs page', () => {
   });
 
   test('run started via UI form appears with a status badge', async ({ page, request }) => {
-    const agent = await seedAgent(request); // NATIVE agents are HEALTHY → selectable
+    const agent = await seedAgent(request); // agents are HEALTHY → selectable
     await page.goto('/runs');
     await page.waitForLoadState('networkidle');
 

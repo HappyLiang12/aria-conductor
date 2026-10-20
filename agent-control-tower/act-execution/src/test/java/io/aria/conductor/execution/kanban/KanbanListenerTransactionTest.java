@@ -213,7 +213,7 @@ class KanbanListenerTransactionTest {
     private static Agent agent(boolean pickupEnabled) {
         return Agent.builder()
                 .id(UUID.randomUUID()).name("agent-" + UUID.randomUUID())
-                .description("listener transaction test").agentType(AgentType.NATIVE).role("tester")
+                .description("listener transaction test").agentType(AgentType.ADK).role("tester")
                 .model("gpt-4o-mini").provider("openai").config("{}")
                 .pickupEnabled(pickupEnabled).healthStatus(HealthStatus.HEALTHY)
                 .createdAt(Instant.now()).build();

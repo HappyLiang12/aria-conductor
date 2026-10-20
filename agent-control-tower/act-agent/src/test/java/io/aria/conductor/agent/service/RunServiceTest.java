@@ -446,6 +446,60 @@ class RunServiceTest {
         assertThat(event.getValue().getAgentId()).isEqualTo(agentId);
     }
 
+    // ── a coordinator-owned run is stopped only on a verified ack ──
+
+    @Test
+    void cancelRun_ofACoordinatorOwnedRun_stopsTheRuntimeBeforePersistingCancelled() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runtimeControl).cancel(id);
+        verify(runRepository).save(any(Run.class));
+    }
+
+    @Test
+    void cancelRun_whenTheRuntimeRefuses_stopsNothingAndPersistsNothing() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException(
+                        "Run " + id + " was not stopped: the run-owned core did not verify the stop"))
+                .when(runtimeControl).cancel(id);
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("did not verify the stop");
+        verify(runRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_ofARunNoRuntimeOwns_keepsTheRecordedTransition() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(false);
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runtimeControl, never()).cancel(any());
+    }
+
     @Test
     void cancelRun_alreadyCompleted_isRejected() {
         UUID id = UUID.randomUUID();

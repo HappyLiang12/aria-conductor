@@ -2,7 +2,6 @@ package io.aria.conductor;
 
 import io.aria.conductor.aria.config.AriaProperties;
 import io.aria.conductor.dashboard.report.ReportProperties;
-import io.aria.conductor.execution.circuit.CircuitBreakerProperties;
 import io.aria.conductor.execution.llm.LlmProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -17,7 +16,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 @EnableConfigurationProperties({
         LlmProperties.class,
-        CircuitBreakerProperties.class,
         AriaProperties.class,
         ReportProperties.class
 })

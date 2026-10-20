@@ -99,4 +99,30 @@ class CoordinatedRunRuntimeControlTest {
 
         control.resume(runId);
     }
+
+    @Test
+    void cancel_passesOnAVerifiedStoppedAck() {
+        CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
+        when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
+        when(coordinator.cancel(runId)).thenReturn(
+                CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true)));
+
+        control.cancel(runId);
+    }
+
+    @Test
+    void cancel_refusalSurfacesTheExactPendingControlReason() {
+        CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
+        when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
+        when(coordinator.cancel(runId)).thenReturn(
+                CompletableFuture.completedFuture(new ControlAck(ControlState.RUNNING, false)));
+        when(coordinator.pendingControl(runId)).thenReturn(Optional.of(new RunRuntimeRegistry.ControlRequest(
+                ControlState.STOPPED, Instant.now(),
+                "Stop refused for run " + runId + ": the backend refused the stop (writers alive)")));
+
+        assertThatThrownBy(() -> control.cancel(runId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("was not stopped")
+                .hasMessageContaining("the backend refused the stop");
+    }
 }

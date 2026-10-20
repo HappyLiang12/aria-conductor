@@ -37,7 +37,7 @@ async function apiCall(
 async function createAgent(page: Page): Promise<string> {
   const { status, data } = await apiCall(page, 'POST', '/agents', {
     name: `WfSmAgent-${Date.now()}`,
-    agentType: 'NATIVE',
+    agentType: 'ADK',
     description: 'State machine E2E agent',
   });
   expect(status).toBe(201);

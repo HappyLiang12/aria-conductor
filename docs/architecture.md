@@ -29,12 +29,12 @@ Aria Conductor is a modular monolith built with Java 21 + Spring Boot 3.3 for go
 |--------|---------------|
 | **act-common** | Shared models (Agent, Run, Approval, Knowledge), DTOs, repositories, enums |
 | **act-agent** | Agent lifecycle management — creation, configuration, health monitoring, template system |
-| **act-execution** | Tool execution engine, LLM client abstraction, run-owned core runtime (coordinator, launcher, adapters, Host/Sandbox backends), circuit breaker |
+| **act-execution** | LLM client abstraction, run-owned core runtime (coordinator, launcher, adapters, Host/Sandbox backends), approvals |
 | **act-knowledge** | Knowledge base management — CRUD, versioning, Git-backed storage |
 | **act-aria** | Aria AI assistant — chat sessions, agent orchestration, scheduled jobs |
 | **act-dashboard-api** | REST API controllers for the dashboard frontend |
 | **act-app** | Spring Boot application entry point, configuration, Flyway migrations |
-| **act-test-support** | Shared test utilities, mock ADK runtime, test data builders |
+| **act-test-support** | Shared test utilities and test data builders |
 
 ## Key Concepts
 

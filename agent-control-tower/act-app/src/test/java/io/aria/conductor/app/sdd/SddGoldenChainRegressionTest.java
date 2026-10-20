@@ -10,9 +10,8 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.WorkflowChain;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.llm.LlmResponse;
+import io.aria.conductor.execution.runtime.CoreResult;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -24,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
@@ -41,25 +39,22 @@ class SddGoldenChainRegressionTest extends BaseH2IntegrationTest {
     @Autowired
     private AgentRepository agentRepository;
     @MockBean
-    private AdkProviderRegistry adkProviderRegistry;
+    private CoreRunLauncher coreRunLauncher;
 
     @Test
     void genericChain_withoutKinds_walksExactCurrentPath() throws Exception {
         Agent agent = agentRepository.save(Agent.builder()
                 .name("golden-generic-agent")
                 .role("test-role")
-                .agentType(AgentType.NATIVE)
-                .adkProvider("langchain")
+                .agentType(AgentType.ADK)
+                .adkProvider("opencode")
                 .config("{}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build());
         UUID agentId = agent.getId();
-        AdkProvider mock = mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(mock);
-        when(mock.isHealthy(any())).thenReturn(true);
-        when(mock.parseActionsFromResponse(any())).thenReturn(List.of());
-        when(mock.call(any(), any(), any(), any())).thenAnswer(inv ->
-                new LlmResponse("step output", 10, 20, "stop", List.of()));
+        when(coreRunLauncher.owns(any())).thenReturn(true);
+        when(coreRunLauncher.execute(any(), any(), any())).thenAnswer(inv ->
+                new CoreResult("sess-golden", "step output", null, false));
 
         WorkflowResponse created = workflowService.createAndStart(
                 CreateWorkflowRequest.builder()

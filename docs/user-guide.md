@@ -57,10 +57,12 @@ Full conversation view with:
 ### Agent Health
 Each agent shows a health badge:
 - **HEALTHY** — ready to accept runs
-- **UNHEALTHY** — check configuration or ADK connectivity
+- **UNHEALTHY** — check configuration or core connectivity
 
-### Assign Tools
-Agents can be assigned tools (web_search, web_fetch, shell_exec, etc.). Tools marked `INTERNAL` in the Knowledge space are auto-seeded at startup.
+### Agent Capabilities
+An agent's tools come from its core (`opencode` or `qoder`) and, for platform operations,
+from the run-scoped Aria Conductor MCP endpoint. There is no per-agent tool assignment;
+the core's native permission asks surface through the approval gate.
 
 ---
 
@@ -87,9 +89,9 @@ Click **Details** to expand:
 
 | Action | When available | Effect |
 |--------|---------------|--------|
-| **Pause** | Status = RUNNING | Freezes execution; iteration count stops |
+| **Pause** | Status = RUNNING | Freezes the run-owned core; the run stays PAUSED until resumed |
 | **Resume** | Status = PAUSED | Continues from where it paused |
-| **Cancel** | Status = RUNNING or PAUSED | Attempts to stop the run |
+| **Cancel** | Status = RUNNING or PAUSED | Stops the run-owned core; the verified stop is recorded before CANCELLED |
 
 ### Run Statuses
 `PENDING → RUNNING → COMPLETED / FAILED / CANCELLED`
@@ -168,7 +170,6 @@ Navigate to **Reports** in the sidebar.
 |-----|--------|
 | **Model inheritance** | If an agent has no `model` set, it uses the active LLM provider's `defaultModel` |
 | **Token budget** | Runs have a 100K token safety limit. Hitting it causes FAILED status |
-| **Shell disabled** | `shell_exec` is disabled by default for security. Enable via `tools.shell.enabled=true` |
 | **WebSocket updates** | TopBar KPIs update in real-time via WebSocket. If WS disconnects, data may appear stale — refresh the page |
 | **Theme toggle** | TopBar right — switch between dark and light mode |
 | **Notifications bell** | Shows unread system events (run completed, approval needed, etc.) |

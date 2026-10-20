@@ -3,33 +3,21 @@ package io.aria.conductor.execution.engine;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
-import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
-import io.aria.conductor.common.service.ToolRegistry;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.runtime.CoreExecutionService;
-import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalGate;
-import io.aria.conductor.execution.circuit.CircuitBreaker;
-import io.aria.conductor.execution.dod.DoDService;
-import io.aria.conductor.execution.harness.ToolSteeringGuard;
-import io.aria.conductor.execution.kanban.KanbanService;
-import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
+import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.repository.ApprovalRepository;
-import io.aria.conductor.execution.repository.PromptCallRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
-import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
-import io.aria.conductor.execution.tool.AgentToolResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -55,32 +43,29 @@ class OrphanedRunRecoveryTest {
 
     @Mock private RunRepository runRepository;
     @Mock private AgentRepository agentRepository;
-    @Mock private AdkProviderRegistry adkProviderRegistry;
     @Mock private SessionStateManager sessionStateManager;
-    @Mock private ActionExecutionPipeline actionPipeline;
-    @Mock private CircuitBreaker circuitBreaker;
     @Mock private ApprovalGate approvalGate;
-    @Mock private PromptCallRepository promptCallRepository;
+    @Mock private PermissionCoordinator permissionCoordinator;
     @Mock private SessionTrajectoryRepository trajectoryRepository;
-    @Mock private ToolCallRepository toolCallRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private WorkflowService workflowService;
     @Mock private WorkflowChainRepository workflowChainRepository;
-    @Mock private AgentToolResolver agentToolResolver;
     @Mock private AgentSkillResolver agentSkillResolver;
-    @Mock private ToolRegistry toolRegistry;
     @Mock private KnowledgeContextProvider knowledgeProvider;
     @Mock private WorkspaceManager workspaceManager;
-    @Mock private HarnessProfileService harnessProfileService;
-    @Mock private ToolSteeringGuard toolSteeringGuard;
     @Mock private ApprovalRepository approvalRepository;
-    @Mock private TaskDeadlineProperties taskDeadlineProperties;
-    @Mock private org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
-    @Mock private DoDService dodService;
-    @Mock private KanbanService kanbanService;
 
-    @InjectMocks
     private AgentLoopEngine engine;
+
+    @BeforeEach
+    void setUp() {
+        engine = new AgentLoopEngine(
+                runRepository, agentRepository, sessionStateManager, approvalGate,
+                permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
+                workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
+                approvalRepository, null /* coreExecutionServiceProvider */, null /* DoDService */,
+                null /* coreRunLauncherProvider */, null /* admission */);
+    }
 
     private Run run(RunStatus status) {
         Run run = new Run();

@@ -145,7 +145,7 @@ function executionSelection(opts: ExecutionSelectionOpts) {
 }
 
 /**
- * POST /agents — NATIVE agents are created HEALTHY, so they are immediately
+ * POST /agents — agents are created HEALTHY, so they are immediately
  * runnable. Optional explicit core/mode/workspace selection is passed through
  * to the same fields the Crew create form submits.
  */
@@ -156,7 +156,7 @@ export async function seedAgent(
 ) {
   const { status, data } = await apiCall(request, 'POST', '/agents', {
     name: name ?? uniqueName('e2e-agent'),
-    agentType: 'NATIVE',
+    agentType: 'ADK',
     description: 'Seeded by Phase E e2e fixtures',
     ...executionSelection(opts),
   });

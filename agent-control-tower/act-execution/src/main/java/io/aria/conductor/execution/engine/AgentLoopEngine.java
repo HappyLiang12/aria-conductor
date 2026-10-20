@@ -6,19 +6,13 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
-import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunIterationEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.aria.conductor.common.exception.BudgetExceededException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.*;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.TaskContext;
 import io.aria.conductor.execution.adk.TaskExecutionException;
-import io.aria.conductor.execution.adk.TaskResult;
 import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ControlState;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
@@ -27,32 +21,16 @@ import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
-import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
-import io.aria.conductor.execution.approval.ApprovalDecision;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
-import io.aria.conductor.execution.circuit.CircuitBreaker;
 import io.aria.conductor.execution.dod.DoDService;
-import io.aria.conductor.execution.kanban.KanbanService;
 import io.aria.conductor.execution.llm.LlmMessage;
-import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.llm.LlmToolCall;
-import io.aria.conductor.execution.pipeline.Action;
-import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
-import io.aria.conductor.execution.pipeline.ActionType;
-import io.aria.conductor.execution.pipeline.ActionResult;
-import io.aria.conductor.execution.harness.ToolSteeringGuard;
 import io.aria.conductor.execution.repository.ApprovalRepository;
-import io.aria.conductor.execution.repository.PromptCallRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
-import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.common.model.ToolCall;
-import io.aria.conductor.common.model.ToolCallStatus;
-import io.aria.conductor.execution.tool.AgentToolResolver;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
-import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -73,61 +51,36 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * Agent loop engine — orchestrates the iterative agent execution cycle.
- * Uses virtual threads so CompletableFuture blocking doesn't pin OS threads.
+ * Run engine — starts a run on its run-owned core (through the coordinator and
+ * launcher) and keeps the engine-level business transitions: run status,
+ * trajectory, SSE delivery and run-end approval finalization.
+ *
+ * <p>Uses virtual threads so blocking on the core does not pin OS threads.
  */
 @Slf4j
 @Component
 public class AgentLoopEngine {
 
-    private static final java.util.regex.Pattern ACTION_PATTERN =
-            java.util.regex.Pattern.compile(
-                    "\\b(create|start|update|delete|remove|add|run|" +
-                            "execute|generate|build|deploy|cancel|pause|resume|retire|" +
-                            "store|query|amend|init|submit|transition|approve|reject)\\b");
 
     private final RunRepository runRepository;
     private final AgentRepository agentRepository;
-    private final AdkProviderRegistry adkProviderRegistry;
     private final SessionStateManager sessionStateManager;
-    private final ActionExecutionPipeline actionPipeline;
-    private final CircuitBreaker circuitBreaker;
     private final ApprovalGate approvalGate;
-    /**
-     * The native-ask coordinator (Task 3): the run-end hook settles the run's
-     * still-pending ACP asks through it — the legacy gate sweeps skip those rows
-     * (they are stamped {@code ACP_PERMISSION}), so this is their only owner.
-     */
     private final PermissionCoordinator permissionCoordinator;
-    private final PromptCallRepository promptCallRepository;
     private final SessionTrajectoryRepository trajectoryRepository;
-    private final ToolCallRepository toolCallRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final WorkflowService workflowService;
     private final WorkflowChainRepository workflowChainRepository;
-    private final AgentToolResolver agentToolResolver;
     private final AgentSkillResolver agentSkillResolver;
-    private final ToolRegistry toolRegistry;
     private final KnowledgeContextProvider knowledgeProvider;
     private final WorkspaceManager workspaceManager;
-    private final HarnessProfileService harnessProfileService;
-    private final ToolSteeringGuard toolSteeringGuard;
     private final ApprovalRepository approvalRepository;
-    private final TaskDeadlineProperties taskDeadlineProperties;
     /**
-     * The run coordinator, when the cutover wiring provides one (Task 18). A run
-     * whose runtime the coordinator owns has its runtime control (pause, resume,
-     * cancel) delegated to it; without a coordinator the legacy provider paths
-     * stay in charge, so this engine keeps its business state transitions either
-     * way.
+     * The run coordinator and launcher of the cutover wiring: every run is
+     * executed by a run-owned core, so both are required in production. Null
+     * only in unit tests that exercise the engine without the core wiring.
      */
     private final ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
-    /**
-     * The production cutover launcher (Task 18), when the wiring provides one:
-     * a run on a registered production core is driven end to end through the
-     * run coordinator. Absent in unit tests that exercise the generic turn
-     * loop against provider doubles.
-     */
     private final ObjectProvider<CoreRunLauncher> coreRunLauncherProvider;
     /**
      * The run admission gate of the cutover wiring: a launcher-owned run must
@@ -136,71 +89,49 @@ public class AgentLoopEngine {
      */
     private final RunAdmissionQueue admission;
     private final DoDService dodService;
-    private final KanbanService kanbanService;
 
     private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Map<UUID, RunContext> activeContexts = new ConcurrentHashMap<>();
 
     public AgentLoopEngine(RunRepository runRepository,
                            AgentRepository agentRepository,
-                           AdkProviderRegistry adkProviderRegistry,
                            SessionStateManager sessionStateManager,
-                           ActionExecutionPipeline actionPipeline,
-                           CircuitBreaker circuitBreaker,
                            ApprovalGate approvalGate,
                            PermissionCoordinator permissionCoordinator,
-                           PromptCallRepository promptCallRepository,
                            SessionTrajectoryRepository trajectoryRepository,
-                           ToolCallRepository toolCallRepository,
                            ApplicationEventPublisher eventPublisher,
                            WorkflowService workflowService,
                            WorkflowChainRepository workflowChainRepository,
-                           AgentToolResolver agentToolResolver,
                            AgentSkillResolver agentSkillResolver,
-                           ToolRegistry toolRegistry,
                            KnowledgeContextProvider knowledgeProvider,
                            WorkspaceManager workspaceManager,
-                           HarnessProfileService harnessProfileService,
-                           ToolSteeringGuard toolSteeringGuard,
                            ApprovalRepository approvalRepository,
-                           TaskDeadlineProperties taskDeadlineProperties,
                            ObjectProvider<CoreExecutionService> coreExecutionServiceProvider,
                            DoDService dodService,
-                           KanbanService kanbanService,
                            ObjectProvider<CoreRunLauncher> coreRunLauncherProvider,
                            RunAdmissionQueue admission) {
         this.runRepository = runRepository;
         this.agentRepository = agentRepository;
-        this.adkProviderRegistry = adkProviderRegistry;
         this.sessionStateManager = sessionStateManager;
-        this.actionPipeline = actionPipeline;
-        this.circuitBreaker = circuitBreaker;
         this.approvalGate = approvalGate;
         this.permissionCoordinator = permissionCoordinator;
-        this.promptCallRepository = promptCallRepository;
         this.trajectoryRepository = trajectoryRepository;
-        this.toolCallRepository = toolCallRepository;
         this.eventPublisher = eventPublisher;
         this.workflowService = workflowService;
         this.workflowChainRepository = workflowChainRepository;
-        this.agentToolResolver = agentToolResolver;
         this.agentSkillResolver = agentSkillResolver;
-        this.toolRegistry = toolRegistry;
         this.knowledgeProvider = knowledgeProvider;
         this.workspaceManager = workspaceManager;
-        this.harnessProfileService = harnessProfileService;
-        this.toolSteeringGuard = toolSteeringGuard;
         this.approvalRepository = approvalRepository;
-        this.taskDeadlineProperties = taskDeadlineProperties;
         this.coreExecutionServiceProvider = coreExecutionServiceProvider;
         this.coreRunLauncherProvider = coreRunLauncherProvider;
         this.admission = admission;
         this.dodService = dodService;
-        this.kanbanService = kanbanService;
     }
 
     /**
-     * Start a run — loads agent, creates session, enters iteration loop on virtual thread.
+     * Start a run — loads the agent, creates the session and dispatches the
+     * run-owned core execution on a virtual thread.
      */
     public void startRun(UUID runId) {
         startRunInternal(runId, null, List.of());
@@ -257,16 +188,7 @@ public class AgentLoopEngine {
         // is a hard cap over the agent's configured maxToolCallRounds; a value of 0 means "not set",
         // in which case the agent config (or a global default) is used. Persist the resolved value
         // back onto the run so the stored record and UI reflect the effective cap.
-        // Resolve the harness profile once per run (tool steering, self-verify escalation, budgets).
-        HarnessProfile harnessProfile = harnessProfileService.resolve(agent);
-
         int maxIterations = parseMaxIterationsFromConfig(agent, run.getMaxIterations());
-        // If the agent set no explicit round cap but the profile does, apply the (tighter) profile
-        // cap so a weak model terminates sooner. The default profile leaves rounds unset (no change).
-        if (harnessProfile.maxToolCallRounds() > 0 && !hasExplicitMaxToolCallRounds(agent)) {
-            int cap = harnessProfile.maxToolCallRounds();
-            maxIterations = run.getMaxIterations() > 0 ? Math.min(cap, run.getMaxIterations()) : cap;
-        }
         if (run.getMaxIterations() != maxIterations) {
             run.setMaxIterations(maxIterations);
         }
@@ -296,11 +218,9 @@ public class AgentLoopEngine {
         updateRunStatus(run, RunStatus.INITIALIZING);
 
         // Create/load session
-        AgentSession session = sessionStateManager.loadOrCreateSession(runId, agent.getId());
+        sessionStateManager.loadOrCreateSession(runId, agent.getId());
 
-        // Create run context with the resolved maxIterations
-        RunContext ctx = new RunContext(runId, agent.getId(), agent, session, maxIterations, run.getConversationId());
-        ctx.setHarnessProfile(harnessProfile);
+        RunContext ctx = new RunContext(runId, agent.getId(), agent, run.getConversationId());
         if (intent != null) {
             ctx.setIntent(intent);
         }
@@ -309,7 +229,7 @@ public class AgentLoopEngine {
         // Launch loop on virtual thread
         virtualThreadExecutor.execute(() -> {
             try {
-                executeRunLoop(ctx, run, emitter, initialContext);
+                dispatchRun(ctx, run, emitter, initialContext);
             } catch (Exception e) {
                 log.error("Run loop failed unexpectedly: runId={}", runId, e);
                 handleRunFailure(runId, e.getMessage());
@@ -346,7 +266,6 @@ public class AgentLoopEngine {
                                 .orElse("the run-owned core did not verify the pause"));
             }
         }
-        ctx.pause();
         updateRunStatusDirect(runId, RunStatus.PAUSED);
         sessionStateManager.updateSessionStatus(runId, SessionStatus.PAUSED);
         log.info("Run paused: runId={}", runId);
@@ -381,7 +300,6 @@ public class AgentLoopEngine {
                                 .orElse("the run-owned core did not verify the resume"));
             }
         }
-        ctx.resume();
         updateRunStatusDirect(runId, RunStatus.RUNNING);
         sessionStateManager.updateSessionStatus(runId, SessionStatus.ACTIVE);
         log.info("Run resumed: runId={}", runId);
@@ -399,26 +317,6 @@ public class AgentLoopEngine {
         return coreRunLauncherProvider == null ? null : coreRunLauncherProvider.getIfAvailable();
     }
 
-    /**
-     * The legacy provider of the run's selected core, for the provider-level paths
-     * (turn loop, task delegation, budget summary). A catalog core resolves to no
-     * provider bean -- {@link AdkProviderRegistry#resolve(Agent)} consults the
-     * production core catalog -- because its run path is the coordinator through
-     * the core launcher, which the dispatch gates above have already handled. A
-     * catalog core reaching this method therefore means the cutover wiring is not
-     * deployed; the run is refused explicitly instead of failing with a
-     * null-provider error, and no other provider is ever substituted.
-     */
-    private AdkProvider requireLegacyProvider(RunContext ctx) {
-        AdkProvider provider = adkProviderRegistry.resolve(ctx.getAgent());
-        if (provider == null) {
-            String coreId = ctx.getAgent() == null ? null : ctx.getAgent().getAdkProvider();
-            throw new IllegalStateException("Core '" + coreId + "' is served by its run-owned core runtime"
-                    + " (the core launcher/coordinator), which is not available in this wiring;"
-                    + " the legacy provider path must not execute it");
-        }
-        return provider;
-    }
 
     /**
      * Drives one run on a registered production core through the cutover
@@ -540,7 +438,10 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Cancel a running run. Signals the loop thread via volatile flag and updates DB.
+     * Records the cancellation of a run whose operator cancel was verified and
+     * persisted upstream: the run-owned core stop is verified by
+     * {@code RunService.cancelRun} through {@code RunRuntimeControlPort} before
+     * the {@code RunCompletedEvent} reaches this listener.
      */
     public void cancelRun(UUID runId) {
         RunContext ctx = activeContexts.get(runId);
@@ -554,10 +455,6 @@ public class AgentLoopEngine {
                 }
             });
             return;
-        }
-        ctx.setCancelled(true);
-        if (ctx.isPaused()) {
-            ctx.resume(); // unblocks awaitResume() so thread checks isCancelled()
         }
         updateRunStatusDirect(runId, RunStatus.CANCELLED);
         sessionStateManager.updateSessionStatus(runId, SessionStatus.CANCELLED);
@@ -766,10 +663,10 @@ public class AgentLoopEngine {
                 });
     }
 
-    // ---- Main loop ----
+    // ---- Run dispatch ----
 
-    private void executeRunLoop(RunContext ctx, Run run, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {
-        log.info("Entering run loop: runId={}, agentId={}", ctx.getRunId(), ctx.getAgentId());
+    private void dispatchRun(RunContext ctx, Run run, @Nullable SseEmitter emitter, List<LlmMessage> initialContext) {
+        log.info("Dispatching run: runId={}, agentId={}", ctx.getRunId(), ctx.getAgentId());
 
         // SSE: notify client that processing has started. Include the runId so the client
         // can cancel this run server-side mid-stream (M1).
@@ -778,13 +675,12 @@ public class AgentLoopEngine {
         // Update to RUNNING
         updateRunStatusDirect(ctx.getRunId(), RunStatus.RUNNING);
 
-        // Provision per-run workspace (lazy — only creates dir; handlers use it when needed)
+        // Provision the per-run scratch workspace that the diff preview reads.
         try {
             String wsDir = workspaceManager.getOrProvision(ctx.getRunId());
-            ctx.setWorkspaceDir(wsDir);
             log.info("Provisioned run workspace: {}", wsDir);
         } catch (Exception e) {
-            log.error("Workspace provisioning failed for run {} (use-site fallback will retry): {}",
+            log.error("Workspace provisioning failed for run {}: {}",
                     ctx.getRunId(), e.getMessage());
         }
 
@@ -811,8 +707,7 @@ public class AgentLoopEngine {
 
         // Runtime-coordination branch: a run whose runtime is owned by the run coordinator
         // is driven by its run-owned core session (prompt, events, permissions, finalization).
-        // The legacy provider paths below -- the turn loop and the task delegation at the end
-        // of this branch -- must not start a second execution for that run.
+        // No second execution is started for that run.
         CoreExecutionService coordinator = runCoordinator();
         if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
             log.info("Run {} is owned by its run-owned core session; no provider-level execution is started",
@@ -820,372 +715,30 @@ public class AgentLoopEngine {
             return;
         }
 
-        // Production cutover (Task 18): a run whose (stored or defaulted) core is a
-        // registered production core (opencode, qoder) is executed end to end by the
-        // run coordinator through the core launcher (frozen binding -> backend -> core
+        // Production cutover: a run whose (stored or defaulted) core is a registered
+        // production core (opencode, qoder) is executed end to end by the run
+        // coordinator through the core launcher (frozen binding -> backend -> core
         // session -> verified finalization) -- including a run whose remaining
         // selection admission refuses: executeCoreRun() fails it with the admission
-        // message and the provider path is never entered. Only a core outside the
-        // production catalog falls through to the registry, whose explicit
-        // no-fallback refusal ends the run; it is never executed either.
+        // message.
         CoreRunLauncher coreLauncher = runCoreLauncher();
         if (coreLauncher != null && coreLauncher.owns(ctx.getAgent())) {
             executeCoreRun(ctx, coreLauncher, emitter);
             return;
         }
 
-        // Task-level delegation branch: a task-capable provider (e.g. OpenCode) takes
-        // over the whole run via executeTask — the turn-level loop below is never
-        // entered. Turn-loop logic remains untouched.
-        AdkProvider resolvedProvider = requireLegacyProvider(ctx);
-        if (resolvedProvider.supportsTaskExecution()) {
-            taskExecutionPath(ctx, resolvedProvider, emitter);
-            return;
-        }
-
-        try {
-            while (!ctx.isCancelled() && ctx.getIterationCount() < ctx.getMaxIterations()) {
-                // Check pause
-                if (ctx.isPaused()) {
-                    ctx.awaitResume();
-                    if (ctx.isCancelled()) break;
-                    // Reset the per-iteration latency timer so time spent paused is not counted (#22)
-                    ctx.markIterationStart();
-                }
-
-                // Check circuit breaker
-                circuitBreaker.check(ctx);
-
-                // Execute one iteration
-                boolean shouldContinue = executeIteration(ctx, emitter);
-
-                if (!shouldContinue) {
-                    log.info("Run loop ending naturally: runId={}, iterations={}", ctx.getRunId(), ctx.getIterationCount());
-                    break;
-                }
-
-                // Persist session every 5 iterations
-                if (ctx.getIterationCount() % 5 == 0) {
-                    sessionStateManager.persistSession(ctx.getRunId());
-                }
-            }
-
-            // Budget exhaustion: if loop stopped because of iteration limit, get honest summary
-            if (ctx.getIterationCount() >= ctx.getMaxIterations() && !ctx.isCancelled()) {
-                log.info("Budget exhausted for runId={} — requesting honest summary", ctx.getRunId());
-                try {
-                    List<LlmMessage> summaryMessages = new ArrayList<>(buildMessages(ctx));
-                    summaryMessages.add(LlmMessage.system(
-                            "You ran out of tool-call budget. List ONLY what was actually done "
-                                    + "based on tool results above. Clearly state what could NOT be completed."));
-                    AdkProvider summaryProvider = requireLegacyProvider(ctx);
-                    LlmResponse summaryResponse = summaryProvider.call(
-                            ctx.getAgentId(), summaryMessages, List.of()); // no tools
-                    ctx.addTokensUsed(summaryResponse.inputTokens(), summaryResponse.outputTokens());
-                    if (summaryResponse.content() != null && !summaryResponse.content().isBlank()) {
-                        ctx.setLastAssistantResponse(summaryResponse.content());
-                    }
-                } catch (Exception e) {
-                    log.warn("Budget summary call failed for runId={}: {}", ctx.getRunId(), e.getMessage());
-                }
-            }
-
-            // Complete the run
-            // SSE: emit final message and done before cleanup
-            String finalOutput = ctx.getLastAssistantResponse();
-            if (finalOutput != null && !finalOutput.isBlank()) {
-                tryEmit(emitter, "message", Map.of("content", finalOutput));
-            }
-            tryEmit(emitter, "done", donePayload(ctx, null));
-            RunStatus finalStatus = ctx.isCancelled() ? RunStatus.CANCELLED : RunStatus.COMPLETED;
-            completeRun(ctx, finalStatus);
-        } catch (BudgetExceededException e) {
-            log.error("Circuit breaker tripped for run {}: {}", ctx.getRunId(), e.getMessage());
-            ctx.addError(e.getMessage());
-            tryEmit(emitter, "done", donePayload(ctx, e.getMessage()));
-            tryEmit(emitter, "error", Map.of("message", e.getMessage() != null ? e.getMessage() : "Budget exceeded"));
-            completeRun(ctx, RunStatus.FAILED);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Run interrupted: runId={}", ctx.getRunId());
-            tryEmit(emitter, "done", donePayload(ctx, "Run interrupted"));
-            tryEmit(emitter, "error", Map.of("message", "Run interrupted"));
-            completeRun(ctx, RunStatus.CANCELLED);
-        } catch (Exception e) {
-            log.error("Run loop error: runId={}", ctx.getRunId(), e);
-            ctx.addError(e.getMessage());
-            String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
-            tryEmit(emitter, "done", donePayload(ctx, errMsg));
-            tryEmit(emitter, "error", Map.of("message", errMsg));
-            completeRun(ctx, RunStatus.FAILED);
-        }
-    }
-
-    // ---- Task-level delegation branch (task-capable providers, e.g. OpenCode) ----
-
-    /**
-     * Task-level delegation path: hands the whole run to a task-capable provider
-     * instead of the turn-level while loop. Governance at task level: optional
-     * approval gate → virtual-thread execution with cancellable polling →
-     * timeout/abort mapping → token audit + final output persistence.
-     */
-    private void taskExecutionPath(RunContext ctx, AdkProvider provider, @Nullable SseEmitter emitter) {
-        log.info("Task execution path: runId={}, provider={}", ctx.getRunId(), provider.providerId());
-        tryEmit(emitter, "thinking", Map.of("status", "processing", "mode", "task", "provider", provider.providerId()));
-
-        try {
-            // Circuit breaker — same governance as the turn loop (budget / iteration /
-            // latency caps). Runs before the approval gate so a budget-exhausted run is
-            // stopped even when a human would have approved it.
-            circuitBreaker.check(ctx);
-
-            // Approval gate — mirrors the turn path's human gate semantics. Default
-            // REQUIRES approval before task-level execution; only an explicit
-            // "taskApprovalRequired": false in the agent config opts out.
-            ApprovalDecision approval = taskApprovalGate(ctx);
-            if (!approval.isApproved()) {
-                String denial = "Task approval denied: " + approval.reason();
-                log.warn("Task denied by approval gate: runId={}, reason={}", ctx.getRunId(), approval.reason());
-                ctx.addError(denial);
-                tryEmit(emitter, "done", donePayload(ctx, denial));
-                tryEmit(emitter, "error", Map.of("message", denial));
-                completeRun(ctx, RunStatus.CANCELLED);
-                return;
-            }
-
-            // Single merged task prompt: same system-rule injection (role / knowledge /
-            // skills) as the turn loop via buildMessages, plus the user request.
-            String taskPrompt = buildTaskPrompt(ctx);
-
-            // Task-level constraints: agent-config round cap (same parse as the turn loop)
-            // + the mode-neutral run deadline (aria.tasks.deadline-minutes, default 45).
-            TaskContext taskContext = new TaskContext(
-                    parseMaxIterationsFromConfig(ctx.getAgent(), ctx.getMaxIterations()),
-                    taskDeadlineProperties.deadline());
-
-            // Execute on a virtual thread; poll every second so cancelRun() stays
-            // responsive (abortTask on cancel → TaskExecutionException(ABORTED)).
-            TaskResult result = awaitTaskResult(ctx, provider, taskPrompt, taskContext);
-
-            // Success: token/iteration bookkeeping + audit + final output + completion.
-            ctx.addTokensUsed(result.inputTokens(), result.outputTokens());
-            ctx.incrementIteration();
-            if (result.finalOutput() != null && !result.finalOutput().isBlank()) {
-                ctx.setLastAssistantResponse(result.finalOutput());
-                tryEmit(emitter, "message", Map.of("content", result.finalOutput()));
-                recordTaskTrajectory(ctx, result.finalOutput(), result.outputTokens());
-            }
-            recordTaskPromptCall(ctx, result.inputTokens(), result.outputTokens());
-            RunStatus finalStatus = result.aborted() ? RunStatus.ABORTED : RunStatus.COMPLETED;
-            tryEmit(emitter, "done", donePayload(ctx, null));
-            completeRun(ctx, finalStatus);
-        } catch (BudgetExceededException e) {
-            log.error("Circuit breaker tripped for task run {}: {}", ctx.getRunId(), e.getMessage());
-            handleTaskFailure(ctx, e.getMessage() != null ? e.getMessage() : "Budget exceeded",
-                    RunStatus.FAILED, emitter);
-        } catch (TaskExecutionException e) {
-            handleTaskExecutionFailure(ctx, e, provider, emitter);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            handleTaskFailure(ctx, "Task interrupted: " + e.getMessage(), RunStatus.CANCELLED, emitter);
-        } catch (Exception e) {
-            log.error("Task path unexpected failure: runId={}", ctx.getRunId(), e);
-            handleTaskFailure(ctx, e.getMessage() != null ? e.getMessage() : "Unknown task error",
-                    RunStatus.FAILED, emitter);
-        }
-    }
-
-    /**
-     * Builds the single task prompt handed to a task-level provider: the same
-     * system-rule injection (role / knowledge / skills) as the turn loop via
-     * {@link #buildMessages}, merged with the user request into one string
-     * ({@code ---} + {@code User request:} separator). Degrades gracefully when
-     * either half is missing.
-     */
-    private String buildTaskPrompt(RunContext ctx) {
-        List<LlmMessage> messages = buildMessages(ctx);
-        StringBuilder system = new StringBuilder();
-        String userRequest = null;
-        for (LlmMessage msg : messages) {
-            if ("system".equals(msg.role())) {
-                if (!system.isEmpty()) system.append("\n\n");
-                system.append(msg.content());
-            } else if ("user".equals(msg.role())) {
-                userRequest = msg.content();
-            }
-        }
-        if (userRequest == null || userRequest.isBlank()) {
-            return system.toString();
-        }
-        if (system.isEmpty()) {
-            return userRequest;
-        }
-        return system + "\n\n---\nUser request: " + userRequest;
-    }
-
-    /**
-     * Task-level approval gate — reuses the turn-level {@link ApprovalGate} entry.
-     * Default REQUIRES human approval before task-level execution, matching the
-     * governance level of the turn path. An agent config can opt out explicitly
-     * with {@code "taskApprovalRequired": false} (and can still opt in explicitly
-     * with {@code true} for backward compatibility).
-     */
-    private ApprovalDecision taskApprovalGate(RunContext ctx) {
-        if (taskApprovalExplicitlyDisabled(ctx.getAgent())) {
-            return ApprovalDecision.approve("Task approval disabled by agent config");
-        }
-        log.info("Requesting task-level approval: runId={}, agentId={}", ctx.getRunId(), ctx.getAgentId());
-        // Synthetic action representing the whole task (the gate only needs a name/type).
-        Action taskAction = new Action("task_execution", ActionType.EXECUTE, "{}", null);
-        return approvalGate.requestApproval(taskAction, ctx);
-    }
-
-    /** Whether the agent config explicitly disables human approval before task-level execution. */
-    private static boolean taskApprovalExplicitlyDisabled(Agent agent) {
-        String config = agent.getConfig();
-        if (config == null || config.isBlank()) return false;
-        try {
-            Map<String, Object> configMap = new ObjectMapper().readValue(
-                    config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-            Object v = configMap.get("taskApprovalRequired");
-            return v instanceof Boolean b && !b;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /**
-     * Runs the provider task on a virtual thread and polls for completion every
-     * second. Each poll re-checks {@code ctx.isCancelled()} (set by cancelRun)
-     * so an in-flight task can be interrupted: abort the provider and surface
-     * {@link TaskExecutionException}(ABORTED).
-     */
-    private TaskResult awaitTaskResult(RunContext ctx, AdkProvider provider, String taskPrompt, TaskContext taskContext)
-            throws InterruptedException {
-        CompletableFuture<TaskResult> future = CompletableFuture.supplyAsync(
-                () -> provider.executeTask(ctx.getAgent(), ctx.getRunId(), taskPrompt, taskContext),
-                virtualThreadExecutor);
-
-        while (true) {
-            if (ctx.isCancelled()) {
-                // Cancel the underlying future: after this the future is terminal and
-                // future.get() would throw CancellationException, so it must never be
-                // called again (the throw below returns from this method directly).
-                // Note: CompletableFuture.cancel(true) does not interrupt the executing
-                // thread (mayInterruptIfRunning is a no-op there) — the runtime stop below
-                // is what actually stops in-flight work.
-                future.cancel(true);
-                stopCancelledRuntime(ctx, provider);
-                throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED, "Run cancelled");
-            }
-            try {
-                return future.get(1, TimeUnit.SECONDS);
-            } catch (TimeoutException timeout) {
-                // still in flight — poll again (cancellation re-checked at loop top)
-            } catch (ExecutionException execution) {
-                Throwable cause = execution.getCause() != null ? execution.getCause() : execution;
-                if (cause instanceof TaskExecutionException tee) {
-                    throw tee;
-                }
-                throw new TaskExecutionException(TaskExecutionException.Cause.PROVIDER_ERROR,
-                        "Task execution failed: " + cause.getMessage(), cause);
-            }
-        }
-    }
-
-    /**
-     * Stops the in-flight runtime of a cancelled run. A coordinator-owned run is
-     * stopped through the coordinator, which cancels its run-owned core session,
-     * verifiably stops the run's writers and revokes the run's worker authority;
-     * every other run keeps the provider-level abort. A coordinator-owned run is
-     * never merely "asked" to abort, and a refused stop is never reported as a
-     * stopped cancellation: only a matching verified {@link ControlAck}
-     * ({@code STOPPED}, verified) lets the cancellation stand, while a refusal
-     * surfaces the exact pending-control failure reason -- the same truthful
-     * pattern the pause/resume paths use -- so the run's writers are never
-     * silently left running behind a terminal state.
-     */
-    private void stopCancelledRuntime(RunContext ctx, AdkProvider provider) {
-        CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
-            ControlAck ack = awaitControl(coordinator.cancel(ctx.getRunId()), ctx.getRunId(), "cancel");
-            if (ack.state() != ControlState.STOPPED || !ack.verified()) {
-                throw new IllegalStateException("Run " + ctx.getRunId() + " was not cancelled: "
-                        + coordinator.pendingControl(ctx.getRunId())
-                                .map(RunRuntimeRegistry.ControlRequest::failureReason)
-                                .orElse("the run-owned core did not verify the stop"));
-            }
-            return;
-        }
-        try {
-            provider.abortTask(ctx.getRunId());
-        } catch (Exception abortEx) {
-            log.warn("Abort call failed for cancelled run {}: {}", ctx.getRunId(), abortEx.getMessage());
-        }
-    }
-
-    /**
-     * Maps a {@link TaskExecutionException} onto the run state: TIMEOUT aborts the
-     * provider's in-flight work and marks the run ABORTED; ABORTED (user cancel /
-     * provider abort) marks ABORTED; sandbox/provider errors FAIL the run. Mirrors
-     * the turn-loop semantics — failure paths write no PromptCall audit entry.
-     */
-    private void handleTaskExecutionFailure(RunContext ctx, TaskExecutionException e,
-                                            AdkProvider provider, @Nullable SseEmitter emitter) {
-        log.error("Task execution failed: runId={}, cause={}, message={}", ctx.getRunId(), e.cause(), e.getMessage());
-        String errMsg = e.getMessage() != null ? e.getMessage() : "Task execution failed: " + e.cause();
-        ctx.addError(errMsg);
-
-        RunStatus status = switch (e.cause()) {
-            case TIMEOUT -> {
-                try {
-                    provider.abortTask(ctx.getRunId());
-                } catch (Exception abortEx) {
-                    log.warn("Abort call failed after task timeout for run {}: {}", ctx.getRunId(), abortEx.getMessage());
-                }
-                yield RunStatus.ABORTED;
-            }
-            case ABORTED -> RunStatus.ABORTED;
-            case SANDBOX_UNAVAILABLE, PROVIDER_ERROR -> RunStatus.FAILED;
-        };
-
-        tryEmit(emitter, "done", donePayload(ctx, errMsg));
-        tryEmit(emitter, "error", Map.of("message", errMsg));
-        completeRun(ctx, status);
-    }
-
-    /**
-     * Generic failure handler for the task path (non-TaskExecutionException):
-     * records the error and completes the run with the given status.
-     */
-    private void handleTaskFailure(RunContext ctx, String message, RunStatus status, @Nullable SseEmitter emitter) {
-        log.error("Task path failure: runId={}, status={}, message={}", ctx.getRunId(), status, message);
+        // No production core runtime is available for this agent. Never fall back to
+        // a provider: the run-owned core is the only execution path.
+        String coreId = ctx.getAgent() == null ? null : ctx.getAgent().getAdkProvider();
+        String message = "Core '" + coreId + "' is served by its run-owned core runtime"
+                + " (the core launcher/coordinator), which is not available in this wiring;"
+                + " the run cannot execute";
         ctx.addError(message);
         tryEmit(emitter, "done", donePayload(ctx, message));
-        tryEmit(emitter, "error", Map.of("message", message != null ? message : "Unknown error"));
-        completeRun(ctx, status);
+        tryEmit(emitter, "error", Map.of("message", message));
+        completeRun(ctx, RunStatus.FAILED);
     }
 
-    /**
-     * Mirrors {@link #recordPromptCall} for the task path: persists a PromptCall
-     * audit entry (input/output tokens) for successful task-level runs only.
-     */
-    private void recordTaskPromptCall(RunContext ctx, int inputTokens, int outputTokens) {
-        try {
-            PromptCall promptCall = PromptCall.builder()
-                    .runId(ctx.getRunId())
-                    .agentId(ctx.getAgentId())
-                    .provider(ctx.getAgent().getProvider())
-                    .model(ctx.getAgent().getModel())
-                    .inputTokens(inputTokens)
-                    .outputTokens(outputTokens)
-                    .latencyMs(0) // TODO: measure actual latency
-                    .build();
-            promptCallRepository.save(promptCall);
-        } catch (Exception e) {
-            log.warn("Failed to record task prompt call: {}", e.getMessage());
-        }
-    }
 
     /**
      * Mirrors {@link #recordTrajectory} for the task path: persists the final task
@@ -1206,278 +759,6 @@ public class AgentLoopEngine {
                     .build());
         } catch (Exception e) {
             log.warn("Failed to record task trajectory: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * S12: forward intermediate ADK stream fragments as {@code RunProgressEvent}s
-     * for live dashboard observability. Never allowed to break the loop.
-     */
-    private void publishProgress(RunContext ctx, int iteration, io.aria.conductor.execution.adk.AdkStreamEvent ev) {
-        try {
-            io.aria.conductor.common.event.RunProgressEvent.Kind kind =
-                    switch (ev.kind() == null ? "" : ev.kind()) {
-                        case "thinking" -> io.aria.conductor.common.event.RunProgressEvent.Kind.THINKING;
-                        case "tool_call" -> io.aria.conductor.common.event.RunProgressEvent.Kind.TOOL_CALL;
-                        case "tool_result" -> io.aria.conductor.common.event.RunProgressEvent.Kind.TOOL_RESULT;
-                        case "error" -> io.aria.conductor.common.event.RunProgressEvent.Kind.ERROR;
-                        default -> io.aria.conductor.common.event.RunProgressEvent.Kind.STATUS;
-                    };
-            eventPublisher.publishEvent(new io.aria.conductor.common.event.RunProgressEvent(
-                    this, ctx.getRunId(), ctx.getAgentId(), iteration, kind,
-                    ev.content(), ev.toolName(), ctx.nextProgressSeq()));
-        } catch (Exception e) {
-            log.debug("run.progress publish failed for run {}: {}", ctx.getRunId(), e.getMessage());
-        }
-    }
-
-    /**
-     * Execute a single iteration of the agent loop.
-     * @return true if the loop should continue, false if it should stop
-     */
-    private boolean executeIteration(RunContext ctx, @Nullable SseEmitter emitter) {
-        ctx.incrementIteration();
-        ctx.markIterationStart(); // start the per-iteration latency window (#22)
-        int iteration = ctx.getIterationCount();
-        log.info("Iteration {} starting: runId={}", iteration, ctx.getRunId());
-
-        try {
-            // Build messages from session history
-            List<LlmMessage> messages = buildMessages(ctx);
-
-            // Call LLM via the resolved ADK provider
-            AdkProvider adkProvider = requireLegacyProvider(ctx);
-
-            // Resolve tools for this agent
-            List<Map<String, Object>> toolsPayload = List.of();
-            try {
-                List<ToolDefinition> agentTools = agentToolResolver.resolveForAgent(ctx.getAgent());
-                // Explicit user tool assignments are authoritative (UI-controlled); the profile
-                // denylist only hardens role-template DEFAULTS (e.g. weak-model-safe removes
-                // shell_exec from the dev template), so skip it when the agent has explicit grants.
-                if (!agentToolResolver.hasExplicitTools(ctx.getAgent())) {
-                    agentTools = harnessProfileService.applyDenylist(agentTools, ctx.getHarnessProfile());
-                }
-                if (!agentTools.isEmpty()) {
-                    toolsPayload = toolRegistry.buildToolsPayloadForIds(
-                            agentTools.stream().map(ToolDefinition::getId).toList());
-                }
-            } catch (Exception e) {
-                log.warn("Failed to resolve tools for agent {}: {}", ctx.getAgentId(), e.getMessage());
-            }
-
-            // Anti-hallucination guard: when agent has no tools, prevent it from claiming file access
-            if (toolsPayload.isEmpty()) {
-                messages.add(LlmMessage.system(
-                        "You have NO tools available. You MUST NOT claim to have read, written, or executed any file. "
-                        + "Only provide analysis and recommendations based on information in this conversation. "
-                        + "If asked to read a file, state that you cannot access files and suggest the operator do it."));
-            }
-
-            LlmResponse response = adkProvider.call(ctx.getAgentId(), messages, toolsPayload,
-                    ev -> publishProgress(ctx, iteration, ev));
-
-            // Update token tracking
-            ctx.addTokensUsed(response.inputTokens(), response.outputTokens());
-
-            // Record prompt call
-            recordPromptCall(ctx, response);
-
-            // Precompute turn number once
-            int baseTurn = trajectoryRepository.findMaxTurnNumberByRunId(ctx.getRunId()) + 1;
-
-            // Parse actions from response
-            List<Action> actions = adkProvider.parseActionsFromResponse(response);
-
-            // Hallucination guard: if no tool calls but prompt matches action verbs, retry once with nudge
-            if (actions.isEmpty() && looksLikeActionRequest(ctx)) {
-                log.info("Hallucination guard triggered — injecting nudge for runId={}", ctx.getRunId());
-                List<LlmMessage> retryMessages = new ArrayList<>(messages);
-                retryMessages.add(LlmMessage.system(
-                        "IMPORTANT: Use the available tools to fulfill this request. "
-                                + "Do not just describe — actually call the tools."));
-                LlmResponse retryResponse = adkProvider.call(ctx.getAgentId(), retryMessages, toolsPayload,
-                        ev -> publishProgress(ctx, iteration, ev));
-                ctx.addTokensUsed(retryResponse.inputTokens(), retryResponse.outputTokens());
-                actions = adkProvider.parseActionsFromResponse(retryResponse);
-                if (retryResponse.content() != null && !retryResponse.content().isBlank()) {
-                    response = retryResponse;
-                }
-            }
-
-            // Record the authoritative trajectory AFTER the guard decision
-            recordTrajectory(ctx, response, baseTurn);
-
-            // Capture the assistant's response as the latest output
-            if (response.content() != null && !response.content().isBlank()) {
-                ctx.setLastAssistantResponse(response.content());
-            }
-
-            // Execute actions through pipeline
-            List<ActionResult> results = new ArrayList<>();
-            for (Action action : actions) {
-                // 1. Create ToolCall entity with status=PENDING.
-                // ApprovalGate will update the status to EXECUTING or DENIED.
-                ToolCall toolCall = ToolCall.builder()
-                        .runId(ctx.getRunId())
-                        .toolName(action.name())
-                        .arguments(action.arguments())
-                        .status(ToolCallStatus.PENDING)
-                        .build();
-                toolCall = toolCallRepository.save(toolCall);
-                ctx.setCurrentToolCallId(toolCall.getId());
-
-                // SSE: notify client which tool is being executed
-                tryEmit(emitter, "tool_call", Map.of(
-                        "name", action.name(),
-                        "status", "executing"
-                ));
-
-                // 2. Execute through pipeline (may block on approval). First, steer ungoverned
-                //    git/gh-via-shell_exec calls to the governed git pack (weak-model safety); a
-                //    steering nudge short-circuits the pipeline and is surfaced back to the model.
-                long start = System.currentTimeMillis();
-                ActionResult result = toolSteeringGuard.intercept(action, ctx.getHarnessProfile())
-                        .orElseGet(() -> actionPipeline.execute(action, ctx));
-                long end = System.currentTimeMillis();
-
-                // Reload tool call from DB — ApprovalGate may have updated status to DENIED
-                toolCall = toolCallRepository.findById(toolCall.getId()).orElse(toolCall);
-
-                // PENDING means approval was not required or was auto-approved
-                if (toolCall.getStatus() == ToolCallStatus.PENDING) {
-                    if (result.status() == ActionResult.Status.BLOCKED) {
-                        // Blocked by rule verification or AI safety before execution
-                        toolCall.setResult(result.error());
-                        toolCall.setStatus(ToolCallStatus.FAILED);
-                    } else {
-                        // Auto-approved — no approval required, proceed to execution
-                        toolCall.setStatus(ToolCallStatus.EXECUTING);
-                    }
-                }
-                // EXECUTING means approved and now being executed
-                if (toolCall.getStatus() == ToolCallStatus.EXECUTING) {
-                    if (result.status() == ActionResult.Status.SUCCESS) {
-                        toolCall.setResult(result.output());
-                        toolCall.setStatus(ToolCallStatus.COMPLETED);
-                    } else if (result.status() == ActionResult.Status.FAILED) {
-                        toolCall.setResult("ERROR: " + (result.error() != null ? result.error() : "Unknown error"));
-                        toolCall.setStatus(ToolCallStatus.FAILED);
-                    }
-                }
-                // DENIED status is set by ApprovalGate — persist the human reason so it is
-                // surfaced to the model as tool feedback (#32).
-                if (toolCall.getStatus() == ToolCallStatus.DENIED && toolCall.getResult() == null) {
-                    toolCall.setResult(result.error() != null ? result.error() : "Denied by human reviewer.");
-                }
-                toolCall.setLatencyMs((int)(end - start));
-                toolCallRepository.save(toolCall);
-
-                // SSE: notify client of tool result
-                String toolResultPreview = result.output() != null ? result.output() : (result.error() != null ? "Error: " + result.error() : "");
-                tryEmit(emitter, "tool_result", Map.of(
-                        "name", action.name(),
-                        "result", truncateForSse(toolResultPreview, 200)
-                ));
-
-                results.add(result);
-
-                if (result.status() == ActionResult.Status.FAILED) {
-                    ctx.addError("Action " + action.name() + " failed: " + result.error());
-                }
-            }
-
-            // Consecutive same-blocker early termination: prevents infinite retry loops
-            // (e.g., "File not found" repeated 15 times, or a human denial re-issued forever — #32).
-            boolean allBlocked = !results.isEmpty() && results.stream()
-                    .allMatch(r -> r.status() == ActionResult.Status.FAILED
-                            || r.status() == ActionResult.Status.DENIED);
-            if (allBlocked) {
-                String firstError = results.get(0).error() != null ? results.get(0).error() : "";
-                boolean allIdentical = results.stream()
-                        .allMatch(r -> firstError.equals(r.error() != null ? r.error() : ""));
-                boolean anyDenied = results.stream().anyMatch(r -> r.status() == ActionResult.Status.DENIED);
-                if (allIdentical && !firstError.isEmpty()) {
-                    if (firstError.equals(ctx.getLastToolError())) {
-                        ctx.setConsecutiveSameErrorCount(ctx.getConsecutiveSameErrorCount() + 1);
-                    } else {
-                        ctx.setLastToolError(firstError);
-                        ctx.setConsecutiveSameErrorCount(1);
-                    }
-                    // A human denial should stop sooner (they already said no); plain failures keep 3 strikes.
-                    int limit = anyDenied ? 2 : 3;
-                    if (ctx.getConsecutiveSameErrorCount() >= limit) {
-                        log.warn("Run {} hit {} consecutive identical {} — terminating early: {}",
-                                ctx.getRunId(), ctx.getConsecutiveSameErrorCount(),
-                                anyDenied ? "human denials" : "tool errors", firstError);
-                        ctx.setLastAssistantResponse(anyDenied
-                                ? "Stopped: a human reviewer denied this action — " + firstError
-                                : "Stopped: repeated tool failure — " + firstError
-                                        + "\nPlease check the configuration or provide the correct path.");
-                        return false; // exit the iteration loop
-                    }
-                }
-            } else {
-                ctx.setLastToolError(null);
-                ctx.setConsecutiveSameErrorCount(0);
-            }
-
-            // Update session
-            sessionStateManager.updateSession(ctx.getRunId(), response, results);
-
-            // Publish iteration event for live dashboard updates
-            try {
-                // Cache skill names once per run (skills don't change mid-execution)
-                if (ctx.getCachedSkillNames() == null) {
-                    try {
-                        ctx.setCachedSkillNames(agentSkillResolver.resolveForAgent(ctx.getAgent())
-                                .stream().map(SkillContext::name).toList());
-                    } catch (Exception e) {
-                        ctx.setCachedSkillNames(List.of());
-                    }
-                }
-
-                // Build tool call details from this iteration's actions and results
-                List<RunIterationEvent.ToolCallDetail> details = new ArrayList<>();
-                for (int i = 0; i < actions.size(); i++) {
-                    ActionResult r = i < results.size() ? results.get(i) : null;
-                    String resultPreview = r != null
-                            ? (r.status() == ActionResult.Status.SUCCESS
-                                    ? (r.output() != null ? truncateForSse(r.output(), 200) : "")
-                                    : "Error: " + (r.error() != null ? r.error() : "unknown"))
-                            : "";
-                    details.add(new RunIterationEvent.ToolCallDetail(
-                            actions.get(i).name(), actions.get(i).arguments(), resultPreview));
-                }
-
-                eventPublisher.publishEvent(new RunIterationEvent(
-                        this, ctx.getRunId(), ctx.getAgentId(),
-                        ctx.getIterationCount(), ctx.getMaxIterations(),
-                        response.content(), details, ctx.getCachedSkillNames()));
-            } catch (Exception e) {
-                log.warn("Failed to publish iteration event: {}", e.getMessage());
-            }
-
-            // If no tool_calls and just text content, the agent is responding with chat
-            // Continue the loop only if we got tool calls (agent wants to do more)
-            // or if the finish reason is not "stop"
-            if (!response.hasToolCalls()) {
-                log.info("No tool calls in response — agent returned final answer. Ending loop.");
-                return false;
-            }
-
-            // Record tool results as trajectory entries for the LLM feedback loop
-            int toolResultBaseTurn = baseTurn + 1;
-            recordToolResults(ctx, actions, results, toolResultBaseTurn);
-            log.debug("Iteration {} complete: {} actions processed", iteration, actions.size());
-            return true;
-
-        } catch (BudgetExceededException e) {
-            throw e; // let the loop handler deal with it
-        } catch (Exception e) {
-            log.error("Iteration {} failed: runId={}", iteration, ctx.getRunId(), e);
-            ctx.addError("Iteration " + iteration + " failed: " + e.getMessage());
-            throw e;
         }
     }
 
@@ -1574,92 +855,6 @@ public class AgentLoopEngine {
         return messages;
     }
 
-    private void recordPromptCall(RunContext ctx, LlmResponse response) {
-        try {
-            PromptCall promptCall = PromptCall.builder()
-                    .runId(ctx.getRunId())
-                    .agentId(ctx.getAgentId())
-                    .provider(ctx.getAgent().getProvider())
-                    .model(ctx.getAgent().getModel())
-                    .inputTokens(response.inputTokens())
-                    .outputTokens(response.outputTokens())
-                    .latencyMs(0) // TODO: measure actual latency
-                    .build();
-            promptCallRepository.save(promptCall);
-        } catch (Exception e) {
-            log.warn("Failed to record prompt call: {}", e.getMessage());
-        }
-    }
-
-    private void recordTrajectory(RunContext ctx, LlmResponse response, int turnNumber) {
-        try {
-            // Record only the assistant response — user messages are already persisted
-            // by the inject endpoint or the initial promptSeed seeding in executeRunLoop().
-            // Store tool_calls as JSON array of {id, name, arguments} so they can be
-            // reconstructed in buildMessages() for multi-iteration DeepSeek compatibility.
-            String toolCallsStr = response.hasToolCalls()
-                    ? buildToolCallsJson(response.toolCalls())
-                    : null;
-
-            SessionTrajectory assistantTrajectory = SessionTrajectory.builder()
-                    .runId(ctx.getRunId())
-                    .turnNumber(turnNumber)
-                    .role("assistant")
-                    .content(response.content() != null ? response.content() : "")
-                    .toolCalls(toolCallsStr)
-                    .outputTokens(response.outputTokens())
-                    .build();
-
-            trajectoryRepository.save(assistantTrajectory);
-        } catch (Exception e) {
-            log.warn("Failed to record trajectory: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Serialize a list of LlmToolCall into a JSON array string.
-     * Uses character-by-character escaping to handle all JSON control characters.
-     */
-    static String buildToolCallsJson(List<LlmToolCall> toolCalls) {
-        StringBuilder sb = new StringBuilder("[");
-        boolean first = true;
-        for (var tc : toolCalls) {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("{\"id\":\"").append(escapeJson(tc.id())).append("\",");
-            sb.append("\"name\":\"").append(escapeJson(tc.name())).append("\",");
-            sb.append("\"arguments\":").append(quoteJsonString(
-                    tc.arguments() != null ? tc.arguments() : "{}")).append("}");
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
-    static String escapeJson(String s) {
-        if (s == null) return "";
-        StringBuilder sb = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"'  -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\b' -> sb.append("\\b");
-                case '\f' -> sb.append("\\f");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default -> {
-                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
-                    else sb.append(c);
-                }
-            }
-        }
-        return sb.toString();
-    }
-
-    static String quoteJsonString(String s) {
-        return "\"" + escapeJson(s) + "\"";
-    }
 
     /**
      * Parse tool_calls JSON from a SessionTrajectory entry back into LlmToolCall objects.
@@ -1688,54 +883,6 @@ public class AgentLoopEngine {
         }
     }
 
-    /**
-     * Builds the tool-result message content shown to the model (#32).
-     * A human denial is surfaced as an explicit, non-retryable instruction so the model
-     * does not re-issue the same blocked action; failures keep the generic ERROR prefix.
-     */
-    static String toolResultContent(ActionResult result) {
-        if (result.status() == ActionResult.Status.SUCCESS) {
-            return result.output() != null ? result.output() : "";
-        }
-        if (result.status() == ActionResult.Status.DENIED) {
-            return "DENIED BY HUMAN REVIEWER: "
-                    + (result.error() != null ? result.error() : "no reason given")
-                    + ". This action was NOT executed. Do not retry it — choose a different approach or give your final answer.";
-        }
-        return "ERROR: " + (result.error() != null ? result.error() : "Unknown error");
-    }
-
-    private void recordToolResults(RunContext ctx, List<Action> actions, List<ActionResult> results, int baseTurn) {
-        try {
-            List<SessionTrajectory> toolTrajectories = new ArrayList<>();
-            for (int i = 0; i < actions.size(); i++) {
-                String toolCallId = actions.get(i).toolCallId();
-                ActionResult result = results.get(i);
-                boolean denied = result.status() == ActionResult.Status.DENIED;
-                if (toolCallId == null || toolCallId.isBlank()) {
-                    if (!denied) {
-                        log.warn("Skipping tool result with null/blank toolCallId: action={}", actions.get(i).name());
-                        continue;
-                    }
-                    // A human denial must still reach the model even without a tool_call id (#32).
-                    toolCallId = "denied-" + (baseTurn + i);
-                }
-                String content = toolResultContent(result);
-                toolTrajectories.add(SessionTrajectory.builder()
-                        .runId(ctx.getRunId())
-                        .turnNumber(baseTurn + i)
-                        .role("tool")
-                        .content(content)
-                        .toolCallId(toolCallId)
-                        .build());
-            }
-            if (!toolTrajectories.isEmpty()) {
-                trajectoryRepository.saveAll(toolTrajectories);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to record tool results: {}", e.getMessage());
-        }
-    }
 
     /**
      * Completes the run — updates DB entities and clears state.
@@ -1879,19 +1026,6 @@ public class AgentLoopEngine {
         return runMaxIterations > 0 ? runMaxIterations : 50;
     }
 
-    /** True when the agent explicitly set a positive maxToolCallRounds in its config JSON. */
-    private static boolean hasExplicitMaxToolCallRounds(Agent agent) {
-        String config = agent.getConfig();
-        if (config == null || config.isBlank()) return false;
-        try {
-            Map<String, Object> configMap = new ObjectMapper().readValue(
-                    config, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-            Object v = configMap.get("maxToolCallRounds");
-            return v instanceof Number num && num.intValue() > 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
     private String getSystemPromptFromConfig(Agent agent) {
         String config = agent.getConfig();
@@ -1960,12 +1094,4 @@ public class AgentLoopEngine {
         return value.length() > max ? value.substring(0, max) + "..." : value;
     }
 
-    /**
-     * Heuristic: does the user's prompt contain action verbs suggesting they expect tool execution?
-     */
-    private boolean looksLikeActionRequest(RunContext ctx) {
-        Run run = runRepository.findById(ctx.getRunId()).orElse(null);
-        if (run == null || run.getPromptSeed() == null) return false;
-        return ACTION_PATTERN.matcher(run.getPromptSeed().toLowerCase()).find();
-    }
 }

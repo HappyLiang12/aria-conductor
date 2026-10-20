@@ -35,26 +35,6 @@ class CompositeIdEqualityTest {
     }
 
     @Test
-    void agentToolId_equalityAndHashCode() {
-        AgentToolId a = new AgentToolId("agent-1", "tool-1");
-        AgentToolId b = new AgentToolId("agent-1", "tool-1");
-
-        assertThat(a).isEqualTo(b).hasSameHashCodeAs(b);
-        assertThat(a).isNotEqualTo(new AgentToolId("agent-1", "tool-2"));
-        assertThat(a).isNotEqualTo(new AgentToolId("agent-2", "tool-1"));
-    }
-
-    @Test
-    void skillToolId_equalityAndHashCode() {
-        SkillToolId a = new SkillToolId("skill-1", "tool-1");
-        SkillToolId b = new SkillToolId("skill-1", "tool-1");
-
-        assertThat(a).isEqualTo(b).hasSameHashCodeAs(b);
-        assertThat(a).isNotEqualTo(new SkillToolId("skill-2", "tool-1"));
-        assertThat(a).isNotEqualTo(new SkillToolId("skill-1", "tool-2"));
-    }
-
-    @Test
     void roleSkillTemplateId_equalityAndHashCode() {
         RoleSkillTemplateId a = new RoleSkillTemplateId("ANALYST", "skill-1");
         RoleSkillTemplateId b = new RoleSkillTemplateId("ANALYST", "skill-1");
@@ -62,16 +42,6 @@ class CompositeIdEqualityTest {
         assertThat(a).isEqualTo(b).hasSameHashCodeAs(b);
         assertThat(a).isNotEqualTo(new RoleSkillTemplateId("REVIEWER", "skill-1"));
         assertThat(a).isNotEqualTo(new RoleSkillTemplateId("ANALYST", "skill-2"));
-    }
-
-    @Test
-    void roleToolTemplateId_equalityAndHashCode() {
-        RoleToolTemplateId a = new RoleToolTemplateId("ANALYST", "tool-1");
-        RoleToolTemplateId b = new RoleToolTemplateId("ANALYST", "tool-1");
-
-        assertThat(a).isEqualTo(b).hasSameHashCodeAs(b);
-        assertThat(a).isNotEqualTo(new RoleToolTemplateId("REVIEWER", "tool-1"));
-        assertThat(a).isNotEqualTo(new RoleToolTemplateId("ANALYST", "tool-2"));
     }
 
     @Test

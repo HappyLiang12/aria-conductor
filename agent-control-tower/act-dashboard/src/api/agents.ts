@@ -38,35 +38,6 @@ export async function createFromTemplate(templateName: string): Promise<Agent> {
   return data;
 }
 
-export interface AdkTool {
-  id: string;
-  name: string;
-  displayName?: string;
-  description?: string;
-  category?: string;
-  enabled: boolean;
-}
-
-export async function listTools(): Promise<AdkTool[]> {
-  const { data } = await client.get<AdkTool[]>('/api/v1/tools');
-  return data;
-}
-
-export async function getAgentTools(id: string): Promise<AdkTool[]> {
-  const { data } = await client.get<AdkTool[]>(`/api/v1/agents/${id}/tools`);
-  return data;
-}
-
-export async function assignAgentTool(id: string, toolId: string): Promise<AdkTool[]> {
-  const { data } = await client.post<AdkTool[]>(`/api/v1/agents/${id}/tools`, { toolId });
-  return data;
-}
-
-export async function unassignAgentTool(id: string, toolId: string): Promise<AdkTool[]> {
-  const { data } = await client.delete<AdkTool[]>(`/api/v1/agents/${id}/tools/${toolId}`);
-  return data;
-}
-
 export interface AdkSkill {
   id: string;
   name: string;
@@ -76,11 +47,10 @@ export interface AdkSkill {
 }
 
 export interface RoleDefaults {
-  tools: AdkTool[];
   skills: AdkSkill[];
 }
 
-/** Rule-based recommended tools + skills for a role (used to pre-check the create/manage UIs). */
+/** Rule-based recommended skills for a role (used to pre-check the create UI). */
 export async function getRoleDefaults(role: string): Promise<RoleDefaults> {
   const { data } = await client.get<RoleDefaults>(`/api/v1/agents/role-defaults/${encodeURIComponent(role)}`);
   return data;
@@ -98,12 +68,6 @@ export async function assignAgentSkill(id: string, skillId: string): Promise<Adk
 
 export async function unassignAgentSkill(id: string, skillId: string): Promise<AdkSkill[]> {
   const { data } = await client.delete<AdkSkill[]>(`/api/v1/agents/${id}/skills/${skillId}`);
-  return data;
-}
-
-/** Idempotent bulk-replace: set the agent's tools to exactly these ids. */
-export async function setAgentTools(id: string, ids: string[]): Promise<AdkTool[]> {
-  const { data } = await client.put<AdkTool[]>(`/api/v1/agents/${id}/tools`, { ids });
   return data;
 }
 

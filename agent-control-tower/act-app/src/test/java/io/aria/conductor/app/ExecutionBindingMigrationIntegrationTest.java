@@ -100,7 +100,7 @@ class ExecutionBindingMigrationIntegrationTest extends BaseH2IntegrationTest {
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             try (PreparedStatement insert = connection.prepareStatement(
                     "INSERT INTO agents (id, name, agent_type, adk_provider, model, health_status, created_at) "
-                            + "VALUES (CAST(? AS UUID), ?, 'NATIVE', ?, ?, 'HEALTHY', CURRENT_TIMESTAMP)")) {
+                            + "VALUES (CAST(? AS UUID), ?, 'ADK', ?, ?, 'HEALTHY', CURRENT_TIMESTAMP)")) {
                 insert.setString(1, openCodeAgentId.toString());
                 insert.setString(2, "opencode agent");
                 insert.setString(3, "opencode");
@@ -292,7 +292,7 @@ class ExecutionBindingMigrationIntegrationTest extends BaseH2IntegrationTest {
     private Agent createAgent(String name, String adkProvider, ExecutionMode executionMode) {
         return agentRepository.saveAndFlush(Agent.builder()
                 .name(name)
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .adkProvider(adkProvider)
                 .executionMode(executionMode)
                 .healthStatus(HealthStatus.HEALTHY)

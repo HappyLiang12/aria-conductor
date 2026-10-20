@@ -6,13 +6,9 @@ import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
-import io.aria.conductor.execution.llm.LlmClient;
-import io.aria.conductor.execution.llm.LlmProperties;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.execution.tool.ToolExecutionEngine;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,10 +40,7 @@ class AriaSynthesisPromptTest {
     @Mock AgentLoopEngine agentLoopEngine;
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
-    @Mock LlmClient llmClient;
     @Mock IntentClassifier intentClassifier;
-    @Mock ToolRegistry toolRegistry;
-    @Mock ToolExecutionEngine toolExecutionEngine;
     @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
@@ -57,7 +50,7 @@ class AriaSynthesisPromptTest {
     @BeforeEach
     void setUp() {
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
-                llmClient, new LlmProperties(), intentClassifier, toolRegistry, toolExecutionEngine,
+                intentClassifier,
                 knowledgeService, trajectoryRepository, toolCallRepository);
     }
 

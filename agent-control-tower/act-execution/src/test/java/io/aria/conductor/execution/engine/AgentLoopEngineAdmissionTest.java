@@ -3,36 +3,24 @@ package io.aria.conductor.execution.engine;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
-import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.RunIterationEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
-import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
-import io.aria.conductor.common.service.ToolRegistry;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
-import io.aria.conductor.execution.circuit.CircuitBreaker;
-import io.aria.conductor.execution.harness.ToolSteeringGuard;
-import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
 import io.aria.conductor.execution.repository.ApprovalRepository;
-import io.aria.conductor.execution.repository.PromptCallRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
-import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.execution.runtime.CoreExecutionService;
 import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
-import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
-import io.aria.conductor.execution.tool.AgentToolResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,52 +54,34 @@ import static org.mockito.Mockito.when;
  * existing event path (the behavioural park/release cycle is covered by the
  * queue suite and the cap integration test).
  *
- * <p>The construction follows {@link AgentLoopEngineTaskPathTest} (explicit
- * engine construction with the two same-erased-type {@code ObjectProvider}
- * mocks); the queue double grants instantly and records what the engine asked
- * of it, so each test observes exactly the gate's decisions.
+ * <p>The engine is constructed explicitly with the two same-erased-type
+ * {@code ObjectProvider} mocks; the queue double grants instantly and records
+ * what the engine asked of it, so each test observes exactly the gate's
+ * decisions.
  */
 @ExtendWith(MockitoExtension.class)
 class AgentLoopEngineAdmissionTest {
 
     @Mock RunRepository runRepository;
     @Mock AgentRepository agentRepository;
-    @Mock AdkProviderRegistry adkProviderRegistry;
     @Mock SessionStateManager sessionStateManager;
-    @Mock ActionExecutionPipeline actionPipeline;
-    @Mock CircuitBreaker circuitBreaker;
     @Mock ApprovalGate approvalGate;
     @Mock PermissionCoordinator permissionCoordinator;
-    @Mock PromptCallRepository promptCallRepository;
     @Mock SessionTrajectoryRepository trajectoryRepository;
-    @Mock ToolCallRepository toolCallRepository;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock WorkflowService workflowService;
     @Mock WorkflowChainRepository workflowChainRepository;
-    @Mock AgentToolResolver agentToolResolver;
     @Mock AgentSkillResolver agentSkillResolver;
-    @Mock ToolRegistry toolRegistry;
     @Mock KnowledgeContextProvider knowledgeProvider;
     @Mock WorkspaceManager workspaceManager;
-    @Mock HarnessProfileService harnessProfileService;
-    @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
-    @Mock TaskDeadlineProperties taskDeadlineProperties;
     @Mock(name = "coreExecutionServiceProvider")
     org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
-    /**
-     * The cutover launcher seam. The engine's second constructor parameter of
-     * this erased type, hence the explicit engine construction below (same
-     * reasoning as {@link AgentLoopEngineTaskPathTest}).
-     */
     @Mock(name = "coreRunLauncherProvider")
     org.springframework.beans.factory.ObjectProvider<CoreRunLauncher> coreRunLauncherProvider;
 
     /** The stub production launcher: owns what the test says it owns. */
     @Mock CoreRunLauncher coreLauncher;
-
-    /** The turn-level provider double for the not-owned (legacy) path. */
-    @Mock AdkProvider turnProvider;
 
     /**
      * A queue double: records the acquire/settle calls and grants instantly.
@@ -161,9 +131,6 @@ class AgentLoopEngineAdmissionTest {
         lenient().when(agent.getId()).thenReturn(agentId);
         when(agent.getConfig()).thenReturn(
                 "{\"maxToolCallRounds\":7,\"systemPrompt\":\"You are a tester agent.\"}");
-        // Conditional stubs (provider/model only used on the turn-loop success path).
-        lenient().when(agent.getProvider()).thenReturn("openai");
-        lenient().when(agent.getModel()).thenReturn("gpt-4o");
 
         run = Run.builder()
                 .id(runId).agentId(agentId).status(RunStatus.PENDING)
@@ -173,17 +140,13 @@ class AgentLoopEngineAdmissionTest {
 
         when(runRepository.findById(runId)).thenReturn(Optional.of(run));
         when(agentRepository.findById(agentId)).thenReturn(Optional.of(agent));
-        when(harnessProfileService.resolve(agent)).thenReturn(HarnessProfile.defaults());
 
         engine = new AgentLoopEngine(
-                runRepository, agentRepository, adkProviderRegistry, sessionStateManager,
-                actionPipeline, circuitBreaker, approvalGate, permissionCoordinator, promptCallRepository,
-                trajectoryRepository, toolCallRepository, eventPublisher, workflowService,
-                workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
-                knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
-                approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
-                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                recordingQueue);
+                runRepository, agentRepository, sessionStateManager, approvalGate,
+                permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
+                workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
+                approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
+                coreRunLauncherProvider, recordingQueue);
     }
 
     /** Stubs the post-admission run-loop plumbing both owned and not-owned runs walk through. */
@@ -234,27 +197,26 @@ class AgentLoopEngineAdmissionTest {
         assertThat(recordingQueue.settled).as("settle is only for aborted/terminal runs").isEmpty();
     }
 
-    // ---- (b) not owned: the legacy path never consults admission ----
+    // ---- (b) not owned: no admission, explicit refusal ----
 
     @Test
-    void runNotOwnedByTheLauncher_neverConsultsAdmission_andTheLegacyPathIsUnchanged() {
+    void runNotOwnedByTheLauncher_neverConsultsAdmission_andFailsExplicitly() {
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreLauncher);
         when(coreLauncher.owns(agent)).thenReturn(false);
-        stubRunLoopPlumbing();
-        when(adkProviderRegistry.resolve(agent)).thenReturn(turnProvider);
-        when(turnProvider.supportsTaskExecution()).thenReturn(false);
-        when(turnProvider.call(any(), any(), any(), any()))
-                .thenReturn(new io.aria.conductor.execution.llm.LlmResponse("final answer", 10, 5, "stop", null));
-        when(turnProvider.parseActionsFromResponse(any())).thenReturn(List.of());
+        lenient().when(agent.getAdkProvider()).thenReturn("legacy-core");
+        when(sessionStateManager.loadOrCreateSession(runId, agentId))
+                .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
 
         engine.startRun(runId);
 
         // No admission for a run the launcher does not own.
         assertThat(recordingQueue.acquired).isEmpty();
 
-        // The legacy behavior is unchanged: the run executes and completes.
-        await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.COMPLETED);
-        assertThat(recordingQueue.acquired).isEmpty();
+        await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.FAILED);
+        assertThat(run.getErrorMessage())
+                .contains("Core 'legacy-core'")
+                .contains("not available in this wiring")
+                .contains("the run cannot execute");
         assertThat(recordingQueue.settled).isEmpty();
     }
 

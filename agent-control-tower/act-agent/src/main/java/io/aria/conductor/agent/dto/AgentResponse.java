@@ -40,5 +40,4 @@ public class AgentResponse {
     private List<String> pickupIneligibleReasons;
     private Instant lastProbedAt;
     private List<String> skills;
-    private List<String> tools;
 }

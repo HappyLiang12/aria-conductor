@@ -47,7 +47,7 @@ async function ensureRoleAgents(request: Parameters<typeof apiCall>[0]) {
       const created = await apiCall(request, 'POST', '/agents', {
         name: `sdd-${role}-${Date.now()}`,
         role,
-        agentType: 'NATIVE',
+        agentType: 'ADK',
       });
       expect(created.status, `create ${role} agent: ${JSON.stringify(created.data)}`).toBe(201);
     }

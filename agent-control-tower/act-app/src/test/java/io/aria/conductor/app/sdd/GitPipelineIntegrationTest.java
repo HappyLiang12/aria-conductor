@@ -8,14 +8,12 @@ import io.aria.conductor.app.BaseH2IntegrationTest;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.dashboard.report.ReportArtifact;
 import io.aria.conductor.dashboard.report.ReportService;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.git.GitBranchService;
-import io.aria.conductor.execution.llm.LlmResponse;
+import io.aria.conductor.execution.runtime.CoreResult;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
 import io.aria.conductor.knowledge.repository.KnowledgeVersionRepository;
@@ -37,35 +35,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * FULL-CYCLE integration tests for the SDD git-pipeline artifact flow (plan Task 7).
  *
- * <p>Proves the whole loop end-to-end with a mocked ADK and mocked GitHub channel:
- * instantiateTemplate (with issueRef/issueRepo/repoUrl) -> branchName injection -> BA
- * spec draft -> SPEC_REVIEW approval -> Git branch handoff (createBranch + commit
- * spec/spec.md) -> Dev completion backend-push fallback -> QA verdict routing on the
+ * <p>Proves the whole loop end-to-end with a mocked core launcher and mocked GitHub
+ * channel: instantiateTemplate (with issueRef/issueRepo/repoUrl) -> branchName
+ * injection -> BA spec draft -> SPEC_REVIEW approval -> Git branch handoff
+ * (createBranch + commit spec/spec.md) -> QA verdict routing on the
  * {@code VERDICT=} marker (no submit_dod_review tool call).
  *
  * <p>Mocking strategy:
  * <ul>
- *   <li>{@code @MockBean AdkProviderRegistry} — resolves a scripted {@link AdkProvider}
- *       whose {@code call()} returns per-agent outputs (BA/DEV specs, QA verdict markers).</li>
+ *   <li>{@code @MockBean CoreRunLauncher} — returns per-agent outputs (BA/DEV specs,
+ *       QA verdict markers).</li>
  *   <li>{@code @MockBean GitBranchService} — records createBranch/putFile/branchHeadSha;
- *       branchHeadSha always returns the spec-commit sha so the backend-push fallback
- *       path is exercised (Dev "forgot" to push).</li>
- *   <li>{@code @MockBean OpenCodeAdkProvider} — verifies {@code runSandboxCommand} carries
- *       the {@code git push origin sdd/&lt;chainId&gt;} fallback command.</li>
+ *       branchHeadSha returns the spec-commit sha.</li>
  * </ul>
  *
  * <p>The real {@link io.aria.conductor.knowledge.sdd.SpecReviewCoordinator} and
  * {@link io.aria.conductor.execution.listener.WorkflowAutoChainer} are used untouched;
- * only the outer ADK and GitHub boundaries are mocked.
+ * only the outer core and GitHub boundaries are mocked.
  */
 class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
 
@@ -91,11 +84,9 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     private ReportService reportService;
 
     @MockBean
-    private AdkProviderRegistry adkProviderRegistry;
-    @MockBean
     private GitBranchService gitBranchService;
     @MockBean
-    private OpenCodeAdkProvider openCodeAdkProvider;
+    private CoreRunLauncher coreRunLauncher;
 
     private UUID baAgentId;
     private UUID devAgentId;
@@ -122,8 +113,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         devAgentId = createAgent("DEV-Agent-" + shortUuid());
         qaAgentId = createAgent("QA-Agent-" + shortUuid());
 
-        // The spec-commit sha is recorded on approval (branchHeadSha), and the same sha is
-        // returned after Dev completes -> branch did NOT advance -> backend-push fallback runs.
+        // The spec-commit sha is recorded on approval (branchHeadSha).
         when(gitBranchService.branchHeadSha(anyString(), anyString()))
                 .thenReturn(Optional.of("spec-sha-abc"));
 
@@ -138,8 +128,8 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     // ================================================================
 
     @Test
-    void fullCycle_ba_approve_devFallback_qaMarkerPass_completesChain() {
-        configureMockAdk(QA_MARKER_PASS);
+    void fullCycle_ba_approve_dev_qaMarkerPass_completesChain() {
+        configureCore(QA_MARKER_PASS);
 
         WorkflowResponse created = createSddGitChain();
         UUID chainId = created.getId();
@@ -158,18 +148,13 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         // 3. approve via coordinator -> createBranch + commit spec/spec.md
         approveSpecReview(chainId);
 
-        // 4-5. Dev completes (branchHeadSha unchanged -> backend fallback) -> QA marker
-        //      VERDICT=PASS (no tool verdict) -> chain COMPLETED
+        // 4-5. Dev completes -> QA marker VERDICT=PASS (no tool verdict) -> chain COMPLETED
         awaitChainStatus(chainId, WorkflowChain.Status.COMPLETED);
 
         // Branch handoff: branch created and cleaned spec committed to spec/spec.md
         verify(gitBranchService).createBranch(eq(REPO_URL), eq(branch));
         verify(gitBranchService).putFile(eq(REPO_URL), eq(branch), eq("spec/spec.md"),
                 eq(BA_OUTPUT), anyString());
-
-        // Backend push fallback: Dev did not advance the branch, so the sandbox command ran
-        verify(openCodeAdkProvider).runSandboxCommand(eq(devAgentId),
-                contains("git push origin " + branch));
 
         // DoD qa review recorded via the VERDICT=PASS marker path (R8-F2) -> DoD completed + PASSED
         DoDRecord dod = dodService.getStatus(chainId.toString());
@@ -187,7 +172,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     @Test
     void fullCycle_verdictDefect_reschedulesDev() {
         // First QA run emits DEFECT, second (after Dev rework) emits PASS.
-        configureMockAdk(QA_MARKER_DEFECT, QA_MARKER_PASS);
+        configureCore(QA_MARKER_DEFECT, QA_MARKER_PASS);
 
         WorkflowResponse created = createSddGitChain();
         UUID chainId = created.getId();
@@ -212,7 +197,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     @Test
     void fullCycle_verdictSpecGap_reschedulesBa() {
         // First QA run emits SPEC_GAP, second (after BA re-spec + re-approval) emits PASS.
-        configureMockAdk(QA_MARKER_SPEC_GAP, QA_MARKER_PASS);
+        configureCore(QA_MARKER_SPEC_GAP, QA_MARKER_PASS);
 
         WorkflowResponse created = createSddGitChain();
         UUID chainId = created.getId();
@@ -241,7 +226,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
 
     @Test
     void fullCycle_noMarkerNoTool_failsChainWithHint() {
-        configureMockAdk(QA_NO_VERDICT);
+        configureCore(QA_NO_VERDICT);
 
         WorkflowResponse created = createSddGitChain();
         UUID chainId = created.getId();
@@ -266,7 +251,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
 
     @Test
     void fullCycle_qaMarkerPass_capturesReportArtifactFromBranch() {
-        configureMockAdk(QA_MARKER_PASS);
+        configureCore(QA_MARKER_PASS);
 
         WorkflowResponse created = createSddGitChain();
         UUID chainId = created.getId();
@@ -309,8 +294,8 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
         Agent agent = Agent.builder()
                 .name(name)
                 .role("test-role")
-                .agentType(AgentType.NATIVE)
-                .adkProvider("langchain")
+                .agentType(AgentType.ADK)
+                .adkProvider("opencode")
                 .config("{}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
@@ -414,18 +399,16 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
     }
 
     /**
-     * Configure the mock ADK. {@code qaOutputs} is the scripted sequence of QA outputs
-     * (one consumed per QA run; the last entry is repeated for any further runs).
-     * BA/DEV always return their fixed outputs.
+     * Configure the core launcher double. {@code qaOutputs} is the scripted sequence of
+     * QA outputs (one consumed per QA run; the last entry is repeated for any further
+     * runs). BA/DEV always return their fixed outputs.
      */
-    private void configureMockAdk(String... qaOutputs) {
-        AdkProvider mockAdk = mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(mockAdk);
-        when(mockAdk.isHealthy(any())).thenReturn(true);
-        when(mockAdk.parseActionsFromResponse(any())).thenReturn(List.of());
+    private void configureCore(String... qaOutputs) {
+        when(coreRunLauncher.owns(any())).thenReturn(true);
         AtomicInteger qaCall = new AtomicInteger(0);
-        when(mockAdk.call(any(), any(), any(), any())).thenAnswer(inv -> {
-            UUID agentId = inv.getArgument(0);
+        when(coreRunLauncher.execute(any(), any(), any())).thenAnswer(inv -> {
+            Agent agent = inv.getArgument(1);
+            UUID agentId = agent.getId();
             String output;
             if (qaAgentId.equals(agentId)) {
                 int idx = Math.min(qaCall.getAndIncrement(), qaOutputs.length - 1);
@@ -435,7 +418,7 @@ class GitPipelineIntegrationTest extends BaseH2IntegrationTest {
             } else {
                 output = BA_OUTPUT;
             }
-            return new LlmResponse(output, 10, 20, "stop", List.of());
+            return new CoreResult("sess-" + agentId, output, null, false);
         });
     }
 

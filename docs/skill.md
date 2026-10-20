@@ -24,7 +24,7 @@ curl http://localhost:8080/actuator/health
 curl http://localhost:8080/api/v1/agents
 ```
 
-Returns array with: `id`, `name`, `agentType` (NATIVE|ADK), `role`, `model`, `healthStatus`, `tools[]`
+Returns array with: `id`, `name`, `agentType` (always `ADK`), `role`, `model`, `healthStatus`, `skills[]`
 
 ### 3. Create an Agent
 
@@ -33,13 +33,15 @@ curl -X POST http://localhost:8080/api/v1/agents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Researcher",
-    "agentType": "NATIVE",
+    "agentType": "ADK",
+    "adkProvider": "opencode",
     "role": "Researches topics and provides factual summaries",
     "model": "deepseek-chat"
   }'
 ```
 
-Required fields: `name`, `agentType`. Optional: `role`, `model`, `provider`, `config`.
+Required fields: `name`. Optional: `agentType` (only `ADK`; defaults to `ADK`), `adkProvider`
+(`opencode`, the default, or `qoder`), `role`, `model`, `provider`, `config`.
 
 ### 4. Start a Run
 
@@ -184,9 +186,8 @@ The MCP server (`packages/mcp-server/`) exposes these tool categories:
 | Limitation | Workaround |
 |-----------|-----------|
 | No authentication | Bind to 127.0.0.1 only; use reverse proxy for production |
-| `shell_exec` disabled | Set `tools.shell.enabled=true` in config |
-| New agent ADK cold start | First run on a fresh agent waits up to 60s for the ADK subprocess to become ready |
-| Cancel is cooperative | Takes effect at the next iteration boundary; terminal state is protected from overwrite |
+| New agent core cold start | First run on a fresh agent waits for the core process/sandbox to become ready |
+| Cancel is verified | The run-owned core must confirm the stop; terminal state is protected from overwrite |
 | Zombie run cleanup | Runs stuck RUNNING with no active context are auto-reaped after `run.reaper.timeout-minutes` (default 120) |
 
 ## Monitoring Checklist

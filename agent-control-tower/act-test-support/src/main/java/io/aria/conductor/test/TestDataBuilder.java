@@ -83,7 +83,7 @@ public final class TestDataBuilder {
         private UUID id = UUID.randomUUID();
         private String name = "test-agent-" + shortId();
         private String description = "Test agent fixture";
-        private AgentType agentType = AgentType.NATIVE;
+        private AgentType agentType = AgentType.ADK;
         private String role = "tester";
         private String model = "gpt-4o-mini";
         private String provider = "openai";

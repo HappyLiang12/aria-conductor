@@ -2,20 +2,17 @@ package io.aria.conductor.execution.engine;
 
 import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.SessionStatus;
-import io.aria.conductor.execution.llm.LlmResponse;
-import io.aria.conductor.execution.pipeline.ActionResult;
 import io.aria.conductor.execution.repository.AgentSessionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Manages agent sessions in-memory with periodic persistence to H2.
+ * Manages agent sessions in memory and persists the final state to H2.
  */
 @Slf4j
 @Component
@@ -62,51 +59,6 @@ public class SessionStateManager {
         return newSession;
     }
 
-    /**
-     * Update session with LLM response and action results.
-     */
-    public void updateSession(UUID runId, LlmResponse response, List<ActionResult> actionResults) {
-        AgentSession session = sessionCache.get(runId);
-        if (session == null) {
-            log.warn("Session not found for update: runId={}", runId);
-            return;
-        }
-
-        // Update token counts
-        session.setTotalInputTokens(session.getTotalInputTokens() + response.inputTokens());
-        session.setTotalOutputTokens(session.getTotalOutputTokens() + response.outputTokens());
-
-        // Increment turn count
-        session.setTurnCount(session.getTurnCount() + 1);
-
-        // Update memory with latest response (append)
-        String memoryUpdate = buildMemoryUpdate(response, actionResults);
-        if (session.getMemory() == null || session.getMemory().isEmpty()) {
-            session.setMemory(memoryUpdate);
-        } else {
-            session.setMemory(session.getMemory() + "\n" + memoryUpdate);
-        }
-
-        log.debug("Session updated: runId={}, turnCount={}, totalInputTokens={}, totalOutputTokens={}",
-                runId, session.getTurnCount(), session.getTotalInputTokens(), session.getTotalOutputTokens());
-    }
-
-    /**
-     * Persist session to H2. Called every 5 iterations.
-     */
-    @Transactional
-    public void persistSession(UUID runId) {
-        AgentSession session = sessionCache.get(runId);
-        if (session == null) {
-            log.warn("Session not found for persistence: runId={}", runId);
-            return;
-        }
-
-        log.info("Persisting session: runId={}, turnCount={}", runId, session.getTurnCount());
-        // Re-cache the persisted instance so its @Version stays in sync with the DB; repeatedly
-        // save()-ing a detached entity with a stale version causes OptimisticLockException.
-        sessionCache.put(runId, sessionRepository.save(session));
-    }
 
     /**
      * Clear session from cache and persist final state.
@@ -136,22 +88,5 @@ public class SessionStateManager {
      */
     public AgentSession getSession(UUID runId) {
         return sessionCache.get(runId);
-    }
-
-    private String buildMemoryUpdate(LlmResponse response, List<ActionResult> actionResults) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[Turn] content=").append(truncate(response.content(), 200));
-        if (response.hasToolCalls()) {
-            sb.append(", toolCalls=").append(response.toolCalls().size());
-        }
-        if (actionResults != null && !actionResults.isEmpty()) {
-            sb.append(", results=").append(actionResults.size());
-        }
-        return sb.toString();
-    }
-
-    private String truncate(String s, int maxLen) {
-        if (s == null) return "";
-        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 }

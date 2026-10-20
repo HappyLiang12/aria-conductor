@@ -52,7 +52,6 @@ class AgentControllerCrudTest extends WebMvcTestBase {
                 .provider("alibaba")
                 .healthStatus(HealthStatus.HEALTHY)
                 .skills(List.of("triage"))
-                .tools(List.of("read_file"))
                 .build();
     }
 
@@ -68,8 +67,7 @@ class AgentControllerCrudTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.id").value(id.toString()))
                 .andExpect(jsonPath("$.name").value("triage-bot"))
                 .andExpect(jsonPath("$.agentType").value("ADK"))
-                .andExpect(jsonPath("$.healthStatus").value("HEALTHY"))
-                .andExpect(jsonPath("$.tools[0]").value("read_file"));
+                .andExpect(jsonPath("$.healthStatus").value("HEALTHY"));
     }
 
     @Test
@@ -194,52 +192,4 @@ class AgentControllerCrudTest extends WebMvcTestBase {
                 .andExpect(jsonPath("$.status").value(400));
     }
 
-    @Test
-    void listAgentTools_returnsTools() throws Exception {
-        UUID id = UUID.randomUUID();
-        when(agentService.getAgentTools(id)).thenReturn(List.of(
-                ToolDefinition.builder().id("t1").name("read_file").enabled(true).build()));
-
-        mvc.perform(get("/api/v1/agents/" + id + "/tools"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value("t1"))
-                .andExpect(jsonPath("$[0].name").value("read_file"));
-    }
-
-    @Test
-    void assignTool_returns201_andReturnsUpdatedToolList() throws Exception {
-        UUID id = UUID.randomUUID();
-        when(agentService.getAgentTools(id)).thenReturn(List.of(
-                ToolDefinition.builder().id("t1").name("read_file").enabled(true).build()));
-
-        mvc.perform(post("/api/v1/agents/" + id + "/tools")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("toolId", "t1"))))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$[0].id").value("t1"));
-        verify(agentService).assignTool(id, "t1");
-    }
-
-    @Test
-    void assignTool_notApproved_returns409() throws Exception {
-        UUID id = UUID.randomUUID();
-        doThrow(new IllegalStateException("Tool 'shell_exec' is not approved/enabled and cannot be assigned"))
-                .when(agentService).assignTool(id, "t1");
-
-        mvc.perform(post("/api/v1/agents/" + id + "/tools")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("toolId", "t1"))))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.status").value(409));
-    }
-
-    @Test
-    void unassignTool_returnsOk_andDelegates() throws Exception {
-        UUID id = UUID.randomUUID();
-        when(agentService.getAgentTools(id)).thenReturn(List.of());
-
-        mvc.perform(delete("/api/v1/agents/" + id + "/tools/t1"))
-                .andExpect(status().isOk());
-        verify(agentService).unassignTool(id, "t1");
-    }
 }

@@ -196,11 +196,27 @@ public class RunService {
         return toResponse(runRepository.save(run));
     }
 
+    /**
+     * Cancels a run. When the run's runtime is owned by the execution
+     * coordinator, the run-owned core is stopped and the stop proof is verified
+     * first; CANCELLED is persisted only after that verified acknowledgement, so
+     * a cancellation the core never confirmed is refused instead of recorded.
+     * A run no runtime owns keeps the plain recorded transition.
+     */
     @Transactional
     public RunResponse cancelRun(UUID id) {
         Run run = findRunOrThrow(id);
         validateTransition(run.getStatus(), RunStatus.CANCELLED);
         log.info("Cancelling run: id={}", id);
+        RunRuntimeControlPort control = runtimeControlProvider == null
+                ? null : runtimeControlProvider.getIfAvailable();
+        if (control != null && control.owns(run.getAgentId(), id)) {
+            control.cancel(id);
+            // The runtime may have finalized while the verified stop was in flight:
+            // the transition is re-checked against the state that actually stands.
+            run = findRunOrThrow(id);
+            validateTransition(run.getStatus(), RunStatus.CANCELLED);
+        }
         run.setStatus(RunStatus.CANCELLED);
         run.setCompletedAt(Instant.now());
         Run saved = runRepository.save(run);

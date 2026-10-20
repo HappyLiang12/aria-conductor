@@ -13,8 +13,8 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Scheduled checker that finds expired pending approvals,
- * marks them EXPIRED, and completes their futures with rejection.
+ * Scheduled checker that finds expired pending approvals and marks them
+ * EXPIRED.
  *
  * <p>Native ({@code ACP_PERMISSION}) asks are owned by the
  * {@link PermissionCoordinator}: this sweep skips them in its own loop and
@@ -29,13 +29,11 @@ import java.util.List;
 public class ApprovalExpiryChecker {
 
     private final ApprovalRepository approvalRepository;
-    private final ApprovalGate approvalGate;
     private final PermissionCoordinator permissionCoordinator;
 
-    public ApprovalExpiryChecker(ApprovalRepository approvalRepository, ApprovalGate approvalGate,
+    public ApprovalExpiryChecker(ApprovalRepository approvalRepository,
                                  PermissionCoordinator permissionCoordinator) {
         this.approvalRepository = approvalRepository;
-        this.approvalGate = approvalGate;
         this.permissionCoordinator = permissionCoordinator;
     }
 
@@ -71,9 +69,6 @@ public class ApprovalExpiryChecker {
             approval.setReason(PermissionCoordinator.EXPIRY_REASON);
             approval.setDecidedAt(Instant.now());
             approvalRepository.save(approval);
-
-            // Unblock any waiting thread with denial
-            approvalGate.cancelPendingApproval(approval.getId());
         }
     }
 }

@@ -55,7 +55,7 @@ public final class SandboxHostResolver {
     /**
      * Sandbox-reachable host candidates in preference order: the override first
      * (when set), then the private v4 candidates ranked (172.16/12 podman/WSL
-     * adapters, then 10/8, then 192.168/16). Consumers (OpenCodeAdkProvider
+     * adapters, then 10/8, then 192.168/16). Consumers (the OpenCode core
      * reachability probe) probe in order and pick the first candidate the sandbox
      * actually reaches — ranking alone is only a guess.
      */

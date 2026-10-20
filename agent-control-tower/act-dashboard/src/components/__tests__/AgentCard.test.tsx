@@ -7,7 +7,7 @@ const baseAgent: Agent = {
   id: 'a-1',
   name: 'Test Agent',
   description: '',
-  agentType: 'NATIVE',
+  agentType: 'ADK',
   role: 'dev',
   model: '',
   provider: '',

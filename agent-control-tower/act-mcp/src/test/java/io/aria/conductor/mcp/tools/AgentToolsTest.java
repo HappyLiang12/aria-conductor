@@ -51,11 +51,11 @@ class AgentToolsTest {
     void getAgent_returnsAgentJson() {
         UUID id = UUID.randomUUID();
         when(agentService.getAgent(id)).thenReturn(AgentResponse.builder()
-                .id(id).name("worker").agentType(AgentType.NATIVE).healthStatus(HealthStatus.HEALTHY).build());
+                .id(id).name("worker").agentType(AgentType.ADK).healthStatus(HealthStatus.HEALTHY).build());
 
         String json = tools.getAgent(id);
 
-        assertThat(json).contains("\"ok\":true").contains("worker").contains("NATIVE");
+        assertThat(json).contains("\"ok\":true").contains("worker").contains("ADK");
     }
 
     @Test
@@ -72,7 +72,7 @@ class AgentToolsTest {
     @Test
     void createAgent_defaultsToNativeType() {
         when(agentService.createAgent(any())).thenReturn(AgentResponse.builder()
-                .id(UUID.randomUUID()).name("developer").agentType(AgentType.NATIVE).build());
+                .id(UUID.randomUUID()).name("developer").agentType(AgentType.ADK).build());
 
         String json = tools.createAgent("developer", "worker", null, "builds things",
                 "gpt-4o", "openai", "langchain", Map.of("harnessProfile", "weak-model-safe"));
@@ -80,7 +80,7 @@ class AgentToolsTest {
         assertThat(json).contains("\"ok\":true").contains("developer");
         ArgumentCaptor<CreateAgentRequest> captor = ArgumentCaptor.forClass(CreateAgentRequest.class);
         verify(agentService).createAgent(captor.capture());
-        assertThat(captor.getValue().getAgentType()).isEqualTo(AgentType.NATIVE);
+        assertThat(captor.getValue().getAgentType()).isEqualTo(AgentType.ADK);
         assertThat(captor.getValue().getRole()).isEqualTo("worker");
     }
 
@@ -101,7 +101,7 @@ class AgentToolsTest {
     void createAgent_mapsInvalidTypeToValidation() {
         String json = tools.createAgent("bad", "worker", "quantum", null, null, null, null, null);
 
-        assertThat(json).contains("\"errorType\":\"VALIDATION\"").contains("NATIVE, ADK");
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"").contains("ADK");
         assertThat(json).doesNotContain("stackTrace");
     }
 
@@ -113,7 +113,7 @@ class AgentToolsTest {
 
         String json = tools.createAgent("bad", "worker", "quantum", null, null, null, null, null);
 
-        assertThat(json).contains("\"errorType\":\"VALIDATION\"").contains("NATIVE, ADK");
+        assertThat(json).contains("\"errorType\":\"VALIDATION\"").contains("ADK");
         assertThat(json).doesNotContain("stackTrace");
         assertThat(json).doesNotContain("IllegalArgumentException");
     }

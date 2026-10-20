@@ -26,26 +26,6 @@ const CATEGORIES: CategoryDef[] = [
     keys: [
       { key: 'llm.request.timeout.seconds', label: 'LLM Request Timeout', min: 30, max: 3600, step: 1, unit: 's' },
       { key: 'aria.sse.timeout.ms', label: 'Aria SSE Timeout', min: 30000, max: 3600000, step: 1000, unit: 'ms' },
-      { key: 'llm.max.tokens.ceiling', label: 'Max Tokens Ceiling', min: 1024, max: 131072, step: 1024 },
-    ],
-  },
-  {
-    icon: '🛡️',
-    title: 'Circuit Breaker',
-    keys: [
-      { key: 'circuit.breaker.max.tokens.per.run', label: 'Max Tokens Per Run', min: 1000, max: 10_000_000, step: 1000 },
-      { key: 'circuit.breaker.max.iterations', label: 'Max Iterations', min: 1, max: 500, step: 1 },
-      { key: 'circuit.breaker.error.rate.threshold', label: 'Error Rate Threshold', min: 0, max: 1, step: 0.01 },
-      { key: 'circuit.breaker.max.iteration.latency.ms', label: 'Max Iteration Latency', min: 10000, max: 3_600_000, step: 1000, unit: 'ms' },
-    ],
-  },
-  {
-    icon: '⚙️',
-    title: 'ADK Runtime',
-    keys: [
-      { key: 'adk.health.check.interval.ms', label: 'Health Check Interval', min: 5000, max: 300_000, step: 1000, unit: 'ms' },
-      { key: 'adk.shutdown.timeout.ms', label: 'Shutdown Timeout', min: 1000, max: 60_000, step: 1000, unit: 'ms' },
-      { key: 'adk.max.restart.backoff.ms', label: 'Max Restart Backoff', min: 1000, max: 300_000, step: 1000, unit: 'ms' },
     ],
   },
   {

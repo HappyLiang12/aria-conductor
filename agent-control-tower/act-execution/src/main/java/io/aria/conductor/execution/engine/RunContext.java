@@ -1,125 +1,56 @@
 package io.aria.conductor.execution.engine;
 
 import io.aria.conductor.common.model.Agent;
-import io.aria.conductor.common.model.AgentSession;
+import io.aria.conductor.execution.llm.LlmMessage;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 /**
- * Context object carried through the agent loop iterations.
+ * Per-run state kept by the engine for an active coordinated run: identity,
+ * intent, token and iteration accounting, and the conversation material used
+ * for message assembly.
+ *
+ * <p>Runtime control (pause / resume / cancel) belongs to the run coordinator
+ * and is verified through {@code RunRuntimeControlPort}, so it is not mirrored
+ * here.
  */
 public class RunContext {
 
     private final UUID runId;
     private final UUID agentId;
     private final Agent agent;
-    private AgentSession session;
-    private String conversationId;
+    private final String conversationId;
     private String intent;
     private int iterationCount;
-    private int maxIterations;
     private long totalTokensUsed;
-    private final List<String> errors;
-    private final Instant startTime;
-    private volatile boolean paused;
-    private volatile boolean cancelled;
-    private CompletableFuture<Void> pauseBlocker;
+    private final List<String> errors = new ArrayList<>();
     private String lastAssistantResponse;
-    private UUID currentToolCallId;
-    private List<UUID> currentTurnToolCallIds;
-    private List<String> cachedSkillNames;
-    private String workspaceDir;
-    private io.aria.conductor.common.model.HarnessProfile harnessProfile;
     /**
      * The conversation turns that precede this run, supplied by the caller for
      * message assembly only. They are never persisted as this run's trajectory
      * rows: the run's own rows are its request and its assistant turns, so the
      * conversation timeline (aggregated across runs) stays free of duplicates.
      */
-    private List<io.aria.conductor.execution.llm.LlmMessage> priorContext = List.of();
-    /** S12: monotonic seq for run.progress events (client-side dedupe). */
-    private final java.util.concurrent.atomic.AtomicLong progressSeq =
-            new java.util.concurrent.atomic.AtomicLong();
+    private List<LlmMessage> priorContext = List.of();
 
-    public long nextProgressSeq() {
-        return progressSeq.incrementAndGet();
-    }
-
-    // Per-iteration latency tracking (#22): iterationStartTime is reset at the start of each
-    // iteration; blockedWaitMillis accumulates human approval/pause wait so it is excluded
-    // from the per-iteration latency budget.
-    private Instant iterationStartTime;
-    private volatile long blockedWaitMillis;
-
-    // Consecutive same-error tracking (prevents infinite retry loops)
-    private String lastToolError;
-    private int consecutiveSameErrorCount;
-
-    public RunContext(UUID runId, UUID agentId, Agent agent, AgentSession session) {
-        this(runId, agentId, agent, session, 50);
-    }
-
-    public RunContext(UUID runId, UUID agentId, Agent agent, AgentSession session, int maxIterations) {
-        this(runId, agentId, agent, session, maxIterations, null);
-    }
-
-    public RunContext(UUID runId, UUID agentId, Agent agent, AgentSession session, int maxIterations, String conversationId) {
+    public RunContext(UUID runId, UUID agentId, Agent agent, String conversationId) {
         this.runId = runId;
         this.agentId = agentId;
         this.agent = agent;
-        this.session = session;
         this.conversationId = conversationId;
-        this.iterationCount = 0;
-        this.maxIterations = maxIterations;
-        this.totalTokensUsed = 0;
-        this.errors = new ArrayList<>();
-        this.startTime = Instant.now();
-        this.iterationStartTime = this.startTime;
-        this.blockedWaitMillis = 0L;
-        this.paused = false;
-        this.cancelled = false;
-        this.pauseBlocker = null;
     }
 
     public UUID getRunId() { return runId; }
     public UUID getAgentId() { return agentId; }
     public Agent getAgent() { return agent; }
-    public AgentSession getSession() { return session; }
     public String getConversationId() { return conversationId; }
-    public void setConversationId(String conversationId) { this.conversationId = conversationId; }
     public String getIntent() { return intent; }
     public void setIntent(String intent) { this.intent = intent; }
     public int getIterationCount() { return iterationCount; }
-    public int getMaxIterations() { return maxIterations; }
     public long getTotalTokensUsed() { return totalTokensUsed; }
     public List<String> getErrors() { return errors; }
-    public Instant getStartTime() { return startTime; }
-
-    /** Start of the current iteration (reset via {@link #markIterationStart()}). */
-    public Instant getIterationStartTime() { return iterationStartTime; }
-
-    /** Reset the per-iteration latency timer to now (call at the start of each iteration / after resume). */
-    public void markIterationStart() { this.iterationStartTime = Instant.now(); }
-
-    /** Accumulated human approval/pause wait (ms) excluded from the per-iteration latency budget. */
-    public long getBlockedWaitMillis() { return blockedWaitMillis; }
-
-    /** Add time spent blocked on human approval/pause so it is excluded from latency accounting. */
-    public void addBlockedWait(Duration duration) {
-        if (duration != null && !duration.isNegative()) {
-            this.blockedWaitMillis += duration.toMillis();
-        }
-    }
-
-    public boolean isPaused() { return paused; }
-    public boolean isCancelled() { return cancelled; }
-
-    public void setSession(AgentSession session) { this.session = session; }
 
     public void incrementIteration() { this.iterationCount++; }
 
@@ -132,74 +63,8 @@ public class RunContext {
     public String getLastAssistantResponse() { return lastAssistantResponse; }
     public void setLastAssistantResponse(String response) { this.lastAssistantResponse = response; }
 
-    public UUID getCurrentToolCallId() { return currentToolCallId; }
-    public void setCurrentToolCallId(UUID toolCallId) { this.currentToolCallId = toolCallId; }
-
-    public List<UUID> getCurrentTurnToolCallIds() { return currentTurnToolCallIds; }
-    public void setCurrentTurnToolCallIds(List<UUID> ids) { this.currentTurnToolCallIds = ids; }
-
-    public List<String> getCachedSkillNames() { return cachedSkillNames; }
-    public void setCachedSkillNames(List<String> names) { this.cachedSkillNames = names; }
-
-    public String getLastToolError() { return lastToolError; }
-    public void setLastToolError(String e) { this.lastToolError = e; }
-    public int getConsecutiveSameErrorCount() { return consecutiveSameErrorCount; }
-    public void setConsecutiveSameErrorCount(int c) { this.consecutiveSameErrorCount = c; }
-
-    public String getWorkspaceDir() { return workspaceDir; }
-    public void setWorkspaceDir(String workspaceDir) { this.workspaceDir = workspaceDir; }
-
-    /**
-     * The resolved harness profile for this run (tool steering, self-verify escalation, budgets).
-     * May be null for runs created before profile resolution; callers should fall back to
-     * {@link io.aria.conductor.common.model.HarnessProfile#defaults()}.
-     */
-    public io.aria.conductor.common.model.HarnessProfile getHarnessProfile() { return harnessProfile; }
-    public void setHarnessProfile(io.aria.conductor.common.model.HarnessProfile harnessProfile) { this.harnessProfile = harnessProfile; }
-
-    public List<io.aria.conductor.execution.llm.LlmMessage> getPriorContext() { return priorContext; }
-    public void setPriorContext(List<io.aria.conductor.execution.llm.LlmMessage> priorContext) {
+    public List<LlmMessage> getPriorContext() { return priorContext; }
+    public void setPriorContext(List<LlmMessage> priorContext) {
         this.priorContext = priorContext == null ? List.of() : List.copyOf(priorContext);
-    }
-
-    /**
-     * Pause the run — creates a new CompletableFuture that blocks the loop.
-     */
-    public synchronized void pause() {
-        this.paused = true;
-        if (this.pauseBlocker == null || this.pauseBlocker.isDone()) {
-            this.pauseBlocker = new CompletableFuture<>();
-        }
-    }
-
-    /**
-     * Resume the run — completes the pause blocker to unblock the loop.
-     */
-    public synchronized void resume() {
-        this.paused = false;
-        if (this.pauseBlocker != null && !this.pauseBlocker.isDone()) {
-            this.pauseBlocker.complete(null);
-        }
-    }
-
-    public void setCancelled(boolean cancelled) { this.cancelled = cancelled; }
-
-    /**
-     * Blocks the virtual thread while the run is paused.
-     * Returns normally when resumed.
-     * Throws if the future is cancelled (run cancelled while paused).
-     */
-    public void awaitResume() throws InterruptedException {
-        CompletableFuture<Void> blocker;
-        synchronized (this) {
-            if (!paused) return;
-            blocker = this.pauseBlocker;
-        }
-        try {
-            blocker.get(); // blocks virtual thread, not OS thread
-        } catch (Exception e) {
-            Thread.currentThread().interrupt();
-            throw new InterruptedException("Run interrupted while paused");
-        }
     }
 }

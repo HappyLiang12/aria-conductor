@@ -539,11 +539,15 @@ export async function pollRunTerminal(
  * permission-driven scenario does. This helper waits for the FIRST of exactly
  * two documented outcomes:
  *
- *  - a PENDING ask for this run exists: every ask is approved once through
+ *  - a PENDING gate ask for this run exists: every ask is approved once through
  *    {@link decideApproval} (whose response is verified field by field, so an
  *    unprocessed decision throws rather than passing) and the wait continues
  *    until the run is terminal; or
  *  - the run reaches a terminal state with no undecided ask for it.
+ *
+ * A terminal run can no longer be gated, so the terminal check comes first: the
+ * post-run REVIEW_REQUEST ask that the kanban review flow raises for the run's
+ * mirror card is display-only and must never be counted as a settled gate.
  *
  * It never treats an absent ask as a pass: the returned outcome names which of
  * the two happened, and the caller asserts the exact terminal evidence either
@@ -561,18 +565,18 @@ export async function settleRunApproval(
     if (status !== 200) {
       throw new Error(`settleRunApproval could not read run ${runId}: HTTP ${status}`);
     }
+    if ((TERMINAL_RUN_STATES as readonly string[]).includes(run?.status)) {
+      return { approvedAskIds: [...decided] };
+    }
     const { data: approvals } = await apiCall(request, 'GET', '/approvals');
     const pending = (Array.isArray(approvals) ? approvals : []).filter(
-      (a: any) => a.status === 'PENDING' && a.runId === runId,
+      (a: any) => a.status === 'PENDING' && a.runId === runId && a.askType !== 'REVIEW_REQUEST',
     );
     const next = pending.find((a: any) => !decided.has(a.id));
     if (next) {
       await decideApproval(request, next.id, true, 'API E2E operator approval (one-use grant)');
       decided.add(next.id);
       continue;
-    }
-    if ((TERMINAL_RUN_STATES as readonly string[]).includes(run?.status)) {
-      return { approvedAskIds: [...decided] };
     }
     if (Date.now() > deadline) {
       throw new Error(

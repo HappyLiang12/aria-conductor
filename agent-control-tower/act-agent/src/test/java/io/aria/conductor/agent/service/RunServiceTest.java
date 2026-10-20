@@ -584,6 +584,51 @@ class RunServiceTest {
     }
 
     @Test
+    void cancelRun_whenTheRuntimeFailedDuringTheStop_recordsTheVerifiedCancellation() {
+        // The engine observes our own verified stop as an execution failure; the
+        // stop is authoritative, so the operator's cancel still records CANCELLED
+        // instead of answering an invalid FAILED -> CANCELLED transition.
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        RunRepository.RunStateView committed =
+                org.mockito.Mockito.mock(RunRepository.RunStateView.class);
+        when(committed.getStatus()).thenReturn(RunStatus.FAILED);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(committed));
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runtimeControl).cancel(id);
+        verify(runRepository).save(any(Run.class));
+    }
+
+    @Test
+    void cancelRun_whenTheRuntimeAlreadyRecordedTheCancellation_recordsTheSameOutcome() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        stubSaveReturnsArgument();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        RunRepository.RunStateView committed =
+                org.mockito.Mockito.mock(RunRepository.RunStateView.class);
+        when(committed.getStatus()).thenReturn(RunStatus.CANCELLED);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(committed));
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runtimeControl).cancel(id);
+        verify(runRepository).save(any(Run.class));
+    }
+
+    @Test
     void cancelRun_alreadyCompleted_isRejected() {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(

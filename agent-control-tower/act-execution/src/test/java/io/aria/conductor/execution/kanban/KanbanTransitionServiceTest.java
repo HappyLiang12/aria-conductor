@@ -23,6 +23,8 @@ import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Map;
@@ -391,6 +393,32 @@ class KanbanTransitionServiceTest {
         verify(kanbanService).transition("c1", KanbanStatus.TODO, "needs rework");
         // Dragging back must not dispatch a new run.
         verify(runService, never()).createRun(any(CreateRunRequest.class));
+    }
+
+    @Test
+    void inProgressToTodo_defersTheRunStopUntilTheCardTransactionCommits() {
+        // The verified stop waits on the core; holding the card transaction across
+        // that wait would let the engine's completion event update the same card
+        // and fail the commit with an optimistic-lock conflict.
+        card.setStatus(KanbanStatus.IN_PROGRESS);
+        card.setLinkedRunId(RUN_ID.toString());
+        when(runRepository.findById(RUN_ID))
+                .thenReturn(Optional.of(Run.builder().status(RunStatus.RUNNING).build()));
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.transition("c1", TransitionRequest.builder()
+                    .status(KanbanStatus.TODO).comment("needs rework").build());
+
+            verify(runService, never()).pauseRun(any());
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+
+            verify(runService).pauseRun(RUN_ID);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 
     @Test

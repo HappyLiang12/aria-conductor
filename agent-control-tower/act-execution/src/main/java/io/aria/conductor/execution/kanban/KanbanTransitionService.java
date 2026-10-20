@@ -17,10 +17,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -104,7 +105,7 @@ public class KanbanTransitionService {
 
         return switch (to) {
             case BACKLOG -> {
-                stopLinkedRun(item);
+                stopLinkedRunDeferred(item);
                 detachLinkOnStop(item);
                 clearStaleLinksOnReopen(item);
                 yield kanbanService.transition(id, KanbanStatus.BACKLOG, request.getComment());
@@ -114,7 +115,7 @@ public class KanbanTransitionService {
                 // Dragging an in-flight card back to TODO stops the run and
                 // detaches the card; no re-dispatch.
                 case IN_PROGRESS -> {
-                    stopLinkedRun(item);
+                    stopLinkedRunDeferred(item);
                     detachLinkOnStop(item);
                     yield kanbanService.transition(id, KanbanStatus.TODO, request.getComment());
                 }
@@ -222,7 +223,7 @@ public class KanbanTransitionService {
      * below are unchanged.
      */
     private KanbanItem requestChanges(KanbanItem item, TransitionRequest request) {
-        cancelLiveLinkedRun(item);
+        cancelLiveLinkedRunDeferred(item);
         approvalRepository.denyPendingByKanbanItemId(item.getId(), "superseded by request changes", Instant.now());
         kanbanService.transition(item.getId(), KanbanStatus.TODO, request.getComment());
         return pickup(item, request);
@@ -265,7 +266,7 @@ public class KanbanTransitionService {
         // CANCELLED and skips it (terminal cards are never re-transitioned) —
         // harmless by design.
         kanbanService.transition(item.getId(), KanbanStatus.CANCELLED, comment);
-        cancelLiveLinkedRun(item);
+        cancelLiveLinkedRunDeferred(item);
         return item;
     }
 
@@ -279,14 +280,32 @@ public class KanbanTransitionService {
      * pending ACP asks (R23) and frees the provider's single-run slot for that agent. A
      * missing or corrupt link is history, not a run to operate on.
      */
-    private void cancelLiveLinkedRun(KanbanItem item) {
-        findRun(item).ifPresent(run -> {
-            if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
-                    || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED
-                    || run.getStatus() == RunStatus.WAITING_INPUT) {
-                runService.cancelRun(UUID.fromString(item.getLinkedRunId()));
-            }
-        });
+    private void cancelLiveLinkedRunDeferred(KanbanItem item) {
+        UUID runId = parseLinkOrNull(item);
+        if (runId == null) {
+            return;
+        }
+        afterCommit("cancel", runId, () -> cancelLiveLinkedRun(runId));
+    }
+
+    private void cancelLiveLinkedRun(UUID runId) {
+        Run run = runRepository.findById(runId).orElse(null);
+        if (run == null) {
+            return;
+        }
+        if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
+                || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED
+                || run.getStatus() == RunStatus.WAITING_INPUT) {
+            runService.cancelRun(runId);
+        }
+    }
+
+    private void stopLinkedRunDeferred(KanbanItem item) {
+        UUID runId = parseLinkOrNull(item);
+        if (runId == null) {
+            return;
+        }
+        afterCommit("stop", runId, () -> stopLinkedRun(runId));
     }
 
     /**
@@ -298,11 +317,7 @@ public class KanbanTransitionService {
      * iterations keep dragging the card back (RunKanbanAutoCreator.onRunIteration
      * finds cards by linkedRunId).
      */
-    private void stopLinkedRun(KanbanItem item) {
-        UUID runId = parseLinkOrNull(item);
-        if (runId == null) {
-            return;
-        }
+    private void stopLinkedRun(UUID runId) {
         Run run = runRepository.findById(runId).orElse(null);
         if (run == null) {
             return;
@@ -316,6 +331,36 @@ public class KanbanTransitionService {
             case WAITING_INPUT -> runService.cancelRun(runId);
             case PENDING, INITIALIZING -> runService.cancelRun(runId);
             default -> { }
+        }
+    }
+
+    /**
+     * Runs a run-side control after the card transaction commits. The verified
+     * pause/cancel waits on the run-owned core, and holding the card row's
+     * transaction across that external wait lets the engine's completion event
+     * update the same card row, failing this commit with an optimistic-lock
+     * conflict. The card transition is the operator's decision and commits
+     * first; the control then runs against the committed link. With no
+     * transaction (direct unit calls) the control runs inline.
+     */
+    private static void afterCommit(String action, UUID runId, Runnable control) {
+        Runnable guarded = () -> {
+            try {
+                control.run();
+            } catch (RuntimeException e) {
+                log.error("Kanban {} failed after the card transition committed for run {}: {}",
+                        action, runId, e.getMessage(), e);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    guarded.run();
+                }
+            });
+        } else {
+            guarded.run();
         }
     }
 
@@ -363,11 +408,6 @@ public class KanbanTransitionService {
             log.warn("Clearing corrupt linkedRunId {} on kanban item {}", link, item.getId());
             return null;
         }
-    }
-
-    private Optional<Run> findRun(KanbanItem item) {
-        UUID runId = parseLinkOrNull(item);
-        return runId == null ? Optional.empty() : runRepository.findById(runId);
     }
 
     private String buildPromptSeed(KanbanItem item, String feedback) {

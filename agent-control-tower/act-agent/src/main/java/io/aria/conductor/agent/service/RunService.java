@@ -210,6 +210,9 @@ public class RunService {
      * coordinator, the run-owned core is stopped and the stop proof is verified
      * first; CANCELLED is persisted only after that verified acknowledgement, so
      * a cancellation the core never confirmed is refused instead of recorded.
+     * The verified stop is authoritative: a FAILED/CANCELLED the run reports
+     * while the stop was in flight is normalized to CANCELLED, while a
+     * COMPLETED it reports still wins and the cancel is refused.
      * A run no runtime owns keeps the plain recorded transition.
      */
     @Transactional
@@ -223,11 +226,16 @@ public class RunService {
             control.cancel(id);
             // The runtime may have finalized while the verified stop was in flight:
             // re-check the committed state through the projection (findById would
-            // serve this transaction's stale snapshot).
+            // serve this transaction's stale snapshot). A FAILED or CANCELLED it
+            // reports here is the engine observing this same stop, not an
+            // independent ending: the verified stop is authoritative, so the
+            // recorded outcome stays CANCELLED instead of refusing the operator.
             RunStatus committed = runRepository.findStateById(id)
                     .map(RunRepository.RunStateView::getStatus)
                     .orElse(run.getStatus());
-            validateTransition(committed, RunStatus.CANCELLED);
+            if (committed != RunStatus.FAILED && committed != RunStatus.CANCELLED) {
+                validateTransition(committed, RunStatus.CANCELLED);
+            }
         }
         run.setStatus(RunStatus.CANCELLED);
         run.setCompletedAt(Instant.now());

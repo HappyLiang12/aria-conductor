@@ -536,8 +536,11 @@ export async function pollRunTerminal(
  * The run-gate contract of a core-owned run, settled without inventing an ask:
  * the coordinator asks the run gate only when the core raises a permission
  * need, so a read-only completion legitimately opens no ask while a
- * permission-driven scenario does. This helper waits for the FIRST of exactly
- * two documented outcomes:
+ * permission-driven scenario does. Only native permission asks
+ * ({@code ACP_PERMISSION}) belong to this helper: the automatic REVIEW_REQUEST
+ * the Kanban mirror opens on completion is owned by the review flow and can
+ * appear in the same poll window, so it is deliberately left untouched.
+ * This helper waits for the FIRST of exactly two documented outcomes:
  *
  *  - a PENDING ask for this run exists: every ask is approved once through
  *    {@link decideApproval} (whose response is verified field by field, so an
@@ -563,7 +566,9 @@ export async function settleRunApproval(
     }
     const { data: approvals } = await apiCall(request, 'GET', '/approvals');
     const pending = (Array.isArray(approvals) ? approvals : []).filter(
-      (a: any) => a.status === 'PENDING' && a.runId === runId,
+      (a: any) => a.status === 'PENDING'
+        && a.runId === runId
+        && a.source === 'ACP_PERMISSION',
     );
     const next = pending.find((a: any) => !decided.has(a.id));
     if (next) {

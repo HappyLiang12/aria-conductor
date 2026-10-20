@@ -6,6 +6,7 @@ import WorkflowStepper from '../components/WorkflowStepper';
 import DelegationTree from '../components/DelegationTree';
 import ReviewQueue from '../components/ReviewQueue';
 import { useWebSocketContext } from '../components/Layout';
+import { apiErrorMessage } from '../api/operatorSession';
 import { formatTimestamp } from '../utils/formatTime';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import type { Run, Agent, SessionTrajectory } from '../types';
@@ -147,6 +148,7 @@ export default function ChatPage() {
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
   const [injectedByThread, setInjectedByThread] = useState<Record<string, ChatMessage[]>>({});
+  const [injectError, setInjectError] = useState<string | null>(null);
   const [readThreads, setReadThreads] = useState<Record<string, boolean>>({});
   const stackRef = useRef<HTMLDivElement | null>(null);
   // Submit lock: Ctrl+Enter spam must not fire duplicate inject POSTs.
@@ -292,14 +294,16 @@ export default function ChatPage() {
     void (async () => {
       try {
         await injectRunMessage(activeThread.id, text);
+        setInjectError(null);
         // Clear the optimistic message before refetching to avoid duplication
         setInjectedByThread((prev) => ({
           ...prev,
           [activeThread.id]: [],
         }));
         queryClient.invalidateQueries({ queryKey: ['run-trajectory', activeThread.id] });
-      } catch {
-        /* offline-friendly: keep local injection only */
+      } catch (err) {
+        // The optimistic bubble stays local; say plainly that it never reached the run.
+        setInjectError(apiErrorMessage(err, 'The message was not delivered to the run.'));
       } finally {
         injectingRef.current = false;
       }
@@ -426,6 +430,11 @@ export default function ChatPage() {
               })}
             </div>
 
+            {injectError && (
+              <div role="alert" className="error-state" style={{ marginBottom: 8 }}>
+                {injectError}
+              </div>
+            )}
             <div className="chat-compose">
               <div
                 style={{

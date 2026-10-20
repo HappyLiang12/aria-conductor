@@ -232,4 +232,41 @@ class AgentLoopEngineWaitingInputTest {
             assertThat(a.getReason()).isEqualTo("run cancelled");
         });
     }
+
+    @Test
+    void completeRunCancelledPersistsTheRecordedTerminationReason() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+        when(inputCoordinator.consumeTerminationReason(runId))
+                .thenReturn("Run deadline reached at 2026-10-20T12:00:00Z (aria.tasks.deadline-minutes)."
+                        + " Re-dispatch with a longer deadline or split the task.");
+
+        engine.completeRun(ctx, RunStatus.CANCELLED);
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getErrorMessage())
+                .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z (aria.tasks.deadline-minutes)."
+                        + " Re-dispatch with a longer deadline or split the task.");
+    }
+
+    @Test
+    void completeRunFailureWithoutAMessagePersistsAnHonestFallbackInsteadOfNull() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        ctx.addError(null);
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+
+        engine.completeRun(ctx, RunStatus.FAILED);
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getErrorMessage()).isEqualTo(
+                "Run failed without an error message; check the backend log for the failure details.");
+    }
 }

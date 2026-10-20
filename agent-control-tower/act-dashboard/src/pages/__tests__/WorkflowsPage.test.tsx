@@ -99,7 +99,10 @@ describe('WorkflowsPage delete confirmation (Task 10)', () => {
   });
 
   it('surfaces the failure when the confirmed delete is rejected', async () => {
-    mockDeleteWorkflow.mockRejectedValue(new Error('boom'));
+    // The backend's own refusal wording is surfaced, not the axios status line.
+    mockDeleteWorkflow.mockRejectedValue({
+      response: { data: { message: 'Workflow delete refused: an active run owns it' } },
+    });
 
     renderPage(<WorkflowsPage />);
     await clickDelete();
@@ -108,6 +111,7 @@ describe('WorkflowsPage delete confirmation (Task 10)', () => {
     // The dialog must never strand open on a rejection...
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     // ...and the failure must not be silent: the page's inline error banner shows it.
-    expect(await screen.findByRole('alert')).toHaveTextContent('Operation failed: boom');
+    expect(await screen.findByRole('alert'))
+      .toHaveTextContent('Workflow delete refused: an active run owns it');
   });
 });

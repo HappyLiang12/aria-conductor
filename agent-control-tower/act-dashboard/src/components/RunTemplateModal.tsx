@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { getKnowledgeYaml, instantiateWorkflowTemplate } from '../api/knowledge';
+import { apiErrorMessage } from '../api/operatorSession';
 import { extractTemplateParams } from '../utils/workflowTemplateParams';
 import type { KnowledgeItem } from '../types';
 
@@ -58,11 +59,8 @@ export default function RunTemplateModal({ item, onClose, onSuccess }: Props) {
       }
       await instantiateWorkflowTemplate(item.id, filtered);
       onSuccess();
-    } catch (e: any) {
-      const msg = typeof e?.response?.data === 'string'
-        ? e.response.data
-        : (e?.response?.data?.message || e?.message || 'Failed to instantiate');
-      setError(msg);
+    } catch (e: unknown) {
+      setError(apiErrorMessage(e, 'Failed to instantiate'));
     } finally {
       setSubmitting(false);
     }

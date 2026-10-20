@@ -89,12 +89,16 @@ describe('ScheduledJobsPage delete confirmation (Task 10)', () => {
   });
 
   it('clears the pending state and reports a deletion failure through the page toast', async () => {
-    mockDeleteJob.mockRejectedValue(new Error('boom'));
+    mockDeleteJob.mockRejectedValue({
+      response: { data: { message: 'Job is referenced by a running workflow.' } },
+    });
     ui();
     await clickDelete();
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Operation failed: boom');
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Job is referenced by a running workflow.',
+    );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(mockDeleteJob).toHaveBeenCalledTimes(1);
   });

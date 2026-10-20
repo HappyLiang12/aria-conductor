@@ -108,7 +108,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
         log.error("Data integrity violation", ex);
-        String message = "Data integrity violation";
+        String message = "Data integrity violation. Retry; if it persists, check the backend log.";
         if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
             String detail = ex.getMostSpecificCause().getMessage();
             message = "Data integrity violation: " + (detail != null ? detail : "no details");
@@ -119,7 +119,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(PersistenceException.class)
     public ResponseEntity<Map<String, Object>> handlePersistence(PersistenceException ex) {
         log.error("Persistence error", ex);
-        String message = "Database error";
+        String message = "Database error. Retry; if it persists, check the backend log.";
         if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
             Throwable cause = ex.getCause();
             String detail = cause != null ? cause.getMessage() : ex.getMessage();
@@ -137,7 +137,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneral(Exception ex) {
         log.error("Unhandled exception: {} - {}", ex.getClass().getSimpleName(), ex.getMessage(), ex);
-        String message = "An unexpected error occurred";
+        String message = "An unexpected error occurred. Check the backend log for the stack trace.";
         if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
             message = ex.getClass().getSimpleName() + ": " +
                       (ex.getMessage() != null ? ex.getMessage() : "no details");

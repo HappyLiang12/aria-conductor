@@ -27,6 +27,7 @@ import io.aria.conductor.execution.runtime.CoreExecutionService;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.approval.ApprovalDecision;
@@ -104,6 +105,7 @@ class AgentLoopEngineTaskPathTest {
     @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
     @Mock TaskDeadlineProperties taskDeadlineProperties;
+    @Mock RunInputCoordinator inputCoordinator;
     @Mock(name = "coreExecutionServiceProvider")
     org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
     /**
@@ -182,7 +184,7 @@ class AgentLoopEngineTaskPathTest {
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
                 null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                unlimitedAdmission(), null /* KanbanRepository */, null /* RunInputCoordinator */);
+                unlimitedAdmission(), null /* KanbanRepository */, inputCoordinator);
     }
 
     /**

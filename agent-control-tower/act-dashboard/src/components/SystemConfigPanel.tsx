@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listConfig, updateConfig, resetConfig, type SystemConfig } from '../api/systemConfig';
+import { apiErrorMessage } from '../api/operatorSession';
 
 /* ── category metadata ── */
 
@@ -107,7 +108,7 @@ export function SystemConfigPanel() {
       });
       pushToast(`Saved ${updated.configKey}`, 'success');
     },
-    onError: () => pushToast('Failed to save value', 'error'),
+    onError: (err: unknown) => pushToast(apiErrorMessage(err, 'Failed to save value'), 'error'),
   });
 
   const resetMutation = useMutation({
@@ -123,7 +124,7 @@ export function SystemConfigPanel() {
       });
       pushToast(`Reset ${updated.configKey}`, 'success');
     },
-    onError: () => pushToast('Failed to reset value', 'error'),
+    onError: (err: unknown) => pushToast(apiErrorMessage(err, 'Failed to reset value'), 'error'),
   });
 
   const currentVal = (key: string): string =>

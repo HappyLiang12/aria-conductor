@@ -30,6 +30,7 @@ import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.AgentToolResolver;
@@ -97,6 +98,7 @@ class AgentLoopEngineAdmissionTest {
     @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
     @Mock TaskDeadlineProperties taskDeadlineProperties;
+    @Mock RunInputCoordinator inputCoordinator;
     @Mock(name = "coreExecutionServiceProvider")
     org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
     /**
@@ -183,7 +185,7 @@ class AgentLoopEngineAdmissionTest {
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
                 null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                recordingQueue, null /* KanbanRepository */, null /* RunInputCoordinator */);
+                recordingQueue, null /* KanbanRepository */, inputCoordinator);
     }
 
     /** Stubs the post-admission run-loop plumbing both owned and not-owned runs walk through. */

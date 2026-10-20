@@ -48,7 +48,8 @@ class AgentExecutionPolicyTest {
                 WorkspaceMode.DIRECT, "C:/repo", null);
         assertThatThrownBy(() -> policy.normalize(request))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Unsupported agent core: langchain");
+                .hasMessage("Unsupported agent core: langchain. Supported cores: opencode, qoder."
+                        + " Select one in Configure > Runtime.");
     }
 
     @Test
@@ -80,7 +81,7 @@ class AgentExecutionPolicyTest {
         assertThatThrownBy(() -> policy().normalize(
                 new AgentExecutionSettings("", ExecutionMode.HOST, null, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(UNSUPPORTED_CORE);
+                .hasMessageStartingWith(UNSUPPORTED_CORE);
     }
 
     @Test
@@ -92,7 +93,8 @@ class AgentExecutionPolicyTest {
 
         assertThatThrownBy(() -> policy.normalize(new AgentExecutionSettings(null, null, null, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(UNSUPPORTED_CORE + "opencode");
+                .hasMessage(UNSUPPORTED_CORE + "opencode. Supported cores: qoder."
+                        + " Select one in Configure > Runtime.");
     }
 
     @Test
@@ -104,11 +106,13 @@ class AgentExecutionPolicyTest {
         assertThatThrownBy(() -> policy.normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.SANDBOX, null, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Unsupported execution mode: qoder/SANDBOX");
+                .hasMessage("Unsupported execution mode: qoder/SANDBOX. qoder supports: HOST."
+                        + " Select the fleet runtime in Configure > Runtime.");
         assertThatThrownBy(() -> policy.normalize(new AgentExecutionSettings(
                 "opencode", ExecutionMode.HOST, null, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Unsupported execution mode: opencode/HOST");
+                .hasMessage("Unsupported execution mode: opencode/HOST. opencode supports: SANDBOX."
+                        + " Select the fleet runtime in Configure > Runtime.");
     }
 
     @Test
@@ -116,11 +120,13 @@ class AgentExecutionPolicyTest {
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.HOST, WorkspaceMode.WORKTREE, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Worktree workspace requires a repository path");
+                .hasMessage("Worktree workspace requires a repository path."
+                        + " Edit the agent's workspace settings in Crew.");
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.HOST, WorkspaceMode.WORKTREE, "   ", "main")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Worktree workspace requires a repository path");
+                .hasMessage("Worktree workspace requires a repository path."
+                        + " Edit the agent's workspace settings in Crew.");
     }
 
     @Test
@@ -128,11 +134,13 @@ class AgentExecutionPolicyTest {
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.HOST, WorkspaceMode.DIRECT, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Direct workspace requires an explicitly selected directory");
+                .hasMessage("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.HOST, WorkspaceMode.DIRECT, "  ", null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Direct workspace requires an explicitly selected directory");
+                .hasMessage("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
     }
 
     @Test
@@ -150,15 +158,18 @@ class AgentExecutionPolicyTest {
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.HOST, WorkspaceMode.DIRECT, "C:/repo", "main")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Base ref applies only to a worktree workspace");
+                .hasMessage("Base ref applies only to a worktree workspace."
+                        + " Edit the agent's workspace settings in Crew.");
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 null, ExecutionMode.SANDBOX, null, null, "main")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Base ref requires a worktree workspace");
+                .hasMessage("Base ref requires a worktree workspace."
+                        + " Edit the agent's workspace settings in Crew.");
         assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
                 "qoder", ExecutionMode.HOST, WorkspaceMode.WORKTREE, "C:/repo", "   ")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Worktree base ref must not be blank");
+                .hasMessage("Worktree base ref must not be blank."
+                        + " Edit the agent's workspace settings in Crew.");
     }
 
     @Test

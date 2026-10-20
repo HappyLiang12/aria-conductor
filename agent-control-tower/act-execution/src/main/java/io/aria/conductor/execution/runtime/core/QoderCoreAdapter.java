@@ -343,7 +343,9 @@ public final class QoderCoreAdapter implements CoreAdapter {
         if (!Files.isRegularFile(path)) {
             throw new IllegalStateException("The Qoder bridge launch requires an existing file for " + property
                     + ", but the configured value does not resolve to one: " + configured + " (resolved: "
-                    + path + ")");
+                    + path + "). Build the committed bridge with"
+                    + " `pnpm --dir packages/qoder-acp-bridge build`, or leave the property unset to use"
+                    + " the default path, then re-dispatch the run.");
         }
         return path.toString();
     }

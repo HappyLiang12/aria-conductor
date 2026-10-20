@@ -51,7 +51,10 @@ public class CoreCredentialService {
         String coreId = coreIdOf(credentialRef);
         CoreCredential row = credentials.findById(coreId)
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Runtime credential is not configured: " + credentialRef));
+                        "Qoder runtime credential is not configured (" + credentialRef + ")."
+                                + " Save a Qoder personal access token in Configure > LLM Providers"
+                                + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
+                                + " then re-dispatch the run."));
         return new SecretBundle(credentialRef, Map.of(row.getEnvironmentVariable(), row.getValue()));
     }
 

@@ -45,8 +45,10 @@ public class CircuitBreaker {
 
         // Max iterations check
         if (ctx.getIterationCount() >= maxIterations) {
-            String msg = String.format("Max iterations reached: %d/%d", ctx.getIterationCount(),
-                    maxIterations);
+            String msg = String.format("Max iterations reached: %d/%d."
+                    + " Raise circuit.breaker.max.iterations in Configure > System Config,"
+                    + " or split the task into smaller runs.",
+                    ctx.getIterationCount(), maxIterations);
             log.error("Circuit breaker tripped: {}", msg);
             throw new BudgetExceededException(msg);
         }
@@ -55,7 +57,9 @@ public class CircuitBreaker {
         if (!ctx.getErrors().isEmpty() && ctx.getIterationCount() > 0) {
             double errorRate = (double) ctx.getErrors().size() / ctx.getIterationCount();
             if (errorRate > errorRateThreshold) {
-                String msg = String.format("Error rate exceeded: %.2f > %.2f (errors=%d, iterations=%d)",
+                String msg = String.format("Error rate exceeded: %.2f > %.2f (errors=%d, iterations=%d)."
+                        + " Review the failing steps; raise circuit.breaker.error.rate.threshold"
+                        + " in Configure > System Config if the failures are expected.",
                         errorRate, errorRateThreshold,
                         ctx.getErrors().size(), ctx.getIterationCount());
                 log.error("Circuit breaker tripped: {}", msg);
@@ -69,8 +73,9 @@ public class CircuitBreaker {
         long iterationElapsedMs = Math.max(0L,
                 Duration.between(ctx.getIterationStartTime(), Instant.now()).toMillis() - ctx.getBlockedWaitMillis());
         if (iterationElapsedMs > maxIterationLatencyMs) {
-            String msg = String.format("Max iteration latency exceeded: %dms > %dms", iterationElapsedMs,
-                    maxIterationLatencyMs);
+            String msg = String.format("Max iteration latency exceeded: %dms > %dms."
+                    + " Raise circuit.breaker.max.iteration.latency.ms in Configure > System Config.",
+                    iterationElapsedMs, maxIterationLatencyMs);
             log.error("Circuit breaker tripped: {}", msg);
             throw new BudgetExceededException(msg);
         }
@@ -79,8 +84,9 @@ public class CircuitBreaker {
         // approval wait). Defaults well above the approval window so legitimate HITL runs survive.
         long totalElapsedMs = Duration.between(ctx.getStartTime(), Instant.now()).toMillis();
         if (totalElapsedMs > maxRunDurationMs) {
-            String msg = String.format("Max total run duration exceeded: %dms > %dms", totalElapsedMs,
-                    maxRunDurationMs);
+            String msg = String.format("Max total run duration exceeded: %dms > %dms."
+                    + " Raise circuit.breaker.max.run.duration.ms in Configure > System Config,"
+                    + " or split the task into smaller runs.", totalElapsedMs, maxRunDurationMs);
             log.error("Circuit breaker tripped: {}", msg);
             throw new BudgetExceededException(msg);
         }

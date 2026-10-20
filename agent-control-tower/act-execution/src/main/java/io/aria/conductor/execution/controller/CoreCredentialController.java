@@ -154,7 +154,9 @@ public class CoreCredentialController {
         }
         if (!configured) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(Map.of("error", "Qoder runtime credential is not configured"));
+                    .body(Map.of("error", "Qoder runtime credential is not configured."
+                            + " Save one in Configure > LLM Providers > Qoder runtime credential,"
+                            + " then test again."));
         }
         if (probe == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(

@@ -131,13 +131,13 @@ public class KnowledgeController {
      * not server errors.
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<String> handleIllegalArgument(IllegalArgumentException e) {
-        return ResponseEntity.badRequest().body(e.getMessage());
+    public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException e) {
+        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
     }
 
     /** State errors from template instantiation (e.g. template/version state mismatch). */
     @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<String> handleIllegalState(IllegalStateException e) {
-        return ResponseEntity.badRequest().body(e.getMessage());
+    public ResponseEntity<Map<String, String>> handleIllegalState(IllegalStateException e) {
+        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
     }
 }

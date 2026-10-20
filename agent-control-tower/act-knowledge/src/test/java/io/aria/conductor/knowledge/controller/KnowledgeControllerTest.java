@@ -578,7 +578,8 @@ class KnowledgeControllerTest extends WebMvcTestBase {
         mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
                         .contentType("application/json")
                         .content("{\"parameters\":{}}"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Cannot resolve agent for YAML step: role='ba'"));
     }
 
     @Test

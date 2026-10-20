@@ -107,7 +107,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
     },
-    onError: () => setError('Action rejected — please retry.'),
+    onError: (err: unknown) => setError(apiErrorMessage(err, 'Request changes failed — the card is unchanged.')),
   });
 
   const resolve = (args: { ask: Approval; approved: boolean; answer?: string }) => {
@@ -204,8 +204,9 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       {error && <div className="kanban-form-error">{error}</div>}
       {operatorRejected && (
         <div className="ask-ctx">
-          Approvals are operator-only — establish the operator session (Providers page, Operator
-          access) and retry. Nothing was decided by the refused call.
+          Approvals are operator-only. On this machine, loopback requests are the operator
+          automatically — reload the page and retry. From a remote machine, set
+          ARIA_OPERATOR_BEARER_TOKEN and reload. Nothing was decided by the refused call.
         </div>
       )}
     </div>
@@ -297,7 +298,7 @@ export function ShortApprovalView({
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
       setError(null);
     },
-    onError: () => setError('Action rejected — the card is unchanged.'),
+    onError: (err: unknown) => setError(apiErrorMessage(err, 'Move failed — the card is unchanged.')),
   });
 
   // Task 7: the linked run's outcome drives both the chip and the copy — a

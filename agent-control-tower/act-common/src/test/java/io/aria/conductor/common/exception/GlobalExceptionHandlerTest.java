@@ -37,7 +37,8 @@ class GlobalExceptionHandlerTest {
         ResponseEntity<Map<String, Object>> response = handler.handleGeneral(ex);
 
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
-        assertEquals("An unexpected error occurred", response.getBody().get("message"));
+        assertEquals("An unexpected error occurred. Check the backend log for the stack trace.",
+                response.getBody().get("message"));
     }
 
     @Test
@@ -47,7 +48,8 @@ class GlobalExceptionHandlerTest {
         Map<String, Object> body = response.getBody();
         assertEquals(500, body.get("status"));
         assertEquals("Internal Server Error", body.get("error"));
-        assertEquals("An unexpected error occurred", body.get("message"));
+        assertEquals("An unexpected error occurred. Check the backend log for the stack trace.",
+                body.get("message"));
         //noinspection DataFlowIssue
         assertEquals(true, body.containsKey("timestamp"));
     }

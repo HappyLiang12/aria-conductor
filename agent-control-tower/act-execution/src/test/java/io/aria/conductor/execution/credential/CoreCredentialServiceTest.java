@@ -49,10 +49,13 @@ class CoreCredentialServiceTest {
     }
 
     @Test
-    void resolveOfMissingCredentialFailsAdmissionLoudly() {
+    void resolveOfMissingCredentialFailsAdmissionLoudlyWithTheProvisioningPath() {
         assertThatThrownBy(() -> service.resolve("qoder:operator"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Runtime credential is not configured: qoder:operator");
+                .hasMessage("Qoder runtime credential is not configured (qoder:operator)."
+                        + " Save a Qoder personal access token in Configure > LLM Providers"
+                        + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
+                        + " then re-dispatch the run.");
     }
 
     @Test

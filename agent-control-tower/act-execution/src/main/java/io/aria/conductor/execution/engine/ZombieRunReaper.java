@@ -61,7 +61,8 @@ public class ZombieRunReaper {
             log.warn("Reaping zombie run: id={}, status={}, lastActivity={}, threshold={}min",
                     current.getId(), current.getStatus(), lastActivity, timeoutMinutes);
             current.setStatus(RunStatus.FAILED);
-            current.setErrorMessage("Zombie run reaped: no active execution context, last activity " + lastActivity);
+            current.setErrorMessage("Zombie run reaped: no active execution context, last activity " + lastActivity
+                    + ". Re-dispatch the run; if this recurs, check the backend log for a stalled core.");
             current.setCompletedAt(Instant.now());
             runRepository.save(current);
 
@@ -70,7 +71,8 @@ public class ZombieRunReaper {
             // chains/boards stuck in RUNNING.
             try {
                 eventPublisher.publishEvent(new RunCompletedEvent(
-                        this, current.getId(), current.getAgentId(), RunStatus.FAILED, null));
+                        this, current.getId(), current.getAgentId(), RunStatus.FAILED, null,
+                        current.getErrorMessage()));
             } catch (Exception e) {
                 log.warn("Failed to publish RunCompletedEvent for reaped run {}: {}", current.getId(), e.getMessage());
             }

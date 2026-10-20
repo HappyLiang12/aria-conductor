@@ -36,6 +36,18 @@ class NotificationTriggerListenerTest {
     }
 
     @Test
+    void onRunCompleted_withFailedStatusCarriesTheFailureReason() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.FAILED, null,
+                "Qoder runtime credential is not configured (qoder:operator). Save one in Configure."));
+        verify(notificationService).create("run.failed", "Run failed",
+                "Run " + runId + " finished with status FAILED."
+                        + " Reason: Qoder runtime credential is not configured (qoder:operator)."
+                        + " Save one in Configure.",
+                "RUN", runId.toString());
+    }
+
+    @Test
     void onApprovalRequested() {
         UUID approvalId = UUID.randomUUID();
         listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, UUID.randomUUID(), UUID.randomUUID()));

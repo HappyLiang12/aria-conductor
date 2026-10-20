@@ -11,6 +11,7 @@ import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
+import { RunErrorNotice } from './ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
@@ -403,7 +404,7 @@ export function TaskDrawer() {
                             marginTop: 8,
                           }}
                         >
-                          {linkedRun.errorMessage}
+                          <RunErrorNotice message={linkedRun.errorMessage} />
                         </div>
                       )}
                       {linkedRun.finalOutput && (

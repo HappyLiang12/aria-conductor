@@ -47,6 +47,7 @@ import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
@@ -118,6 +119,7 @@ class AgentLoopEngineCoreDispatchTest {
     @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
     @Mock TaskDeadlineProperties taskDeadlineProperties;
+    @Mock RunInputCoordinator inputCoordinator;
     /**
      * No coordinator is deployed in this unit wiring: the run must fail before any
      * coordinated execution is attempted (the engine's {@code runCoordinator()} then
@@ -225,7 +227,7 @@ class AgentLoopEngineCoreDispatchTest {
                 knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
                 approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
                 null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                unlimitedAdmission(), null /* KanbanRepository */, null /* RunInputCoordinator */);
+                unlimitedAdmission(), null /* KanbanRepository */, inputCoordinator);
     }
 
     /**
@@ -266,7 +268,8 @@ class AgentLoopEngineCoreDispatchTest {
 
         await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.FAILED);
         assertThat(run.getErrorMessage())
-                .isEqualTo("Direct workspace requires an explicitly selected directory");
+                .isEqualTo("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
         assertProviderPathNotTaken();
     }
 

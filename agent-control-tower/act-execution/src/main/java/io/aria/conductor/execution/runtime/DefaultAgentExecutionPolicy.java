@@ -48,9 +48,13 @@ public final class DefaultAgentExecutionPolicy implements AgentExecutionPolicy {
                 ? DEFAULT_EXECUTION_MODE : requested.executionMode();
 
         if (!catalog.coreIds().contains(coreId))
-            throw new IllegalArgumentException("Unsupported agent core: " + coreId);
+            throw new IllegalArgumentException("Unsupported agent core: " + coreId
+                    + ". Supported cores: " + supportedCores()
+                    + ". Select one in Configure > Runtime.");
         if (!catalog.supports(coreId, executionMode))
-            throw new IllegalArgumentException("Unsupported execution mode: " + coreId + "/" + executionMode);
+            throw new IllegalArgumentException("Unsupported execution mode: " + coreId + "/" + executionMode
+                    + ". " + coreId + " supports: " + supportedModes(coreId)
+                    + ". Select the fleet runtime in Configure > Runtime.");
 
         // An explicit mode is never discarded: it is validated against the path.
         // Worktree is only the applied default, it is not inferred as a replacement.
@@ -62,24 +66,39 @@ public final class DefaultAgentExecutionPolicy implements AgentExecutionPolicy {
                 requested.workspacePath(), requested.workspaceBaseRef());
     }
 
+    private String supportedCores() {
+        return catalog.coreIds().stream().sorted()
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    private String supportedModes(String coreId) {
+        return catalog.modesFor(coreId).stream().map(Enum::name).sorted()
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
     private static void validateWorkspace(WorkspaceMode workspaceMode, String workspacePath, String workspaceBaseRef) {
         if (workspaceMode == null) {
             // No repository binding (e.g. an operator chat using an owned scratch workspace).
             if (workspaceBaseRef != null)
-                throw new IllegalArgumentException("Base ref requires a worktree workspace");
+                throw new IllegalArgumentException("Base ref requires a worktree workspace."
+                        + " Edit the agent's workspace settings in Crew.");
             return;
         }
         boolean hasDirectory = workspacePath != null && !workspacePath.isBlank();
         if (workspaceMode == WorkspaceMode.DIRECT) {
             if (!hasDirectory)
-                throw new IllegalArgumentException("Direct workspace requires an explicitly selected directory");
+                throw new IllegalArgumentException("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
             if (workspaceBaseRef != null)
-                throw new IllegalArgumentException("Base ref applies only to a worktree workspace");
+                throw new IllegalArgumentException("Base ref applies only to a worktree workspace."
+                        + " Edit the agent's workspace settings in Crew.");
             return;
         }
         if (!hasDirectory)
-            throw new IllegalArgumentException("Worktree workspace requires a repository path");
+            throw new IllegalArgumentException("Worktree workspace requires a repository path."
+                    + " Edit the agent's workspace settings in Crew.");
         if (workspaceBaseRef != null && workspaceBaseRef.isBlank())
-            throw new IllegalArgumentException("Worktree base ref must not be blank");
+            throw new IllegalArgumentException("Worktree base ref must not be blank."
+                    + " Edit the agent's workspace settings in Crew.");
     }
 }

@@ -159,16 +159,20 @@ describe('KnowledgePage promote confirmation (#UI audit Task 10)', () => {
     expect(updateKnowledge).not.toHaveBeenCalled();
   });
 
-  it('surfaces a failure message instead of failing silently', async () => {
+  it('surfaces the backend rejection instead of failing silently', async () => {
     mockApprovedLibrary();
-    vi.mocked(updateKnowledge).mockRejectedValueOnce(new Error('boom'));
+    vi.mocked(updateKnowledge).mockRejectedValueOnce({
+      response: { data: { message: 'Promote denied: the item is already in review.' } },
+    });
     ui();
     await selectApprovedItem();
 
     fireEvent.click(screen.getByRole('button', { name: /Promote/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(await screen.findByText('Promote failed. Please retry.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Promote denied: the item is already in review.'),
+    ).toBeInTheDocument();
     expect(updateKnowledge).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml, resubmitApproval } from '../api/workflows';
 import { listRuns } from '../api/runs';
 import { listAgents } from '../api/agents';
+import { apiErrorMessage } from '../api/operatorSession';
 import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import TemplatesPanel from '../components/TemplatesPanel';
@@ -239,16 +240,19 @@ export function WorkflowsPage() {
   const cancelMutation = useMutation({
     mutationFn: (id: string) => cancelWorkflow(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Cancel failed.')),
   });
 
   const retryMutation = useMutation({
     mutationFn: ({ id, stepIndex }: { id: string; stepIndex: number }) => retryWorkflow(id, stepIndex),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Retry step failed.')),
   });
 
   const resubmitMutation = useMutation({
     mutationFn: (id: string) => resubmitApproval(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Resubmit failed.')),
   });
 
   const deleteMutation = useMutation({
@@ -265,7 +269,7 @@ export function WorkflowsPage() {
     // rendered in this page's existing inline error banner.
     onError: (err: unknown) => {
       setDeletingId(null);
-      setDeleteError(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`);
+      setDeleteError(apiErrorMessage(err, 'Operation failed.'));
     },
   });
 
@@ -275,11 +279,13 @@ export function WorkflowsPage() {
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       setSelectedIds([]);
     },
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Merge failed.')),
   });
 
   const executeYamlMutation = useMutation({
     mutationFn: (yamlContent: string) => executeYaml(yamlContent),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'YAML execution failed.')),
   });
 
   // Real-time invalidation on workflow.* or run.* WS events

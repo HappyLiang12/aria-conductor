@@ -74,7 +74,9 @@ class SystemConfigControllerTest {
         when(service.getByKey("nope")).thenThrow(new IllegalArgumentException("Unknown config key: nope"));
 
         mockMvc.perform(get("/api/v1/system-config/nope"))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Unknown system config key: nope."
+                        + " The key must exist before it can be read."));
     }
 
     @Test
@@ -94,7 +96,8 @@ class SystemConfigControllerTest {
         mockMvc.perform(put("/api/v1/system-config/my.key")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("value", ""))))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("A value is required for system config key: my.key."));
     }
 
     @Test

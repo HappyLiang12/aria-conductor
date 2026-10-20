@@ -7,6 +7,8 @@ import { useWebSocketContext } from '../components/Layout';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import { StatusBadge } from '../components/StatusBadge';
 import { RuntimeBadge } from '../components/RuntimeBadge';
+import { RunErrorNotice, ErrorNotice } from '../components/ErrorNotice';
+import { presentError, type PresentedError } from '../api/errorPresentation';
 import type { CreateRunRequest, RunStatus, SessionTrajectory, ToolCall } from '../types';
 
 export function RunsPage() {
@@ -17,6 +19,7 @@ export function RunsPage() {
   const [filterAgent, setFilterAgent] = useState<string>('');
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<PresentedError | null>(null);
 
   const [form, setForm] = useState<CreateRunRequest>({ agentId: '', promptSeed: '', maxIterations: 10 });
 
@@ -37,22 +40,27 @@ export function RunsPage() {
       setShowForm(false);
       setForm({ agentId: '', promptSeed: '', maxIterations: 10 });
       setFormErrors({});
+      setActionError(null);
     },
+    onError: (err: unknown) => setActionError(presentError(err, 'The run could not be started.')),
   });
 
   const cancelMutation = useMutation({
     mutationFn: cancelRun,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onError: (err: unknown) => setActionError(presentError(err, 'The cancel request was refused.')),
   });
 
   const pauseMutation = useMutation({
     mutationFn: pauseRun,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onError: (err: unknown) => setActionError(presentError(err, 'The pause request was refused.')),
   });
 
   const resumeMutation = useMutation({
     mutationFn: resumeRun,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onError: (err: unknown) => setActionError(presentError(err, 'The resume request was refused.')),
   });
 
   useEffect(() => {
@@ -111,6 +119,12 @@ export function RunsPage() {
           {showForm ? 'Cancel' : '+ Start Run'}
         </button>
       </div>
+
+      {actionError && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorNotice presented={actionError} />
+        </div>
+      )}
 
       {/* Filters */}
       <div className="filter-bar">
@@ -276,7 +290,10 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
             <div className="detail-info-item"><span>Status</span><StatusBadge status={run.status} /></div>
             <div className="detail-info-item"><span>Tokens Used</span><strong>{run.totalTokensUsed.toLocaleString()}</strong></div>
             {run.errorMessage && (
-              <div className="detail-info-item error-detail"><span>Error</span><span className="error-text">{run.errorMessage}</span></div>
+              <div className="detail-info-item error-detail" style={{ display: 'block' }}>
+                <span>Error</span>
+                <RunErrorNotice message={run.errorMessage} />
+              </div>
             )}
           </div>
         </div>

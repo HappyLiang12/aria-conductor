@@ -251,11 +251,13 @@ public class AgentService {
                 .collect(Collectors.toSet());
         if (runtimes.size() > 1) {
             throw new IllegalStateException(
-                    "The fleet runtime is mixed; converge it first via PUT /api/v1/agents/runtime");
+                    "The fleet runtime is mixed; converge it first in Configure > Runtime"
+                            + " (API: PUT /api/v1/agents/runtime).");
         }
         if (!runtimes.isEmpty() && !runtimes.contains(incoming)) {
             throw new IllegalStateException("Runtime mixing is not allowed: the fleet runs "
-                    + runtimes.iterator().next() + "; use PUT /api/v1/agents/runtime to change it fleet-wide");
+                    + runtimes.iterator().next()
+                    + "; change it fleet-wide in Configure > Runtime (API: PUT /api/v1/agents/runtime).");
         }
     }
 

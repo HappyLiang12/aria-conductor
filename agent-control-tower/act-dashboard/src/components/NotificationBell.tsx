@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useWebSocketContext } from './Layout';
 import { getUnreadCount, listNotifications, markRead, markAllRead } from '../api/ariaNotifications';
 import { composeSynthesis } from '../api/ariaConversations';
+import { apiErrorMessage } from '../api/operatorSession';
 import type { Notification } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { formatTimestamp } from '../utils/formatTime';
@@ -13,6 +14,7 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -43,19 +45,25 @@ export function NotificationBell() {
   const handleMarkRead = async (id: string) => {
     try {
       await markRead(id);
+      setActionError(null);
       setUnreadCount(prev => Math.max(0, prev - 1));
       setNotifications(prev =>
         prev.map(n => n.id === id ? { ...n, isRead: true } : n)
       );
-    } catch { /* silent */ }
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'The notification could not be marked read.'));
+    }
   };
 
   const handleMarkAllRead = async () => {
     try {
       await markAllRead();
+      setActionError(null);
       setUnreadCount(0);
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-    } catch { /* silent */ }
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'Notifications could not be marked read.'));
+    }
   };
 
   const getNavRoute = (notification: Notification): string | null =>
@@ -90,8 +98,11 @@ export function NotificationBell() {
       if (!notification.isRead) {
         await handleMarkRead(notification.id);
       }
+      setActionError(null);
       window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt } }));
-    } catch { /* silent — same contract as markRead */ }
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'The synthesis prompt could not be composed.'));
+    }
   };
 
   const typeEmoji: Record<string, string> = {
@@ -157,6 +168,11 @@ export function NotificationBell() {
             </button>
           </div>
           <div className="notif-dropdown-list" aria-live="polite">
+            {actionError && (
+              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
+                {actionError}
+              </div>
+            )}
             {loading ? (
               <div className="notif-empty">Loading…</div>
             ) : error ? (

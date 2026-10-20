@@ -131,4 +131,17 @@ class RunInputCoordinatorTest {
 
         assertThat(future.get(1, TimeUnit.SECONDS).finalizeRequested()).isTrue();
     }
+
+    @Test
+    void aTerminationReasonSurvivesTheBareIntentRecordedRightAfterAndIsConsumedOnce() {
+        // The deadline records its reason, then the verified-stop path records the
+        // bare intent; the second call must not erase the reason the engine persists.
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.");
+        coordinator.recordTerminationIntent(runId);
+
+        assertThat(coordinator.consumeTerminationReason(runId))
+                .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
+        assertThat(coordinator.consumeTerminationReason(runId)).isNull();
+    }
 }

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listTools, getAgentTools, assignAgentTool, unassignAgentTool,
@@ -6,6 +6,7 @@ import {
   getRoleDefaults, setAgentTools, setAgentSkills,
 } from '../api/agents';
 import { listSkills } from '../api/skills';
+import { apiErrorMessage } from '../api/operatorSession';
 import type { Agent } from '../types';
 
 /**
@@ -23,6 +24,7 @@ interface Props {
 
 export function ManageToolsDialog({ agent, onClose }: Props) {
   const qc = useQueryClient();
+  const [actionError, setActionError] = useState<string | null>(null);
   const open = !!agent;
   const agentId = agent?.id ?? '';
 
@@ -60,26 +62,33 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
   );
 
   const invalidate = () => {
+    setActionError(null);
     qc.invalidateQueries({ queryKey: ['agent-tools', agentId] });
     qc.invalidateQueries({ queryKey: ['agent-skills', agentId] });
     qc.invalidateQueries({ queryKey: ['agents'] });
   };
 
+  const fail = (err: unknown) => setActionError(apiErrorMessage(err, 'The capability change was refused.'));
+
   const assignMut = useMutation({
     mutationFn: (toolId: string) => assignAgentTool(agentId, toolId),
     onSuccess: invalidate,
+    onError: fail,
   });
   const unassignMut = useMutation({
     mutationFn: (toolId: string) => unassignAgentTool(agentId, toolId),
     onSuccess: invalidate,
+    onError: fail,
   });
   const assignSkillMut = useMutation({
     mutationFn: (skillId: string) => assignAgentSkill(agentId, skillId),
     onSuccess: invalidate,
+    onError: fail,
   });
   const unassignSkillMut = useMutation({
     mutationFn: (skillId: string) => unassignAgentSkill(agentId, skillId),
     onSuccess: invalidate,
+    onError: fail,
   });
   const applyDefaultsMut = useMutation({
     mutationFn: async () => {
@@ -90,6 +99,7 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
       ]);
     },
     onSuccess: invalidate,
+    onError: fail,
   });
 
   const busy = assignMut.isPending || unassignMut.isPending
@@ -118,6 +128,11 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
       >
         <h3>Capabilities{agent ? ` · ${agent.name}` : ''}</h3>
         <p>Choose the tools and skills this agent may use. Only APPROVED + enabled items are listed.</p>
+        {actionError && (
+          <div role="alert" style={{ color: 'var(--red)', fontSize: 12, margin: '4px 0' }}>
+            {actionError}
+          </div>
+        )}
         <div style={{ fontSize: 12.5, fontWeight: 600, margin: '4px 0' }}>Tools</div>
         <div style={{ maxHeight: 240, overflowY: 'auto', margin: '4px 0' }}>
           {(allTools ?? []).length === 0 && (

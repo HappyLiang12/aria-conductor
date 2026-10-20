@@ -21,9 +21,13 @@ public class NotificationTriggerListener {
             case FAILED -> "Run failed";
             default -> "Run finished with status: " + event.getStatus();
         };
+        String body = "Run " + event.getRunId() + " finished with status " + event.getStatus() + ".";
+        if (event.getErrorMessage() != null && !event.getErrorMessage().isBlank()) {
+            body += " Reason: " + event.getErrorMessage();
+        }
         notificationService.create("run." + event.getStatus().name().toLowerCase().replace("_", "."),
                 title,
-                "Run " + event.getRunId() + " finished with status " + event.getStatus() + ".",
+                body,
                 "RUN", event.getRunId().toString());
     }
 

@@ -650,7 +650,8 @@ public class AgentLoopEngine {
                     settleOrphanedClarificationAsks(run.getId());
                 }
                 eventPublisher.publishEvent(new RunCompletedEvent(
-                        this, run.getId(), run.getAgentId(), RunStatus.FAILED, null));
+                        this, run.getId(), run.getAgentId(), RunStatus.FAILED, null,
+                        run.getErrorMessage()));
             } catch (Exception e) {
                 log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
             }
@@ -1921,6 +1922,30 @@ public class AgentLoopEngine {
     }
 
     /**
+     * The operator-facing reason persisted with a settling run: the joined turn
+     * errors, else the recorded termination reason (e.g. the run deadline), else
+     * an honest fallback for a failure that carried no message. Null entries are
+     * filtered so the dashboard never renders the literal "null".
+     */
+    private String completionError(RunContext ctx, RunStatus finalStatus) {
+        String joined = ctx.getErrors().stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::trim)
+                .filter(text -> !text.isEmpty())
+                .collect(java.util.stream.Collectors.joining("; "));
+        String terminationReason = inputCoordinator.consumeTerminationReason(ctx.getRunId());
+        if (!joined.isEmpty()) {
+            return joined;
+        }
+        if (terminationReason != null && !terminationReason.isBlank()) {
+            return terminationReason;
+        }
+        return finalStatus == RunStatus.FAILED
+                ? "Run failed without an error message; check the backend log for the failure details."
+                : "";
+    }
+
+    /**
      * Completes the run — updates DB entities and clears state.
      * Note: @Transactional omitted because this is a self-invocation from within the same class.
      * Each repository.save() call runs in its own transaction, which is acceptable here.
@@ -1928,6 +1953,8 @@ public class AgentLoopEngine {
     protected void completeRun(RunContext ctx, RunStatus finalStatus) {
         log.info("Completing run: runId={}, status={}, iterations={}, tokens={}",
                 ctx.getRunId(), finalStatus, ctx.getIterationCount(), ctx.getTotalTokensUsed());
+
+        String completionError = completionError(ctx, finalStatus);
 
         // Tracks whether an external actor (e.g. RunService.cancelRun) already moved this run to a
         // terminal state AND published its RunCompletedEvent. In that case we must neither overwrite
@@ -1956,8 +1983,8 @@ public class AgentLoopEngine {
                 run.setIterationCount(ctx.getIterationCount());
                 run.setTotalTokensUsed(ctx.getTotalTokensUsed());
                 run.setCompletedAt(Instant.now());
-                if (!ctx.getErrors().isEmpty()) {
-                    run.setErrorMessage(String.join("; ", ctx.getErrors()));
+                if (!completionError.isEmpty()) {
+                    run.setErrorMessage(completionError);
                 }
                 // Store the final output (last assistant response)
                 if (ctx.getLastAssistantResponse() != null) {
@@ -1989,7 +2016,9 @@ public class AgentLoopEngine {
         if (!alreadyTerminatedExternally.get()) {
             try {
                 eventPublisher.publishEvent(new RunCompletedEvent(
-                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus, ctx.getLastAssistantResponse()));
+                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus,
+                        ctx.getLastAssistantResponse(),
+                        completionError.isEmpty() ? null : completionError));
             } catch (Exception e) {
                 log.warn("Failed to publish run completed event: {}", e.getMessage());
             }

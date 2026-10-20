@@ -238,10 +238,10 @@ describe('ShortApprovalView', () => {
     mockedTransition.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(item);
     renderPanel(<ShortApprovalView item={item} />);
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
-    expect(await screen.findByText('Action rejected — the card is unchanged.')).toBeInTheDocument();
+    expect(await screen.findByText('Move failed — the card is unchanged.')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
     await waitFor(() =>
-      expect(screen.queryByText('Action rejected — the card is unchanged.')).not.toBeInTheDocument(),
+      expect(screen.queryByText('Move failed — the card is unchanged.')).not.toBeInTheDocument(),
     );
   });
 });

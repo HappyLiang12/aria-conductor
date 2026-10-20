@@ -10,6 +10,7 @@ import {
   reportHtmlUrl,
 } from '../api/reports';
 import { useWebSocketContext } from '../components/Layout';
+import { apiErrorMessage } from '../api/operatorSession';
 import { ReportContentViewer } from '../components/ReportContentViewer';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -162,6 +163,10 @@ export function ReportsPage() {
       queryClient.invalidateQueries({ queryKey: ['reports'] });
       queryClient.invalidateQueries({ queryKey: ['report-html'] });
     },
+    onError: (err: unknown) => {
+      setCopyToast(apiErrorMessage(err, 'Regeneration failed.'));
+      setTimeout(() => setCopyToast(null), 2800);
+    },
   });
 
   const archiveMutation = useMutation({
@@ -172,13 +177,13 @@ export function ReportsPage() {
       // Task 10: the confirmed archive is done — drop the pending confirmation.
       setConfirmingArchive(false);
     },
-    onError: () => {
+    onError: (err: unknown) => {
       // The confirmed action is over (it failed) — never leave the confirmation
       // stuck open. Failures reuse the toolbar notice this page already renders
       // (no second toast); the state name predates this use.
       setConfirmingArchive(false);
-      setCopyToast('Archive failed. Please retry.');
-      setTimeout(() => setCopyToast(null), 1800);
+      setCopyToast(apiErrorMessage(err, 'Archive failed. Please retry.'));
+      setTimeout(() => setCopyToast(null), 2800);
     },
   });
 
@@ -558,7 +563,8 @@ export function ReportsPage() {
                   data scope, and run evidence.
                   {amendMutation.isError && (
                     <span style={{ color: '#ff8d99', marginLeft: 8 }}>
-                      · Amendment failed. Check LLM provider configuration.
+                      · {apiErrorMessage(amendMutation.error,
+                        'Amendment failed. Check LLM provider configuration.')}
                     </span>
                   )}
                 </div>

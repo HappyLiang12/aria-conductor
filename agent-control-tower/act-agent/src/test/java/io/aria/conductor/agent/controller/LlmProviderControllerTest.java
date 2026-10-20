@@ -170,6 +170,7 @@ class LlmProviderControllerTest extends WebMvcTestBase {
         mvc.perform(post("/api/v1/llm-providers/" + id + "/test"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.message").value("Connection failed"));
+                .andExpect(jsonPath("$.message").value("Connection failed. Check the provider's base URL"
+                        + " and API key in Configure > LLM Providers."));
     }
 }

@@ -1092,6 +1092,11 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                         log.error("Run {}: expiring the pending native asks at the deadline failed: {}",
                                 runId, e.getMessage());
                     }
+                    // The run settles as CANCELLED; without this reason the dashboard
+                    // would show a cancellation with no explanation.
+                    inputs.recordTerminationIntent(runId, "Run deadline reached at " + deadline
+                            + " (aria.tasks.deadline-minutes). Re-dispatch with a longer deadline"
+                            + " or split the task.");
                     cancel(runId);
                 }
             } catch (RuntimeException e) {

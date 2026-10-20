@@ -43,6 +43,13 @@ public class RunInputCoordinator {
      */
     private final Set<UUID> terminationIntent = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Why the run is being terminated (e.g. the run deadline), consumed once by
+     * the engine's completion path. The verified-stop hook records the intent
+     * without a reason for an operator cancel, so an absent entry is expected.
+     */
+    private final Map<UUID, String> terminationReasons = new ConcurrentHashMap<>();
+
     public RunInputCoordinator(ApplicationEventPublisher eventPublisher) {
         this.eventPublisher = eventPublisher;
     }
@@ -103,11 +110,29 @@ public class RunInputCoordinator {
      * {@link #requestInput} cannot be missed in favor of a stranded intent.
      */
     public void recordTerminationIntent(UUID runId) {
+        recordTerminationIntent(runId, null);
+    }
+
+    /**
+     * Records a sticky termination intent together with the operator-facing
+     * reason the run should carry when it settles. An existing reason is kept:
+     * the deadline records first, then the verified-stop path records the bare
+     * intent, and the reason must survive that second call.
+     */
+    public void recordTerminationIntent(UUID runId, String reason) {
+        if (reason != null && !reason.isBlank()) {
+            terminationReasons.putIfAbsent(runId, reason);
+        }
         PendingInput waiting = pending.remove(runId);
         if (waiting != null) {
             waiting.future().complete(new OperatorInput(null, true));
             return;
         }
         terminationIntent.add(runId);
+    }
+
+    /** Consumes the recorded termination reason; null when the run ended without one. */
+    public String consumeTerminationReason(UUID runId) {
+        return terminationReasons.remove(runId);
     }
 }

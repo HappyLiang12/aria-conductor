@@ -8,6 +8,7 @@ import {
   getKnowledgeYaml,
 } from '../api/knowledge';
 import { listAgents } from '../api/agents';
+import { apiErrorMessage } from '../api/operatorSession';
 import { useWebSocketContext } from '../components/Layout';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -151,7 +152,7 @@ export function KnowledgePage() {
       setConfirmReview(null);
     },
     onError: (err) =>
-      setToast(`Review failed: ${(err as Error)?.message || 'Unknown error'}`),
+      setToast(apiErrorMessage(err, 'Review failed.')),
   });
 
   const batchMut = useMutation({
@@ -165,7 +166,7 @@ export function KnowledgePage() {
       setConfirmReview(null);
     },
     onError: (err) =>
-      setToast(`Review failed: ${(err as Error)?.message || 'Unknown error'}`),
+      setToast(apiErrorMessage(err, 'Review failed.')),
   });
 
   const createMut = useMutation({
@@ -177,7 +178,7 @@ export function KnowledgePage() {
       setFormError(null);
       setToast('Knowledge submitted for review');
     },
-    onError: () => setFormError('Submission failed. Please retry.'),
+    onError: (err: unknown) => setFormError(apiErrorMessage(err, 'Submission failed.')),
   });
 
   // realtime
@@ -293,7 +294,7 @@ export function KnowledgePage() {
     setConfirmingPromote(false);
     updateKnowledge(target.id, { status: 'PROMOTED' })
       .then(() => queryClient.invalidateQueries({ queryKey: ['knowledge'] }))
-      .catch(() => setToast('Promote failed. Please retry.'))
+      .catch((err) => setToast(apiErrorMessage(err, 'Promote failed.')))
       .finally(() => setConfirmingPromote(false));
   };
 

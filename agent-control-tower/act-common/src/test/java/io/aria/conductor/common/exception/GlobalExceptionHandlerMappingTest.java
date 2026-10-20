@@ -66,7 +66,9 @@ class GlobalExceptionHandlerMappingTest {
     void handleBudgetExceeded_maps429() {
         var response = handler.handleBudgetExceeded(new BudgetExceededException(150, 100));
         assertStandardBody(response, HttpStatus.TOO_MANY_REQUESTS);
-        assertThat(response.getBody().get("message")).isEqualTo("Token budget exceeded: used 150, limit 100");
+        assertThat(response.getBody().get("message")).isEqualTo("Token budget exceeded: used 150, limit 100."
+                + " Raise circuit.breaker.max.tokens.per.run in Configure > System Config,"
+                + " or split the task into smaller runs.");
     }
 
     @Test
@@ -158,7 +160,8 @@ class GlobalExceptionHandlerMappingTest {
         var response = handler.handleDataIntegrity(
                 new DataIntegrityViolationException("boom", new RuntimeException("unique violation")));
         assertStandardBody(response, HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody().get("message")).isEqualTo("Data integrity violation");
+        assertThat(response.getBody().get("message"))
+                .isEqualTo("Data integrity violation. Retry; if it persists, check the backend log.");
     }
 
     @Test
@@ -173,7 +176,7 @@ class GlobalExceptionHandlerMappingTest {
     void handlePersistence_nonH2_maps500Generic() {
         var response = handler.handlePersistence(new PersistenceException("failure", new RuntimeException("sql error")));
         assertStandardBody(response, HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody().get("message")).isEqualTo("Database error");
+        assertThat(response.getBody().get("message")).isEqualTo("Database error. Retry; if it persists, check the backend log.");
     }
 
     @Test
@@ -194,7 +197,8 @@ class GlobalExceptionHandlerMappingTest {
     void handleGeneral_nonH2_returnsOpaqueMessage() {
         var response = handler.handleGeneral(new RuntimeException("secret detail"));
         assertStandardBody(response, HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody().get("message")).isEqualTo("An unexpected error occurred");
+        assertThat(response.getBody().get("message"))
+                .isEqualTo("An unexpected error occurred. Check the backend log for the stack trace.");
     }
 
     @Test

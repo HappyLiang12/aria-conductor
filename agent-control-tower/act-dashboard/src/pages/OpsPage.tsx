@@ -8,6 +8,8 @@ import {
 import { listApprovals, approveApproval, rejectApproval } from '../api/approvals';
 import { listAgents } from '../api/agents';
 import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import { ErrorNotice } from '../components/ErrorNotice';
 import {
   NativePermissionFacts,
   NativePermissionKindPill,
@@ -254,6 +256,11 @@ export default function OpsPage() {
   const runs = (runsQ.data ?? []).slice().sort((a, b) =>
     new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   ).slice(0, 14);
+  // Panels that silently degrade to empty must say so instead of showing a
+  // healthy-looking surface built from missing data.
+  const degradedPanels = [runsQ, agentsQ, summaryQ, activityQ]
+    .filter((q) => q.isError)
+    .map((q) => presentError(q.error, 'A dashboard query failed.').text);
 
   return (
     <div className="view-zone" data-view="ops" style={{ display: 'block', padding: '16px' }}>
@@ -296,6 +303,13 @@ export default function OpsPage() {
         </div>
       </div>
 
+      {/* ---------- Degraded panels: name what could not be loaded ---------- */}
+      {degradedPanels.length > 0 && (
+        <div className="error-state" role="alert" style={{ marginBottom: 12 }}>
+          {Array.from(new Set(degradedPanels)).join(' ')}
+        </div>
+      )}
+
       {/* ---------- 2-column ops grid (wide left, narrow right) ---------- */}
       <HousekeepingPanel />
       <div
@@ -328,9 +342,11 @@ export default function OpsPage() {
               <div className="body" style={{ color: 'var(--text-dim)' }}>Loading queue…</div>
             )}
             {pendingQ.isError && (
-              <div className="body" style={{ color: '#ff97a3' }}>Failed to load approvals.</div>
+              <div className="body">
+                <ErrorNotice presented={presentError(pendingQ.error, 'Failed to load approvals.')} />
+              </div>
             )}
-            {!pendingQ.isLoading && pending.length === 0 && (
+            {!pendingQ.isLoading && !pendingQ.isError && pending.length === 0 && (
               <div
                 className="body"
                 style={{

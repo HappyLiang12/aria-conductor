@@ -94,10 +94,14 @@ public class RunService {
         Agent agent = agentService.findAgentOrThrow(request.getAgentId());
 
         if (agent.getHealthStatus() == HealthStatus.RETIRED) {
-            throw new IllegalArgumentException("Cannot create run for retired agent: " + agent.getId());
+            throw new IllegalArgumentException("Cannot create run for a retired agent ("
+                    + agent.getId() + "). Retired agents cannot take new runs;"
+                    + " create a new agent in Crew and dispatch to it.");
         }
         if (agent.getHealthStatus() == HealthStatus.UNHEALTHY) {
-            throw new IllegalArgumentException("Cannot create run for unhealthy agent: " + agent.getId());
+            throw new IllegalArgumentException("Cannot create run for an unhealthy agent ("
+                    + agent.getId() + "). Check the agent's configuration in Crew;"
+                    + " unhealthy agents are excluded from dispatch until their health is repaired.");
         }
 
         log.info("Creating run for agent: agentId={}, prompt={}", request.getAgentId(),

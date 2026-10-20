@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { streamMessage } from '../api/aria';
 import type { StreamError } from '../api/aria';
 import { listApprovals } from '../api/approvals';
-import { isOperatorRejection } from '../api/operatorSession';
+import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
 import { cancelRun } from '../api/runs';
 import type { AriaMessage } from '../types';
 import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
@@ -203,6 +203,7 @@ export function AriaPanel() {
   const lastSentSkillIdRef = useRef<string | undefined>(undefined); // retry must re-attach the skill directive
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const stackRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -245,9 +246,11 @@ export function AriaPanel() {
           setConversationId(fresh);
           console.log(`[Aria] New conversation: ${fresh}`);
         }
-      } catch {
-        // Backend unavailable — start fresh locally
+      } catch (err) {
+        // Backend unavailable — start fresh locally, but say the history was not loaded.
         if (!cancelled) {
+          setHistoryError(apiErrorMessage(err,
+            'Conversation history unavailable — starting a new conversation.'));
           setConversationId(crypto.randomUUID());
         }
       } finally {
@@ -537,7 +540,19 @@ export function AriaPanel() {
     // M1: cancel the server-side run so it stops consuming tokens (best-effort; runId
     // is known once the first `thinking` event arrives).
     if (activeRunIdRef.current) {
-      cancelRun(activeRunIdRef.current).catch(() => {});
+      cancelRun(activeRunIdRef.current).catch((err) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: 'The server-side cancel could not be confirmed: '
+              + apiErrorMessage(err, 'unknown error'),
+            timestamp: new Date().toISOString(),
+            error: true,
+          },
+        ]);
+      });
     }
     setBusy(false);
     setActiveTool(null);
@@ -697,6 +712,12 @@ export function AriaPanel() {
                   I can brief you on agents, runs, approvals, and the knowledge
                   base — and I can act on what you ask.
                 </div>
+              </div>
+            )}
+
+            {historyError && (
+              <div role="alert" style={{ margin: '8px 12px', color: '#ff8d99', fontSize: 11.5 }}>
+                {historyError}
               </div>
             )}
 

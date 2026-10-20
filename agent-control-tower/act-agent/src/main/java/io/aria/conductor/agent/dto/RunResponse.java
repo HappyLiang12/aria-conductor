@@ -23,6 +23,9 @@ public class RunResponse {
     private long totalTokensUsed;
     private int iterationCount;
     private String errorMessage;
+    /** Stable identity and repair surface of an actionable failure (null otherwise). */
+    private String errorCode;
+    private String errorSurface;
     private String finalOutput;
     /**
      * The frozen runtime of the run (Fleet Runtime Governance): the core and

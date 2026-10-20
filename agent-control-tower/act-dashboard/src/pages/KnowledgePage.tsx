@@ -9,6 +9,8 @@ import {
 } from '../api/knowledge';
 import { listAgents } from '../api/agents';
 import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from '../components/ErrorNotice';
 import { useWebSocketContext } from '../components/Layout';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -104,7 +106,7 @@ export function KnowledgePage() {
   const { lastMessage } = useWebSocketContext();
 
   // queries
-  const { data: itemsRaw, isLoading: loadingItems } = useQuery({
+  const { data: itemsRaw, isLoading: loadingItems, error: itemsError } = useQuery({
     queryKey: ['knowledge'],
     queryFn: () => listKnowledge(),
   });
@@ -318,6 +320,12 @@ export function KnowledgePage() {
         </div>
       </div>
 
+      {itemsError && (
+        <div style={{ marginBottom: 16 }}>
+          <ErrorNotice presented={presentError(itemsError, 'Failed to load the knowledge library.')} />
+        </div>
+      )}
+
       {/* ---------- 1. Promotion Path ---------- */}
       <section className="panel" style={{ marginBottom: 16 }}>
         <h2>
@@ -467,7 +475,7 @@ export function KnowledgePage() {
               {loadingItems && (
                 <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: '12px 0' }}>Loading…</div>
               )}
-              {!loadingItems && visiblePending.length === 0 && (
+              {!loadingItems && !itemsError && visiblePending.length === 0 && (
                 <div
                   style={{
                     color: 'var(--text-mute)',
@@ -587,7 +595,7 @@ export function KnowledgePage() {
 
           <div className="kb-layout">
             <div className="unified-list">
-              {filteredApproved.length === 0 && (
+              {!itemsError && filteredApproved.length === 0 && (
                 <div
                   style={{
                     color: 'var(--text-mute)',

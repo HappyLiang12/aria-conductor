@@ -221,7 +221,9 @@ class CoreCredentialControllerTest extends WebMvcTestBase {
     @Test
     void testWithoutCredentialIsConflict() throws Exception {
         mvc.perform(post("/api/v1/cores/qoder/credential/test").with(loopback()))
-                .andExpect(status().isConflict());
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("RUNTIME_CREDENTIAL_NOT_CONFIGURED"))
+                .andExpect(jsonPath("$.surface").value("LLM_PROVIDERS"));
         verifyNoInteractions(probe);
     }
 

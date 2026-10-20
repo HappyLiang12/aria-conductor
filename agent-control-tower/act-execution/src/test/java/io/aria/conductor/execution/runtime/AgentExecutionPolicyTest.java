@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.runtime;
 
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -128,6 +130,30 @@ class AgentExecutionPolicyTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Worktree workspace requires a repository path."
                         + " Edit the agent's workspace settings in Crew.");
+    }
+
+    @Test
+    void refusalsCarryTheStableRepairIdentity() {
+        assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
+                "langchain", ExecutionMode.HOST, null, null, null)))
+                .isInstanceOfSatisfying(ActionableIllegalArgumentException.class, e -> {
+                    assertThat(e.code()).isEqualTo("UNSUPPORTED_AGENT_CORE");
+                    assertThat(e.surface()).isEqualTo(ErrorSurface.RUNTIME);
+                });
+        assertThatThrownBy(() -> new DefaultAgentExecutionPolicy(new CoreCatalog(Map.of(
+                "qoder", Set.of(ExecutionMode.HOST))))
+                .normalize(new AgentExecutionSettings(
+                        "qoder", ExecutionMode.SANDBOX, null, null, null)))
+                .isInstanceOfSatisfying(ActionableIllegalArgumentException.class, e -> {
+                    assertThat(e.code()).isEqualTo("UNSUPPORTED_EXECUTION_MODE");
+                    assertThat(e.surface()).isEqualTo(ErrorSurface.RUNTIME);
+                });
+        assertThatThrownBy(() -> policy().normalize(new AgentExecutionSettings(
+                "qoder", ExecutionMode.HOST, WorkspaceMode.WORKTREE, null, null)))
+                .isInstanceOfSatisfying(ActionableIllegalArgumentException.class, e -> {
+                    assertThat(e.code()).isEqualTo("WORKSPACE_REPOSITORY_REQUIRED");
+                    assertThat(e.surface()).isEqualTo(ErrorSurface.CREW);
+                });
     }
 
     @Test

@@ -15,6 +15,9 @@ public class RunCompletedEvent extends ApplicationEvent {
     private final String finalOutput;
     /** Operator-facing failure reason; null when the run did not fail with one. */
     private final String errorMessage;
+    /** Stable identity and repair surface of the failure (null when it has none). */
+    private final String errorCode;
+    private final String errorSurface;
 
     public RunCompletedEvent(Object source, UUID runId, UUID agentId, RunStatus status) {
         this(source, runId, agentId, status, null, null);
@@ -26,11 +29,19 @@ public class RunCompletedEvent extends ApplicationEvent {
 
     public RunCompletedEvent(Object source, UUID runId, UUID agentId, RunStatus status,
                              String finalOutput, String errorMessage) {
+        this(source, runId, agentId, status, finalOutput, errorMessage, null, null);
+    }
+
+    public RunCompletedEvent(Object source, UUID runId, UUID agentId, RunStatus status,
+                             String finalOutput, String errorMessage,
+                             String errorCode, String errorSurface) {
         super(source);
         this.runId = runId;
         this.agentId = agentId;
         this.status = status;
         this.finalOutput = finalOutput;
         this.errorMessage = errorMessage;
+        this.errorCode = errorCode;
+        this.errorSurface = errorSurface;
     }
 }

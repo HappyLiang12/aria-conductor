@@ -9,6 +9,8 @@ import io.aria.conductor.agent.dto.UpdateAgentRequest;
 import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.event.AgentCreatedEvent;
+import io.aria.conductor.common.exception.ActionableIllegalStateException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentTool;
@@ -250,14 +252,17 @@ public class AgentService {
                         + "/" + (a.getExecutionMode() != null ? a.getExecutionMode() : ExecutionMode.SANDBOX))
                 .collect(Collectors.toSet());
         if (runtimes.size() > 1) {
-            throw new IllegalStateException(
+            throw new ActionableIllegalStateException(
                     "The fleet runtime is mixed; converge it first in Configure > Runtime"
-                            + " (API: PUT /api/v1/agents/runtime).");
+                            + " (API: PUT /api/v1/agents/runtime).",
+                    "FLEET_RUNTIME_MIXED", ErrorSurface.RUNTIME);
         }
         if (!runtimes.isEmpty() && !runtimes.contains(incoming)) {
-            throw new IllegalStateException("Runtime mixing is not allowed: the fleet runs "
+            throw new ActionableIllegalStateException(
+                    "Runtime mixing is not allowed: the fleet runs "
                     + runtimes.iterator().next()
-                    + "; change it fleet-wide in Configure > Runtime (API: PUT /api/v1/agents/runtime).");
+                    + "; change it fleet-wide in Configure > Runtime (API: PUT /api/v1/agents/runtime).",
+                    "FLEET_RUNTIME_MIXING_NOT_ALLOWED", ErrorSurface.RUNTIME);
         }
     }
 

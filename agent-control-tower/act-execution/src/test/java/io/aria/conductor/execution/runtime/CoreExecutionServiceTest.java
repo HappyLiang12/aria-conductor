@@ -781,7 +781,7 @@ class CoreExecutionServiceTest {
         ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler();
         service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
                 new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
-                CLOCK, Duration.ofMinutes(5), scheduler);
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, taskDeadlines);
         // The frozen deadline elapses while the prompt is in flight: the timer target fires now.
         session.duringPrompt = scheduler::fireDeadline;
 
@@ -801,6 +801,15 @@ class CoreExecutionServiceTest {
         // The task was armed from the injected clock and the frozen deadline, then cancelled in the finally.
         assertThat(scheduler.delayMillis).isEqualTo(Duration.ofMinutes(45).toMillis());
         assertThat(scheduler.cancelled).isTrue();
+        // The deadline is recorded with its repair identity so the settling run can
+        // tell the operator which System Config key to change.
+        RunInputCoordinator.TerminationFailure deadlineFailure = coordinator.consumeTerminationFailure(RUN);
+        assertThat(deadlineFailure).isNotNull();
+        assertThat(deadlineFailure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(deadlineFailure.surface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(deadlineFailure.message())
+                .contains("Run deadline reached at")
+                .contains("aria.tasks.deadline-minutes in Configure > System Config");
     }
 
     @Test

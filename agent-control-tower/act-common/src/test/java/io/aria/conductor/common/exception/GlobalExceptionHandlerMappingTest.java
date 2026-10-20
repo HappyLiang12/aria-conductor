@@ -72,6 +72,33 @@ class GlobalExceptionHandlerMappingTest {
     }
 
     @Test
+    void handleBudgetExceeded_reportsTheSystemConfigRepairSurface() {
+        var response = handler.handleBudgetExceeded(new BudgetExceededException(150, 100));
+
+        assertThat(response.getBody())
+                .containsEntry("code", "TOKEN_BUDGET_EXCEEDED")
+                .containsEntry("surface", "SYSTEM_CONFIG");
+    }
+
+    @Test
+    void actionableIllegalArgument_carriesCodeAndSurface() {
+        var response = handler.handleBadRequest(new ActionableIllegalArgumentException(
+                "A workspace repository is required.", "WORKSPACE_REPOSITORY_REQUIRED", ErrorSurface.CREW));
+
+        assertStandardBody(response, HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody())
+                .containsEntry("code", "WORKSPACE_REPOSITORY_REQUIRED")
+                .containsEntry("surface", "CREW");
+    }
+
+    @Test
+    void plainIllegalArgument_carriesNoRepairIdentity() {
+        var response = handler.handleBadRequest(new IllegalArgumentException("bad input"));
+
+        assertThat(response.getBody()).doesNotContainKeys("code", "surface");
+    }
+
+    @Test
     void handleApprovalTimeout_maps408() {
         UUID id = UUID.randomUUID();
         var response = handler.handleApprovalTimeout(new ApprovalTimeoutException(id));

@@ -205,8 +205,9 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       {operatorRejected && (
         <div className="ask-ctx">
           Approvals are operator-only. On this machine, loopback requests are the operator
-          automatically — reload the page and retry. From a remote machine, set
-          ARIA_OPERATOR_BEARER_TOKEN and reload. Nothing was decided by the refused call.
+          automatically — reload the page and retry. From a remote machine, the operator who
+          runs the backend must grant access (the server's operator credential); the dashboard
+          has no remote token entry. Nothing was decided by the refused call.
         </div>
       )}
     </div>

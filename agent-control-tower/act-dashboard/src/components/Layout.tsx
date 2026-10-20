@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TopBar } from './TopBar';
 import { RailNav } from './RailNav';
 import { AriaPanel } from './AriaPanel';
@@ -17,7 +17,7 @@ interface WebSocketContextType {
   subscribe: (handler: (e: WsEvent) => void) => WsSubscription;
 }
 
-const WebSocketContext = createContext<WebSocketContextType>({
+export const WebSocketContext = createContext<WebSocketContextType>({
   lastMessage: null,
   isConnected: false,
   subscribe: () => ({ unsubscribe: () => {} }),
@@ -41,7 +41,7 @@ export function useWebSocketContext() {
  * A dropped live feed is otherwise invisible: timers keep polling but nothing
  * streams. Show it after a short grace period so a connect blip never flashes.
  */
-function ConnectionBanner() {
+export function ConnectionBanner() {
   const { isConnected } = useWebSocketContext();
   const [paused, setPaused] = useState(false);
 
@@ -71,11 +71,39 @@ function ConnectionBanner() {
   );
 }
 
+/**
+ * Keep the rail's sticky offset in sync with the header stack, which grows when
+ * the connection banner shows or the top bar wraps on narrow viewports.
+ */
+function useTopStackHeight(ref: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const apply = () => root.style.setProperty('--top-stack-h', `${el.offsetHeight}px`);
+    apply();
+    if (typeof ResizeObserver === 'undefined') {
+      return () => root.style.removeProperty('--top-stack-h');
+    }
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty('--top-stack-h');
+    };
+  }, [ref]);
+}
+
 export function Layout() {
+  const stackRef = useRef<HTMLDivElement>(null);
+  useTopStackHeight(stackRef);
+
   return (
     <DrawerProvider>
-      <TopBar />
-      <ConnectionBanner />
+      <div className="top-stack" ref={stackRef}>
+        <TopBar />
+        <ConnectionBanner />
+      </div>
       <div className="app-shell">
         <RailNav />
         <main className="content">

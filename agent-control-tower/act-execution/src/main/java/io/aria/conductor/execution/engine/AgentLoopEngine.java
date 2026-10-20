@@ -78,6 +78,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 /**
  * Agent loop engine — orchestrates the iterative agent execution cycle.
@@ -490,7 +491,7 @@ public class AgentLoopEngine {
             completeRun(ctx, result.cancelled() ? RunStatus.CANCELLED : RunStatus.COMPLETED);
         } catch (Exception e) {
             log.error("Coordinated core run failed: runId={}", ctx.getRunId(), e);
-            ctx.addError(e.getMessage());
+            ctx.addError(e);
             String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
             tryEmit(emitter, "done", donePayload(ctx, errMsg));
             tryEmit(emitter, "error", Map.of("message", errMsg));
@@ -651,7 +652,7 @@ public class AgentLoopEngine {
                 }
                 eventPublisher.publishEvent(new RunCompletedEvent(
                         this, run.getId(), run.getAgentId(), RunStatus.FAILED, null,
-                        run.getErrorMessage()));
+                        run.getErrorMessage(), run.getErrorCode(), run.getErrorSurface()));
             } catch (Exception e) {
                 log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
             }
@@ -1085,7 +1086,7 @@ public class AgentLoopEngine {
             completeRun(ctx, finalStatus);
         } catch (BudgetExceededException e) {
             log.error("Circuit breaker tripped for run {}: {}", ctx.getRunId(), e.getMessage());
-            ctx.addError(e.getMessage());
+            ctx.addError(e);
             tryEmit(emitter, "done", donePayload(ctx, e.getMessage()));
             tryEmit(emitter, "error", Map.of("message", e.getMessage() != null ? e.getMessage() : "Budget exceeded"));
             completeRun(ctx, RunStatus.FAILED);
@@ -1097,7 +1098,7 @@ public class AgentLoopEngine {
             completeRun(ctx, RunStatus.CANCELLED);
         } catch (Exception e) {
             log.error("Run loop error: runId={}", ctx.getRunId(), e);
-            ctx.addError(e.getMessage());
+            ctx.addError(e);
             String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
             tryEmit(emitter, "done", donePayload(ctx, errMsg));
             tryEmit(emitter, "error", Map.of("message", errMsg));
@@ -1165,8 +1166,7 @@ public class AgentLoopEngine {
             completeRun(ctx, finalStatus);
         } catch (BudgetExceededException e) {
             log.error("Circuit breaker tripped for task run {}: {}", ctx.getRunId(), e.getMessage());
-            handleTaskFailure(ctx, e.getMessage() != null ? e.getMessage() : "Budget exceeded",
-                    RunStatus.FAILED, emitter);
+            handleTaskFailure(ctx, e, RunStatus.FAILED, emitter);
         } catch (TaskExecutionException e) {
             handleTaskExecutionFailure(ctx, e, provider, emitter);
         } catch (InterruptedException e) {
@@ -1174,8 +1174,7 @@ public class AgentLoopEngine {
             handleTaskFailure(ctx, "Task interrupted: " + e.getMessage(), RunStatus.CANCELLED, emitter);
         } catch (Exception e) {
             log.error("Task path unexpected failure: runId={}", ctx.getRunId(), e);
-            handleTaskFailure(ctx, e.getMessage() != null ? e.getMessage() : "Unknown task error",
-                    RunStatus.FAILED, emitter);
+            handleTaskFailure(ctx, e, RunStatus.FAILED, emitter);
         }
     }
 
@@ -1347,6 +1346,17 @@ public class AgentLoopEngine {
         ctx.addError(message);
         tryEmit(emitter, "done", donePayload(ctx, message));
         tryEmit(emitter, "error", Map.of("message", message != null ? message : "Unknown error"));
+        completeRun(ctx, status);
+    }
+
+    /** Failure handler that preserves an actionable failure's code/surface. */
+    private void handleTaskFailure(RunContext ctx, Throwable failure, RunStatus status,
+                                   @Nullable SseEmitter emitter) {
+        String message = failure.getMessage() != null ? failure.getMessage() : "Unknown error";
+        log.error("Task path failure: runId={}, status={}, message={}", ctx.getRunId(), status, message);
+        ctx.addError(failure);
+        tryEmit(emitter, "done", donePayload(ctx, message));
+        tryEmit(emitter, "error", Map.of("message", message));
         completeRun(ctx, status);
     }
 
@@ -1660,7 +1670,7 @@ public class AgentLoopEngine {
             throw e; // let the loop handler deal with it
         } catch (Exception e) {
             log.error("Iteration {} failed: runId={}", iteration, ctx.getRunId(), e);
-            ctx.addError("Iteration " + iteration + " failed: " + e.getMessage());
+            ctx.addError("Iteration " + iteration + " failed: ", e);
             throw e;
         }
     }
@@ -1921,28 +1931,50 @@ public class AgentLoopEngine {
         }
     }
 
+    /** The reason persisted/published with a settling run, plus its repair identity. */
+    record CompletionFailure(String message, String code, String surface) {
+    }
+
+    /** The persisted column is VARCHAR(2000); leave room for the truncation marker. */
+    private static final int MAX_PERSISTED_ERROR_LENGTH = 2000;
+
     /**
      * The operator-facing reason persisted with a settling run: the joined turn
      * errors, else the recorded termination reason (e.g. the run deadline), else
      * an honest fallback for a failure that carried no message. Null entries are
-     * filtered so the dashboard never renders the literal "null".
+     * filtered so the dashboard never renders the literal "null", and an
+     * oversized join is bounded so persisting it can never fail the completion.
      */
-    private String completionError(RunContext ctx, RunStatus finalStatus) {
+    private CompletionFailure completionError(RunContext ctx, RunStatus finalStatus) {
         String joined = ctx.getErrors().stream()
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(text -> !text.isEmpty())
-                .collect(java.util.stream.Collectors.joining("; "));
-        String terminationReason = inputCoordinator.consumeTerminationReason(ctx.getRunId());
+                .collect(Collectors.joining("; "));
         if (!joined.isEmpty()) {
-            return joined;
+            return new CompletionFailure(boundedError(joined), ctx.getErrorCode(), ctx.getErrorSurface());
         }
-        if (terminationReason != null && !terminationReason.isBlank()) {
-            return terminationReason;
+        RunInputCoordinator.TerminationFailure termination =
+                inputCoordinator.consumeTerminationFailure(ctx.getRunId());
+        if (termination != null && termination.message() != null && !termination.message().isBlank()) {
+            return new CompletionFailure(boundedError(termination.message()),
+                    termination.code(), termination.surface());
         }
-        return finalStatus == RunStatus.FAILED
+        return new CompletionFailure(finalStatus == RunStatus.FAILED
                 ? "Run failed without an error message; check the backend log for the failure details."
-                : "";
+                : "", null, null);
+    }
+
+    static String boundedError(String message) {
+        if (message == null) {
+            return "";
+        }
+        if (message.length() <= 1900) {
+            return message;
+        }
+        int keep = 1850;
+        return message.substring(0, keep) + "... [truncated, "
+                + (message.length() - keep) + " more characters]";
     }
 
     /**
@@ -1954,7 +1986,7 @@ public class AgentLoopEngine {
         log.info("Completing run: runId={}, status={}, iterations={}, tokens={}",
                 ctx.getRunId(), finalStatus, ctx.getIterationCount(), ctx.getTotalTokensUsed());
 
-        String completionError = completionError(ctx, finalStatus);
+        CompletionFailure completionError = completionError(ctx, finalStatus);
 
         // Tracks whether an external actor (e.g. RunService.cancelRun) already moved this run to a
         // terminal state AND published its RunCompletedEvent. In that case we must neither overwrite
@@ -1983,8 +2015,10 @@ public class AgentLoopEngine {
                 run.setIterationCount(ctx.getIterationCount());
                 run.setTotalTokensUsed(ctx.getTotalTokensUsed());
                 run.setCompletedAt(Instant.now());
-                if (!completionError.isEmpty()) {
-                    run.setErrorMessage(completionError);
+                if (!completionError.message().isEmpty()) {
+                    run.setErrorMessage(completionError.message());
+                    run.setErrorCode(completionError.code());
+                    run.setErrorSurface(completionError.surface());
                 }
                 // Store the final output (last assistant response)
                 if (ctx.getLastAssistantResponse() != null) {
@@ -2018,7 +2052,8 @@ public class AgentLoopEngine {
                 eventPublisher.publishEvent(new RunCompletedEvent(
                         this, ctx.getRunId(), ctx.getAgentId(), finalStatus,
                         ctx.getLastAssistantResponse(),
-                        completionError.isEmpty() ? null : completionError));
+                        completionError.message().isEmpty() ? null : completionError.message(),
+                        completionError.code(), completionError.surface()));
             } catch (Exception e) {
                 log.warn("Failed to publish run completed event: {}", e.getMessage());
             }

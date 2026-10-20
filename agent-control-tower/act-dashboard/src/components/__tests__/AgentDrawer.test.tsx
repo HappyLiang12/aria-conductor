@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactElement } from 'react';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { AgentDrawer } from '../AgentDrawer';
 import { listRuns, getRunProgress } from '../../api/runs';
 import type { RunProgressEntry } from '../../api/runs';
@@ -59,23 +60,25 @@ vi.mock('../DrawerContext', () => ({
   }),
 }));
 
+function drawerTree(qc: QueryClient) {
+  return (
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <AgentDrawer />
+      </QueryClientProvider>
+    </MemoryRouter>
+  );
+}
+
 function ui() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const utils = render(
-    <QueryClientProvider client={qc}>
-      <AgentDrawer />
-    </QueryClientProvider>,
-  );
+  const utils = render(drawerTree(qc));
   return { ...utils, qc };
 }
 
 /** Re-render against the SAME QueryClient (react-query cache must persist). */
 function rerenderDrawer(rerender: (ui: ReactElement) => void, qc: QueryClient) {
-  rerender(
-    <QueryClientProvider client={qc}>
-      <AgentDrawer />
-    </QueryClientProvider>,
-  );
+  rerender(drawerTree(qc));
 }
 
 function push(event: WsEvent) {
@@ -105,11 +108,7 @@ describe('AgentDrawer live stream (S2)', () => {
         },
         timestamp: '2026-08-29T06:00:00Z',
       });
-      rerender(
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          <AgentDrawer />
-        </QueryClientProvider>,
-      );
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
     });
 
     // S2 contract: the parsed thinking must reach the screen (previously dropped).
@@ -129,7 +128,7 @@ describe('AgentDrawer live stream (S2)', () => {
           payload: { agentId: 'a-1', iteration: i, thinking: `line ${i}` },
           timestamp: `2026-08-29T06:00:${String(i % 60).padStart(2, '0')}Z`,
         });
-        rerender(<QueryClientProvider client={qc}><AgentDrawer /></QueryClientProvider>);
+        rerender(drawerTree(qc));
       }
     });
 
@@ -144,13 +143,13 @@ describe('AgentDrawer live stream (S2)', () => {
 
     act(() => {
       push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'THINKING', content: 'pump thinking line', seq: 1 }, timestamp: '2026-08-29T06:00:00Z' });
-      rerender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><AgentDrawer /></QueryClientProvider>);
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
     });
     expect(screen.getByText(/pump thinking line/)).toBeInTheDocument();
 
     act(() => {
       push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'TOOL_CALL', content: '', toolName: 'bash', seq: 2 }, timestamp: '2026-08-29T06:00:01Z' });
-      rerender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><AgentDrawer /></QueryClientProvider>);
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
     });
     expect(screen.getAllByText(/bash/).length).toBeGreaterThan(0);
 
@@ -158,7 +157,7 @@ describe('AgentDrawer live stream (S2)', () => {
     const linesBefore = container.querySelectorAll('.stream .ln').length;
     act(() => {
       push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'TOOL_CALL', content: '', toolName: 'bash', seq: 2 }, timestamp: '2026-08-29T06:00:02Z' });
-      rerender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><AgentDrawer /></QueryClientProvider>);
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
     });
     expect(container.querySelectorAll('.stream .ln').length).toBe(linesBefore);
   });
@@ -169,7 +168,7 @@ describe('AgentDrawer live stream (S2)', () => {
 
     const toggle = screen.getByRole('button', { name: /collapse/i });
     act(() => { fireEvent.click(toggle); });
-    rerender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><AgentDrawer /></QueryClientProvider>);
+    rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
 
     const stream = container.querySelector('.stream');
     expect(stream).not.toBeNull();

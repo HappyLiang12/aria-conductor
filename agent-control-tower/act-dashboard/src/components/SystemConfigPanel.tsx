@@ -43,6 +43,13 @@ const CATEGORIES: CategoryDef[] = [
   },
   {
     icon: '⚙️',
+    title: 'Execution',
+    keys: [
+      { key: 'aria.tasks.deadline-minutes', label: 'Run Deadline', min: 1, max: 1440, step: 1, unit: 'min' },
+    ],
+  },
+  {
+    icon: '⚙️',
     title: 'ADK Runtime',
     keys: [
       { key: 'adk.health.check.interval.ms', label: 'Health Check Interval', min: 5000, max: 300_000, step: 1000, unit: 'ms' },

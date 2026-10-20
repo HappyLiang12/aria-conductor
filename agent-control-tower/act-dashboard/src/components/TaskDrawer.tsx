@@ -7,6 +7,9 @@ import {
 } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
+import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from './ErrorNotice';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -193,11 +196,11 @@ export function TaskDrawer() {
 
   const validTransitions = item ? TRANSITIONS[item.status] : [];
 
-  // GlobalExceptionHandler puts the human reason in `message` and the HTTP
-  // phrase in `error` (e.g. "Bad Request"); prefer the reason when present.
-  const errData = (transitionMutation.error as { response?: { data?: { message?: string; error?: string } } } | null)
-    ?.response?.data;
-  const errMsg = errData?.message ?? errData?.error;
+  // GlobalExceptionHandler serves the human reason in `message`; the shared
+  // parser also reads the { error } rejections some controllers return.
+  const errMsg = transitionMutation.error
+    ? apiErrorMessage(transitionMutation.error, 'The transition was refused.')
+    : null;
 
   return (
     <>
@@ -278,6 +281,11 @@ export function TaskDrawer() {
                 <div className="dz-title">
                   <RunOutcomeChip outcome={runOutcome} />
                 </div>
+              )}
+              {asksQuery.isError && (
+                <ErrorNotice
+                  presented={presentError(asksQuery.error, "Failed to load this task's asks.")}
+                />
               )}
               {pendingAsks.length > 0 && (
                 <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />

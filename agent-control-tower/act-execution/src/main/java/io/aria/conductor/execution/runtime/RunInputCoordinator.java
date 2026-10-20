@@ -48,7 +48,11 @@ public class RunInputCoordinator {
      * the engine's completion path. The verified-stop hook records the intent
      * without a reason for an operator cancel, so an absent entry is expected.
      */
-    private final Map<UUID, String> terminationReasons = new ConcurrentHashMap<>();
+    private final Map<UUID, TerminationFailure> terminationFailures = new ConcurrentHashMap<>();
+
+    /** Operator-facing termination reason plus the stable repair surface, when one exists. */
+    public record TerminationFailure(String message, String code, String surface) {
+    }
 
     public RunInputCoordinator(ApplicationEventPublisher eventPublisher) {
         this.eventPublisher = eventPublisher;
@@ -120,8 +124,19 @@ public class RunInputCoordinator {
      * intent, and the reason must survive that second call.
      */
     public void recordTerminationIntent(UUID runId, String reason) {
+        recordTerminationIntent(runId, reason, null, null);
+    }
+
+    /**
+     * Records a sticky termination intent together with the stable code/surface
+     * of the failure that caused it (null when the escalation has no repair
+     * surface, e.g. an operator cancel). An existing entry is kept: the deadline
+     * records first, then the verified-stop path records the bare intent, and the
+     * reason must survive that second call.
+     */
+    public void recordTerminationIntent(UUID runId, String reason, String code, String surface) {
         if (reason != null && !reason.isBlank()) {
-            terminationReasons.putIfAbsent(runId, reason);
+            terminationFailures.putIfAbsent(runId, new TerminationFailure(reason, code, surface));
         }
         PendingInput waiting = pending.remove(runId);
         if (waiting != null) {
@@ -133,6 +148,12 @@ public class RunInputCoordinator {
 
     /** Consumes the recorded termination reason; null when the run ended without one. */
     public String consumeTerminationReason(UUID runId) {
-        return terminationReasons.remove(runId);
+        TerminationFailure failure = terminationFailures.remove(runId);
+        return failure == null ? null : failure.message();
+    }
+
+    /** Consumes the recorded termination reason and its repair surface. */
+    public TerminationFailure consumeTerminationFailure(UUID runId) {
+        return terminationFailures.remove(runId);
     }
 }

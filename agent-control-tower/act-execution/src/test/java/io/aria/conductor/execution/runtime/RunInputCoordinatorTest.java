@@ -144,4 +144,18 @@ class RunInputCoordinatorTest {
                 .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
         assertThat(coordinator.consumeTerminationReason(runId)).isNull();
     }
+
+    @Test
+    void aTerminationFailureCarriesItsRepairSurfaceAndIsConsumedOnce() {
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.",
+                "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
+        coordinator.recordTerminationIntent(runId);
+
+        RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(runId);
+        assertThat(failure.message()).isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
+        assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(coordinator.consumeTerminationFailure(runId)).isNull();
+    }
 }

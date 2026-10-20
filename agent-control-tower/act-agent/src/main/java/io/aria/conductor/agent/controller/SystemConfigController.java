@@ -32,7 +32,9 @@ public class SystemConfigController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404)
                     .body(Map.of("error", "Unknown system config key: " + key
-                            + ". The key must exist before it can be read."));
+                            + ". The key must exist before it can be read.",
+                            "code", "UNKNOWN_SYSTEM_CONFIG_KEY",
+                            "surface", "SYSTEM_CONFIG"));
         }
     }
 
@@ -48,7 +50,9 @@ public class SystemConfigController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404)
                     .body(Map.of("error", "Unknown system config key: " + key
-                            + ". The key must exist before its value can be changed."));
+                            + ". The key must exist before its value can be changed.",
+                            "code", "UNKNOWN_SYSTEM_CONFIG_KEY",
+                            "surface", "SYSTEM_CONFIG"));
         }
     }
 
@@ -62,7 +66,9 @@ public class SystemConfigController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404)
                     .body(Map.of("error", "Unknown system config key: " + key
-                            + ". The key must exist before it can be reset."));
+                            + ". The key must exist before it can be reset.",
+                            "code", "UNKNOWN_SYSTEM_CONFIG_KEY",
+                            "surface", "SYSTEM_CONFIG"));
         }
     }
 }

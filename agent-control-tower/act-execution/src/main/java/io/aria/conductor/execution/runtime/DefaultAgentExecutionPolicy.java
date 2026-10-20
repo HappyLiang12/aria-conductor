@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.runtime;
 
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -48,13 +50,17 @@ public final class DefaultAgentExecutionPolicy implements AgentExecutionPolicy {
                 ? DEFAULT_EXECUTION_MODE : requested.executionMode();
 
         if (!catalog.coreIds().contains(coreId))
-            throw new IllegalArgumentException("Unsupported agent core: " + coreId
+            throw new ActionableIllegalArgumentException(
+                    "Unsupported agent core: " + coreId
                     + ". Supported cores: " + supportedCores()
-                    + ". Select one in Configure > Runtime.");
+                    + ". Select one in Configure > Runtime.",
+                    "UNSUPPORTED_AGENT_CORE", ErrorSurface.RUNTIME);
         if (!catalog.supports(coreId, executionMode))
-            throw new IllegalArgumentException("Unsupported execution mode: " + coreId + "/" + executionMode
+            throw new ActionableIllegalArgumentException(
+                    "Unsupported execution mode: " + coreId + "/" + executionMode
                     + ". " + coreId + " supports: " + supportedModes(coreId)
-                    + ". Select the fleet runtime in Configure > Runtime.");
+                    + ". Select the fleet runtime in Configure > Runtime.",
+                    "UNSUPPORTED_EXECUTION_MODE", ErrorSurface.RUNTIME);
 
         // An explicit mode is never discarded: it is validated against the path.
         // Worktree is only the applied default, it is not inferred as a replacement.
@@ -80,25 +86,25 @@ public final class DefaultAgentExecutionPolicy implements AgentExecutionPolicy {
         if (workspaceMode == null) {
             // No repository binding (e.g. an operator chat using an owned scratch workspace).
             if (workspaceBaseRef != null)
-                throw new IllegalArgumentException("Base ref requires a worktree workspace."
-                        + " Edit the agent's workspace settings in Crew.");
+                throw WorkspaceGuidance.refusal("Base ref requires a worktree workspace."
+                        + WorkspaceGuidance.SETTINGS_HINT, "WORKSPACE_BASE_REF_REQUIRES_WORKTREE");
             return;
         }
         boolean hasDirectory = workspacePath != null && !workspacePath.isBlank();
         if (workspaceMode == WorkspaceMode.DIRECT) {
             if (!hasDirectory)
-                throw new IllegalArgumentException("Direct workspace requires an explicitly selected directory."
-                        + " Edit the agent's workspace settings in Crew.");
+                throw WorkspaceGuidance.refusal("Direct workspace requires an explicitly selected directory."
+                        + WorkspaceGuidance.SETTINGS_HINT, "WORKSPACE_DIRECT_REQUIRED");
             if (workspaceBaseRef != null)
-                throw new IllegalArgumentException("Base ref applies only to a worktree workspace."
-                        + " Edit the agent's workspace settings in Crew.");
+                throw WorkspaceGuidance.refusal("Base ref applies only to a worktree workspace."
+                        + WorkspaceGuidance.SETTINGS_HINT, "WORKSPACE_BASE_REF_INVALID_FOR_DIRECT");
             return;
         }
         if (!hasDirectory)
-            throw new IllegalArgumentException("Worktree workspace requires a repository path."
-                    + " Edit the agent's workspace settings in Crew.");
+            throw WorkspaceGuidance.refusal("Worktree workspace requires a repository path."
+                    + WorkspaceGuidance.SETTINGS_HINT, "WORKSPACE_REPOSITORY_REQUIRED");
         if (workspaceBaseRef != null && workspaceBaseRef.isBlank())
-            throw new IllegalArgumentException("Worktree base ref must not be blank."
-                    + " Edit the agent's workspace settings in Crew.");
+            throw WorkspaceGuidance.refusal("Worktree base ref must not be blank."
+                    + WorkspaceGuidance.SETTINGS_HINT, "WORKSPACE_BASE_REF_BLANK");
     }
 }

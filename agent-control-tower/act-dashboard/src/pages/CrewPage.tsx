@@ -244,13 +244,14 @@ export default function CrewPage() {
       : form.adkProvider === ''
         ? 'Select an agent core'
         : !selectedCoreInfo
-          ? `Unsupported agent core: ${form.adkProvider}`
+          ? `Unsupported agent core: ${form.adkProvider}. Select one in Configure > Runtime.`
           : !supportedModes.includes(form.executionMode)
-            ? `Unsupported execution mode: ${form.adkProvider}/${form.executionMode}`
+            ? `Unsupported execution mode: ${form.adkProvider}/${form.executionMode}.`
+              + ' Select the fleet runtime in Configure > Runtime.'
             : form.executionMode === 'HOST' && trimmedWorkspacePath === ''
               ? form.workspaceMode === 'WORKTREE'
-                ? 'Host worktree mode requires a repository path'
-                : 'Direct mode requires an explicitly selected directory'
+                ? 'Host worktree mode requires a repository path.'
+                : 'Direct mode requires an explicitly selected directory.'
               : null;
 
   // The inventory is the only core source: before it answers, no core has been

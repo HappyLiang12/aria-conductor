@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { ReviewWorkspace } from '../ReviewWorkspace';
 import { DrawerProvider, useDrawerContext } from '../DrawerContext';
 import type { Approval, KanbanItem, Run } from '../../types';
@@ -97,11 +98,13 @@ function renderWorkspace(seedItems?: KanbanItem[]) {
   });
   if (seedItems) qc.setQueryData(['kanban-items'], seedItems);
   const utils = render(
-    <QueryClientProvider client={qc}>
-      <DrawerProvider>
-        <Harness />
-      </DrawerProvider>
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <DrawerProvider>
+          <Harness />
+        </DrawerProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
   return { ...utils, qc };
 }

@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import {
   openConfigure,
   presentRunError,
@@ -12,6 +13,7 @@ export function ErrorNotice({ presented, className }: {
   presented: PresentedError;
   className?: string;
 }) {
+  const navigate = useNavigate();
   return (
     <div
       className={className ? `error-notice ${className}` : 'error-notice'}
@@ -25,7 +27,14 @@ export function ErrorNotice({ presented, className }: {
         <button
           type="button"
           className="btn"
-          onClick={() => openConfigure(presented.action!.tab)}
+          onClick={() => {
+            const action = presented.action!;
+            if ('tab' in action) {
+              openConfigure(action.tab);
+            } else {
+              navigate(action.path);
+            }
+          }}
         >
           {presented.action.label}
         </button>
@@ -36,12 +45,14 @@ export function ErrorNotice({ presented, className }: {
 
 export default ErrorNotice;
 
-/** A run's persisted error message rendered with its next step; null-safe. */
-export function RunErrorNotice({ message, className }: {
+/** A run's persisted failure rendered with its next step; null-safe. */
+export function RunErrorNotice({ message, surface, code, className }: {
   message: string | null | undefined;
+  surface?: string | null;
+  code?: string | null;
   className?: string;
 }) {
-  const presented = presentRunError(message);
+  const presented = presentRunError(message, surface, code);
   if (!presented) {
     return null;
   }

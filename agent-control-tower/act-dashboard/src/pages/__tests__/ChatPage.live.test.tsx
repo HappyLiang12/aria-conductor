@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import ChatPage from '../ChatPage';
 import { getRunTrajectory } from '../../api/runs';
 import type { WsEvent } from '../../types';
@@ -29,12 +30,18 @@ const run = (id: string, status: string) => ({
   createdAt: '2026-08-29T06:00:00Z', completedAt: null, conversationId: null,
 });
 
-function ui(qc: QueryClient) {
-  return render(
-    <QueryClientProvider client={qc}>
-      <ChatPage />
-    </QueryClientProvider>,
+function page(qc: QueryClient) {
+  return (
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <ChatPage />
+      </QueryClientProvider>
+    </MemoryRouter>
   );
+}
+
+function ui(qc: QueryClient) {
+  return render(page(qc));
 }
 
 describe('ChatPage WS live updates (S4)', () => {
@@ -53,7 +60,7 @@ describe('ChatPage WS live updates (S4)', () => {
 
     act(() => {
       mockCtx = { lastMessage: { type: 'run.iteration', payload: { runId: 'r-9', iteration: 2 }, timestamp: 't' }, isConnected: true };
-      rerender(<QueryClientProvider client={qc}><ChatPage /></QueryClientProvider>);
+      rerender(page(qc));
     });
     await waitFor(() =>
       expect(spy.mock.calls.some((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['run-trajectory', 'r-9'])))
@@ -69,7 +76,7 @@ describe('ChatPage WS live updates (S4)', () => {
 
     act(() => {
       mockCtx = { lastMessage: { type: 'run.iteration', payload: { runId: 'r-other', iteration: 1 }, timestamp: 't' }, isConnected: true };
-      rerender(<QueryClientProvider client={qc}><ChatPage /></QueryClientProvider>);
+      rerender(page(qc));
     });
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(spy.mock.calls.some((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['run-trajectory', 'r-9'])))
@@ -85,7 +92,7 @@ describe('ChatPage WS live updates (S4)', () => {
     act(() => {
       for (let i = 0; i < 10; i++) {
         mockCtx = { lastMessage: { type: 'run.progress', payload: { runId: 'r-9', kind: 'thinking', seq: i }, timestamp: 't' }, isConnected: true };
-        rerender(<QueryClientProvider client={qc}><ChatPage /></QueryClientProvider>);
+        rerender(page(qc));
       }
     });
     expect(spy.mock.calls.filter((c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(['runs'])))

@@ -68,6 +68,9 @@ export interface Run {
   totalTokensUsed: number;
   iterationCount: number;
   errorMessage: string | null;
+  /** Stable failure identity and repair surface served by the backend. */
+  errorCode?: string | null;
+  errorSurface?: string | null;
   finalOutput: string | null;
   createdAt: string;
   completedAt: string | null;

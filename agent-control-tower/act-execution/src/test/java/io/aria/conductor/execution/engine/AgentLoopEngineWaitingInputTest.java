@@ -240,24 +240,37 @@ class AgentLoopEngineWaitingInputTest {
         when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
-        when(inputCoordinator.consumeTerminationReason(runId))
-                .thenReturn("Run deadline reached at 2026-10-20T12:00:00Z (aria.tasks.deadline-minutes)."
-                        + " Re-dispatch with a longer deadline or split the task.");
+        when(inputCoordinator.consumeTerminationFailure(runId))
+                .thenReturn(new RunInputCoordinator.TerminationFailure(
+                        "Run deadline reached at 2026-10-20T12:00:00Z"
+                                + " (aria.tasks.deadline-minutes in Configure > System Config)."
+                                + " Re-dispatch with a longer deadline or split the task.",
+                        "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG"));
 
         engine.completeRun(ctx, RunStatus.CANCELLED);
 
         ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
         verify(runRepository).save(saved.capture());
         assertThat(saved.getValue().getErrorMessage())
-                .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z (aria.tasks.deadline-minutes)."
+                .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z"
+                        + " (aria.tasks.deadline-minutes in Configure > System Config)."
                         + " Re-dispatch with a longer deadline or split the task.");
+        assertThat(saved.getValue().getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(saved.getValue().getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
+
+        // The dashboard reads the same repair identity from the completion event.
+        ArgumentCaptor<RunCompletedEvent> published = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue().getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(published.getValue().getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(published.getValue().getErrorMessage()).contains("Run deadline reached");
     }
 
     @Test
     void completeRunFailureWithoutAMessagePersistsAnHonestFallbackInsteadOfNull() {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
-        ctx.addError(null);
+        ctx.addError((String) null);
         when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
@@ -268,5 +281,25 @@ class AgentLoopEngineWaitingInputTest {
         verify(runRepository).save(saved.capture());
         assertThat(saved.getValue().getErrorMessage()).isEqualTo(
                 "Run failed without an error message; check the backend log for the failure details.");
+    }
+
+    @Test
+    void completeRunBoundsAnOversizedFailureBeforePersistingIt() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        ctx.addError("x".repeat(5000));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+
+        engine.completeRun(ctx, RunStatus.FAILED);
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        // error_message is VARCHAR(2000): bounded below the column limit with an
+        // honest marker naming exactly how much text was dropped.
+        assertThat(saved.getValue().getErrorMessage())
+                .hasSize(1887)
+                .endsWith("... [truncated, 3150 more characters]");
     }
 }

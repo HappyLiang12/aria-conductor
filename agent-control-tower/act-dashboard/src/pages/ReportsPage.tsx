@@ -700,19 +700,10 @@ export function ReportsPage() {
 }
 
 function extractError(err: unknown): string | null {
-  if (typeof err === 'object' && err !== null) {
-    const anyErr = err as {
-      response?: { data?: { message?: string; error?: string } };
-      message?: string;
-    };
-    return (
-      anyErr.response?.data?.message ??
-      anyErr.response?.data?.error ??
-      anyErr.message ??
-      null
-    );
+  if (err === null || err === undefined) {
+    return null;
   }
-  return null;
+  return apiErrorMessage(err, '') || null;
 }
 
 export default ReportsPage;

@@ -4,6 +4,8 @@ import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWork
 import { listRuns } from '../api/runs';
 import { listAgents } from '../api/agents';
 import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from '../components/ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import TemplatesPanel from '../components/TemplatesPanel';
@@ -400,12 +402,16 @@ export function WorkflowsPage() {
 
       {activeTab === 'chains' && (<>
       {isLoading && <div style={{ color: 'var(--muted, #94a3b8)' }}>Loading workflows...</div>}
-      {error && <div style={{ color: 'var(--err, #ef4444)' }}>Failed to load workflows</div>}
+      {error && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorNotice presented={presentError(error, 'Failed to load workflows.')} />
+        </div>
+      )}
       {deleteError && (
         <div role="alert" style={{ color: 'var(--err, #ef4444)' }}>{deleteError}</div>
       )}
 
-      {sorted.length === 0 && !isLoading && (
+      {!error && sorted.length === 0 && !isLoading && (
         <div style={{
           textAlign: 'center',
           padding: 40,

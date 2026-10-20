@@ -276,6 +276,22 @@ class RunServiceTest {
                 .hasMessageContaining(id.toString());
     }
 
+    @Test
+    void runResponseCarriesThePersistedErrorIdentity() {
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.FAILED).build();
+        run.setErrorMessage("Run deadline reached at 2026-10-20T12:00:00Z.");
+        run.setErrorCode("RUN_DEADLINE_REACHED");
+        run.setErrorSurface("SYSTEM_CONFIG");
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+
+        RunResponse response = service.getRun(id);
+
+        assertThat(response.getErrorMessage()).isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
+        assertThat(response.getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(response.getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
+    }
+
     // ---------------------------------------------------------------------
     // frozen runtime on the response (Fleet Runtime Governance)
     // ---------------------------------------------------------------------

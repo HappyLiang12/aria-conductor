@@ -105,16 +105,9 @@ function batchConfirmMessage(kind: BatchKind, n: number): string {
   }
 }
 
-/** One-line failure reason for the batch summary (409 body shape when present). */
+/** One-line failure reason for the batch summary (backend body when present). */
 function batchFailureReason(err: unknown): string {
-  const data = (err as { response?: { data?: KanbanRejection & { error?: string } } } | null)
-    ?.response?.data;
-  return (
-    data?.message
-    ?? data?.error
-    ?? (err as { message?: string } | null)?.message
-    ?? 'transition refused'
-  );
+  return apiErrorMessage(err, 'transition refused');
 }
 
 interface NewItemDraft {

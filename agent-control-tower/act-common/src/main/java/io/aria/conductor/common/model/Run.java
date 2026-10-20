@@ -64,6 +64,13 @@ public class Run {
 
     private String errorMessage;
 
+    /** Stable identity and repair surface of an actionable failure (null otherwise). */
+    @Column(length = 64)
+    private String errorCode;
+
+    @Column(length = 32)
+    private String errorSurface;
+
     @Column(columnDefinition = "TEXT")
     private String finalOutput;
 

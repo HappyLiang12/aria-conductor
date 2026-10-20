@@ -7,6 +7,8 @@ import {
 } from '../api/agents';
 import { listSkills } from '../api/skills';
 import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from './ErrorNotice';
 import type { Agent } from '../types';
 
 /**
@@ -28,29 +30,31 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
   const open = !!agent;
   const agentId = agent?.id ?? '';
 
-  const { data: allTools } = useQuery({
+  const { data: allTools, error: toolsError } = useQuery({
     queryKey: ['tools'],
     queryFn: listTools,
     enabled: open,
   });
 
-  const { data: assigned } = useQuery({
+  const { data: assigned, error: assignedError } = useQuery({
     queryKey: ['agent-tools', agentId],
     queryFn: () => getAgentTools(agentId),
     enabled: open,
   });
 
-  const { data: allSkills } = useQuery({
+  const { data: allSkills, error: skillsError } = useQuery({
     queryKey: ['skills'],
     queryFn: () => listSkills(),
     enabled: open,
   });
 
-  const { data: assignedSkills } = useQuery({
+  const { data: assignedSkills, error: assignedSkillsError } = useQuery({
     queryKey: ['agent-skills', agentId],
     queryFn: () => getAgentSkills(agentId),
     enabled: open,
   });
+
+  const loadError = toolsError ?? assignedError ?? skillsError ?? assignedSkillsError;
 
   const assignedIds = useMemo(
     () => new Set((assigned ?? []).map((t) => t.id)),
@@ -133,9 +137,12 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
             {actionError}
           </div>
         )}
+        {loadError && (
+          <ErrorNotice presented={presentError(loadError, 'Failed to load the tool and skill catalog.')} />
+        )}
         <div style={{ fontSize: 12.5, fontWeight: 600, margin: '4px 0' }}>Tools</div>
         <div style={{ maxHeight: 240, overflowY: 'auto', margin: '4px 0' }}>
-          {(allTools ?? []).length === 0 && (
+          {!loadError && (allTools ?? []).length === 0 && (
             <div style={{ color: 'var(--text-mute)', fontSize: 12 }}>
               No approved tools available yet.
             </div>
@@ -158,7 +165,7 @@ export function ManageToolsDialog({ agent, onClose }: Props) {
         </div>
         <div style={{ fontSize: 12.5, fontWeight: 600, margin: '8px 0 4px' }}>Skills</div>
         <div style={{ maxHeight: 200, overflowY: 'auto', margin: '4px 0' }}>
-          {(allSkills ?? []).filter((s) => s.enabled !== false && s.id).length === 0 && (
+          {!loadError && (allSkills ?? []).filter((s) => s.enabled !== false && s.id).length === 0 && (
             <div style={{ color: 'var(--text-mute)', fontSize: 12 }}>
               No approved skills available yet.
             </div>

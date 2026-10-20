@@ -29,16 +29,19 @@ public class RuleVerifier {
 
         // Token budget check
         if (ctx.getTotalTokensUsed() > maxTokensPerRun) {
-            String reason = String.format("Token budget exceeded: %d/%d", ctx.getTotalTokensUsed(),
-                    maxTokensPerRun);
+            String reason = String.format("Token budget exceeded: %d/%d."
+                            + " Raise circuit.breaker.max.tokens.per.run in Configure > System Config,"
+                            + " or split the task into smaller runs.",
+                    ctx.getTotalTokensUsed(), maxTokensPerRun);
             log.warn("Rule verification denied: {}", reason);
             return RuleVerificationResult.deny(reason);
         }
 
         // Max iterations check
         if (ctx.getIterationCount() >= maxIterations) {
-            String reason = String.format("Max iterations reached: %d/%d", ctx.getIterationCount(),
-                    maxIterations);
+            String reason = String.format("Max iterations reached: %d/%d."
+                            + " Raise circuit.breaker.max.iterations in Configure > System Config.",
+                    ctx.getIterationCount(), maxIterations);
             log.warn("Rule verification denied: {}", reason);
             return RuleVerificationResult.deny(reason);
         }
@@ -47,8 +50,10 @@ public class RuleVerifier {
         if (!ctx.getErrors().isEmpty()) {
             double errorRate = (double) ctx.getErrors().size() / Math.max(ctx.getIterationCount(), 1);
             if (errorRate > errorRateThreshold) {
-                String reason = String.format("Error rate too high: %.2f > %.2f", errorRate,
-                        errorRateThreshold);
+                String reason = String.format("Error rate too high: %.2f > %.2f."
+                                + " Review the failing steps; raise circuit.breaker.error.rate.threshold"
+                                + " in Configure > System Config if the failures are expected.",
+                        errorRate, errorRateThreshold);
                 log.warn("Rule verification denied: {}", reason);
                 return RuleVerificationResult.deny(reason);
             }

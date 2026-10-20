@@ -1095,8 +1095,9 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                     // The run settles as CANCELLED; without this reason the dashboard
                     // would show a cancellation with no explanation.
                     inputs.recordTerminationIntent(runId, "Run deadline reached at " + deadline
-                            + " (aria.tasks.deadline-minutes). Re-dispatch with a longer deadline"
-                            + " or split the task.");
+                            + " (aria.tasks.deadline-minutes in Configure > System Config)."
+                            + " Re-dispatch with a longer deadline or split the task.",
+                            "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
                     cancel(runId);
                 }
             } catch (RuntimeException e) {

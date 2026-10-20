@@ -21,7 +21,9 @@ export function NotificationBell() {
 
   // Fetch initial unread count on mount
   useEffect(() => {
-    getUnreadCount().then(c => setUnreadCount(c.unreadCount)).catch(() => {});
+    getUnreadCount()
+      .then(c => setUnreadCount(c.unreadCount))
+      .catch((err) => setActionError(apiErrorMessage(err, 'The unread notification count could not be loaded.')));
   }, []);
 
   // Listen for aria.notification WebSocket events

@@ -50,7 +50,7 @@ public class CircuitBreaker {
                     + " or split the task into smaller runs.",
                     ctx.getIterationCount(), maxIterations);
             log.error("Circuit breaker tripped: {}", msg);
-            throw new BudgetExceededException(msg);
+            throw new BudgetExceededException(msg, "MAX_ITERATIONS_EXCEEDED");
         }
 
         // Error rate check
@@ -63,7 +63,7 @@ public class CircuitBreaker {
                         errorRate, errorRateThreshold,
                         ctx.getErrors().size(), ctx.getIterationCount());
                 log.error("Circuit breaker tripped: {}", msg);
-                throw new BudgetExceededException(msg);
+                throw new BudgetExceededException(msg, "ERROR_RATE_EXCEEDED");
             }
         }
 
@@ -77,7 +77,7 @@ public class CircuitBreaker {
                     + " Raise circuit.breaker.max.iteration.latency.ms in Configure > System Config.",
                     iterationElapsedMs, maxIterationLatencyMs);
             log.error("Circuit breaker tripped: {}", msg);
-            throw new BudgetExceededException(msg);
+            throw new BudgetExceededException(msg, "ITERATION_LATENCY_EXCEEDED");
         }
 
         // Total run duration guard: independent safety cap on overall wall-clock time (includes
@@ -88,7 +88,7 @@ public class CircuitBreaker {
                     + " Raise circuit.breaker.max.run.duration.ms in Configure > System Config,"
                     + " or split the task into smaller runs.", totalElapsedMs, maxRunDurationMs);
             log.error("Circuit breaker tripped: {}", msg);
-            throw new BudgetExceededException(msg);
+            throw new BudgetExceededException(msg, "RUN_DURATION_EXCEEDED");
         }
 
         log.debug("Circuit breaker check passed: tokens={}, iterations={}, errors={}, iterationLatencyMs={}, totalMs={}",

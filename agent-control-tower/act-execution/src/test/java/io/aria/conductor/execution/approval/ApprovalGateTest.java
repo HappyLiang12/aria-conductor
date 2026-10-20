@@ -191,6 +191,26 @@ class ApprovalGateTest {
         verify(approvalRepository, never()).save(any());
     }
 
+    @Test
+    void cancelAllPendingForRun_leavesReviewRequestsAlive() {
+        // REVIEW_REQUEST is a display-only post-run prompt (the review card); the
+        // run ending must never expire it.
+        UUID runId = UUID.randomUUID();
+        Approval review = TestDataBuilder.anApproval()
+                .withRunId(runId)
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("review the card")
+                .build();
+        review.setAskType(Approval.AskType.REVIEW_REQUEST);
+        approvalStore.put(review.getId(), review);
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(review));
+
+        gate.cancelAllPendingForRun(runId);
+
+        assertThat(review.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(any());
+    }
+
     /**
      * R20.5: ACP permission asks are cancelled by the ACP permission coordinator (their companion
      * row and delivery state must move with them), so this run sweep must skip them.

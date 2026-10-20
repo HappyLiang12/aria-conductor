@@ -18,7 +18,15 @@ DELETE FROM role_tool_templates;
 DELETE FROM skill_tools;
 
 -- 4. Retire the TOOL knowledge entries that backed the legacy catalogue.
-UPDATE knowledge_items SET status = 'RETIRED' WHERE type = 'TOOL';
+UPDATE knowledge_items
+SET status = 'RETIRED', retired_at = CURRENT_TIMESTAMP
+WHERE type = 'TOOL' AND status <> 'RETIRED';
 
--- 5. Remove harness profile configuration; it only tuned the removed in-JVM loop.
+-- 5. Expire pending legacy tool approvals: the in-JVM executor that would have
+--    run them is gone. Native ACP asks keep their own lifecycle.
+UPDATE approvals
+SET status = 'EXPIRED', reason = 'Legacy tool approval retired', decided_at = CURRENT_TIMESTAMP
+WHERE status = 'PENDING' AND approval_type = 'TOOL_CALL' AND source <> 'ACP_PERMISSION';
+
+-- 6. Remove harness profile configuration; it only tuned the removed in-JVM loop.
 DELETE FROM system_config WHERE config_key LIKE 'harness.%';

@@ -300,7 +300,7 @@ export default function CrewPage() {
         queryClient.invalidateQueries({ queryKey: ['agents'], refetchType: 'active' });
         setDialogOpen(false);
         setForm(EMPTY_FORM);
-        setError('Agent created, but applying the recommended tools/skills failed. Adjust them in Manage Tools.');
+        setError('Agent created, but applying the recommended skills failed. Adjust them on the agent card.');
       } else {
         // The admission policy's exact rejection ("Unsupported agent core: …",
         // "Unsupported execution mode: …", "Direct workspace requires …") is

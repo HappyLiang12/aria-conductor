@@ -501,6 +501,25 @@ class RunServiceTest {
     }
 
     @Test
+    void cancelRun_whenTheRuntimeFinalizedDuringTheStop_keepsTheCommittedTerminalState() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        RunRepository.RunStateView committed =
+                org.mockito.Mockito.mock(RunRepository.RunStateView.class);
+        when(committed.getStatus()).thenReturn(RunStatus.COMPLETED);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(committed));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class);
+        verify(runRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
     void cancelRun_alreadyCompleted_isRejected() {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(

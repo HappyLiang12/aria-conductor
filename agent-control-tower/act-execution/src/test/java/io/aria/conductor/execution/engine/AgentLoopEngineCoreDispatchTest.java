@@ -134,7 +134,7 @@ class AgentLoopEngineCoreDispatchTest {
         when(agentRepository.findById(agentId)).thenReturn(Optional.of(agent));
         when(sessionStateManager.loadOrCreateSession(runId, agentId))
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
-        when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
+        lenient().when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
         lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreRunLauncher());
@@ -230,6 +230,53 @@ class AgentLoopEngineCoreDispatchTest {
                         + " the run cannot execute");
         verifyNoInteractions(coordinator);
         verify(bindings, never()).save(any());
+    }
+
+    @Test
+    void cancelledBeforeDispatch_isNotResurrected_andNoCoreIsLaunched() {
+        // A cancel landing after admission writes CANCELLED while the runtime is not
+        // registered yet (owns() == false). The dispatch must not overwrite it, and
+        // no core may be launched for the cancelled run.
+        agent.setAdkProvider("opencode");
+        when(runRepository.findStateById(runId)).thenReturn(Optional.of(view(RunStatus.CANCELLED)));
+
+        engine().startRun(runId);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(runRepository, org.mockito.Mockito.atLeastOnce()).findStateById(runId));
+        verifyNoInteractions(coordinator);
+        verify(bindings, never()).save(any());
+    }
+
+    @Test
+    void cancelDuringProvisioning_preventsTheCoreLaunch() {
+        // PENDING at dispatch time, CANCELLED by the time the launch gate re-reads:
+        // the second committed-status check must stop the launch.
+        agent.setAdkProvider("opencode");
+        when(runRepository.findStateById(runId)).thenReturn(
+                Optional.of(view(RunStatus.PENDING)),
+                Optional.of(view(RunStatus.CANCELLED)));
+
+        engine().startRun(runId);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(runRepository, times(2)).findStateById(runId));
+        verifyNoInteractions(coordinator);
+        verify(bindings, never()).save(any());
+    }
+
+    private static RunRepository.RunStateView view(RunStatus status) {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return status;
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return null;
+            }
+        };
     }
 
     /**

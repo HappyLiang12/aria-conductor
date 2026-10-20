@@ -90,16 +90,21 @@ public class ApprovalGate {
      * <p>R20.5: ACP permission asks are likewise left alone — their lifecycle belongs to
      * {@code AcpPermissionCoordinator.cancelPendingForRun}.
      *
-     * <p>R-RFUX6/D6: each settled ask is an expiry, not a silent lapse — the same
-     * {@link ApprovalExpiredEvent} the timeout and scheduled sweeps publish is emitted
-     * after the row is saved, so the request notification flips and the operator gets an
-     * expiry notice. Listeners run synchronously here (this method is non-transactional),
-     * and the native-only card-settle listener no-ops for these legacy rows.
+     * <p>REVIEW_REQUEST asks are display-only post-run prompts (the review card the
+     * operator answers after completion); they never block the run and are not
+     * cancelled by its end.
+     *
+     * <p>Each settled ask is an expiry, not a silent lapse: an
+     * {@link ApprovalExpiredEvent} is emitted after the row is saved, so the request
+     * notification flips and the operator gets an expiry notice. Listeners run
+     * synchronously here (this method is non-transactional), and the native-only
+     * card-settle listener no-ops for these legacy rows.
      */
     public void cancelAllPendingForRun(UUID runId) {
         approvalRepository.findByRunId(runId).stream()
                 .filter(a -> a.getStatus() == ApprovalStatus.PENDING)
                 .filter(a -> a.getSource() != ApprovalSource.ACP_PERMISSION)
+                .filter(a -> a.getAskType() != Approval.AskType.REVIEW_REQUEST)
                 .filter(a -> a.getApprovalType() == null
                         || a.getApprovalType() == Approval.ApprovalType.TOOL_CALL)
                 .forEach(a -> {

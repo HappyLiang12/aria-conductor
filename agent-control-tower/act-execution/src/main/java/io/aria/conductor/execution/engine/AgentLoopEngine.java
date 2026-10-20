@@ -332,6 +332,16 @@ public class AgentLoopEngine {
         try {
             Run run = runRepository.findById(ctx.getRunId())
                     .orElseThrow(() -> new ResourceNotFoundException("Run", ctx.getRunId()));
+            // A cancel can land after the dispatch gate while the runtime is still
+            // unregistered (owns() == false), so the recorded CANCELLED would be
+            // overwritten by a launch. Re-read the committed status here; a terminal
+            // run is never launched.
+            RunStatus committed = committedStatus(ctx.getRunId(), run);
+            if (isTerminal(committed)) {
+                log.info("Run {} is already terminal ({}); core launch skipped", ctx.getRunId(), committed);
+                tryEmit(emitter, "done", donePayload(ctx, null));
+                return;
+            }
             CoreResult result = launcher.execute(run, agent, coreTask(ctx));
             recordUsage(ctx, result);
             ctx.incrementIteration();
@@ -364,6 +374,18 @@ public class AgentLoopEngine {
 
     private static int tokenCount(Long value) {
         return value == null ? 0 : value.intValue();
+    }
+
+    /** The committed status (fresh SELECT), falling back to the caller's snapshot. */
+    private RunStatus committedStatus(UUID runId, Run snapshot) {
+        return runRepository.findStateById(runId)
+                .map(RunRepository.RunStateView::getStatus)
+                .orElse(snapshot.getStatus());
+    }
+
+    private static boolean isTerminal(RunStatus status) {
+        return status == RunStatus.COMPLETED || status == RunStatus.FAILED
+                || status == RunStatus.CANCELLED || status == RunStatus.ABORTED;
     }
 
     /** The accepted conversation as the core task: system material, history, current request. */
@@ -672,7 +694,13 @@ public class AgentLoopEngine {
         // can cancel this run server-side mid-stream (M1).
         tryEmit(emitter, "thinking", Map.of("status", "processing", "runId", ctx.getRunId().toString()));
 
-        // Update to RUNNING
+        // A cancel that landed after admission must not be resurrected by the
+        // dispatch write: only a non-terminal committed run may move to RUNNING.
+        RunStatus committed = committedStatus(ctx.getRunId(), run);
+        if (isTerminal(committed)) {
+            log.info("Run {} is already terminal ({}); dispatch skipped", ctx.getRunId(), committed);
+            return;
+        }
         updateRunStatusDirect(ctx.getRunId(), RunStatus.RUNNING);
 
         // Provision the per-run scratch workspace that the diff preview reads.

@@ -213,9 +213,12 @@ public class RunService {
         if (control != null && control.owns(run.getAgentId(), id)) {
             control.cancel(id);
             // The runtime may have finalized while the verified stop was in flight:
-            // the transition is re-checked against the state that actually stands.
-            run = findRunOrThrow(id);
-            validateTransition(run.getStatus(), RunStatus.CANCELLED);
+            // re-check the committed state through the projection (findById would
+            // serve this transaction's stale snapshot).
+            RunStatus committed = runRepository.findStateById(id)
+                    .map(RunRepository.RunStateView::getStatus)
+                    .orElse(run.getStatus());
+            validateTransition(committed, RunStatus.CANCELLED);
         }
         run.setStatus(RunStatus.CANCELLED);
         run.setCompletedAt(Instant.now());

@@ -5,7 +5,10 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.flyway.FlywayMigrationStrategy;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
@@ -29,15 +32,33 @@ import static org.assertj.core.api.Assertions.assertThat;
  * rows are seeded; the pending migration is then applied by a second Flyway
  * instance once the pre-state exists -- the staged-migrate pattern of
  * {@link ExecutionBindingMigrationIntegrationTest}.
+ *
+ * <p>The current {@code Run} entity selects the error-contract columns that
+ * V70 adds after the pinned target; {@link SchemaCompatConfig} adds them right
+ * after the pinned migration so the old-schema context can still boot.
  */
 @SpringBootTest(
-        classes = {ActApplication.class, NoopLlmTestConfig.class},
+        classes = {ActApplication.class, NoopLlmTestConfig.class, ReviewAskRepairMigrationIntegrationTest.SchemaCompatConfig.class},
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
                 "spring.datasource.url=jdbc:h2:mem:review_ask_repair;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE",
                 "spring.flyway.target=65"
         })
 class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
+
+    @TestConfiguration
+    static class SchemaCompatConfig {
+
+        @Bean
+        FlywayMigrationStrategy addRunErrorColumnsAfterThePinnedMigration(DataSource dataSource) {
+            return flyway -> {
+                flyway.migrate();
+                JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+                jdbc.execute("ALTER TABLE runs ADD COLUMN error_code VARCHAR(64)");
+                jdbc.execute("ALTER TABLE runs ADD COLUMN error_surface VARCHAR(32)");
+            };
+        }
+    }
 
     @Autowired
     JdbcTemplate jdbcTemplate;

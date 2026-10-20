@@ -205,38 +205,11 @@ public class RunService {
         return toResponse(runRepository.save(run));
     }
 
-    /**
-     * Cancels a run. When the run's runtime is owned by the execution
-     * coordinator, the run-owned core is stopped and the stop proof is verified
-     * first; CANCELLED is persisted only after that verified acknowledgement, so
-     * a cancellation the core never confirmed is refused instead of recorded.
-     * The verified stop is authoritative: a FAILED/CANCELLED the run reports
-     * while the stop was in flight is normalized to CANCELLED, while a
-     * COMPLETED it reports still wins and the cancel is refused.
-     * A run no runtime owns keeps the plain recorded transition.
-     */
     @Transactional
     public RunResponse cancelRun(UUID id) {
         Run run = findRunOrThrow(id);
         validateTransition(run.getStatus(), RunStatus.CANCELLED);
         log.info("Cancelling run: id={}", id);
-        RunRuntimeControlPort control = runtimeControlProvider == null
-                ? null : runtimeControlProvider.getIfAvailable();
-        if (control != null && control.owns(run.getAgentId(), id)) {
-            control.cancel(id);
-            // The runtime may have finalized while the verified stop was in flight:
-            // re-check the committed state through the projection (findById would
-            // serve this transaction's stale snapshot). A FAILED or CANCELLED it
-            // reports here is the engine observing this same stop, not an
-            // independent ending: the verified stop is authoritative, so the
-            // recorded outcome stays CANCELLED instead of refusing the operator.
-            RunStatus committed = runRepository.findStateById(id)
-                    .map(RunRepository.RunStateView::getStatus)
-                    .orElse(run.getStatus());
-            if (committed != RunStatus.FAILED && committed != RunStatus.CANCELLED) {
-                validateTransition(committed, RunStatus.CANCELLED);
-            }
-        }
         run.setStatus(RunStatus.CANCELLED);
         run.setCompletedAt(Instant.now());
         Run saved = runRepository.save(run);

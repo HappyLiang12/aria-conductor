@@ -5,15 +5,14 @@ import java.util.UUID;
 /**
  * Port interface for the runtime-owned control of a run (Task 19, fix round 7).
  * Lives in act-common to avoid a circular module dependency: the run store
- * (act-agent) persists a run's PAUSED/RUNNING/CANCELLED state, and for a run
- * whose runtime is owned by the execution coordinator (act-execution) the state
- * may only be persisted after the runtime verified the control -- the
- * coordinator's verified {@code ControlAck} gates the persisted state, so a
- * pause, resume or stop the run-owned core never confirmed can never be
- * answered as if it had happened.
+ * (act-agent) persists a run's PAUSED/RUNNING state, and for a run whose runtime
+ * is owned by the execution coordinator (act-execution) the state may only be
+ * persisted after the runtime verified the pause/resume -- the coordinator's
+ * verified {@code ControlAck} gates the persisted state, so a pause the
+ * run-owned core never confirmed can never be answered as PAUSED.
  *
- * <p>A run no deployment owns keeps the plain recorded transition;
- * {@link #owns} is the discriminator.
+ * <p>A run no deployment owns (the legacy paths) keeps the plain recorded
+ * transition; {@link #owns} is the discriminator.
  */
 public interface RunRuntimeControlPort {
 
@@ -41,13 +40,4 @@ public interface RunRuntimeControlPort {
      *         persisted on the caller's side
      */
     void resume(UUID runId);
-
-    /**
-     * Stops the owned runtime and verifies the stop proof.
-     *
-     * @throws IllegalStateException when the runtime did not confirm the stop;
-     *         the message carries the exact refusal reason, and nothing was
-     *         persisted on the caller's side
-     */
-    void cancel(UUID runId);
 }

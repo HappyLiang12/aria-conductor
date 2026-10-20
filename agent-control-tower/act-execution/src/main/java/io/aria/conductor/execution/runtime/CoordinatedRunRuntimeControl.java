@@ -13,15 +13,16 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * The run store's runtime-control port ({@link RunRuntimeControlPort}), served
- * by the run coordinator (Task 19, fix round 7): a coordinated run's pause,
- * resume and cancel are the coordinator's verified control operations on the
- * run-owned core session, and the run store may persist PAUSED/RUNNING/CANCELLED
- * only after this port returned -- a refusal surfaces the exact
- * pending-control reason and claims no state.
+ * by the run coordinator (Task 19, fix round 7): a coordinated run's pause and
+ * resume are the coordinator's verified control operations on the run-owned core
+ * session, and the run store may persist PAUSED/RUNNING only after this port
+ * returned -- the same truthfulness contract the engine's own pause/resume paths
+ * carry (a refusal surfaces the exact pending-control reason and claims no
+ * state).
  *
  * <p>{@link #owns} is the by-run view of the coordinator's active registry: a
- * run the coordinator owns is verified here; any other (uncoordinated or
- * already-finalized) run is not, and its recorded transition stays the caller's.
+ * run the coordinator owns is verified here; any other run (a legacy or
+ * already-finalized run) is not, and its recorded transition stays the caller's.
  */
 @Slf4j
 public class CoordinatedRunRuntimeControl implements RunRuntimeControlPort {
@@ -65,16 +66,6 @@ public class CoordinatedRunRuntimeControl implements RunRuntimeControlPort {
         if (ack.state() != ControlState.RUNNING || !ack.verified()) {
             throw new IllegalStateException("Run " + runId + " was not resumed: " + refusalReason(control, runId,
                     "the run-owned core did not verify the resume"));
-        }
-    }
-
-    @Override
-    public void cancel(UUID runId) {
-        CoreExecutionService control = requireCoordinator(runId, "cancel");
-        ControlAck ack = await(control.cancel(runId), runId, "cancel");
-        if (ack.state() != ControlState.STOPPED || !ack.verified()) {
-            throw new IllegalStateException("Run " + runId + " was not stopped: " + refusalReason(control, runId,
-                    "the run-owned core did not verify the stop"));
         }
     }
 

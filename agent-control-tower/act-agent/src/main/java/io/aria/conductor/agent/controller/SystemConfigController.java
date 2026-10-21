@@ -14,6 +14,11 @@ import java.util.Map;
 @RequestMapping("/api/v1/system-config")
 public class SystemConfigController {
 
+    /** The run deadline read by the execution runtime; its range is a freezes-into-runs contract. */
+    private static final String TASK_DEADLINE_KEY = "aria.tasks.deadline-minutes";
+    private static final int TASK_DEADLINE_MIN_MINUTES = 1;
+    private static final int TASK_DEADLINE_MAX_MINUTES = 1440;
+
     private final SystemConfigService systemConfigService;
 
     public SystemConfigController(SystemConfigService systemConfigService) {
@@ -46,6 +51,16 @@ public class SystemConfigController {
                 return ResponseEntity.badRequest()
                         .body(Map.of("error", "A value is required for system config key: " + key + "."));
             }
+            if (TASK_DEADLINE_KEY.equals(key) && !isValidTaskDeadline(value)) {
+                // The runtime clamps an out-of-range value silently, so accepting it
+                // here would show the operator a deadline that is never applied.
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", TASK_DEADLINE_KEY + " must be a whole number of minutes between "
+                                + TASK_DEADLINE_MIN_MINUTES + " and " + TASK_DEADLINE_MAX_MINUTES
+                                + " (received: \"" + value + "\"). Set it in Configure > System Config > Execution.",
+                        "code", "INVALID_SYSTEM_CONFIG_VALUE",
+                        "surface", "SYSTEM_CONFIG"));
+            }
             return ResponseEntity.ok(systemConfigService.updateValue(key, value));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404)
@@ -53,6 +68,15 @@ public class SystemConfigController {
                             + ". The key must exist before its value can be changed.",
                             "code", "UNKNOWN_SYSTEM_CONFIG_KEY",
                             "surface", "SYSTEM_CONFIG"));
+        }
+    }
+
+    private static boolean isValidTaskDeadline(String value) {
+        try {
+            int minutes = Integer.parseInt(value.trim());
+            return minutes >= TASK_DEADLINE_MIN_MINUTES && minutes <= TASK_DEADLINE_MAX_MINUTES;
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 

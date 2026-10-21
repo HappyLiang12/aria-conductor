@@ -403,6 +403,22 @@ describe('AgentDrawer completed-run history (D5)', () => {
     expect(await screen.findByText('provider exploded')).toBeInTheDocument();
   });
 
+  it('agentDrawer_failedRun_usesTheServedSurfaceForTheRepairAction', async () => {
+    // The wording avoids every legacy text matcher: only the persisted surface
+    // can produce the Configure action here.
+    vi.mocked(listRuns).mockResolvedValue([{
+      ...failedRun,
+      errorMessage: 'The operator credential for this core is missing.',
+      errorSurface: 'LLM_PROVIDERS',
+      errorCode: 'RUNTIME_CREDENTIAL_NOT_CONFIGURED',
+    }]);
+    ui();
+
+    expect(await screen.findByText('Run Failed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Configure → LLM Providers' }))
+      .toBeInTheDocument();
+  });
+
   it('agentDrawer_replaysNewestRun_whenListIsUnsorted', async () => {
     // GET /api/v1/runs returns rows unsorted: the OLDEST run (failed) comes
     // first. The replay target must still be the newest run (completed).

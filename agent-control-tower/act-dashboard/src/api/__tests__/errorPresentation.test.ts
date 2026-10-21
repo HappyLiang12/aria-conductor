@@ -35,6 +35,7 @@ describe('apiErrorMessage carries the actionable backend detail', () => {
 
     expect(apiErrorMessage(error, 'fallback')).toBe('Unsupported core credential: other');
   });
+
 });
 
 describe('errorActionForSurface', () => {

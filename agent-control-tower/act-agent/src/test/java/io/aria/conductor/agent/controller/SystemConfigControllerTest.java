@@ -16,6 +16,7 @@ import java.util.Map;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -106,6 +107,42 @@ class SystemConfigControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("other", "x"))))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updateValue_rejectsAnOutOfRangeRunDeadlineBeforePersistingIt() throws Exception {
+        mockMvc.perform(put("/api/v1/system-config/aria.tasks.deadline-minutes")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("value", "0"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_SYSTEM_CONFIG_VALUE"))
+                .andExpect(jsonPath("$.surface").value("SYSTEM_CONFIG"))
+                .andExpect(jsonPath("$.error").value(
+                        "aria.tasks.deadline-minutes must be a whole number of minutes between 1 and 1440"
+                                + " (received: \"0\"). Set it in Configure > System Config > Execution."));
+        verify(service, never()).updateValue(anyString(), anyString());
+    }
+
+    @Test
+    void updateValue_rejectsANonNumericRunDeadline() throws Exception {
+        mockMvc.perform(put("/api/v1/system-config/aria.tasks.deadline-minutes")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("value", "soon"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_SYSTEM_CONFIG_VALUE"));
+        verify(service, never()).updateValue(anyString(), anyString());
+    }
+
+    @Test
+    void updateValue_acceptsTheRunDeadlineAtItsUpperBound() throws Exception {
+        when(service.updateValue(eq("aria.tasks.deadline-minutes"), eq("1440")))
+                .thenReturn(config("aria.tasks.deadline-minutes", "1440"));
+
+        mockMvc.perform(put("/api/v1/system-config/aria.tasks.deadline-minutes")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("value", "1440"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configValue").value("1440"));
     }
 
     @Test

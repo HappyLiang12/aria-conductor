@@ -60,7 +60,7 @@ export default function RunTemplateModal({ item, onClose, onSuccess }: Props) {
       await instantiateWorkflowTemplate(item.id, filtered);
       onSuccess();
     } catch (e: unknown) {
-      setError(apiErrorMessage(e, 'Failed to instantiate'));
+      setError(apiErrorMessage(e, (e as Error)?.message ?? 'Failed to instantiate'));
     } finally {
       setSubmitting(false);
     }

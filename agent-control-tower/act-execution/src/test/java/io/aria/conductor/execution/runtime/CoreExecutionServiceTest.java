@@ -716,6 +716,33 @@ class CoreExecutionServiceTest {
     }
 
     @Test
+    void aTerminationReasonIsRecordedOnlyAfterTheStopIsVerified() {
+        runOwnedInProcess();
+        String reason = "Run deadline reached at 2026-10-20T12:00:00Z"
+                + " (aria.tasks.deadline-minutes in Configure > System Config).";
+        backend.proofs.add(new StopProof(RUN, false));
+
+        ControlAck refused = service.cancel(RUN, reason, "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG")
+                .toCompletableFuture().join();
+
+        assertThat(refused.verified()).isFalse();
+        assertThat(coordinator.consumeTerminationFailure(RUN))
+                .as("a refused stop leaves the run alive, so it must not carry the deadline failure")
+                .isNull();
+
+        backend.proofs.add(new StopProof(RUN, true));
+        ControlAck stopped = service.cancel(RUN, reason, "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG")
+                .toCompletableFuture().join();
+
+        assertThat(stopped).isEqualTo(new ControlAck(ControlState.STOPPED, true));
+        RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(RUN);
+        assertThat(failure).isNotNull();
+        assertThat(failure.message()).isEqualTo(reason);
+        assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+    }
+
+    @Test
     void aForeignStopProofNeverPersistsACancellation() {
         runOwnedInProcess();
         UUID otherRun = UUID.fromString("00000000-0000-0000-0000-0000000000a8");

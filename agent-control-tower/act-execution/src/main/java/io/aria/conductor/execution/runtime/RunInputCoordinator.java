@@ -119,9 +119,8 @@ public class RunInputCoordinator {
 
     /**
      * Records a sticky termination intent together with the operator-facing
-     * reason the run should carry when it settles. An existing reason is kept:
-     * the deadline records first, then the verified-stop path records the bare
-     * intent, and the reason must survive that second call.
+     * reason the run should carry when it settles. The first reason wins when
+     * more than one escalation races to settle the same run.
      */
     public void recordTerminationIntent(UUID runId, String reason) {
         recordTerminationIntent(runId, reason, null, null);
@@ -130,9 +129,8 @@ public class RunInputCoordinator {
     /**
      * Records a sticky termination intent together with the stable code/surface
      * of the failure that caused it (null when the escalation has no repair
-     * surface, e.g. an operator cancel). An existing entry is kept: the deadline
-     * records first, then the verified-stop path records the bare intent, and the
-     * reason must survive that second call.
+     * surface, e.g. an operator cancel). An existing entry is kept: the first
+     * failure that settled the run is the one the operator sees.
      */
     public void recordTerminationIntent(UUID runId, String reason, String code, String surface) {
         if (reason != null && !reason.isBlank()) {

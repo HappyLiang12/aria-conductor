@@ -1,6 +1,8 @@
 package io.aria.conductor.knowledge.controller;
 
 import io.aria.conductor.agent.dto.WorkflowResponse;
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.KnowledgeStatus;
@@ -592,6 +594,22 @@ class KnowledgeControllerTest extends WebMvcTestBase {
                         .content("{\"parameters\":{}}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Invalid workflow request."));
+    }
+
+    @Test
+    void instantiateWorkflow_actionableRejectionKeepsItsRepairIdentity() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(workflowTemplateService.instantiateTemplate(eq(id), anyMap()))
+                .thenThrow(new ActionableIllegalArgumentException(
+                        "Unsupported execution mode for the workflow agent.",
+                        "UNSUPPORTED_EXECUTION_MODE", ErrorSurface.RUNTIME));
+        mvc.perform(post("/api/v1/knowledge/" + id + "/instantiate-workflow")
+                        .contentType("application/json")
+                        .content("{\"parameters\":{}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Unsupported execution mode for the workflow agent."))
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_EXECUTION_MODE"))
+                .andExpect(jsonPath("$.surface").value("RUNTIME"));
     }
 
     @Test

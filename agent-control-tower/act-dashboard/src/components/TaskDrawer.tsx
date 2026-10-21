@@ -412,7 +412,11 @@ export function TaskDrawer() {
                             marginTop: 8,
                           }}
                         >
-                          <RunErrorNotice message={linkedRun.errorMessage} />
+                          <RunErrorNotice
+                            message={linkedRun.errorMessage}
+                            surface={linkedRun.errorSurface}
+                            code={linkedRun.errorCode}
+                          />
                         </div>
                       )}
                       {linkedRun.finalOutput && (

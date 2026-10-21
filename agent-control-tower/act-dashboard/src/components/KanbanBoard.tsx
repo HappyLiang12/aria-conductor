@@ -107,7 +107,7 @@ function batchConfirmMessage(kind: BatchKind, n: number): string {
 
 /** One-line failure reason for the batch summary (backend body when present). */
 function batchFailureReason(err: unknown): string {
-  return apiErrorMessage(err, 'transition refused');
+  return apiErrorMessage(err, (err as Error)?.message ?? 'transition refused');
 }
 
 interface NewItemDraft {

@@ -3,10 +3,14 @@ package io.aria.conductor.app;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -17,11 +21,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class V71SeedTaskDeadlineConfigTest {
 
+    private static DataSource dataSource;
     private static JdbcTemplate jdbc;
 
     @BeforeAll
     static void migrateFreshDatabase() {
-        DataSource dataSource = new DriverManagerDataSource(
+        dataSource = new DriverManagerDataSource(
                 "jdbc:h2:mem:v71seed;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE", "sa", "");
         Flyway.configure()
                 .dataSource(dataSource)
@@ -39,5 +44,20 @@ class V71SeedTaskDeadlineConfigTest {
 
         assertThat(row.get("config_value")).isEqualTo("45");
         assertThat((String) row.get("description")).contains("range: 1-1440");
+    }
+
+    @Test
+    void reseedingTheDeadlineDoesNotDuplicateTheRow() throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            ScriptUtils.executeSqlScript(connection,
+                    new ClassPathResource("db/migration/V71__seed_task_deadline_config.sql"));
+            ScriptUtils.executeSqlScript(connection,
+                    new ClassPathResource("db/migration/V71__seed_task_deadline_config.sql"));
+        }
+
+        Integer rows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM system_config WHERE config_key = ?",
+                Integer.class, "aria.tasks.deadline-minutes");
+        assertThat(rows).isEqualTo(1);
     }
 }

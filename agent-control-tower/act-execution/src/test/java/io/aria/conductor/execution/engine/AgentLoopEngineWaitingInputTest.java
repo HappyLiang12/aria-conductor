@@ -267,6 +267,38 @@ class AgentLoopEngineWaitingInputTest {
     }
 
     @Test
+    void completeRunCompletedConsumesButDoesNotPersistAStaleTerminationFailure() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        Run run = new Run();
+        when(runRepository.findById(runId)).thenReturn(Optional.of(run));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+        // A refused deadline stop leaves the run free to finish normally; the recorded
+        // intent must be consumed (not leak) and must not label the COMPLETED run.
+        when(inputCoordinator.consumeTerminationFailure(runId))
+                .thenReturn(new RunInputCoordinator.TerminationFailure(
+                        "Run deadline reached at 2026-10-20T12:00:00Z",
+                        "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG"));
+
+        engine.completeRun(ctx, RunStatus.COMPLETED);
+
+        verify(inputCoordinator).consumeTerminationFailure(runId);
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getStatus()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(saved.getValue().getErrorMessage()).isNull();
+        assertThat(saved.getValue().getErrorCode()).isNull();
+        assertThat(saved.getValue().getErrorSurface()).isNull();
+
+        ArgumentCaptor<RunCompletedEvent> published = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue().getErrorMessage()).isNull();
+        assertThat(published.getValue().getErrorCode()).isNull();
+        assertThat(published.getValue().getErrorSurface()).isNull();
+    }
+
+    @Test
     void completeRunFailureWithoutAMessagePersistsAnHonestFallbackInsteadOfNull() {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());

@@ -154,7 +154,7 @@ export function KnowledgePage() {
       setConfirmReview(null);
     },
     onError: (err) =>
-      setToast(apiErrorMessage(err, 'Review failed.')),
+      setToast(apiErrorMessage(err, (err as Error)?.message ?? 'Review failed.')),
   });
 
   const batchMut = useMutation({
@@ -168,7 +168,7 @@ export function KnowledgePage() {
       setConfirmReview(null);
     },
     onError: (err) =>
-      setToast(apiErrorMessage(err, 'Review failed.')),
+      setToast(apiErrorMessage(err, (err as Error)?.message ?? 'Review failed.')),
   });
 
   const createMut = useMutation({

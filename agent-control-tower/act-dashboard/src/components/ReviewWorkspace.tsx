@@ -242,7 +242,11 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
                         marginTop: 8,
                       }}
                     >
-                      <RunErrorNotice message={linkedRun.errorMessage} />
+                      <RunErrorNotice
+                        message={linkedRun.errorMessage}
+                        surface={linkedRun.errorSurface}
+                        code={linkedRun.errorCode}
+                      />
                     </div>
                   )}
                   {linkedRun.finalOutput && (

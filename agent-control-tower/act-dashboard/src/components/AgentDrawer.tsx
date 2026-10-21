@@ -521,7 +521,11 @@ export function AgentDrawer() {
                       marginBottom: 12,
                     }}
                   >
-                    <RunErrorNotice message={replayRun.errorMessage} />
+                    <RunErrorNotice
+                      message={replayRun.errorMessage}
+                      surface={replayRun.errorSurface}
+                      code={replayRun.errorCode}
+                    />
                   </div>
                 </>
               )}

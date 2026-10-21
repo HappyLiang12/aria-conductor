@@ -144,6 +144,43 @@ describe('NotificationBell one-click synthesis', () => {
   });
 });
 
+describe('NotificationBell load failures', () => {
+  it('shows an unread-count failure on the bell even while the dropdown is closed', async () => {
+    mockGetUnreadCount.mockRejectedValue(new Error('Network Error'));
+    mockListNotifications.mockResolvedValue({ content: [], totalElements: 0, totalPages: 1 });
+
+    render(
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>,
+    );
+
+    const reason = 'The unread notification count could not be loaded.';
+    expect(await screen.findByRole('img', { name: reason })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/ }));
+    await act(async () => {});
+    expect(await screen.findByRole('alert')).toHaveTextContent(reason);
+  });
+
+  it('renders the served list failure instead of a generic line', async () => {
+    mockListNotifications.mockRejectedValue({
+      response: { data: { error: 'Notification feed is unavailable.' } },
+    });
+
+    render(
+      <MemoryRouter>
+        <NotificationBell />
+      </MemoryRouter>,
+    );
+    await act(async () => {}); // flush the unread-count fetch
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/ }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Notification feed is unavailable.');
+    expect(screen.queryByText('Failed to load notifications')).not.toBeInTheDocument();
+  });
+});
+
 describe('NotificationBell approval.expired rendering', () => {
   it('renders the expiry icon and keeps the feed intact', async () => {
     const expired = notification({

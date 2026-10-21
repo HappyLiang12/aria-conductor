@@ -88,7 +88,7 @@ export default function HousekeepingPanel() {
           .join(' · '),
       );
     } catch (e) {
-      setReceipt('Cleanup failed: ' + apiErrorMessage(e, 'unknown error'));
+      setReceipt('Cleanup failed: ' + apiErrorMessage(e, (e as Error)?.message ?? 'unknown error'));
     }
   };
 

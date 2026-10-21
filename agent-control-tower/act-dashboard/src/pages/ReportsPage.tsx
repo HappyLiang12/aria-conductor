@@ -703,7 +703,7 @@ function extractError(err: unknown): string | null {
   if (err === null || err === undefined) {
     return null;
   }
-  return apiErrorMessage(err, '') || null;
+  return apiErrorMessage(err, (err as Error)?.message ?? '') || null;
 }
 
 export default ReportsPage;

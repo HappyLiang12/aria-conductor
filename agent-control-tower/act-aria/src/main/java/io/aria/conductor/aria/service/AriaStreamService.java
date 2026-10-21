@@ -9,6 +9,7 @@ import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunErrorText;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SkillContext;
 import io.aria.conductor.common.service.SkillContextProvider;
@@ -101,7 +102,7 @@ public class AriaStreamService {
             if (run != null) {
                 try {
                     run.setStatus(RunStatus.FAILED);
-                    run.setErrorMessage("Stream startup failed: " + ex.getMessage());
+                    run.setErrorMessage(RunErrorText.bound("Stream startup failed: " + ex.getMessage()));
                     runRepository.save(run);
                 } catch (Exception ignored) { /* best-effort */ }
             }

@@ -9,9 +9,13 @@ import org.springframework.boot.autoconfigure.flyway.FlywayMigrationStrategy;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Map;
 import java.util.UUID;
 
@@ -53,9 +57,14 @@ class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
         FlywayMigrationStrategy addRunErrorColumnsAfterThePinnedMigration(DataSource dataSource) {
             return flyway -> {
                 flyway.migrate();
-                JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-                jdbc.execute("ALTER TABLE runs ADD COLUMN error_code VARCHAR(64)");
-                jdbc.execute("ALTER TABLE runs ADD COLUMN error_surface VARCHAR(32)");
+                // The real V70 script, not a copy: a drift between the shim and the
+                // migration would let this context boot on a schema production never has.
+                try (Connection connection = dataSource.getConnection()) {
+                    ScriptUtils.executeSqlScript(connection,
+                            new ClassPathResource("db/migration/V70__run_error_contract.sql"));
+                } catch (SQLException e) {
+                    throw new IllegalStateException("Failed to apply V70 after the pinned migration", e);
+                }
             };
         }
     }

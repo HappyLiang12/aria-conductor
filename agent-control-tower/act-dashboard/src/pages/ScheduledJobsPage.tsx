@@ -102,9 +102,9 @@ export function ScheduledJobsPage() {
     queryFn: () => listJobs({ category: categoryParam, status: statusParam }),
   });
 
-  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setDeletingJob(null); }, onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, 'Operation failed.')); setDeletingJob(null); } });
-  const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, 'Operation failed.')); } });
-  const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, 'Operation failed.')); } });
+  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setDeletingJob(null); }, onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.')); setDeletingJob(null); } });
+  const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.')); } });
+  const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.')); } });
 
   const categoryEmoji: Record<string, string> = { REMINDER: '🔔', MONITOR: '📊', BRIEF: '📋' };
 

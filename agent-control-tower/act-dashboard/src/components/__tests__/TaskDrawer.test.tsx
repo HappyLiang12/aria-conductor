@@ -193,6 +193,28 @@ describe('TaskDrawer linked run result (D4)', () => {
     expect(await screen.findByText('tool call blew up')).toBeInTheDocument();
   });
 
+  it('render_taskDrawer_usesTheServedSurfaceForTheRepairAction', async () => {
+    // The wording avoids every legacy text matcher: only the persisted surface
+    // can produce the Configure action here.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(
+      mkRun({
+        status: 'FAILED',
+        finalOutput: null,
+        errorMessage: 'The operator credential for this core is missing.',
+        errorSurface: 'LLM_PROVIDERS',
+        errorCode: 'RUNTIME_CREDENTIAL_NOT_CONFIGURED',
+      }),
+    );
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    expect(await screen.findByText('The operator credential for this core is missing.'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Configure → LLM Providers' }))
+      .toBeInTheDocument();
+  });
+
   it('render_taskDrawer_withoutRunId_doesNotFetchRun', async () => {
     mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: null }));
     renderDrawer();

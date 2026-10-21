@@ -1935,9 +1935,6 @@ public class AgentLoopEngine {
     record CompletionFailure(String message, String code, String surface) {
     }
 
-    /** The persisted column is VARCHAR(2000); leave room for the truncation marker. */
-    private static final int MAX_PERSISTED_ERROR_LENGTH = 2000;
-
     /**
      * The operator-facing reason persisted with a settling run: the joined turn
      * errors, else the recorded termination reason (e.g. the run deadline), else
@@ -1954,9 +1951,13 @@ public class AgentLoopEngine {
         if (!joined.isEmpty()) {
             return new CompletionFailure(boundedError(joined), ctx.getErrorCode(), ctx.getErrorSurface());
         }
+        // Always consumed so a stale intent cannot outlive its run; applied only
+        // when the run did not complete, because a stop that was refused (e.g. at
+        // the deadline) leaves the prompt free to finish normally.
         RunInputCoordinator.TerminationFailure termination =
                 inputCoordinator.consumeTerminationFailure(ctx.getRunId());
-        if (termination != null && termination.message() != null && !termination.message().isBlank()) {
+        if (finalStatus != RunStatus.COMPLETED
+                && termination != null && termination.message() != null && !termination.message().isBlank()) {
             return new CompletionFailure(boundedError(termination.message()),
                     termination.code(), termination.surface());
         }
@@ -1966,15 +1967,7 @@ public class AgentLoopEngine {
     }
 
     static String boundedError(String message) {
-        if (message == null) {
-            return "";
-        }
-        if (message.length() <= 1900) {
-            return message;
-        }
-        int keep = 1850;
-        return message.substring(0, keep) + "... [truncated, "
-                + (message.length() - keep) + " more characters]";
+        return RunErrorText.bound(message);
     }
 
     /**
@@ -2116,7 +2109,7 @@ public class AgentLoopEngine {
             // No context — try to update run directly
             runRepository.findById(runId).ifPresent(run -> {
                 run.setStatus(RunStatus.FAILED);
-                run.setErrorMessage(errorMessage);
+                run.setErrorMessage(RunErrorText.bound(errorMessage));
                 run.setCompletedAt(Instant.now());
                 runRepository.save(run);
             });

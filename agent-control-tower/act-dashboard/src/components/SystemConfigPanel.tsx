@@ -207,9 +207,11 @@ export function SystemConfigPanel() {
               const dirty = isDirty(meta.key);
               const desc = configMap[meta.key]?.description ?? '';
               const numVal = Number(val);
-              const outOfRange =
+              // An out-of-range value is silently clamped by the runtime, so it must
+              // never look saved: block Save instead of only tinting the border.
+              const invalidValue =
                 val !== '' &&
-                (!isNaN(numVal) && (numVal < meta.min || numVal > meta.max));
+                (!Number.isFinite(numVal) || numVal < meta.min || numVal > meta.max);
 
               return (
                 <div
@@ -225,7 +227,7 @@ export function SystemConfigPanel() {
                       ? 'rgba(91,140,255,.06)'
                       : 'rgba(255,255,255,.02)',
                     border: `1px solid ${
-                      outOfRange
+                      invalidValue
                         ? 'rgba(255,107,122,.5)'
                         : dirty
                         ? 'rgba(91,140,255,.35)'
@@ -281,10 +283,13 @@ export function SystemConfigPanel() {
                       min={meta.min}
                       max={meta.max}
                       step={meta.step}
+                      aria-label={meta.label}
+                      aria-invalid={invalidValue || undefined}
+                      title={invalidValue ? `Value must be between ${meta.min} and ${meta.max}` : undefined}
                       value={val}
                       onChange={(e) => handleChange(meta.key, e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSave(meta.key);
+                        if (e.key === 'Enter' && !invalidValue) handleSave(meta.key);
                       }}
                       style={{
                         width: '100%',
@@ -316,8 +321,8 @@ export function SystemConfigPanel() {
                     <button
                       type="button"
                       className="btn"
-                      title="Save"
-                      disabled={!dirty || saveMutation.isPending}
+                      title={`Save ${meta.label}`}
+                      disabled={!dirty || invalidValue || saveMutation.isPending}
                       onClick={() => handleSave(meta.key)}
                       style={{
                         padding: '5px 8px',

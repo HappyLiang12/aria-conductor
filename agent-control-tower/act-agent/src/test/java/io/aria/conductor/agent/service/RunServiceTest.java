@@ -5,6 +5,8 @@ import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
@@ -139,8 +141,12 @@ class RunServiceTest {
         CreateRunRequest request = CreateRunRequest.builder()
                 .agentId(agentId).promptSeed("p").maxIterations(5).build();
 
+        String expectedCode = status == HealthStatus.RETIRED ? "AGENT_RETIRED" : "AGENT_UNHEALTHY";
         assertThatThrownBy(() -> service.createRun(request))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOfSatisfying(ActionableIllegalArgumentException.class, rejection -> {
+                    assertThat(rejection.code()).isEqualTo(expectedCode);
+                    assertThat(rejection.surface()).isEqualTo(ErrorSurface.CREW);
+                });
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
     }

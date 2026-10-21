@@ -53,7 +53,7 @@ export default function TemplateEditorModal({ item, onClose, onSaved }: Props) {
       }
       onSaved();
     } catch (e: unknown) {
-      setError(apiErrorMessage(e, 'Save failed'));
+      setError(apiErrorMessage(e, (e as Error)?.message ?? 'Save failed'));
     } finally {
       setSaving(false);
     }

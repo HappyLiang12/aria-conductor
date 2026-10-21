@@ -837,6 +837,17 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * control request and nothing else changes.
      */
     public CompletionStage<ControlAck> cancel(UUID runId) {
+        return cancel(runId, null, null, null);
+    }
+
+    /**
+     * Cancels the run like {@link #cancel(UUID)} and, when the stop is verified,
+     * records {@code reason}/{@code code}/{@code surface} as the run's termination
+     * failure. Recording only after verification keeps a refused stop from
+     * attaching a failure the run never reached (the prompt may then finish
+     * normally).
+     */
+    public CompletionStage<ControlAck> cancel(UUID runId, String reason, String code, String surface) {
         RunRuntimeRegistry.RunRuntime runtime = requireRuntime(runId, "cancel");
         try {
             runtime.session().cancel(cleanupDeadline()).toCompletableFuture().join();
@@ -864,7 +875,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         // waiting records a sticky termination intent instead, so a park call in
         // the between-turns window returns the finalize signal at once rather
         // than parking a run that is already terminal (Plan B task 6 ruling 1).
-        inputs.recordTerminationIntent(runId);
+        inputs.recordTerminationIntent(runId, reason, code, surface);
         return CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true));
     }
 
@@ -1093,12 +1104,13 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                                 runId, e.getMessage());
                     }
                     // The run settles as CANCELLED; without this reason the dashboard
-                    // would show a cancellation with no explanation.
-                    inputs.recordTerminationIntent(runId, "Run deadline reached at " + deadline
-                            + " (aria.tasks.deadline-minutes in Configure > System Config)."
-                            + " Re-dispatch with a longer deadline or split the task.",
+                    // would show a cancellation with no explanation. The cancel records
+                    // it only after its stop is verified, so a refused stop does not
+                    // leave a deadline failure on a run that kept running.
+                    cancel(runId, "Run deadline reached at " + deadline
+                                    + " (aria.tasks.deadline-minutes in Configure > System Config)."
+                                    + " Re-dispatch with a longer deadline or split the task.",
                             "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
-                    cancel(runId);
                 }
             } catch (RuntimeException e) {
                 log.error("Run {}: enforcing the run deadline failed: {}", runId, e.getMessage());

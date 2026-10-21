@@ -13,7 +13,8 @@ export function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [countError, setCountError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -22,8 +23,11 @@ export function NotificationBell() {
   // Fetch initial unread count on mount
   useEffect(() => {
     getUnreadCount()
-      .then(c => setUnreadCount(c.unreadCount))
-      .catch((err) => setActionError(apiErrorMessage(err, 'The unread notification count could not be loaded.')));
+      .then(c => {
+        setUnreadCount(c.unreadCount);
+        setCountError(null);
+      })
+      .catch((err) => setCountError(apiErrorMessage(err, 'The unread notification count could not be loaded.')));
   }, []);
 
   // Listen for aria.notification WebSocket events
@@ -36,10 +40,10 @@ export function NotificationBell() {
     setOpen(prev => !prev);
     if (!open) {
       setLoading(true);
-      setError(false);
+      setListError(null);
       listNotifications(0, 20)
         .then(data => setNotifications(data.content))
-        .catch(() => setError(true))
+        .catch((err) => setListError(apiErrorMessage(err, 'Notifications could not be loaded.')))
         .finally(() => setLoading(false));
     }
   };
@@ -157,6 +161,11 @@ export function NotificationBell() {
       >
         🔔
         {unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+        {countError && (
+          // The failure notice otherwise lives inside the closed dropdown, so the
+          // bell would keep looking healthy with no count at all.
+          <span className="notif-error-dot" role="img" aria-label={countError} title={countError}>!</span>
+        )}
       </button>
 
       {open && (
@@ -173,6 +182,11 @@ export function NotificationBell() {
             </button>
           </div>
           <div className="notif-dropdown-list" aria-live="polite">
+            {countError && (
+              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
+                {countError}
+              </div>
+            )}
             {actionError && (
               <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
                 {actionError}
@@ -180,8 +194,8 @@ export function NotificationBell() {
             )}
             {loading ? (
               <div className="notif-empty">Loading…</div>
-            ) : error ? (
-              <div className="notif-empty" style={{ color: 'var(--red)' }}>Failed to load notifications</div>
+            ) : listError ? (
+              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">{listError}</div>
             ) : notifications.length === 0 ? (
               <div className="notif-empty">No notifications yet</div>
             ) : (

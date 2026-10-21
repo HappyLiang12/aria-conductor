@@ -280,7 +280,7 @@ export function WorkflowsPage() {
     // rendered in this page's existing inline error banner.
     onError: (err: unknown) => {
       setDeletingId(null);
-      setDeleteError(apiErrorMessage(err, 'Operation failed.'));
+      setDeleteError(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.'));
     },
   });
 

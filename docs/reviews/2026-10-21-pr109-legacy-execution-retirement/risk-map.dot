@@ -65,13 +65,13 @@ digraph RiskMap {
     packs [label="ToolPackController\npack_credentials", fillcolor="#e2e8f0"];
     git [label="GitBranchConfig\nGIT_PACK_ID handoff", fillcolor="#e2e8f0"];
     deleted_e2e [label="Deleted: git-pack-governance.spec.ts\nagent-tool-skill-recommendations.spec.ts\nharness-governance.spec.ts", fillcolor="#f1f5f9"];
-    r04 [label="R-04 MEDIUM 2 x 2 = 4\npack credential E2E gap", fillcolor="#fef3c7", color="#d97706"];
+    r04 [label="R-04 MEDIUM 2 x 2 = 4\npack credential E2E never existed\n(pre-existing)", fillcolor="#fef3c7", color="#d97706"];
     r06 [label="R-06 LOW 2 x 1 = 2\nresidual tool vocabulary", fillcolor="#f1f5f9"];
 
     git -> packs [label="resolves token", color="#334155"];
     packs -> r06 [color="#64748b"];
-    deleted_e2e -> r04 [label="removed coverage", color="#d97706"];
-    packs -> r04 [style=dashed, label="no e2e now", color="#d97706"];
+    deleted_e2e -> r04 [label="registration/risk-tier\ncoverage removed", color="#d97706"];
+    packs -> r04 [style=dashed, label="credential E2E\nnever existed", color="#d97706"];
   }
 
   subgraph cluster_contract {

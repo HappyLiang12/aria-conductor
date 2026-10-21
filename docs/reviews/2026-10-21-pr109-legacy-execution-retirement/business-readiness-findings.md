@@ -18,9 +18,9 @@ and knowledge versioning. The dimensions below apply to those workflows.
 
 ### B-01: SDD spec review now grounds the operator decision in the real artifact (positive)
 
-The BA run's captured `spec.md` is read verbatim (bounded at 50K chars) instead of relying on a
-summary. This directly improves the spec-approval business step: the reviewer sees what the BA
-wrote, not a model-generated digest.
+The BA run's captured `spec.md` is read in full after conservative cleanup (bounded at 50K chars)
+instead of relying on a summary. This directly improves the spec-approval business step: the
+reviewer sees what the BA wrote, not a model-generated digest.
 
 Evidence: `SpecReviewCoordinator.java:280-315`; `SpecReviewCoordinatorTest` 25/25.
 Risk: the file handoff depends on a duplicated result-root contract (R-03).
@@ -54,14 +54,16 @@ may confuse this with the removed tool-execution governance.
 Evidence: `ToolPackController.java:14-19`; `V69:11-13` retains definitions for audit.
 Validation: document the distinction in `docs/architecture.md`; R-06.
 
-### B-05: Regression coverage is honest about what was removed, but one retained path lost E2E (medium)
+### B-05: Regression coverage is honest about what was removed; the retained credential path never had E2E (medium)
 
 Three governance specs were deleted because their features are gone; one spec was trimmed to its
-runtime-agnostic approvals case. The coverage map records that no run-owned replacement exists for
-pack registration, risk tiers, or harness tool removal. The risk is the retained pack credential
-path, not the removed features.
+runtime-agnostic approvals case. The deleted git-pack spec covered pack registration and risk
+tiers, not credential handoff. The coverage map records that no run-owned replacement exists for
+those removed features. The residual risk is the retained pack credential path, which never had
+E2E coverage; it is pre-existing, not introduced by this PR.
 
-Evidence: `e2e/agent-core/coverage-map.json:1458-1470`.
+Evidence: `e2e/agent-core/coverage-map.json:1458-1470`; deleted `git-pack-governance.spec.ts` at
+`5d16e349` (registration `:49-68`, risk tiers `:28,75-90`; no credential case).
 Validation: add the pack credential E2E or record the drop decision (R-04).
 
 ### B-06: Agent instructions now match the runtime (positive)

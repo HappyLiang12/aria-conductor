@@ -71,8 +71,10 @@ the same root.
 
 ## Priority 3 — R-04: Pack credential coverage (Medium)
 
-**Problem:** The tool-pack governance E2E spec was deleted with the retirement, but the pack API and
-credential resolution remain live for git handoff. There is no E2E coverage for the retained path.
+**Problem:** The deleted tool-pack governance E2E spec covered pack registration and risk tiers,
+not credential handoff. The pack API and credential resolution remain live for git handoff, and the
+credential path never had E2E coverage. The gap is pre-existing; deleting the adjacent spec removes
+the closest coverage and makes it more visible.
 
 **Action:** either add one focused E2E (register pack → store credential → run git handoff) or make
 the explicit product decision to drop pack management and move the git token to configuration.
@@ -87,8 +89,10 @@ retirement decision.
 **Problem:** V69 deletes assignment rows, nulls assignment columns, and deletes config keys. There is
 no automated pre-upgrade backup check.
 
-**Action:** add the backup and Flyway-repair procedure to the release notes and the upgrade
-documentation. Optionally add a startup warning when V69 is pending on a non-empty legacy surface.
+**Action:** add the pre-upgrade backup and restore procedure to the release notes and the upgrade
+documentation. Restoring a pre-upgrade backup is sufficient because Flyway re-applies V69 on the
+next start; no repair step is normally needed. Optionally add a startup warning when V69 is pending
+on a non-empty legacy surface.
 
 **Validation gate:** upgrade rehearsal on a staging copy of a pre-V69 database.
 **Owner assumption:** release/operations maintainers.
@@ -105,10 +109,10 @@ documentation. Optionally add a startup warning when V69 is pending on a non-emp
 
 | ID | Attribute | Tool | Rule | CI point | Status |
 |----|-----------|------|------|----------|--------|
-| FF-01 | No legacy agent type | `git grep` | `AgentType.NATIVE` and `agent_type = 'NATIVE'` absent from source | CI lint step | Passing |
+| FF-01 | No legacy agent type | `git grep -- 'agent-control-tower/*/src/main/java'` | `AgentType.NATIVE` absent from production Java; migrations and migration tests may reference the literal intentionally | CI lint step | Passing |
 | FF-02 | Migration postconditions | JUnit (`MigrationIntegrationTest`) | V69 expires only legacy-gate asks; live asks stay pending; survivor config remains | `act-app` tests | Passing |
 | FF-03 | Cancel never resurrects | JUnit (`AgentLoopEngineCoreDispatchTest`) | A committed `CANCELLED` run never launches or returns to `RUNNING` | `act-execution` tests | Passing |
-| FF-04 | Spec fidelity | JUnit (`SpecReviewCoordinatorTest`) | Captured `spec.md` is preferred, bounded at 50K chars, with a logged fallback | `act-knowledge` tests | Passing |
+| FF-04 | Spec fidelity | JUnit (`SpecReviewCoordinatorTest`) | Captured `spec.md` is preferred, bounded at 50K chars, cleaned conservatively; missing-file fallback to `finalOutput` is currently silent (R-03), read exceptions are logged | `act-knowledge` tests | Passing for fidelity; fallback observability tracked by R-03 |
 | FF-05 | Bulk status writes keep `updatedAt` | Reflection test over `RunRepository` `@Query` strings | Every status-updating bulk query also sets `updatedAt` | `act-agent` tests | Proposed |
 | FF-06 | Single result root | Spring wiring test | Capture and read resolve the same canonical path for a non-default configuration | `act-app` tests | Proposed |
 

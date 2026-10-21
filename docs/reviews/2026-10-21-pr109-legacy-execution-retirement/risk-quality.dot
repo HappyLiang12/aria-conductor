@@ -32,11 +32,11 @@ digraph RiskQuality {
     r01 [fillcolor="#fee2e2", color="#b91c1c", label="R-01 Cancel does not stop the live core\n2 x 3 = 6 HIGH (pre-existing)"];
     r02 [fillcolor="#fee2e2", color="#b91c1c", label="R-02 No per-run token cap\n2 x 3 = 6 HIGH (accepted)"];
     r03 [fillcolor="#fef3c7", color="#d97706", label="R-03 SDD spec read via duplicated\nfilesystem contract\n2 x 2 = 4 MEDIUM (introduced)"];
-    r04 [fillcolor="#fef3c7", color="#d97706", label="R-04 Pack credential E2E coverage\nremoved with governance specs\n2 x 2 = 4 MEDIUM (introduced)"];
+    r04 [fillcolor="#fef3c7", color="#d97706", label="R-04 Pack credential E2E gap\n(never had coverage; pre-existing)\n2 x 2 = 4 MEDIUM (surfaced by PR)"];
     r05 [fillcolor="#fef3c7", color="#d97706", label="R-05 V69 destructive migration\n1 x 3 = 3 MEDIUM (introduced)"];
-    r06 [fillcolor="#f1f5f9", color="#64748b", label="R-06 Residual tool/pack schema\n2 x 1 = 2 LOW"];
+    r06 [fillcolor="#f1f5f9", color="#64748b", label="R-06 Residual tool/pack schema\n2 x 1 = 2 LOW (retention decision)"];
     r07 [fillcolor="#f1f5f9", color="#64748b", label="R-07 Approval decide-vs-sweep race\n1 x 2 = 2 LOW (pre-existing)"];
-    r08 [fillcolor="#f1f5f9", color="#64748b", label="R-08 REST/MCP agentType asymmetry\n1 x 2 = 2 LOW (documented)"];
+    r08 [fillcolor="#f1f5f9", color="#64748b", label="R-08 REST/MCP agentType asymmetry\n1 x 2 = 2 LOW (introduced, documented)"];
     { rank=same; r01; r02; r03; r04; }
     { rank=same; r05; r06; r07; r08; }
   }

@@ -18,6 +18,8 @@ directly observed are labelled INFERRED or UNKNOWN in the review.
 | `grep -n "result-root" .../application.yml` | `113: result-root: ${ARIA_WORKSPACES_RESULT_ROOT:./data/workspaces/results}` |
 | `grep -n "capture\|resultRoot" .../RunWorkspaceService.java` | `:87`, `:91`, `:107`, `:243-250` |
 | `grep -n "legacyExecutionRetirement" .../coverage-map.json` | `:1458-1470` |
+| `git show 5d16e349:agent-control-tower/act-dashboard/e2e/git-pack-governance.spec.ts \| grep -n "credential"` | no matches: the deleted spec covered pack registration (`:49-68`) and risk tiers (`:28,75-90`), not credentials |
+| `git grep -n "AgentType.NATIVE" -- "agent-control-tower/*/src/main/java"` | no matches in production Java; the literal remains in V69 and the migration test |
 
 ## Test Evidence (run on reviewed head)
 
@@ -69,6 +71,7 @@ directly observed are labelled INFERRED or UNKNOWN in the review.
 - `remediation-plan.md`
 - `business-readiness-findings.md`
 - `evidence.md` (this file)
+- Index: `../2026-10-21-pr109-legacy-execution-retirement.md`
 
 ## Render Command
 

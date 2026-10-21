@@ -37,7 +37,7 @@ currently supports or refutes it. Status is judged from code, tests, and CI — 
 | Stimulus | BA writes `spec.md`; runtime finalizes with a verified stop and captures artifacts |
 | Artifact | `SpecReviewCoordinator`, `RunWorkspaceService.capture` |
 | Response | SPEC_REVIEW shows the full captured spec, up to 50K chars |
-| Measure | Content equals the captured file; fallback only when the file is absent/unreadable |
+| Measure | Content equals the captured file after conservative cleanup (preambles/chatter stripped); fallback only when the file is absent/unreadable |
 | Current status | PASS for the golden path; DEGRADED under config drift |
 | Evidence | `SpecReviewCoordinator.java:280-315`; `RunWorkspaceService.java:243-250`; `SpecReviewCoordinatorTest` (25/25); `application.yml:113` |
 | Action | Track R-03; unify the result-root contract or expose a runtime-owned lookup |
@@ -53,7 +53,7 @@ currently supports or refutes it. Status is judged from code, tests, and CI — 
 | Measure | Exact postconditions asserted row by row |
 | Current status | PASS |
 | Evidence | `MigrationIntegrationTest.java:81-135`; V69 lines 28-37; CI `act-app` tests green |
-| Action | Keep the backup/repair note in release instructions (R-05) |
+| Action | Keep the pre-upgrade backup/restore note in release instructions (R-05) |
 
 ## QS-05: Cost containment under a runaway run (cost)
 
@@ -77,8 +77,8 @@ currently supports or refutes it. Status is judged from code, tests, and CI — 
 | Artifact | `ToolPackController`, `PackCredentialService`, `GitBranchConfig` |
 | Response | Token resolves from stored pack credentials |
 | Measure | Handoff succeeds with a registered pack; pack approval enables no tools |
-| Current status | PARTIAL — runtime path exists, E2E governance spec was deleted |
-| Evidence | `ToolPackController.java:14-19`; `e2e/agent-core/coverage-map.json:1458-1470` |
+| Current status | PARTIAL — runtime path exists; the credential handoff never had E2E, and the adjacent governance spec (registration/risk tiers) was deleted with the removed features |
+| Evidence | `ToolPackController.java:14-19`; `e2e/agent-core/coverage-map.json:1458-1470`; deleted `git-pack-governance.spec.ts` covered registration/risk tiers only |
 | Action | Track R-04; add a focused E2E or explicitly drop the surface |
 
 ## Summary

@@ -67,8 +67,7 @@ class GlobalExceptionHandlerMappingTest {
         var response = handler.handleBudgetExceeded(new BudgetExceededException(150, 100));
         assertStandardBody(response, HttpStatus.TOO_MANY_REQUESTS);
         assertThat(response.getBody().get("message")).isEqualTo("Token budget exceeded: used 150, limit 100."
-                + " Raise circuit.breaker.max.tokens.per.run in Configure > System Config,"
-                + " or split the task into smaller runs.");
+                + " Split the task into smaller runs.");
     }
 
     @Test

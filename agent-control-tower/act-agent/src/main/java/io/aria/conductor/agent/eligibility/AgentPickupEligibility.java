@@ -17,7 +17,7 @@ import java.util.List;
  * drift apart — the previous duplicate predicate did exactly that.
  *
  * <p>A {@code null} pickup flag counts as enabled: rows written before the
- * column existed and model-less NATIVE agents must stay pickable.
+ * column existed must stay pickable.
  */
 @Component
 public class AgentPickupEligibility {

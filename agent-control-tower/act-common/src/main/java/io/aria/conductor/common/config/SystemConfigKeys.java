@@ -6,7 +6,7 @@ package io.aria.conductor.common.config;
  * execution binding at admission and cannot be re-resolved afterwards.
  *
  * <p>This is the one definition the admin API validates against, the runtime
- * reads through and the V71 migration guard asserts. The dashboard mirrors the
+ * reads through and the V73 migration guard asserts. The dashboard mirrors the
  * same metadata in {@code src/utils/runDeadline.ts}; its contract test fails
  * as soon as one side changes without the other.
  */

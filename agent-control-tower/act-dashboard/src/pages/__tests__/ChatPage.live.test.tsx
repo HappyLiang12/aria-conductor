@@ -13,7 +13,7 @@ vi.mock('../../api/runs', () => ({
   injectRunMessage: vi.fn().mockResolvedValue({ id: 'inj-1', turnNumber: 1 }),
 }));
 vi.mock('../../api/agents', () => ({
-  listAgents: vi.fn().mockResolvedValue([{ id: 'a-1', name: 'Aria', role: 'assistant', agentType: 'NATIVE', healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode', createdAt: '2026-01-01T00:00:00Z' }]),
+  listAgents: vi.fn().mockResolvedValue([{ id: 'a-1', name: 'Aria', role: 'assistant', agentType: 'ADK', healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode', createdAt: '2026-01-01T00:00:00Z' }]),
 }));
 
 let mockCtx: { lastMessage: WsEvent | null; isConnected: boolean } = {

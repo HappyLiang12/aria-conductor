@@ -16,12 +16,12 @@ no removed provider to select.
 |--------|---------------|------------|
 | `act-common` | Shared models, DTOs, repositories, events, exceptions | `agent-control-tower/act-common/src/main/java/io/aria/conductor/common/` |
 | `act-agent` | Agent lifecycle: creation, config, health, templates | `agent-control-tower/act-agent/src/main/java/io/aria/conductor/agent/` |
-| `act-execution` | Tool execution engine, LLM client, core runtime (coordinator, adapters, backends), circuit breaker | `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/ExecutionModule.java` |
+| `act-execution` | LLM client, run-owned core runtime (coordinator, launcher, adapters, Host/Sandbox backends), approvals, workflows | `agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/ExecutionModule.java` |
 | `act-knowledge` | Knowledge base CRUD, versioning, Git-backed storage | `agent-control-tower/act-knowledge/src/main/java/io/aria/conductor/knowledge/` |
 | `act-aria` | Aria AI assistant: chat sessions, orchestration, scheduled jobs | `agent-control-tower/act-aria/src/main/java/io/aria/conductor/aria/AriaModule.java` |
 | `act-dashboard-api` | REST API controllers for dashboard | `agent-control-tower/act-dashboard-api/src/main/java/io/aria/conductor/dashboard/DashboardModule.java` |
 | `act-app` | Spring Boot entry point, config, Flyway migrations | `agent-control-tower/act-app/src/main/java/io/aria/conductor/ActApplication.java` |
-| `act-test-support` | Shared test utilities, mock ADK, test data builders | `agent-control-tower/act-test-support/src/main/java/io/aria/conductor/test/` |
+| `act-test-support` | Shared test utilities and test data builders | `agent-control-tower/act-test-support/src/main/java/io/aria/conductor/test/` |
 | `act-dashboard` | React frontend (pages, components, API layer) | `agent-control-tower/act-dashboard/src/App.tsx` |
 | `opencode-sandbox` | Container image (docker/podman) for the OpenCode sandbox (SANDBOX mode) | `agent-control-tower/opencode-sandbox/Dockerfile` |
 | `packages/mcp-server` | MCP protocol server (TypeScript) | `packages/mcp-server/src/server.ts` |
@@ -58,7 +58,7 @@ no removed provider to select.
 
 | Area | Risk | Check Command |
 |------|------|---------------|
-| Execution engine / circuit breaker | Runaway LLM calls, token overconsumption | `cd agent-control-tower && mvn test -pl act-execution` |
+| Execution engine / core runtime | Runaway LLM calls, unbounded token consumption (no per-run token cap; runs are bounded by the wall-clock deadline) | `cd agent-control-tower && mvn test -pl act-execution` |
 | Agent lifecycle / core admission | Agent startup failure, unsupported core/mode accepted | `cd agent-control-tower && mvn test -pl act-agent` |
 | Run coordinator / run-owned core runtime | Run stuck in RUNNING, unverifiable stop, frozen-binding mismatch | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*CoreExecution*"` |
 | Approval gate state machine | Invalid state transitions block workflows | `cd agent-control-tower && mvn test -pl act-common` |

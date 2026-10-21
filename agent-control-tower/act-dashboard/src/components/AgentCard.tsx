@@ -19,7 +19,6 @@ import { estimateCost } from '../utils/pricing';
 export interface AgentCardProps {
   agent: Agent;
   telemetry?: AgentTelemetry;
-  onManageTools?: (agent: Agent) => void;
   /** H3 bulk selection: when provided, renders a selection checkbox. */
   selected?: boolean;
   onSelect?: () => void;
@@ -87,7 +86,7 @@ function computeActivityLevel(callCount: number): number {
   return 6;
 }
 
-export function AgentCard({ agent, telemetry, onManageTools, selected, onSelect }: AgentCardProps) {
+export function AgentCard({ agent, telemetry, selected, onSelect }: AgentCardProps) {
   const status = liveStatusFor(agent);
   const role = agent.role || agent.agentType.toLowerCase();
   const avatarKind = avatarClassFor(role);
@@ -174,18 +173,7 @@ export function AgentCard({ agent, telemetry, onManageTools, selected, onSelect 
 
       <div className="meta-foot">
         <span className="chip">{agent.model || agent.agentType}</span>
-        <span>{agent.provider || 'native'}</span>
-        {onManageTools && (
-          <button
-            type="button"
-            className="chip"
-            title="Assign tools"
-            style={{ cursor: 'pointer', border: 'none', marginLeft: 'auto' }}
-            onClick={(e) => { e.stopPropagation(); onManageTools(agent); }}
-          >
-            🔧 Tools
-          </button>
-        )}
+        <span>{agent.provider || '—'}</span>
       </div>
     </article>
   );

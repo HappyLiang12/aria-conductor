@@ -113,7 +113,7 @@ class RunDispatchGroupMigrationIntegrationTest extends BaseH2IntegrationTest {
     private Agent createAgent(String name) {
         return agentRepository.saveAndFlush(Agent.builder()
                 .name(name)
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .adkProvider("opencode")
                 .healthStatus(HealthStatus.HEALTHY)
                 .pickupEnabled(Boolean.TRUE)

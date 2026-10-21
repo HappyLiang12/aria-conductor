@@ -32,7 +32,7 @@ class WorkflowRegressionIntegrationTest extends BaseH2IntegrationTest {
     private String createAgent(String name) {
         Map<String, Object> request = Map.of(
                 "name", name,
-                "agentType", "NATIVE",
+                "agentType", "ADK",
                 "description", "Regression test agent"
         );
         ResponseEntity<Map> response = restTemplate.postForEntity(

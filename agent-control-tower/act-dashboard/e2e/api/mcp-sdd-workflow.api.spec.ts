@@ -143,9 +143,10 @@ test('mcp: external client instantiates development-workflow, approves the gate,
       throw e;
     }
     // The deterministic harness's BA completion, exactly: the coordinator prefers the
-    // BA sandbox's /workspace/spec.md and falls back to the run's finalOutput, which
-    // is the fixture completion there. The former "content is markdown" assumption is
-    // retired with the same re-pin sdd-workflow.spec.ts carries.
+    // spec.md exported into the BA run's result directory and falls back to the run's
+    // finalOutput, which is the fixture completion (the harness writes no spec.md).
+    // The former "content is markdown" assumption is retired with the same re-pin
+    // sdd-workflow.spec.ts carries.
     expect(approval.content).toBe('fixture-complete');
     expect(approval.knowledgeItemId).toBeTruthy();
 

@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link ExecutionBindingMigrationIntegrationTest}.
  *
  * <p>The current {@code Run} entity selects the error-contract columns that
- * V70 adds after the pinned target; {@link SchemaCompatConfig} adds them right
+ * V72 adds after the pinned target; {@link SchemaCompatConfig} adds them right
  * after the pinned migration so the old-schema context can still boot.
  */
 @SpringBootTest(
@@ -57,13 +57,13 @@ class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
         FlywayMigrationStrategy addRunErrorColumnsAfterThePinnedMigration(DataSource dataSource) {
             return flyway -> {
                 flyway.migrate();
-                // The real V70 script, not a copy: a drift between the shim and the
+                // The real V72 script, not a copy: a drift between the shim and the
                 // migration would let this context boot on a schema production never has.
                 try (Connection connection = dataSource.getConnection()) {
                     ScriptUtils.executeSqlScript(connection,
-                            new ClassPathResource("db/migration/V70__run_error_contract.sql"));
+                            new ClassPathResource("db/migration/V72__run_error_contract.sql"));
                 } catch (SQLException e) {
-                    throw new IllegalStateException("Failed to apply V70 after the pinned migration", e);
+                    throw new IllegalStateException("Failed to apply V72 after the pinned migration", e);
                 }
             };
         }
@@ -84,7 +84,7 @@ class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
         UUID agentId = UUID.randomUUID();
         jdbcTemplate.update(
                 "INSERT INTO agents (id, name, agent_type, health_status, created_at) "
-                        + "VALUES (CAST(? AS UUID), ?, 'NATIVE', 'HEALTHY', CURRENT_TIMESTAMP)",
+                        + "VALUES (CAST(? AS UUID), ?, 'ADK', 'HEALTHY', CURRENT_TIMESTAMP)",
                 agentId.toString(), "review-ask-repair-agent");
 
         // approvals.run_id carries an FK to runs, so the asks need a real run row.

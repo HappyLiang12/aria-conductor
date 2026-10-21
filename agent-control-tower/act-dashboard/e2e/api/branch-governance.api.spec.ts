@@ -106,7 +106,7 @@ test('SDD branch handoff creates the chain branch on a real GitHub remote (local
   for (const role of ['ba', 'dev', 'qa']) {
     if (!roles.has(role)) {
       const created = await request.post(`${API_URL}/api/v1/agents`, {
-        data: { name: `sdd-${role}-${Date.now()}`, role, agentType: 'NATIVE' },
+        data: { name: `sdd-${role}-${Date.now()}`, role, agentType: 'ADK' },
       });
       expect(created.ok()).toBeTruthy();
     }

@@ -15,12 +15,8 @@ import io.aria.conductor.common.model.AgentSkillId;
 import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.SkillContext;
-import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.repository.AgentSkillRepository;
-import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.RoleSkillTemplateRepository;
-import io.aria.conductor.common.repository.RoleToolTemplateRepository;
-import io.aria.conductor.common.repository.ToolDefinitionRepository;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -57,10 +53,8 @@ class AgentServiceTest {
     @Mock AgentRepository agentRepository;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ObjectMapper objectMapper;
-    @Mock AgentToolRepository agentToolRepository;
-    @Mock ToolDefinitionRepository toolDefinitionRepository;
     @Mock SkillContextProvider skillProvider;
-    @Mock AgentSkillRepository agentSkillRepository;    @Mock RoleToolTemplateRepository roleToolTemplateRepository;
+    @Mock AgentSkillRepository agentSkillRepository;
     @Mock RoleSkillTemplateRepository roleSkillTemplateRepository;
     @Mock AgentExecutionPolicy executionPolicy;
     @Spy AgentPickupEligibility eligibility = new AgentPickupEligibility();
@@ -82,7 +76,7 @@ class AgentServiceTest {
 
     private Agent existingWorker() {
         return Agent.builder().id(agentId).name("worker").role("dev")
-                .agentType(AgentType.NATIVE).healthStatus(HealthStatus.HEALTHY)
+                .agentType(AgentType.ADK).healthStatus(HealthStatus.HEALTHY)
                 .pickupEnabled(Boolean.TRUE).build();
     }
 
@@ -125,24 +119,21 @@ class AgentServiceTest {
     }
 
     @Test
-    void getRoleDefaultsReturnsEnabledToolsAndSkills() {
-        when(roleToolTemplateRepository.findDefaultToolIdsByRole("dev")).thenReturn(List.of("t1"));
-        when(toolDefinitionRepository.findAllById(List.of("t1"))).thenReturn(List.of(
-                ToolDefinition.builder().id("t1").name("read_file").enabled(true).build()));
-        when(roleSkillTemplateRepository.findDefaultSkillIdsByRole("dev")).thenReturn(List.of());
-        when(skillProvider.getEnabledSkillsByIds(List.of())).thenReturn(List.of());
+    void getRoleDefaultsReturnsEnabledSkills() {
+        when(roleSkillTemplateRepository.findDefaultSkillIdsByRole("dev")).thenReturn(List.of("s1"));
+        when(skillProvider.getEnabledSkillsByIds(List.of("s1")))
+                .thenReturn(List.of(new SkillContext("s1", "triage", "d", "t", "SKILL")));
 
         RoleDefaultsResponse defaults = service.getRoleDefaults("dev");
 
-        assertThat(defaults.tools()).hasSize(1);
-        assertThat(defaults.tools().get(0).getName()).isEqualTo("read_file");
-        assertThat(defaults.skills()).isEmpty();
+        assertThat(defaults.skills()).hasSize(1);
+        assertThat(defaults.skills().get(0).id()).isEqualTo("s1");
     }
 
     @Test
     void responseReportsEligibilityAndReasons() {
         Agent aria = Agent.builder().id(AriaConstants.ARIA_AGENT_ID).name("Aria")
-                .agentType(AgentType.NATIVE).healthStatus(HealthStatus.HEALTHY)
+                .agentType(AgentType.ADK).healthStatus(HealthStatus.HEALTHY)
                 .pickupEnabled(Boolean.TRUE).build();
 
         AgentResponse response = service.toResponse(aria);
@@ -181,7 +172,7 @@ class AgentServiceTest {
                 new IllegalArgumentException("Unsupported agent core: langchain"));
 
         assertThatThrownBy(() -> service.createAgent(CreateAgentRequest.builder()
-                .name("legacy").agentType(AgentType.NATIVE).adkProvider("langchain").build()))
+                .name("legacy").agentType(AgentType.ADK).adkProvider("langchain").build()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Unsupported agent core: langchain");
         verify(agentRepository, never()).save(any());
@@ -193,7 +184,7 @@ class AgentServiceTest {
                 new IllegalArgumentException("Direct workspace requires an explicitly selected directory"));
 
         assertThatThrownBy(() -> service.createAgent(CreateAgentRequest.builder()
-                .name("direct-without-path").agentType(AgentType.NATIVE).adkProvider("opencode")
+                .name("direct-without-path").agentType(AgentType.ADK).adkProvider("opencode")
                 .workspaceMode(WorkspaceMode.DIRECT).build()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Direct workspace requires an explicitly selected directory");
@@ -211,7 +202,7 @@ class AgentServiceTest {
                 "qoder", ExecutionMode.HOST, WorkspaceMode.WORKTREE, "C:/repo", "main"));
 
         AgentResponse response = service.createAgent(CreateAgentRequest.builder()
-                .name("worker").agentType(AgentType.NATIVE).adkProvider("qoder")
+                .name("worker").agentType(AgentType.ADK).adkProvider("qoder")
                 .executionMode(ExecutionMode.HOST).workspaceMode(WorkspaceMode.WORKTREE)
                 .workspacePath("C:/repo").workspaceBaseRef("main").build());
 
@@ -265,12 +256,12 @@ class AgentServiceTest {
 
     private Agent fleetAgent(String adkProvider, ExecutionMode executionMode) {
         return Agent.builder().id(UUID.randomUUID()).name("worker-" + adkProvider)
-                .agentType(AgentType.NATIVE).adkProvider(adkProvider).executionMode(executionMode)
+                .agentType(AgentType.ADK).adkProvider(adkProvider).executionMode(executionMode)
                 .healthStatus(HealthStatus.HEALTHY).pickupEnabled(Boolean.TRUE).build();
     }
 
     private CreateAgentRequest aCreateRequest(String adkProvider, ExecutionMode executionMode) {
-        return CreateAgentRequest.builder().name("new-worker").agentType(AgentType.NATIVE)
+        return CreateAgentRequest.builder().name("new-worker").agentType(AgentType.ADK)
                 .adkProvider(adkProvider).executionMode(executionMode).build();
     }
 
@@ -326,12 +317,12 @@ class AgentServiceTest {
         // guard compares EFFECTIVE pairs on both sides, so the next default create on
         // such a fleet must not be refused as an off-fleet write.
         when(agentRepository.findAll()).thenReturn(List.of(
-                Agent.builder().id(UUID.randomUUID()).name("seed").agentType(AgentType.NATIVE)
+                Agent.builder().id(UUID.randomUUID()).name("seed").agentType(AgentType.ADK)
                         .adkProvider("opencode").healthStatus(HealthStatus.HEALTHY).build()));
         when(agentRepository.save(any(Agent.class))).thenAnswer(inv -> inv.getArgument(0));
 
         AgentResponse response = service.createAgent(CreateAgentRequest.builder()
-                .name("second-default").agentType(AgentType.NATIVE).build());
+                .name("second-default").agentType(AgentType.ADK).build());
 
         assertThat(response.getAdkProvider()).isEqualTo("opencode");
     }

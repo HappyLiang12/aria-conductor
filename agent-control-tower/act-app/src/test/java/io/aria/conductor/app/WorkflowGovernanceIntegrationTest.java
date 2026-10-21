@@ -28,7 +28,7 @@ class WorkflowGovernanceIntegrationTest extends BaseH2IntegrationTest {
         // 1. Create an agent
         Map<String, Object> agentRequest = Map.of(
                 "name", "GovAgent-" + UUID.randomUUID().toString().substring(0, 8),
-                "agentType", "NATIVE",
+                "agentType", "ADK",
                 "description", "Agent for governance test",
                 "role", "governance-tester"
         );
@@ -83,7 +83,7 @@ class WorkflowGovernanceIntegrationTest extends BaseH2IntegrationTest {
         // Create agent
         Map<String, Object> agentRequest = Map.of(
                 "name", "StepAgent-" + UUID.randomUUID().toString().substring(0, 8),
-                "agentType", "NATIVE",
+                "agentType", "ADK",
                 "description", "Agent for step test"
         );
         ResponseEntity<Map> agentResponse = restTemplate.postForEntity(

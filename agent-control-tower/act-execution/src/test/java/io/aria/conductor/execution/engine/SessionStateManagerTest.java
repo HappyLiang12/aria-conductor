@@ -2,9 +2,6 @@ package io.aria.conductor.execution.engine;
 
 import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.SessionStatus;
-import io.aria.conductor.execution.llm.LlmResponse;
-import io.aria.conductor.execution.llm.LlmToolCall;
-import io.aria.conductor.execution.pipeline.ActionResult;
 import io.aria.conductor.execution.repository.AgentSessionRepository;
 import io.aria.conductor.test.TestDataBuilder;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,7 +10,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,10 +22,10 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Behaviour tests for {@link SessionStateManager} — the in-memory session cache with
- * write-through persistence. Covers load-or-create precedence (cache → DB → new), turn/token
- * accumulation, memory append semantics, and the no-op guards that protect against operating
- * on an un-cached run.
+ * Behaviour tests for {@link SessionStateManager} — the in-memory session cache
+ * with final-state persistence. Covers load-or-create precedence (cache → DB →
+ * new), clear semantics, and the no-op guards that protect against operating on
+ * an un-cached run.
  */
 @ExtendWith(MockitoExtension.class)
 class SessionStateManagerTest {
@@ -44,10 +40,6 @@ class SessionStateManagerTest {
     @BeforeEach
     void setUp() {
         manager = new SessionStateManager(sessionRepository);
-    }
-
-    private LlmResponse response(String content, int in, int out, List<LlmToolCall> toolCalls) {
-        return new LlmResponse(content, in, out, "stop", toolCalls);
     }
 
     // --- loadOrCreateSession ---
@@ -90,83 +82,6 @@ class SessionStateManagerTest {
         assertThat(loaded.getTurnCount()).isEqualTo(7);
         assertThat(again).isSameAs(persisted);
         verify(sessionRepository, times(1)).findById(runId); // only the first miss hits the DB
-    }
-
-    // --- updateSession ---
-
-    @Test
-    void updateSession_accumulatesTokensTurnsAndSeedsMemory() {
-        when(sessionRepository.findById(runId)).thenReturn(Optional.empty());
-        AgentSession session = manager.loadOrCreateSession(runId, agentId);
-
-        manager.updateSession(runId, response("hello world", 100, 40, List.of()),
-                List.of(ActionResult.success("ok")));
-
-        assertThat(session.getTurnCount()).isEqualTo(1);
-        assertThat(session.getTotalInputTokens()).isEqualTo(100);
-        assertThat(session.getTotalOutputTokens()).isEqualTo(40);
-        assertThat(session.getMemory())
-                .startsWith("[Turn] content=hello world")
-                .contains("results=1");
-    }
-
-    @Test
-    void updateSession_appendsMemoryWithNewline_onSubsequentTurns() {
-        when(sessionRepository.findById(runId)).thenReturn(Optional.empty());
-        AgentSession session = manager.loadOrCreateSession(runId, agentId);
-
-        manager.updateSession(runId, response("first", 10, 5, List.of()), List.of());
-        manager.updateSession(runId, response("second", 20, 10, List.of()), List.of());
-
-        assertThat(session.getTurnCount()).isEqualTo(2);
-        assertThat(session.getTotalInputTokens()).isEqualTo(30);
-        assertThat(session.getMemory())
-                .contains("content=first")
-                .contains("\n[Turn] content=second");
-    }
-
-    @Test
-    void updateSession_recordsToolCallCount_whenResponseHasToolCalls() {
-        when(sessionRepository.findById(runId)).thenReturn(Optional.empty());
-        AgentSession session = manager.loadOrCreateSession(runId, agentId);
-
-        manager.updateSession(runId,
-                response("calling", 5, 5, List.of(new LlmToolCall("id-1", "read_file", "{}"))),
-                List.of());
-
-        assertThat(session.getMemory()).contains("toolCalls=1");
-    }
-
-    @Test
-    void updateSession_isNoOp_whenSessionNotCached() {
-        // No loadOrCreate first — the run is unknown.
-        manager.updateSession(runId, response("x", 10, 10, List.of()), List.of());
-
-        assertThat(manager.getSession(runId)).isNull();
-        verify(sessionRepository, never()).save(any());
-    }
-
-    // --- persistSession ---
-
-    @Test
-    void persistSession_savesAndReCachesReturnedInstance() {
-        when(sessionRepository.findById(runId)).thenReturn(Optional.empty());
-        manager.loadOrCreateSession(runId, agentId);
-        AgentSession reattached = TestDataBuilder.anAgentSession()
-                .withRunId(runId).withAgentId(agentId).withTurnCount(3).build();
-        when(sessionRepository.save(any())).thenReturn(reattached);
-
-        manager.persistSession(runId);
-
-        verify(sessionRepository).save(any(AgentSession.class));
-        // Re-cache: subsequent reads return the persisted (version-synced) instance.
-        assertThat(manager.getSession(runId)).isSameAs(reattached);
-    }
-
-    @Test
-    void persistSession_isNoOp_whenSessionNotCached() {
-        manager.persistSession(runId);
-        verify(sessionRepository, never()).save(any());
     }
 
     // --- clearSession ---

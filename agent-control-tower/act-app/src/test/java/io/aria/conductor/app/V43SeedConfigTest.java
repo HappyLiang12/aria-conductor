@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       taskApprovalRequired=false and maxToolCallRounds=15.</li>
  *   <li>The development-workflow template's per-step max_iterations are all >= 15.</li>
  *   <li>The BA prompt includes the required spec sections (Acceptance Criteria).</li>
- *   <li>The circuit-breaker per-run token budget is 300000.</li>
+ *   <li>V69 retires the circuit-breaker configuration it no longer has a reader for.</li>
  * </ul>
  * A standalone Flyway datasource (unique DB name) is used instead of the shared
  * {@code act_test} database so cross-test {@code cleanup-all.sql} truncation cannot
@@ -125,19 +125,21 @@ class V43SeedConfigTest {
     }
 
     @Test
-    void v48_baPrompt_writesFullSpecToSandboxFile() {
+    void v70_baPrompt_writesFullSpecToTheRunWorkspace() {
         String yaml = templateYaml();
-        // BA prompt: write the FULL spec to /workspace/spec.md so the backend can
-        // read it; finalOutput carries only a short summary plus the SPEC_ID marker.
-        assertThat(yaml).contains("/workspace/spec.md");
+        // BA prompt: write the FULL spec to spec.md in the run working directory so
+        // the backend can read the exported file; finalOutput carries only a short
+        // summary plus the SPEC_ID marker.
+        assertThat(yaml).contains("Write the FULL spec text to the file spec.md in your working directory");
+        assertThat(yaml).doesNotContain("/workspace/spec.md");
         assertThat(yaml).contains("short summary alone is NOT enough");
     }
 
     @Test
-    void systemConfig_tokenBudgetIs300000() {
-        String value = jdbc.queryForObject(
-                "SELECT config_value FROM system_config WHERE config_key = 'circuit.breaker.max.tokens.per.run'",
-                String.class);
-        assertThat(value).isEqualTo("300000");
+    void systemConfig_retiredCircuitBreakerKeysAreGone() {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM system_config WHERE config_key LIKE 'circuit.breaker.%'",
+                Integer.class);
+        assertThat(count).isZero();
     }
 }

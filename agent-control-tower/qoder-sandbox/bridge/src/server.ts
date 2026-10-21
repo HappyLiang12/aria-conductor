@@ -126,9 +126,9 @@ export interface BridgeServerOptions {
   /** One line per request: route, status and session id at most, never a body. */
   log?: (line: string) => void;
   /**
-   * The host's approval window PLUS the provider's documented margin (G8): the value the host
+   * The host's approval window PLUS the documented margin (G8): the value the host
    * expires every ask with is `approvals.timeout-ms`, forwarded as `APPROVAL_TIMEOUT_MS` by
-   * `main.ts` after `QoderAdkProvider` padded it (the host anchors its expiry at persist time,
+   * `main.ts` with that margin applied (the host anchors its expiry at persist time,
    * after the bridge handled the frame, so the raw window would let the bridge reject first).
    * Applied per ask as `min(now + window, session run deadline)`; a test may inject a shorter one.
    */

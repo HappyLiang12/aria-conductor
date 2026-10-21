@@ -48,8 +48,7 @@ class DomainExceptionMessageTest {
     void budgetExceeded_formatsUsedAndLimit() {
         BudgetExceededException ex = new BudgetExceededException(5000L, 4096L);
         assertThat(ex).hasMessage("Token budget exceeded: used 5000, limit 4096."
-                + " Raise circuit.breaker.max.tokens.per.run in Configure > System Config,"
-                + " or split the task into smaller runs.");
+                + " Split the task into smaller runs.");
     }
 
     @Test

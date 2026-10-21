@@ -51,13 +51,13 @@ class ExecutionSettingsTest {
 
     @Test
     void agentExecutionMetadataIsExposedAsNullableColumns() {
-        Agent legacy = Agent.builder().name("legacy").agentType(AgentType.NATIVE).build();
+        Agent legacy = Agent.builder().name("legacy").agentType(AgentType.ADK).build();
         assertThat(legacy.getExecutionMode()).isNull();
         assertThat(legacy.getWorkspaceMode()).isNull();
         assertThat(legacy.getWorkspacePath()).isNull();
         assertThat(legacy.getWorkspaceBaseRef()).isNull();
 
-        Agent host = Agent.builder().name("host").agentType(AgentType.NATIVE)
+        Agent host = Agent.builder().name("host").agentType(AgentType.ADK)
                 .executionMode(ExecutionMode.HOST)
                 .workspaceMode(WorkspaceMode.DIRECT)
                 .workspacePath("C:/projects/example")

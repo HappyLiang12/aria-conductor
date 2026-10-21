@@ -145,7 +145,7 @@ function executionSelection(opts: ExecutionSelectionOpts) {
 }
 
 /**
- * POST /agents — NATIVE agents are created HEALTHY, so they are immediately
+ * POST /agents — agents are created HEALTHY, so they are immediately
  * runnable. Optional explicit core/mode/workspace selection is passed through
  * to the same fields the Crew create form submits.
  */
@@ -156,7 +156,7 @@ export async function seedAgent(
 ) {
   const { status, data } = await apiCall(request, 'POST', '/agents', {
     name: name ?? uniqueName('e2e-agent'),
-    agentType: 'NATIVE',
+    agentType: 'ADK',
     description: 'Seeded by Phase E e2e fixtures',
     ...executionSelection(opts),
   });
@@ -542,11 +542,18 @@ export async function pollRunTerminal(
  * appear in the same poll window, so it is deliberately left untouched.
  * This helper waits for the FIRST of exactly two documented outcomes:
  *
- *  - a PENDING ask for this run exists: every ask is approved once through
+ *  - a PENDING gate ask for this run exists: every ask is approved once through
  *    {@link decideApproval} (whose response is verified field by field, so an
  *    unprocessed decision throws rather than passing) and the wait continues
  *    until the run is terminal; or
- *  - the run reaches a terminal state with no undecided ask for it.
+ *  - the run reaches a terminal state: it can no longer be gated, so the helper
+ *    returns with only the asks it actually approved.
+ *
+ * A terminal run can no longer be gated, so the terminal check comes first and
+ * skips the approval read entirely: the post-run REVIEW_REQUEST ask that the
+ * kanban review flow raises for the run's mirror card is display-only and must
+ * never be counted as a settled gate. Callers that assert an exact approved
+ * ask count still fail if fewer asks were approved before the terminal state.
  *
  * It never treats an absent ask as a pass: the returned outcome names which of
  * the two happened, and the caller asserts the exact terminal evidence either
@@ -564,6 +571,9 @@ export async function settleRunApproval(
     if (status !== 200) {
       throw new Error(`settleRunApproval could not read run ${runId}: HTTP ${status}`);
     }
+    if ((TERMINAL_RUN_STATES as readonly string[]).includes(run?.status)) {
+      return { approvedAskIds: [...decided] };
+    }
     const { data: approvals } = await apiCall(request, 'GET', '/approvals');
     const pending = (Array.isArray(approvals) ? approvals : []).filter(
       (a: any) => a.status === 'PENDING'
@@ -575,9 +585,6 @@ export async function settleRunApproval(
       await decideApproval(request, next.id, true, 'API E2E operator approval (one-use grant)');
       decided.add(next.id);
       continue;
-    }
-    if ((TERMINAL_RUN_STATES as readonly string[]).includes(run?.status)) {
-      return { approvedAskIds: [...decided] };
     }
     if (Date.now() > deadline) {
       throw new Error(

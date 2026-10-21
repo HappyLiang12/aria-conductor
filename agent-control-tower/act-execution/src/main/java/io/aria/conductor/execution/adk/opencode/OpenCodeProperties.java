@@ -5,7 +5,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -48,26 +47,10 @@ public class OpenCodeProperties {
      */
     private Map<String, String> sandboxEnv = new LinkedHashMap<>();
 
-    /** Default task timeout in minutes (used when TaskContext.maxDuration is null). */
-    private int maxTaskMinutes = 45;
-
-    /**
-     * Interval between sandbox TTL renewals while a long synchronous task is
-     * executing. The OpenSandbox SDK's own heartbeat fires too late at the
-     * 30-minute TTL boundary (R3-F2), so this provider renews proactively.
-     */
-    private Duration sandboxRenewInterval = Duration.ofMinutes(5);
-
     /**
      * Default target repository URL used as a fallback when an SDD workflow
      * template declares {@code {repoUrl}} but the caller omits it
      * (env: {@code SDD_REPO_URL}).
      */
     private String repoUrl = "";
-
-    /** S9/S10: progress pump poll interval in ms (opencode.progress-poll-ms). */
-    private long progressPollMs = 2000;
-
-    /** S9/S10: thinking coalesce window in ms (opencode.progress-coalesce-ms). */
-    private long progressCoalesceMs = 400;
 }

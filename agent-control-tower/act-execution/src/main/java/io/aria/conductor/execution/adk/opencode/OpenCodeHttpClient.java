@@ -14,7 +14,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,7 +31,6 @@ import java.util.concurrent.Executors;
  *   <li>{@code POST /session/:id/message} — send a message and wait for the response, returns {@code {info, parts}}</li>
  *   <li>{@code POST /session/:id/abort} — abort a running session, returns {@code boolean}</li>
  *   <li>{@code GET /global/health} — returns {@code {healthy, version}}</li>
- *   <li>{@code GET /session/:id/message} — list session messages {@code [{info, parts}]} (S7 progress pump)</li>
  * </ul>
  *
  * <p>HTTP errors are mapped to {@link TaskExecutionException} with
@@ -43,9 +41,9 @@ import java.util.concurrent.Executors;
 public class OpenCodeHttpClient implements AutoCloseable {
 
     /**
-     * Default request timeout applied to non-task paths (abort / health probes).
-     * Task paths ({@link #sendMessage(String, String, String, Duration)}) use the
-     * per-request deadline derived from the run budget instead of this default.
+     * Default request timeout applied to control paths (session open / abort /
+     * health probes). Prompt sends carry the per-run deadline derived from the
+     * run budget instead of this default.
      */
     public static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofMinutes(5);
 
@@ -93,39 +91,21 @@ public class OpenCodeHttpClient implements AutoCloseable {
     }
 
     /**
-     * Create a new session.
-     *
-     * @param title session title (typically the run id)
-     * @return the created session id
-     */
-    public String createSession(String title) {
-        return createSession(title, true);
-    }
-
-    /**
      * Open a new session with single-shot semantics (task 11 governed session
      * path): a retried {@code POST /session} whose response was lost would open
      * a second native session the run does not know about, so the governed path
-     * never retries a non-idempotent creation call. The legacy
-     * {@link #createSession(String)} keeps its retrying transport for the
-     * existing ADK provider.
+     * never retries a non-idempotent creation call.
      *
      * @param title session title (typically the run id)
      * @return the created session id
      */
     public String openSession(String title) {
-        return createSession(title, false);
-    }
-
-    private String createSession(String title, boolean retry) {
         ObjectNode body = objectMapper.createObjectNode();
         if (title != null && !title.isBlank()) {
             body.put("title", title);
         }
         String payload = body.isEmpty() ? "{}" : toJson(body);
-        HttpResponse<String> resp = retry
-                ? send("POST", "/session", payload, requestTimeout)
-                : sendNoRetry("POST", "/session", payload, requestTimeout);
+        HttpResponse<String> resp = sendNoRetry("POST", "/session", payload, requestTimeout);
         if (resp.statusCode() / 100 != 2) {
             throw providerError("POST /session returned status " + resp.statusCode());
         }
@@ -136,41 +116,6 @@ public class OpenCodeHttpClient implements AutoCloseable {
         }
         log.debug("OpenCode session created: {}", id);
         return id;
-    }
-
-    /**
-     * Send a message to a session and wait for the agent's response.
-     *
-     * @param sessionId    target session
-     * @param systemPrompt system prompt (may be {@code null})
-     * @param userPrompt   user task prompt
-     * @return parsed message response
-     */
-    public MessageResponse sendMessage(String sessionId, String systemPrompt, String userPrompt) {
-        return sendMessage(sessionId, systemPrompt, userPrompt, requestTimeout);
-    }
-
-    /**
-     * Send a message with an explicit timeout (used to bound task execution).
-     *
-     * @throws TaskExecutionException {@code TIMEOUT} if the request exceeds {@code timeout},
-     *                                {@code PROVIDER_ERROR} on HTTP errors
-     */
-    public MessageResponse sendMessage(String sessionId, String systemPrompt, String userPrompt, Duration timeout) {
-        ObjectNode body = objectMapper.createObjectNode();
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            body.put("system", systemPrompt);
-        }
-        ArrayNode parts = body.putArray("parts");
-        parts.addObject().put("type", "text").put("text", userPrompt == null ? "" : userPrompt);
-
-        Duration effectiveTimeout = timeout != null ? timeout : requestTimeout;
-        HttpResponse<String> resp = send("POST", "/session/" + sessionId + "/message",
-                toJson(body), effectiveTimeout);
-        if (resp.statusCode() / 100 != 2) {
-            throw providerError("POST /session/" + sessionId + "/message returned status " + resp.statusCode());
-        }
-        return parseMessageResponse(resp.body());
     }
 
     /**
@@ -336,113 +281,12 @@ public class OpenCodeHttpClient implements AutoCloseable {
         }
     }
 
-    /**
-     * S7: snapshot of one session message for the progress pump.
-     */
-    public record MessageSnapshot(String id, List<PartSnapshot> parts) { }
-
-    /**
-     * S7: fault-tolerant snapshot of a message part. Missing fields stay null.
-     */
-    public record PartSnapshot(String id, String type, String text, String toolName, String state) { }
-
-    /** Pump polling timeout — deliberately short; never reuse the 5min task timeout. */
-    public static final Duration LIST_MESSAGES_TIMEOUT = Duration.ofSeconds(10);
-
-    /**
-     * S7: list session messages for the progress pump ({@code GET /session/:id/message}).
-     *
-     * <p>Degradation contract: any non-2xx, I/O failure or malformed body yields an
-     * EMPTY list (logged at debug) — the pump must never blow up the task path.
-     */
-    public List<MessageSnapshot> listMessages(String sessionId) {
-        try {
-            HttpResponse<String> resp = sendNoRetry("GET", "/session/" + sessionId + "/message",
-                    null, LIST_MESSAGES_TIMEOUT);
-            if (resp.statusCode() / 100 != 2) {
-                log.debug("OpenCode listMessages {} returned status {}", sessionId, resp.statusCode());
-                return List.of();
-            }
-            JsonNode root = objectMapper.readTree(resp.body());
-            if (!root.isArray()) {
-                return List.of();
-            }
-            List<MessageSnapshot> out = new ArrayList<>();
-            for (JsonNode msg : root) {
-                String id = msg.path("info").path("id").asText(null);
-                List<PartSnapshot> parts = new ArrayList<>();
-                JsonNode partsNode = msg.path("parts");
-                if (partsNode.isArray()) {
-                    for (JsonNode p : partsNode) {
-                        parts.add(new PartSnapshot(
-                                p.path("id").asText(null),
-                                p.path("type").asText(null),
-                                p.has("text") ? p.path("text").asText(null) : null,
-                                p.has("tool") ? p.path("tool").asText(null) : p.path("name").asText(null),
-                                p.path("state").path("status").asText(null)));
-                    }
-                }
-                out.add(new MessageSnapshot(id, parts));
-            }
-            return out;
-        } catch (TaskExecutionException e) {
-            log.debug("OpenCode listMessages failed for {}: {}", sessionId, e.getMessage());
-            return List.of();
-        } catch (Exception e) {
-            log.debug("OpenCode listMessages parse failed for {}: {}", sessionId, e.getMessage());
-            return List.of();
-        }
-    }
-
     // ---- internal helpers ----
 
     /**
-     * Send a request with retry on transient I/O failures.
-     *
-     * <p>Retries (up to 2, backoff 1s then 4s) only on {@link IOException}s that
-     * are NOT {@link HttpTimeoutException}: a connection reset is transient and
-     * worth retrying, but a timeout means the server is too slow to answer and
-     * must surface immediately as {@link TaskExecutionException.Cause#TIMEOUT}.
-     * Non-2xx responses are returned as-is (no retry).
-     */
-    private HttpResponse<String> send(String method, String path, String jsonBody, Duration timeout) {
-        return sendWithRetry(method, path, jsonBody, timeout);
-    }
-
-    /**
-     * Retry wrapper over {@link #sendOnce} — see {@link #send} for the policy.
-     */
-    private HttpResponse<String> sendWithRetry(String method, String path, String jsonBody, Duration timeout) {
-        final int maxRetries = 2;
-        for (int attempt = 0; ; attempt++) {
-            try {
-                return sendOnce(method, path, jsonBody, timeout);
-            } catch (HttpTimeoutException e) {
-                // HttpTimeoutException extends IOException — catch it FIRST so a
-                // timeout is translated to TIMEOUT without retrying.
-                throw timeoutError(method, path, timeout, e);
-            } catch (IOException e) {
-                if (attempt >= maxRetries) {
-                    throw providerError(method, path, e);
-                }
-                log.warn("OpenCode HTTP {} {} failed with {} - retrying attempt {}/{}",
-                        method, path, e.getClass().getSimpleName(), attempt + 1, maxRetries);
-                try {
-                    Thread.sleep(attempt == 0 ? 1_000L : 4_000L);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw abortedError(method, path, ie);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw abortedError(method, path, e);
-            }
-        }
-    }
-
-    /**
-     * Single-shot send with no retry — used by abort / health probes where a
-     * dead sandbox must fail fast instead of amplifying latency via backoff.
+     * Single-shot send with no retry: a retried non-idempotent core call could
+     * act twice, and a timeout must surface immediately instead of being
+     * amplified by backoff.
      */
     private HttpResponse<String> sendNoRetry(String method, String path, String jsonBody, Duration timeout) {
         try {
@@ -489,32 +333,6 @@ public class OpenCodeHttpClient implements AutoCloseable {
                 "OpenCode request interrupted: " + method + " " + path, e);
     }
 
-    private MessageResponse parseMessageResponse(String body) {
-        JsonNode root = parse(body);
-        JsonNode info = root.path("info");
-        JsonNode parts = root.path("parts");
-
-        String messageId = info.path("id").asText(null);
-        StringBuilder text = new StringBuilder();
-        if (parts.isArray()) {
-            for (JsonNode part : parts) {
-                if ("text".equals(part.path("type").asText())) {
-                    String t = part.path("text").asText();
-                    if (!t.isBlank()) {
-                        if (!text.isEmpty()) {
-                            text.append('\n');
-                        }
-                        text.append(t);
-                    }
-                }
-            }
-        }
-        JsonNode tokens = info.path("tokens");
-        int inputTokens = tokens.path("input").asInt(0);
-        int outputTokens = tokens.path("output").asInt(0);
-        return new MessageResponse(messageId, text.toString(), inputTokens, outputTokens);
-    }
-
     private JsonNode parse(String body) {
         try {
             return objectMapper.readTree(body);
@@ -544,17 +362,5 @@ public class OpenCodeHttpClient implements AutoCloseable {
             return "";
         }
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
-    }
-
-    /**
-     * Parsed result of {@code POST /session/:id/message}.
-     *
-     * @param messageId    id of the response {@code Message}
-     * @param finalOutput  concatenated text parts of the response
-     * @param inputTokens  prompt tokens reported by the message
-     * @param outputTokens completion tokens reported by the message
-     */
-    public record MessageResponse(String messageId, String finalOutput,
-                                  int inputTokens, int outputTokens) {
     }
 }

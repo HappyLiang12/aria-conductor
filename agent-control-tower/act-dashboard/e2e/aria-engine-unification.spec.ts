@@ -145,7 +145,7 @@ test('Agent creation with config.maxToolCallRounds', async ({ page }) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name,
-        agentType: 'NATIVE',
+        agentType: 'ADK',
         role: 'test',
         adkProvider: 'opencode',
         config: { maxToolCallRounds: 3 },

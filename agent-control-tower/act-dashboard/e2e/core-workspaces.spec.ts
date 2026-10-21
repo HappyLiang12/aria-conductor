@@ -24,7 +24,8 @@ import {
  * Carries the coverage-map rows whose replacement is this spec:
  *  - journey-knowledge-promotion.spec.ts (the knowledge-informed run tail that
  *    was LLM-gated becomes the harness-driven completed trajectory here)
- *  - harness-governance.spec.ts (workspace-diff preview)
+ *  - harness-governance.spec.ts (workspace-diff preview; the source spec was retired
+ *    with the legacy tool surface on 2026-10-21)
  *  - the workspace arms of the acceptance matrix V2 (invalid worktree request,
  *    concurrent Direct writer, dirty source preserved) whose reach path is the
  *    production admission wired in Task 18. The "dirty source preserved" arm IS
@@ -187,7 +188,8 @@ test('two concurrent Direct writers on one directory are exclusive', async ({ re
 });
 
 test('workspace-diff preview answers for a run without a workspace and for an owned one', async ({ request }) => {
-  // Ported from harness-governance.spec.ts: an unknown run answers exactly
+  // Ported from harness-governance.spec.ts (source retired with the legacy tool
+  // surface on 2026-10-21): an unknown run answers exactly
   // hasWorkspace=false (deterministic, no repository involved).
   const unknown = await apiCall(request, 'GET', '/runs/00000000-0000-0000-0000-0000000000ff/workspace-diff');
   expect(unknown.status).toBe(200);

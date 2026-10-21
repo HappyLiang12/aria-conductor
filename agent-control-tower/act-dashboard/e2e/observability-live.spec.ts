@@ -16,7 +16,7 @@ import {
  * S14: live observability e2e — dual-track acceptance.
  *
  * Track A (gate, runs WITHOUT an LLM key): exercises the WS-driven live UI on
- * a fast-failing NATIVE run — drawer Live Activity Stream (idle empty state,
+ * a fast-failing core run — drawer Live Activity Stream (idle empty state,
  * collapse toggle, WS lifecycle fold, retention), Runs live detail panel,
  * kanban transition final state, toast auto-dismiss.
  *

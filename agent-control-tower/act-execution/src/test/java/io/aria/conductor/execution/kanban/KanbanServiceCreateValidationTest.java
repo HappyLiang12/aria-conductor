@@ -106,7 +106,7 @@ class KanbanServiceCreateValidationTest {
     @Test
     void rejectsIneligibleDispatchTarget() {
         when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(Agent.builder()
-                .id(AGENT_ID).name("Disabled").agentType(AgentType.NATIVE)
+                .id(AGENT_ID).name("Disabled").agentType(AgentType.ADK)
                 .healthStatus(HealthStatus.HEALTHY).pickupEnabled(Boolean.FALSE).build()));
 
         assertThatThrownBy(() -> service.create(CreateKanbanItemRequest.builder()
@@ -138,7 +138,7 @@ class KanbanServiceCreateValidationTest {
     @Test
     void acceptsEligibleDispatchTarget() {
         when(agentRepository.findById(AGENT_ID)).thenReturn(Optional.of(Agent.builder()
-                .id(AGENT_ID).name("Worker").agentType(AgentType.NATIVE)
+                .id(AGENT_ID).name("Worker").agentType(AgentType.ADK)
                 .healthStatus(HealthStatus.HEALTHY).pickupEnabled(Boolean.TRUE).build()));
 
         KanbanItem item = service.create(CreateKanbanItemRequest.builder()

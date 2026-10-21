@@ -4,14 +4,10 @@ import io.aria.conductor.aria.intent.IntentClassifier;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
-import io.aria.conductor.common.service.ToolRegistry;
-import io.aria.conductor.execution.tool.ToolExecutionEngine;
 import io.aria.conductor.common.model.KnowledgeItem;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.common.model.Sensitivity;
-import io.aria.conductor.execution.llm.LlmClient;
-import io.aria.conductor.execution.llm.LlmProperties;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.knowledge.service.KnowledgeService;
@@ -44,33 +40,20 @@ class AriaKnowledgeContextTest {
     @Mock AgentLoopEngine agentLoopEngine;
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
-    @Mock LlmClient llmClient;
     @Mock IntentClassifier intentClassifier;
-    @Mock ToolExecutionEngine toolExecutionEngine;
-    @Mock ToolRegistry toolRegistry;
     @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
 
-    LlmProperties llmProperties;
     AriaService ariaService;
 
     @BeforeEach
     void setup() {
-        llmProperties = new LlmProperties();
-        llmProperties.setModel("gpt-4o-mini");
-        llmProperties.setBaseUrl("https://api.openai.com/v1");
-        llmProperties.setApiKey("test-key");
-
         ariaService = new AriaService(
                 agentLoopEngine,
                 agentRepository,
                 runRepository,
-                llmClient,
-                llmProperties,
                 intentClassifier,
-                toolRegistry,
-                toolExecutionEngine,
                 knowledgeService,
                 trajectoryRepository,
                 toolCallRepository

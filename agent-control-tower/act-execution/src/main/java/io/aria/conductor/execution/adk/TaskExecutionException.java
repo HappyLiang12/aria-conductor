@@ -1,8 +1,8 @@
 package io.aria.conductor.execution.adk;
 
 /**
- * Exception thrown when a task-level execution performed by a task-capable
- * {@link AdkProvider} fails.
+ * Exception thrown when a task-level execution performed by a run-owned core
+ * fails.
  *
  * <p>The {@link Cause} discriminates the failure category so callers can map
  * it onto run state transitions (e.g. FAILED vs ABORTED).

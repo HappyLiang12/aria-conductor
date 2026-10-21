@@ -14,8 +14,8 @@ import java.util.List;
 /**
  * Resolves the enabled SKILL-stage skills an agent should receive at runtime.
  *
- * <p>Mirrors {@link AgentToolResolver}: agent-specific assignments first, then
- * the role's default template, then a generic {@code WORKER} fallback. Skills
+ * <p>Resolution order: agent-specific assignments first, then the role's
+ * default template, then a generic {@code WORKER} fallback. Skills
  * are returned as {@link SkillContext} DTOs projected through the act-common
  * seam ({@link SkillContextProvider}) because act-execution cannot reference
  * {@code SkillDefinition}, which lives in act-knowledge.

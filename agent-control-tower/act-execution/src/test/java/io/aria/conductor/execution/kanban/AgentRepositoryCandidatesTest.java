@@ -34,7 +34,7 @@ class AgentRepositoryCandidatesTest {
     }
 
     private static Agent agent(UUID id, String name, String model, HealthStatus health, Boolean pickupEnabled) {
-        return Agent.builder().id(id).name(name).agentType(AgentType.NATIVE).model(model)
+        return Agent.builder().id(id).name(name).agentType(AgentType.ADK).model(model)
                 .healthStatus(health).pickupEnabled(pickupEnabled).build();
     }
 

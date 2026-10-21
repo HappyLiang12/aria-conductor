@@ -37,15 +37,14 @@
     {
       "id": "pw:agent-dev-workflow-governance.spec.ts",
       "path": "agent-control-tower/act-dashboard/e2e/agent-dev-workflow-governance.spec.ts",
-      "cases": 4,
+      "cases": 1,
       "representativeCases": [
-        "Aria is scoped to orchestration tools only (#25)",
-        "git pack tools carry the correct governance risk tiers"
+        "approvals API exposes enriched fields and the UI renders (#24)"
       ],
-      "purpose": "Dev-workflow governance: tool scoping, risk tiers and approval enrichment.",
+      "purpose": "Approvals API enrichment and the data-driven risk badge on the kanban Review column.",
       "runtimeAffected": false,
-      "replacement": "retained unchanged",
-      "rationale": "Governance assertions are runtime-agnostic; T17 keeps this spec and only its fixture base URL changes.",
+      "replacement": "retained (trimmed at the legacy-execution retirement on 2026-10-21: the tool-scoping and risk-tier cases died with the tool registry)",
+      "rationale": "The surviving case is runtime-agnostic. The removed cases asserted the retired tool catalogue and could not pass without it.",
       "status": "retain"
     },
     {
@@ -53,10 +52,10 @@
       "path": "agent-control-tower/act-dashboard/e2e/agent-tool-skill-recommendations.spec.ts",
       "cases": 3,
       "purpose": "Role-based tool/skill recommendations in the agent create/edit flow.",
-      "runtimeAffected": false,
-      "replacement": "retained unchanged",
-      "rationale": "Pure catalog/UI behavior, independent of the execution runtime.",
-      "status": "retain"
+      "runtimeAffected": true,
+      "replacement": "none - the tool catalogue, role-default tool seeds and the Manage-tools dialog were retired with the legacy execution surface (2026-10-21). Role-default skills keep unit coverage (AgentServiceTest); V34 intentionally seeds zero role-skill defaults",
+      "rationale": "The spec required pre-checked role-default tools and the removed Manage-tools dialog, so it could not pass honestly after the retirement.",
+      "status": "removed"
     },
     {
       "id": "pw:approvals-decision-flow.spec.ts",
@@ -184,9 +183,9 @@
       "cases": 3,
       "purpose": "git_push approval gate, pack registration/approval, destructive risk-tier gate.",
       "runtimeAffected": true,
-      "replacement": "core-permissions.spec.ts",
-      "rationale": "The file-write permission path is replaced by one-use write grants (T12); the risk-tier gate assertion is retained and must be re-pointed at the permission coordinator contract.",
-      "status": "port"
+      "replacement": "core-permissions.spec.ts (native permission gate only)",
+      "rationale": "Deleted with the legacy tool surface on 2026-10-21. The native one-use permission gate is covered by core-permissions.spec.ts; the tool registry, pack registration and risk-tier assertions have no run-owned equivalent and are retired with the catalogue.",
+      "status": "removed"
     },
     {
       "id": "pw:harness-governance.spec.ts",
@@ -194,9 +193,9 @@
       "cases": 6,
       "purpose": "Harness profiles, weak-model-safe tool removal, workspace-diff preview.",
       "runtimeAffected": true,
-      "replacement": "core-execution-modes.spec.ts",
-      "rationale": "Harness profile selection feeds execution settings (T2/T3); the tool-set assertions are preserved but bound to the new settings contract.",
-      "status": "port"
+      "replacement": "core-workspaces.spec.ts (workspace-diff preview) and core-execution-modes.spec.ts (execution settings)",
+      "rationale": "Deleted with the harness-profile surface on 2026-10-21. Workspace-diff and execution-settings coverage remain in the named specs; the weak-model-safe tool-set assertions had no run-owned equivalent and are retired with the tool catalogue.",
+      "status": "removed"
     },
     {
       "id": "pw:housekeeping-cleanup.spec.ts",
@@ -1047,7 +1046,7 @@
       "path": "agent-control-tower/act-dashboard/e2e/template-api.spec.ts:146",
       "condition": "permanently disabled case 'CrewPage role dropdown populates from API'",
       "businessPurpose": "Role dropdown data is API-driven.",
-      "replacement": "agent-tool-skill-recommendations.spec.ts already covers role-driven tool defaults; re-enable in T17 only with a deterministic assertion",
+      "replacement": "none - the previously named agent-tool-skill-recommendations.spec.ts was retired with the tool surface (2026-10-21); this role-dropdown purpose remains uncovered and must be re-enabled only with a deterministic assertion",
       "rationale": "Recorded so the removal review can see this purpose remains uncovered today."
     },
     {
@@ -1395,7 +1394,7 @@
       "pw:workflow-data-flow-e2e.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: the chain's runs must be served deterministically)",
       "pw:workflow-state-machine-e2e.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: RUNNING/FAILED step expectations must come from the wired coordinator, not a provider failure; the unconditional test.skip at :154 is untouched)",
       "pw:workflow-ui-interaction-e2e.spec.ts": "not-revised - deferral owner: the T17 remainder (blocked on T18: status badges reflect coordinator-reported run state)",
-      "disabled:template-api.spec.ts:146": "not-revised - the permanently disabled role-dropdown case still has no deterministic re-enable; deferral owner: the T17 remainder",
+      "disabled:template-api.spec.ts:146": "not-revised - the permanently disabled role-dropdown case still has no deterministic re-enable; the previously named replacement spec was retired with the tool surface (2026-10-21); deferral owner: the T17 remainder",
       "disabled:workflow-state-machine-e2e.spec.ts:154": "not-revised - the unconditional in-case skip still has no deterministic expectation; deferral owner: the T17 remainder"
     },
     "removalDecisions": {
@@ -1455,5 +1454,19 @@
       ],
       "validation": "CoreE2e harness (process transport) - per-spec counts recorded in .superpowers/sdd/2026-09-22-agent-core-execution-modes/task-19-wires-report.md section Fix round 3."
     }
+  },
+  "legacyExecutionRetirement": {
+    "date": "2026-10-21",
+    "scope": "PR #109 retired the dead NATIVE/ADK in-JVM execution path, its harness profiles and its tool catalogue; the e2e specs that asserted only those surfaces were deleted, and one spec was trimmed to its runtime-agnostic approvals case.",
+    "deletedSpecs": [
+      "agent-control-tower/act-dashboard/e2e/agent-tool-skill-recommendations.spec.ts - required role-default tools and the removed Manage-tools dialog",
+      "agent-control-tower/act-dashboard/e2e/git-pack-governance.spec.ts - tool-level PUSH gate, pack registration and risk tiers",
+      "agent-control-tower/act-dashboard/e2e/harness-governance.spec.ts - harness profiles and weak-model-safe tool removal"
+    ],
+    "rewrittenSpecs": [
+      "agent-control-tower/act-dashboard/e2e/agent-dev-workflow-governance.spec.ts - trimmed to the approvals-API/Review-badge case (1 case)"
+    ],
+    "supersedes": "The perPurposeStatus and removalGate records above describe the cutover state at 2026-09-25/27. Their residuals for the three deleted specs are closed by retirement, not carried: no run-owned replacement exists for tool-pack registration, tool risk tiers or harness-profile tool removal.",
+    "retainedCoverage": "core-execution-modes.spec.ts, core-permissions.spec.ts and core-workspaces.spec.ts remain the run-owned coverage; the approvals enrichment case remains in agent-dev-workflow-governance.spec.ts."
   }
 }

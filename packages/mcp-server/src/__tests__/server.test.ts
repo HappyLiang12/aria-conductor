@@ -37,13 +37,15 @@ describe('MCP Server — protocol', () => {
     }
   });
 
-  it('create_agent has required name + agentType', async () => {
+  it('create_agent requires name and advertises the only core type', async () => {
     ctx = await createTestClient();
     const { tools } = await ctx.client.listTools();
     const tool = tools.find(t => t.name === 'create_agent')!;
     expect(tool).toBeDefined();
     expect(tool.inputSchema.required).toContain('name');
-    expect(tool.inputSchema.required).toContain('agentType');
+    // ADK is the only agent type: callers may omit it and the schema advertises it.
+    expect(tool.inputSchema.required ?? []).not.toContain('agentType');
+    expect(tool.inputSchema.properties.agentType.enum).toEqual(['ADK']);
   });
 
   it('list_runs has optional agentId + status', async () => {

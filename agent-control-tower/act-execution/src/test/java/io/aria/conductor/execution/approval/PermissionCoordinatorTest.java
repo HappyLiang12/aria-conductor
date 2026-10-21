@@ -21,7 +21,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
-import java.lang.reflect.Field;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -31,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -213,7 +211,7 @@ class PermissionCoordinatorTest {
     /** A coordinator whose read-only platform-tool policy is configured by {@code mcp}. */
     private PermissionCoordinator coordinator(Instant now, PermissionReplySink sink, McpProperties mcp) {
         this.clock = new MutableClock(now);
-        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, 30_000L);
+        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
         this.writeGrants = new WriteGrantService(permissionRepository, clock);
         return new PermissionCoordinator(gate, approvalRepository, decisionLocks, permissionRepository,
                 writeGrants, new PlatformMcpAutoApproval(mcp), eventPublisher, () -> sink, clock);
@@ -546,7 +544,7 @@ class PermissionCoordinatorTest {
         List<PermissionReply> delivered = new ArrayList<>();
         AtomicReference<PermissionReplySink> sink = new AtomicReference<>();
         this.clock = new MutableClock(T0);
-        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, 30_000L);
+        this.gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
         this.writeGrants = new WriteGrantService(permissionRepository, clock);
         PermissionCoordinator coordinator = new PermissionCoordinator(gate, approvalRepository,
                 decisionLocks, permissionRepository, writeGrants, new PlatformMcpAutoApproval(new McpProperties()),
@@ -963,37 +961,12 @@ class PermissionCoordinatorTest {
     }
 
     /**
-     * The coordinator's expiry path must release a blocked waiter exactly like
-     * the scheduled {@link ApprovalExpiryChecker} does (it calls the same
-     * {@link ApprovalGate#cancelPendingApproval}); otherwise a session blocked
-     * on the ask waits for its own timeout.
-     */
-    @Test
-    void anExpiredAskReleasesABlockedWaiterLikeTheScheduledSweep() {
-        coordinator = coordinator(T0.plus(Duration.ofMinutes(6)));
-        UUID approvalId = coordinator.register(permission(PermissionTarget.NATIVE_TOOL));
-        CompletableFuture<ApprovalDecision> waiter = new CompletableFuture<>();
-        pendingApprovals(gate).put(approvalId, waiter);
-
-        assertThatThrownBy(() -> coordinator.decide(approvalId, PermissionChoice.ALLOW_ONCE,
-                ActorPrincipal.operator(null)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Permission request 0 expired at 2026-09-22T12:05:00Z; no decision may be delivered");
-
-        assertThat(waiter.isDone()).isTrue();
-        assertThat(waiter.getNow(null)).isNotNull();
-        assertThat(waiter.getNow(null).isApproved()).isFalse();
-        assertThat(waiter.getNow(null).reason()).isEqualTo("Run cancelled");
-        assertThat(approvalStore.get(approvalId).getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
-    }
-
-    /**
      * The run deadline is the ask's own expiry ({@code register} freezes
      * {@code expiresAt = spec.deadline()}), so the deadline enforcement settles
      * every still-PENDING ask of the run by its own window: the recorded expiry
-     * reason, settled exactly at the deadline instant, the blocked waiter
-     * released like the sweep. An ask still inside its window, another run's ask
-     * and an already-decided ask are all left exactly as they are.
+     * reason, settled exactly at the deadline instant. An ask still inside its
+     * window, another run's ask and an already-decided ask are all left exactly
+     * as they are.
      */
     @Test
     void theDeadlineExpiresTheRunsPendingAsksAtTheirOwnWindow() {
@@ -1008,8 +981,6 @@ class PermissionCoordinatorTest {
         UUID settled = coordinator.register(new NativePermission(RUN_ID, SESSION_ID, "2", TOOL,
                 PermissionTarget.NATIVE_TOOL, arguments, OFFERED, EXPIRES_AT));
         coordinator.decide(settled, PermissionChoice.DENY, ActorPrincipal.operator(null));
-        CompletableFuture<ApprovalDecision> waiter = new CompletableFuture<>();
-        pendingApprovals(gate).put(due, waiter);
 
         int settledCount = coordinator.expirePendingForRun(RUN_ID, EXPIRES_AT);
 
@@ -1018,9 +989,6 @@ class PermissionCoordinatorTest {
         assertThat(approvalStore.get(due).getReason()).isEqualTo("Auto-rejected: approval expired");
         assertThat(approvalStore.get(due).getDecidedAt()).isEqualTo(EXPIRES_AT);
         assertThat(permissionRow(due).getDeliveryState()).isEqualTo(PermissionDeliveryState.EXPIRED.name());
-        assertThat(waiter).isDone();
-        assertThat(waiter.getNow(null).isApproved()).isFalse();
-        assertThat(waiter.getNow(null).reason()).isEqualTo("Run cancelled");
         assertThat(approvalStore.get(insideItsWindow).getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(permissionRow(insideItsWindow).getDeliveryState())
                 .isEqualTo(PermissionDeliveryState.AWAITING_DECISION.name());
@@ -1375,17 +1343,6 @@ class PermissionCoordinatorTest {
             }
         }
         return Optional.ofNullable(approvalStore.get(approvalId));
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<UUID, CompletableFuture<ApprovalDecision>> pendingApprovals(ApprovalGate gate) {
-        try {
-            Field field = ApprovalGate.class.getDeclaredField("pendingApprovals");
-            field.setAccessible(true);
-            return (Map<UUID, CompletableFuture<ApprovalDecision>>) field.get(gate);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("pendingApprovals field not found on ApprovalGate", e);
-        }
     }
 
     private AcpPermissionRequest permissionRow(UUID approvalId) {

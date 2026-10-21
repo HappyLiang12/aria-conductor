@@ -10,10 +10,6 @@ import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.port.SchedulerPort;
 import io.aria.conductor.common.runtime.ExecutionMode;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.llm.LlmResponse;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -28,8 +24,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
 
 class ActIntegrationTest extends BaseH2IntegrationTest {
 
@@ -39,24 +33,8 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
     @Autowired
     AgentRepository agentRepository;
 
-    @MockBean
-    AdkProviderRegistry adkProviderRegistry;
-
-    private AdkProvider mockAdkProvider;
-
     @org.junit.jupiter.api.BeforeEach
-    void setupAdkProvider() {
-        mockAdkProvider = org.mockito.Mockito.mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(mockAdkProvider);
-        when(mockAdkProvider.isHealthy(any())).thenReturn(true);
-        // S12: the engine invokes the 4-arg call (with stream sink); Mockito mocks do
-        // NOT fall through interface default methods, so stub the 4-arg form too.
-        when(mockAdkProvider.call(any(), any(), any()))
-                .thenReturn(new LlmResponse("I can help you manage agents.", 10, 20, "stop", List.of()));
-        when(mockAdkProvider.call(any(), any(), any(), any()))
-                .thenReturn(new LlmResponse("I can help you manage agents.", 10, 20, "stop", List.of()));
-        when(mockAdkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
-
+    void seedAriaAgent() {
         // Ensure Aria agent exists (cleanup-all.sql runs after ApplicationRunner and wipes it).
         // Seeded on the production built-in pair (opencode/SANDBOX, LegacySetupService
         // BUILTIN_CORE/BUILTIN_MODE) so the fleet-runtime uniformity guard sees a uniform
@@ -67,7 +45,7 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
                     .id(ariaId)
                     .name("Aria")
                     .role("AI operator assistant")
-                    .agentType(AgentType.NATIVE)
+                    .agentType(AgentType.ADK)
                     .adkProvider("opencode")
                     .executionMode(ExecutionMode.SANDBOX)
                     .config("{\"maxToolCallRounds\":15}")
@@ -122,7 +100,7 @@ class ActIntegrationTest extends BaseH2IntegrationTest {
         // Create agent first
         Map<String, Object> agentRequest = Map.of(
                 "name", "RunTestAgent-" + UUID.randomUUID().toString().substring(0, 8),
-                "agentType", "NATIVE",
+                "agentType", "ADK",
                 "description", "Agent for run test"
         );
         ResponseEntity<Map> agentResponse = restTemplate.postForEntity(

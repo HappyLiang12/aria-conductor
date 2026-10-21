@@ -1,14 +1,10 @@
 package io.aria.conductor.execution.approval;
 
 import io.aria.conductor.common.event.ApprovalExpiredEvent;
-import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
-import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
-import io.aria.conductor.execution.engine.RunContext;
-import io.aria.conductor.execution.pipeline.Action;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -17,18 +13,15 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
- * Approval gate — blocks agent loop until approval is granted or timeout expires.
- * Uses CompletableFuture to block virtual threads without blocking OS threads.
+ * Approval decisions and run-level cancellation.
+ *
+ * <p>The run-owned cores wait for a permission answer through the ACP
+ * permission coordinator, not through a JVM thread blocked in this class;
+ * this gate owns the shared decision bookkeeping (approval row, associated
+ * tool call, decided event) and the run-end sweep.
  */
 @Slf4j
 @Component
@@ -37,207 +30,18 @@ public class ApprovalGate {
     private final ApprovalRepository approvalRepository;
     private final ToolCallRepository toolCallRepository;
     private final ApplicationEventPublisher eventPublisher;
-    // Injectable so concurrency tests can shrink the window to milliseconds (default 30 min).
-    private final java.time.Duration approvalTimeout;
-    private final Map<UUID, CompletableFuture<ApprovalDecision>> pendingApprovals = new ConcurrentHashMap<>();
 
     public ApprovalGate(ApprovalRepository approvalRepository,
                         ToolCallRepository toolCallRepository,
-                        ApplicationEventPublisher eventPublisher,
-                        @org.springframework.beans.factory.annotation.Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
+                        ApplicationEventPublisher eventPublisher) {
         this.approvalRepository = approvalRepository;
         this.toolCallRepository = toolCallRepository;
         this.eventPublisher = eventPublisher;
-        this.approvalTimeout = java.time.Duration.ofMillis(approvalTimeoutMs);
     }
 
     /**
-     * Stage-4 helper: request a SINGLE batched approval covering every action a turn
-     * wants to execute. The operator sees one prompt of the form
-     * <pre>"Agent wants to execute N actions: [a1, a2, ...]. Approve All / Deny All / Review Each"</pre>
-     * and one decision unblocks (or rejects) all of them.
-     *
-     * <p>If {@code turnActions} is null/empty the call is treated as auto-approved (no-op).
-     * If {@code turnActions} contains exactly one action, this falls through to
-     * {@link #requestApproval(Action, RunContext)} so single-action behaviour is unchanged.
-     */
-    public ApprovalDecision requestTurnApproval(RunContext ctx, List<Action> turnActions) {
-        if (turnActions == null || turnActions.isEmpty()) {
-            return ApprovalDecision.approve("No actions requiring approval");
-        }
-        if (turnActions.size() == 1) {
-            return requestApproval(turnActions.get(0), ctx);
-        }
-
-        UUID approvalId = UUID.randomUUID();
-        UUID firstToolCallId = null;
-        StringBuilder names = new StringBuilder();
-
-        // Find existing ToolCall entities (created by caller before invoking this method)
-        List<UUID> existingIds = ctx.getCurrentTurnToolCallIds();
-        if (existingIds != null && existingIds.size() == turnActions.size()) {
-            for (int i = 0; i < turnActions.size(); i++) {
-                Action action = turnActions.get(i);
-                UUID tcId = existingIds.get(i);
-                var found = toolCallRepository.findById(tcId);
-                if (found.isPresent()) {
-                    var tc = found.get();
-                    if (tc.getStatus() != ToolCallStatus.COMPLETED && tc.getStatus() != ToolCallStatus.FAILED) {
-                        tc.setStatus(ToolCallStatus.PENDING);
-                        toolCallRepository.save(tc);
-                    }
-                } else {
-                    log.warn("ToolCall {} not found in DB during requestTurnApproval — approval may reference orphaned ID", tcId);
-                }
-                if (firstToolCallId == null) {
-                    firstToolCallId = tcId;
-                }
-                if (i > 0) names.append(", ");
-                names.append(action.name());
-            }
-        } else {
-            // Fallback: create ToolCall entities if not pre-created by caller
-            for (int i = 0; i < turnActions.size(); i++) {
-                Action action = turnActions.get(i);
-                ToolCall toolCall = ToolCall.builder()
-                        .runId(ctx.getRunId())
-                        .toolName(action.name())
-                        .arguments(action.arguments())
-                        .status(ToolCallStatus.PENDING)
-                        .build();
-                ToolCall savedToolCall = toolCallRepository.save(toolCall);
-                if (firstToolCallId == null) {
-                    firstToolCallId = savedToolCall.getId();
-                }
-                if (i > 0) names.append(", ");
-                names.append(action.name());
-            }
-        }
-
-        Instant now = Instant.now();
-        String batchedReason = String.format(
-                "Agent wants to execute %d actions: [%s]. Approve All / Deny All / Review Each",
-                turnActions.size(), names);
-        Approval approval = Approval.builder()
-                .runId(ctx.getRunId())
-                .toolCallId(firstToolCallId)
-                .status(ApprovalStatus.PENDING)
-                .reason(batchedReason)
-                .expiresAt(now.plus(approvalTimeout))
-                .build();
-        approvalRepository.save(approval);
-
-        CompletableFuture<ApprovalDecision> future = new CompletableFuture<>();
-        pendingApprovals.put(approval.getId(), future);
-
-        eventPublisher.publishEvent(new ApprovalRequestedEvent(
-                this, approval.getId(), ctx.getRunId(), firstToolCallId));
-
-        log.info("Turn approval requested: approvalId={}, runId={}, actions=[{}], expiresAt={}",
-                approval.getId(), ctx.getRunId(),
-                turnActions.stream().map(Action::name).collect(Collectors.joining(",")),
-                approval.getExpiresAt());
-
-        try {
-            long awaitStart = System.currentTimeMillis();
-            ApprovalDecision decision = future.get(approvalTimeout.toMillis(), TimeUnit.MILLISECONDS);
-            ctx.addBlockedWait(java.time.Duration.ofMillis(System.currentTimeMillis() - awaitStart));
-            return decision;
-        } catch (TimeoutException e) {
-            ctx.addBlockedWait(approvalTimeout);
-            log.warn("Turn approval timed out: approvalId={}", approvalId);
-            handleTimeout(approval.getId());
-            return ApprovalDecision.deny(
-                    "Approval request timed out after " + approvalTimeout.toMinutes() + " minutes");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Turn approval interrupted: approvalId={}", approvalId);
-            cancelPendingApproval(approval.getId());
-            return ApprovalDecision.deny("Approval request interrupted");
-        } catch (Exception e) {
-            log.error("Turn approval failed unexpectedly: approvalId={}", approvalId, e);
-            cancelPendingApproval(approval.getId());
-            return ApprovalDecision.deny("Approval request failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Request approval for an action. Blocks the virtual thread until:
-     * - Approval is granted/denied via decideApproval()
-     * - Timeout expires (auto-reject)
-     */
-    public ApprovalDecision requestApproval(Action action, RunContext ctx) {
-        return requestApproval(action, ctx, null);
-    }
-
-    /**
-     * Request approval for an action, optionally with an escalation note explaining WHY the action
-     * was routed to a human (e.g. AI self-verification reasoning). Blocks the virtual thread until
-     * the approval is decided or the timeout expires.
-     */
-    public ApprovalDecision requestApproval(Action action, RunContext ctx, String escalationNote) {
-        UUID approvalId = UUID.randomUUID();
-
-        // Find existing ToolCall entity (created by AgentLoopEngine before pipeline execution),
-        // or create one if no pre-existing entity is found (backward compatibility).
-        UUID toolCallId = ctx.getCurrentToolCallId();
-        if (toolCallId == null) {
-            ToolCall toolCall = ToolCall.builder()
-                    .runId(ctx.getRunId())
-                    .toolName(action.name())
-                    .arguments(action.arguments())
-                    .status(ToolCallStatus.PENDING)
-                    .build();
-            toolCallId = toolCallRepository.save(toolCall).getId();
-        }
-
-        // Create Approval entity
-        Instant now = Instant.now();
-        Approval approval = Approval.builder()
-                .runId(ctx.getRunId())
-                .toolCallId(toolCallId)
-                .status(ApprovalStatus.PENDING)
-                .reason(buildApprovalReason(action, escalationNote))
-                .expiresAt(now.plus(approvalTimeout))
-                .build();
-        approvalRepository.save(approval);
-
-        // Create CompletableFuture to block this virtual thread
-        CompletableFuture<ApprovalDecision> future = new CompletableFuture<>();
-        pendingApprovals.put(approval.getId(), future);
-
-        // Publish event for dashboard notifications
-        eventPublisher.publishEvent(new ApprovalRequestedEvent(
-                this, approval.getId(), ctx.getRunId(), toolCallId));
-
-        log.info("Approval requested: approvalId={}, runId={}, action={}, expiresAt={}",
-                approval.getId(), ctx.getRunId(), action.name(), approval.getExpiresAt());
-
-        // Block until decision or timeout
-        try {
-            long awaitStart = System.currentTimeMillis();
-            ApprovalDecision decision = future.get(approvalTimeout.toMillis(), TimeUnit.MILLISECONDS);
-            ctx.addBlockedWait(java.time.Duration.ofMillis(System.currentTimeMillis() - awaitStart));
-            return decision;
-        } catch (TimeoutException e) {
-            ctx.addBlockedWait(approvalTimeout);
-            log.warn("Approval timed out: approvalId={}", approvalId);
-            handleTimeout(approval.getId());
-            return ApprovalDecision.deny("Approval request timed out after " + approvalTimeout.toMinutes() + " minutes");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Approval interrupted: approvalId={}", approvalId);
-            cancelPendingApproval(approval.getId());
-            return ApprovalDecision.deny("Approval request interrupted");
-        } catch (Exception e) {
-            log.error("Approval failed unexpectedly: approvalId={}", approvalId, e);
-            cancelPendingApproval(approval.getId());
-            return ApprovalDecision.deny("Approval request failed: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Process an approval decision — updates entity and unblocks the waiting virtual thread.
+     * Process an approval decision — updates the entity and publishes the
+     * decided event.
      *
      * <p>Operator authority is established by the caller (spec §6.2): the REST
      * boundary resolves the authenticated operator session before it calls here,
@@ -271,13 +75,11 @@ public class ApprovalGate {
             return;
         }
 
-        // Update approval entity
         approval.setStatus(approved ? ApprovalStatus.APPROVED : ApprovalStatus.DENIED);
         approval.setReason(reason);
         approval.setDecidedAt(Instant.now());
         approvalRepository.save(approval);
 
-        // Update associated tool call
         if (approval.getToolCallId() != null) {
             toolCallRepository.findById(approval.getToolCallId()).ifPresent(tc -> {
                 tc.setStatus(approved ? ToolCallStatus.EXECUTING : ToolCallStatus.DENIED);
@@ -285,67 +87,8 @@ public class ApprovalGate {
             });
         }
 
-        // Unblock the waiting virtual thread
-        CompletableFuture<ApprovalDecision> future = pendingApprovals.remove(approvalId);
-        if (future != null && !future.isDone()) {
-            ApprovalDecision decision = approved
-                    ? ApprovalDecision.approve(reason)
-                    : ApprovalDecision.deny(reason);
-            future.complete(decision);
-        }
-
-        // Publish event
         eventPublisher.publishEvent(new io.aria.conductor.common.event.ApprovalDecidedEvent(
                 this, approvalId, approval.getStatus()));
-    }
-
-    /**
-     * Build a human-readable approval reason that surfaces the tool name and a truncated
-     * arguments preview, so operators can make an informed decision in the UI (#24).
-     */
-    private String buildApprovalReason(Action action, String escalationNote) {
-        String args = action.arguments() != null ? action.arguments() : "";
-        if (args.length() > 200) {
-            args = args.substring(0, 200) + "…";
-        }
-        String base = "Agent requests approval to execute " + action.name() + (args.isBlank() ? "" : " " + args);
-        if (escalationNote != null && !escalationNote.isBlank()) {
-            return "AI escalated for human review: " + escalationNote.trim() + " — " + base;
-        }
-        return base;
-    }
-
-    /**
-     * Handle approval timeout — mark as expired and reject.
-     *
-     * <p>UX-6: the expiry is not silent — the operator saw the "approval requested"
-     * notification and must learn the ask is gone, so the same expiry event the
-     * scheduled sweep publishes is emitted here with the reason this path recorded.
-     */
-    private void handleTimeout(UUID approvalId) {
-        try {
-            approvalRepository.findById(approvalId).ifPresent(approval -> {
-                approval.setStatus(ApprovalStatus.EXPIRED);
-                approval.setReason("Auto-rejected: approval timed out");
-                approval.setDecidedAt(Instant.now());
-                approvalRepository.save(approval);
-                eventPublisher.publishEvent(new ApprovalExpiredEvent(
-                        this, approval.getId(), approval.getRunId(), approval.getReason()));
-            });
-        } catch (Exception e) {
-            log.error("Failed to mark approval {} as expired", approvalId, e);
-        }
-        pendingApprovals.remove(approvalId);
-    }
-
-    /**
-     * Cancel a pending approval (e.g. when run is cancelled).
-     */
-    public void cancelPendingApproval(UUID approvalId) {
-        CompletableFuture<ApprovalDecision> future = pendingApprovals.remove(approvalId);
-        if (future != null && !future.isDone()) {
-            future.complete(ApprovalDecision.deny("Run cancelled"));
-        }
     }
 
     /**
@@ -360,17 +103,22 @@ public class ApprovalGate {
      * alone for the same ownership reason: the run-input lifecycle settles them
      * (the completion sweep, restart adjudication), never this legacy broad sweep.
      *
-     * <p>R-RFUX6/D6: each settled ask is an expiry, not a silent lapse — the same
-     * {@link ApprovalExpiredEvent} the timeout and scheduled sweeps publish is emitted
-     * after the row is saved, so the request notification flips and the operator gets an
-     * expiry notice. Listeners run synchronously here (this method is non-transactional),
-     * and the native-only card-settle listener no-ops for these legacy rows.
+     * <p>REVIEW_REQUEST asks are display-only post-run prompts (the review card the
+     * operator answers after completion); they never block the run and are not
+     * cancelled by its end.
+     *
+     * <p>Each settled ask is an expiry, not a silent lapse: an
+     * {@link ApprovalExpiredEvent} is emitted after the row is saved, so the request
+     * notification flips and the operator gets an expiry notice. Listeners run
+     * synchronously here (this method is non-transactional), and the native-only
+     * card-settle listener no-ops for these legacy rows.
      */
     public void cancelAllPendingForRun(UUID runId) {
         approvalRepository.findByRunId(runId).stream()
                 .filter(a -> a.getStatus() == ApprovalStatus.PENDING)
                 .filter(a -> a.getSource() != ApprovalSource.ACP_PERMISSION)
                 .filter(a -> a.getSource() != ApprovalSource.CLARIFICATION)
+                .filter(a -> a.getAskType() != Approval.AskType.REVIEW_REQUEST)
                 .filter(a -> a.getApprovalType() == null
                         || a.getApprovalType() == Approval.ApprovalType.TOOL_CALL)
                 .forEach(a -> {
@@ -378,7 +126,6 @@ public class ApprovalGate {
                     a.setReason("Run cancelled");
                     a.setDecidedAt(Instant.now());
                     approvalRepository.save(a);
-                    cancelPendingApproval(a.getId());
                     eventPublisher.publishEvent(new ApprovalExpiredEvent(
                             this, a.getId(), a.getRunId(), a.getReason()));
                 });

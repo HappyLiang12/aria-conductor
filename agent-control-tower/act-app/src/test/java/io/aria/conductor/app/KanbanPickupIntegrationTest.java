@@ -7,19 +7,17 @@ import io.aria.conductor.common.model.AgentType;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
+import io.aria.conductor.execution.runtime.CoreResult;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.kanban.KanbanItem;
 import io.aria.conductor.execution.kanban.KanbanPriority;
 import io.aria.conductor.execution.kanban.KanbanRepository;
 import io.aria.conductor.execution.kanban.KanbanStatus;
 import io.aria.conductor.execution.kanban.KanbanTransitionService;
 import io.aria.conductor.execution.kanban.TransitionRequest;
-import io.aria.conductor.execution.llm.LlmResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -40,7 +38,7 @@ import static org.mockito.Mockito.when;
 /**
  * Integration coverage for the kanban pickup orchestrator (plan section 7):
  * with real beans (orchestrator, kanban service, run service, listeners) and
- * only the ADK provider mocked, dragging an unassigned TODO card to
+ * only the core launcher mocked, dragging an unassigned TODO card to
  * IN_PROGRESS must pick the healthy agent, create the run, link it onto the
  * card, and land the card in IN_PROGRESS — with EXACTLY ONE card for that run
  * (the pickup's suppressAutoCard flag stops RunKanbanAutoCreator from
@@ -55,23 +53,19 @@ class KanbanPickupIntegrationTest extends BaseH2IntegrationTest {
     @Autowired AgentRepository agentRepository;
     @Autowired RunRepository runRepository;
 
-    @MockBean AdkProviderRegistry adkProviderRegistry;
-    private AdkProvider adkProvider;
+    @MockBean CoreRunLauncher coreRunLauncher;
     private CountDownLatch holdExecution;
 
     @BeforeEach
-    void setupAdk() {
-        adkProvider = Mockito.mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(adkProvider);
-        when(adkProvider.isHealthy(any())).thenReturn(true);
-        // Hold the engine inside the LLM call so the run stays RUNNING for the
-        // assertions instead of racing to COMPLETED mid-test.
+    void setupCoreLauncher() {
+        when(coreRunLauncher.owns(any())).thenReturn(true);
+        // Hold the engine inside the run-owned core execution so the run stays
+        // RUNNING for the assertions instead of racing to COMPLETED mid-test.
         holdExecution = new CountDownLatch(1);
-        when(adkProvider.call(any(), any(), any(), any())).thenAnswer(inv -> {
+        when(coreRunLauncher.execute(any(), any(), any())).thenAnswer(inv -> {
             holdExecution.await(30, TimeUnit.SECONDS);
-            return new LlmResponse("done", 10, 5, "stop", null);
+            return new CoreResult("sess-pickup", "done", null, false);
         });
-        when(adkProvider.parseActionsFromResponse(any())).thenReturn(List.of());
     }
 
     @AfterEach
@@ -85,7 +79,7 @@ class KanbanPickupIntegrationTest extends BaseH2IntegrationTest {
         // --- seed: the only healthy agent + an unassigned TODO card ---
         Agent agent = agentRepository.save(Agent.builder()
                 .id(UUID.randomUUID()).name("pickup-agent").description("kanban pickup test")
-                .agentType(AgentType.NATIVE).role("tester").model("gpt-4o-mini")
+                .agentType(AgentType.ADK).role("tester").model("gpt-4o-mini")
                 .provider("openai").config("{}").healthStatus(HealthStatus.HEALTHY)
                 .createdAt(Instant.now()).build());
         KanbanItem card = kanbanRepository.save(KanbanItem.builder()

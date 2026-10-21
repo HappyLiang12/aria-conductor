@@ -43,7 +43,7 @@ async function apiCall(
 async function createTestAgent(page: Page, name: string): Promise<string> {
   const { status, data } = await apiCall(page, 'POST', '/agents', {
     name,
-    agentType: 'NATIVE',
+    agentType: 'ADK',
     description: 'E2E workflow test agent',
   });
   expect(status).toBe(201);

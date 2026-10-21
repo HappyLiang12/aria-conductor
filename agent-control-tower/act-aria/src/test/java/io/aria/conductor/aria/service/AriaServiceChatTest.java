@@ -12,14 +12,10 @@ import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
-import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.execution.engine.AgentLoopEngine;
-import io.aria.conductor.execution.llm.LlmClient;
 import io.aria.conductor.execution.llm.LlmMessage;
-import io.aria.conductor.execution.llm.LlmProperties;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.execution.tool.ToolExecutionEngine;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,10 +54,7 @@ class AriaServiceChatTest {
     @Mock AgentLoopEngine agentLoopEngine;
     @Mock AgentRepository agentRepository;
     @Mock RunRepository runRepository;
-    @Mock LlmClient llmClient;
     @Mock IntentClassifier intentClassifier;
-    @Mock ToolRegistry toolRegistry;
-    @Mock ToolExecutionEngine toolExecutionEngine;
     @Mock KnowledgeService knowledgeService;
     @Mock SessionTrajectoryRepository trajectoryRepository;
     @Mock ToolCallRepository toolCallRepository;
@@ -72,10 +65,8 @@ class AriaServiceChatTest {
 
     @BeforeEach
     void setUp() {
-        LlmProperties llmProperties = new LlmProperties();
-        llmProperties.setModel("gpt-4o-mini");
         ariaService = new AriaService(agentLoopEngine, agentRepository, runRepository,
-                llmClient, llmProperties, intentClassifier, toolRegistry, toolExecutionEngine,
+                intentClassifier,
                 knowledgeService, trajectoryRepository, toolCallRepository);
 
         ariaAgent = Agent.builder()

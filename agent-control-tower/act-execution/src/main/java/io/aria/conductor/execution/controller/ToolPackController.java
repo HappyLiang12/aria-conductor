@@ -12,8 +12,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Minimal pack-management endpoints (Layer A governance).
- * Register packs/tools as PENDING; approve -> APPROVED.
+ * Pack-management endpoints (Layer A governance). Retained after the legacy
+ * tool-execution retirement because the git handoff still resolves its token
+ * from the git pack's stored credentials; pack approval no longer enables any
+ * tool (the run-owned cores own tool execution).
  */
 @RestController
 @RequestMapping("/api/v1/packs")

@@ -1,23 +1,16 @@
 package io.aria.conductor.execution.listener;
 
-import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
-import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.dod.DoDStageReview;
-import io.aria.conductor.execution.git.GitBranchService;
-import io.aria.conductor.execution.git.GitHandoffMetadata;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
@@ -59,27 +52,15 @@ public class WorkflowAutoChainer {
     private final DoDService dodService;
     private final WorkflowChainRepository chainRepository;
     private final ApplicationEventPublisher eventPublisher;
-    private final GitBranchService gitBranchService;
-    private final OpenCodeAdkProvider openCodeAdkProvider;
-    private final AdkProviderRegistry providerRegistry;
-    private final AgentRepository agentRepository;
 
     public WorkflowAutoChainer(WorkflowService workflowService,
                                DoDService dodService,
                                WorkflowChainRepository chainRepository,
-                               ApplicationEventPublisher eventPublisher,
-                               GitBranchService gitBranchService,
-                               OpenCodeAdkProvider openCodeAdkProvider,
-                               AdkProviderRegistry providerRegistry,
-                               AgentRepository agentRepository) {
+                               ApplicationEventPublisher eventPublisher) {
         this.workflowService = workflowService;
         this.dodService = dodService;
         this.chainRepository = chainRepository;
         this.eventPublisher = eventPublisher;
-        this.gitBranchService = gitBranchService;
-        this.openCodeAdkProvider = openCodeAdkProvider;
-        this.providerRegistry = providerRegistry;
-        this.agentRepository = agentRepository;
     }
 
     @EventListener
@@ -151,7 +132,6 @@ public class WorkflowAutoChainer {
             }
             case DEV -> {
                 autoSubmitDevStageReviewIfAtDev(chain);
-                runDevBackendPushFallback(chain, step);
                 boolean started = workflowService.advanceWorkflow(chain.getId(), stepIndex, finalOutput);
                 publishAdvanced(chain, stepIndex, started);
             }
@@ -160,50 +140,6 @@ public class WorkflowAutoChainer {
                 boolean started = workflowService.advanceWorkflow(chain.getId(), stepIndex, finalOutput);
                 publishAdvanced(chain, stepIndex, started);
             }
-        }
-    }
-
-    /**
-     * T6 D-A insurance path: when the Dev run finishes but the branch HEAD has not
-     * advanced past the spec commit (the agent forgot to commit/push), run a
-     * backend git commit+push inside the Dev agent's sandbox. Failures are logged
-     * loudly but never crash the chain.
-     */
-    private void runDevBackendPushFallback(WorkflowChain chain, WorkflowStep devStep) {
-        java.util.Map<String, String> meta = GitHandoffMetadata.parse(chain.getTemplateParams());
-        String repoUrl = meta.get(GitHandoffMetadata.KEY_REPO_URL);
-        String specSha = meta.get(GitHandoffMetadata.KEY_SPEC_COMMIT_SHA);
-        if (repoUrl == null || repoUrl.isBlank() || specSha == null || specSha.isBlank()) {
-            return; // not a git-handoff chain (no repoUrl) or no recorded spec commit
-        }
-        String branchName = GitHandoffMetadata.branchName(chain.getId());
-        Optional<String> headSha;
-        try {
-            headSha = gitBranchService.branchHeadSha(repoUrl, branchName);
-        } catch (Exception e) {
-            log.warn("SDD backend push fallback: cannot resolve branch HEAD for chain {}: {}",
-                    chain.getId(), e.getMessage());
-            return;
-        }
-        if (headSha.isPresent() && !specSha.equals(headSha.get())) {
-            log.info("SDD backend push fallback: branch {} advanced ({} != spec commit); skipping",
-                    branchName, headSha.get());
-            return;
-        }
-        UUID devAgentId = devStep.getAgentId();
-        if (devAgentId == null) {
-            log.warn("SDD backend push fallback: Dev step for chain {} has no agentId; skipping",
-                    chain.getId());
-            return;
-        }
-        String command = "cd /workspace/repo && git add -A && git commit -m 'sdd dev (backend fallback)'"
-                + " && git push origin " + branchName;
-        try {
-            String output = openCodeAdkProvider.runSandboxCommand(devAgentId, command);
-            log.info("SDD backend push fallback executed for chain {}: {}", chain.getId(), output);
-        } catch (Exception e) {
-            log.error("SDD backend push fallback failed for chain {} (non-fatal): {}",
-                    chain.getId(), e.getMessage());
         }
     }
 
@@ -289,7 +225,6 @@ public class WorkflowAutoChainer {
                             "DEFECT verdict but chain has no DEV step");
                     return;
                 }
-                resetAgentInstance(chain, devIdx);
                 workflowService.rescheduleStep(chain.getId(), devIdx, reason);
             }
             case "SPEC_GAP" -> {
@@ -300,73 +235,11 @@ public class WorkflowAutoChainer {
                             "SPEC_GAP verdict but chain has no BA step");
                     return;
                 }
-                resetAgentInstance(chain, baIdx);
                 workflowService.rescheduleStep(chain.getId(), baIdx, reason);
             }
             default -> workflowService.markStepFailed(chain.getId(), stepIndex,
                     "Unknown QA verdict: " + verdict);
         }
-    }
-
-    /**
-     * R9-F3: a rescheduled step (DEFECT / SPEC_GAP loop-back) must not reuse the
-     * previous run's sandbox/session — the {@code serve} process may have died
-     * during the long QA gap (sandbox TTL expiry) while the cached healthy flag
-     * still reports true, so the rerun would fail with a stale session
-     * (IOException -> ConnectException). Force-reset the rescheduled step's agent
-     * instance so the rerun prepares a fresh environment + session.
-     *
-     * <p>The reset goes through the provider registry's mode-neutral
-     * {@link io.aria.conductor.execution.adk.AdkProvider#resetRuntime(UUID)}
-     * instead of naming one concrete provider, so a Host, Sandbox or future
-     * placement resets its own runtime. A core without a provider bean (a
-     * first-delivery core such as qoder) has no agent-scoped runtime at all --
-     * runtimes are run-owned -- so its reset is a truthful no-op instead of a
-     * fail-closed resolution error. Failures are logged loudly but never crash
-     * routing.
-     */
-    private void resetAgentInstance(WorkflowChain chain, int stepIndex) {
-        WorkflowStep step = workflowService.stepAt(chain, stepIndex);
-        UUID agentId = step != null ? step.getAgentId() : null;
-        if (agentId == null) {
-            log.warn("SDD reschedule: step {} for chain {} has no agentId; skipping provider reset",
-                    stepIndex, chain.getId());
-            return;
-        }
-        Agent agent = agentRepository.findById(agentId).orElse(null);
-        if (agent == null) {
-            log.warn("SDD reschedule: no agent row {} for chain {}; skipping provider reset",
-                    agentId, chain.getId());
-            return;
-        }
-        try {
-            AdkProvider provider = providerFor(agent);
-            if (provider == null) {
-                log.info("SDD reschedule: agent {} selects core '{}', which owns its runtimes per run;"
-                        + " no agent-scoped runtime to reset (chain {})", agentId, agent.getAdkProvider(),
-                        chain.getId());
-                return;
-            }
-            provider.resetRuntime(agentId);
-            log.info("SDD reschedule: reset the run runtime of agent {} (chain {})", agentId, chain.getId());
-        } catch (Exception e) {
-            log.warn("SDD reschedule: failed to reset the provider instance for agent {} (chain {}): {}",
-                    agentId, chain.getId(), e.getMessage());
-        }
-    }
-
-    /**
-     * The provider bean that serves the agent's core, or {@code null} when no
-     * provider-level runtime exists for it (a first-delivery core such as qoder, or
-     * an unknown/removed core). An agent that stores no core keeps the registry's
-     * documented default resolution.
-     */
-    private AdkProvider providerFor(Agent agent) {
-        String coreId = agent.getAdkProvider();
-        if (coreId == null || coreId.isBlank()) {
-            return providerRegistry.resolve(agent);
-        }
-        return providerRegistry.getProvider(coreId);
     }
 
     /**

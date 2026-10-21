@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * real {@code Authorization} header against a header-validating stub.
  *
  * <p>The probe logic lives in {@code e2e/qoder/slice-a/03-mcp-auth.mjs} (a Node ESM script,
- * executed in-sandbox via {@code OpenCodeSandboxManager#runCommand}); this test boots the
+ * executed in-sandbox via the sandbox SDK command path); this test boots the
  * sandbox, injects the Qoder PAT as the {@code QODER_PERSONAL_ACCESS_TOKEN} sandbox
  * environment variable (environment only, never argv — see
  * {@link QoderSandboxHarness#boot(String, String, Map)}), uploads the script plus the pinned

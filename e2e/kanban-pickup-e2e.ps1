@@ -76,9 +76,9 @@ $ErrorActionPreference = 'Stop'
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
 function ApiGet($path) { return Invoke-RestMethod -Method Get -Uri "$ApiUrl$path" }
 
-# ApiPost as in natural-flow-harness.ps1, except that the status code is returned
-# as data: this scenario makes assertions about the code, so a 4xx/5xx is an
-# observation to report rather than an exception that aborts the run.
+# ApiPost returns the status code as data: this scenario makes assertions about
+# the code, so a 4xx/5xx is an observation to report rather than an exception
+# that aborts the run.
 function ApiPost($path, $body) {
     $response = Invoke-WebRequest -Method Post -Uri "$ApiUrl$path" -ContentType 'application/json' `
         -Body ($body | ConvertTo-Json -Depth 8) -SkipHttpErrorCheck

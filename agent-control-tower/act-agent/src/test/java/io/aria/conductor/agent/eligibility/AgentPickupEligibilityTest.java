@@ -22,7 +22,7 @@ class AgentPickupEligibilityTest {
     private static final UUID WORKER = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
 
     private Agent agent(UUID id, Boolean pickupEnabled, HealthStatus health) {
-        return Agent.builder().id(id).name("worker").agentType(io.aria.conductor.common.model.AgentType.NATIVE)
+        return Agent.builder().id(id).name("worker").agentType(io.aria.conductor.common.model.AgentType.ADK)
                 .pickupEnabled(pickupEnabled).healthStatus(health).build();
     }
 
@@ -36,8 +36,8 @@ class AgentPickupEligibilityTest {
 
     @Test
     void nullPickupEnabledCountsAsEnabled() {
-        // Rows written before V56 and NATIVE agents built without the flag must
-        // stay pickable; only an explicit FALSE disables an agent.
+        // Rows written before V56 and agents built without the flag must stay
+        // pickable; only an explicit FALSE disables an agent.
         assertThat(eligibility.evaluate(agent(WORKER, null, HealthStatus.HEALTHY)).eligible()).isTrue();
     }
 

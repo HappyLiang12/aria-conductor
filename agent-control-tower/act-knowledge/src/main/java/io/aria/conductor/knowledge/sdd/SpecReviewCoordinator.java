@@ -8,7 +8,6 @@ import io.aria.conductor.common.event.BaStepCompletedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.*;
-import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
 import io.aria.conductor.execution.repository.ApprovalRepository;
@@ -28,6 +27,10 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -60,7 +63,7 @@ public class SpecReviewCoordinator {
     private final ApplicationEventPublisher eventPublisher;
     private final TransactionTemplate transactionTemplate;
     private final GitBranchService gitBranchService;
-    private final OpenCodeAdkProvider openCodeAdkProvider;
+    private final Path runResultRoot;
     private final Duration approvalTimeout;
 
     public SpecReviewCoordinator(KnowledgeService knowledgeService,
@@ -72,7 +75,7 @@ public class SpecReviewCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  PlatformTransactionManager transactionManager,
                                  GitBranchService gitBranchService,
-                                 OpenCodeAdkProvider openCodeAdkProvider,
+                                 @Value("${aria.workspaces.result-root:./data/workspaces/results}") String runResultRoot,
                                  @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.knowledgeService = knowledgeService;
         this.itemRepository = itemRepository;
@@ -83,7 +86,7 @@ public class SpecReviewCoordinator {
         this.eventPublisher = eventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.gitBranchService = gitBranchService;
-        this.openCodeAdkProvider = openCodeAdkProvider;
+        this.runResultRoot = Path.of(runResultRoot).toAbsolutePath().normalize();
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
     }
 
@@ -269,44 +272,44 @@ public class SpecReviewCoordinator {
 
     /**
      * Resolve the spec content for a BA completion: prefer the full spec file the BA
-     * wrote to its sandbox ({@code /workspace/spec.md}); fall back to the BA run's
-     * finalOutput when the sandbox file is unavailable (or a BA that
-     * did not write the file). Either way the content is cleaned before storage.
+     * wrote as {@code spec.md} in its run workspace (captured verbatim into the run's
+     * result directory when the runtime finalizes); fall back to the BA run's
+     * finalOutput when the file is unavailable (or a BA that did not write it). Either
+     * way the content is cleaned before storage.
      */
     private String resolveSpecContent(UUID chainId, BaStepCompletedEvent event) {
-        String sandboxSpec = readSpecFromSandbox(chainId, event);
-        if (sandboxSpec != null && !sandboxSpec.isBlank()) {
-            return cleanSpecContent(sandboxSpec);
+        String fileSpec = readSpecFromRunWorkspace(event.getBaRunId());
+        if (fileSpec != null && !fileSpec.isBlank()) {
+            return cleanSpecContent(fileSpec);
         }
         return cleanSpecContent(event.getFinalOutput());
     }
 
-    /** Read the full spec the BA wrote to its sandbox, or null when unavailable. */
-    private String readSpecFromSandbox(UUID chainId, BaStepCompletedEvent event) {
-        UUID baAgentId = resolveBaAgentId(chainId, event);
-        if (baAgentId == null) {
+    /**
+     * Reads at most {@link #MAX_SPEC_CONTENT_LENGTH} characters of the run's exported
+     * {@code spec.md}; the same bound the stored spec is truncated to. A missing or
+     * unreadable file falls back to the finalOutput.
+     */
+    private String readSpecFromRunWorkspace(UUID runId) {
+        if (runId == null) {
             return null;
         }
+        Path specFile = runResultRoot.resolve(runId.toString()).resolve("spec.md");
         try {
-            return openCodeAdkProvider.runSandboxCommand(baAgentId, "cat /workspace/spec.md");
-        } catch (Exception e) {
-            log.warn("Cannot cat /workspace/spec.md in BA sandbox for chain {}: {}",
-                    chainId, e.getMessage());
-            return null;
-        }
-    }
-
-    /** Resolve the BA step's agent id from the chain steps, or null when unavailable. */
-    private UUID resolveBaAgentId(UUID chainId, BaStepCompletedEvent event) {
-        try {
-            WorkflowChain chain = chainRepository.findById(chainId).orElse(null);
-            if (chain == null) {
+            if (!Files.isRegularFile(specFile)) {
                 return null;
             }
-            WorkflowStep baStep = workflowService.stepAt(chain, event.getBaStepIndex());
-            return baStep != null ? baStep.getAgentId() : null;
+            char[] buffer = new char[MAX_SPEC_CONTENT_LENGTH];
+            int read = 0;
+            try (Reader reader = Files.newBufferedReader(specFile, StandardCharsets.UTF_8)) {
+                int n;
+                while (read < buffer.length && (n = reader.read(buffer, read, buffer.length - read)) > 0) {
+                    read += n;
+                }
+            }
+            return read == 0 ? null : new String(buffer, 0, read);
         } catch (Exception e) {
-            log.warn("Cannot resolve BA agent for chain {}: {}", chainId, e.getMessage());
+            log.warn("Cannot read spec.md from the BA run workspace for run {}: {}", runId, e.getMessage());
             return null;
         }
     }

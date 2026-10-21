@@ -40,7 +40,7 @@ const agent = (id: string, name: string) => ({
   id,
   name,
   description: '',
-  agentType: 'NATIVE',
+  agentType: 'ADK',
   role: 'dev',
   model: 'test-model',
   provider: 'opencode',

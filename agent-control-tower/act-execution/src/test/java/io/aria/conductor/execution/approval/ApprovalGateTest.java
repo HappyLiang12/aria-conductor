@@ -1,17 +1,11 @@
 package io.aria.conductor.execution.approval;
 
 import io.aria.conductor.common.event.ApprovalExpiredEvent;
-import io.aria.conductor.common.event.ApprovalRequestedEvent;
-import io.aria.conductor.common.model.Agent;
-import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalSource;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.common.model.ToolCall;
 import io.aria.conductor.common.model.ToolCallStatus;
-import io.aria.conductor.execution.engine.RunContext;
-import io.aria.conductor.execution.pipeline.Action;
-import io.aria.conductor.execution.pipeline.ActionType;
 import io.aria.conductor.execution.repository.ApprovalRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.test.TestDataBuilder;
@@ -23,18 +17,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -46,15 +34,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Behaviour tests for {@link ApprovalGate} covering the single-action approval
- * lifecycle: PENDING creation with the 30-minute expiry window, approve/deny
- * decisions unblocking the waiting thread, idempotent double-decisions,
- * unknown-id error paths and run-level cancellation.
+ * Behaviour tests for {@link ApprovalGate}: operator decisions update the
+ * approval row and its tool call idempotently, and the run-end sweep expires
+ * only the run-gate rows it owns (never SPEC_REVIEW or ACP permission asks).
  *
  * <p>Repository mocks are backed by in-memory stores so tests can assert the
  * actual entity state after the gate mutates it (not just that save() ran).
- * The blocking {@code requestApproval} call is driven from a separate thread,
- * mirroring the established idiom in {@code TurnLevelApprovalTest}.
  */
 @ExtendWith(MockitoExtension.class)
 class ApprovalGateTest {
@@ -89,75 +74,52 @@ class ApprovalGateTest {
         lenient().when(approvalRepository.findById(any(UUID.class)))
                 .thenAnswer(inv -> Optional.ofNullable(approvalStore.get(inv.<UUID>getArgument(0))));
 
-        gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, java.time.Duration.ofMinutes(30).toMillis());
+        gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
     }
 
-    @Test
-    void requestApproval_createsPendingApprovalWithThirtyMinuteExpiry() throws Exception {
-        Instant before = Instant.now();
-        RunContext ctx = ctx();
-
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("write_file", "{\"path\":\"a.txt\"}"), ctx));
-
-        UUID approvalId = waitForApprovalId();
-        Instant after = Instant.now();
-
-        Approval pending = approvalStore.get(approvalId);
-        assertThat(pending.getStatus()).isEqualTo(ApprovalStatus.PENDING);
-        assertThat(pending.getRunId()).isEqualTo(ctx.getRunId());
-        assertThat(pending.getToolCallId()).isNotNull();
-        assertThat(pending.getReason())
-                .contains("write_file")
-                .contains("a.txt");
-        // Expiry constant behaviour: expiresAt must be exactly request-time + 30 minutes
-        // (bounded by the instants captured around the call — no sleeping involved).
-        assertThat(pending.getExpiresAt())
-                .isBetween(before.plus(Duration.ofMinutes(30)), after.plus(Duration.ofMinutes(30)));
-
-        gate.decideApproval(approvalId, true, "ok");
-        assertThat(future.get(5, TimeUnit.SECONDS).isApproved()).isTrue();
-    }
+    // --- decideApproval ---
 
     @Test
-    void decideApproval_approved_unblocksCallerAndMarksEntitiesApproved() throws Exception {
-        RunContext ctx = ctx();
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("deploy", "{}"), ctx));
-        UUID approvalId = waitForApprovalId();
+    void decideApproval_approved_marksApprovalAndToolCallApproved() {
+        Approval approval = storePendingApproval(UUID.randomUUID(), "Agent requests approval to execute deploy {}");
 
-        gate.decideApproval(approvalId, true, "operator says go");
+        gate.decideApproval(approval.getId(), true, "operator says go");
 
-        ApprovalDecision decision = future.get(5, TimeUnit.SECONDS);
-        assertThat(decision.isApproved()).isTrue();
-        assertThat(decision.reason()).isEqualTo("operator says go");
-
-        Approval approval = approvalStore.get(approvalId);
-        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
-        assertThat(approval.getReason()).isEqualTo("operator says go");
-        assertThat(approval.getDecidedAt()).isNotNull();
-        assertThat(toolCallStore.get(approval.getToolCallId()).getStatus())
+        Approval decided = approvalStore.get(approval.getId());
+        assertThat(decided.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(decided.getReason()).isEqualTo("operator says go");
+        assertThat(decided.getDecidedAt()).isNotNull();
+        assertThat(toolCallStore.get(decided.getToolCallId()).getStatus())
                 .isEqualTo(ToolCallStatus.EXECUTING);
     }
 
     @Test
-    void decideApproval_denied_unblocksCallerAndMarksEntitiesDenied() throws Exception {
-        RunContext ctx = ctx();
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("drop_table", "{}"), ctx));
-        UUID approvalId = waitForApprovalId();
+    void decideApproval_denied_marksApprovalAndToolCallDenied() {
+        Approval approval = storePendingApproval(UUID.randomUUID(), "Agent requests approval to execute drop_table {}");
 
-        gate.decideApproval(approvalId, false, "too risky");
+        gate.decideApproval(approval.getId(), false, "too risky");
 
-        ApprovalDecision decision = future.get(5, TimeUnit.SECONDS);
-        assertThat(decision.isApproved()).isFalse();
-        assertThat(decision.reason()).isEqualTo("too risky");
-
-        Approval approval = approvalStore.get(approvalId);
-        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.DENIED);
-        assertThat(approval.getDecidedAt()).isNotNull();
-        assertThat(toolCallStore.get(approval.getToolCallId()).getStatus())
+        Approval decided = approvalStore.get(approval.getId());
+        assertThat(decided.getStatus()).isEqualTo(ApprovalStatus.DENIED);
+        assertThat(decided.getReason()).isEqualTo("too risky");
+        assertThat(decided.getDecidedAt()).isNotNull();
+        assertThat(toolCallStore.get(decided.getToolCallId()).getStatus())
                 .isEqualTo(ToolCallStatus.DENIED);
+    }
+
+    @Test
+    void decideApproval_withoutToolCall_stillRecordsTheDecision() {
+        Approval approval = TestDataBuilder.anApproval()
+                .withRunId(UUID.randomUUID())
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("spec question")
+                .build();
+        approvalStore.put(approval.getId(), approval);
+
+        gate.decideApproval(approval.getId(), true, "fine");
+
+        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        verify(toolCallRepository, never()).findById(any());
     }
 
     @Test
@@ -195,129 +157,102 @@ class ApprovalGateTest {
     }
 
     @Test
-    void decideApproval_secondDecisionOnDecidedApproval_isIgnored() throws Exception {
-        RunContext ctx = ctx();
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("deploy", "{}"), ctx));
-        UUID approvalId = waitForApprovalId();
+    void decideApproval_secondDecisionOnDecidedApproval_isIgnored() {
+        Approval approval = storePendingApproval(UUID.randomUUID(), "Agent requests approval to execute deploy {}");
 
-        gate.decideApproval(approvalId, true, "first: approved");
-        assertThat(future.get(5, TimeUnit.SECONDS).isApproved()).isTrue();
+        gate.decideApproval(approval.getId(), true, "first: approved");
+        gate.decideApproval(approval.getId(), false, "late deny");
 
-        // A late conflicting decision must not flip the recorded outcome.
-        gate.decideApproval(approvalId, false, "late deny");
-
-        Approval approval = approvalStore.get(approvalId);
-        assertThat(approval.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
-        assertThat(approval.getReason()).isEqualTo("first: approved");
-        assertThat(toolCallStore.get(approval.getToolCallId()).getStatus())
+        Approval decided = approvalStore.get(approval.getId());
+        assertThat(decided.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
+        assertThat(decided.getReason()).isEqualTo("first: approved");
+        assertThat(toolCallStore.get(decided.getToolCallId()).getStatus())
                 .isEqualTo(ToolCallStatus.EXECUTING);
     }
 
-    @Test
-    void requestApproval_withEscalationNote_prefixesReasonWithAiEscalation() throws Exception {
-        RunContext ctx = ctx();
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("risky_tool", "{}"), ctx, "model was unsure about side effects"));
-        UUID approvalId = waitForApprovalId();
-
-        assertThat(approvalStore.get(approvalId).getReason())
-                .startsWith("AI escalated for human review: model was unsure about side effects")
-                .contains("Agent requests approval to execute risky_tool");
-
-        gate.decideApproval(approvalId, true, "ok");
-        assertThat(future.get(5, TimeUnit.SECONDS).isApproved()).isTrue();
-    }
+    // --- cancelAllPendingForRun ---
 
     @Test
-    void requestApproval_truncatesOversizedArgumentsInReason() throws Exception {
-        RunContext ctx = ctx();
-        String hugeArgs = "x".repeat(250);
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("write_file", hugeArgs), ctx));
-        UUID approvalId = waitForApprovalId();
-
-        String reason = approvalStore.get(approvalId).getReason();
-        assertThat(reason)
-                .contains("x".repeat(200) + "…")
-                .doesNotContain("x".repeat(201));
-
-        gate.decideApproval(approvalId, false, "no");
-        assertThat(future.get(5, TimeUnit.SECONDS).isApproved()).isFalse();
-    }
-
-    @Test
-    void cancelAllPendingForRun_expiresPendingAndLeavesDecidedUntouched() throws Exception {
-        RunContext ctx = ctx();
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("deploy", "{}"), ctx));
-        UUID pendingId = waitForApprovalId();
-
+    void cancelAllPendingForRun_expiresPendingAndLeavesDecidedUntouched() {
+        UUID runId = UUID.randomUUID();
+        Approval pending = storePendingApproval(runId, "Agent requests approval to execute deploy {}");
         Approval alreadyDecided = TestDataBuilder.anApproval()
-                .withRunId(ctx.getRunId())
+                .withRunId(runId)
                 .withStatus(ApprovalStatus.APPROVED)
                 .withReason("already approved")
                 .withDecidedAt(Instant.now().minusSeconds(60))
                 .build();
         approvalStore.put(alreadyDecided.getId(), alreadyDecided);
-        when(approvalRepository.findByRunId(ctx.getRunId()))
-                .thenReturn(List.of(approvalStore.get(pendingId), alreadyDecided));
+        when(approvalRepository.findByRunId(runId))
+                .thenReturn(List.of(approvalStore.get(pending.getId()), alreadyDecided));
 
-        gate.cancelAllPendingForRun(ctx.getRunId());
+        gate.cancelAllPendingForRun(runId);
 
-        // The blocked caller is released with a denial.
-        ApprovalDecision decision = future.get(5, TimeUnit.SECONDS);
-        assertThat(decision.isApproved()).isFalse();
-        assertThat(decision.reason()).isEqualTo("Run cancelled");
-
-        // Pending approval is expired with audit fields set.
-        Approval expired = approvalStore.get(pendingId);
+        Approval expired = approvalStore.get(pending.getId());
         assertThat(expired.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
         assertThat(expired.getReason()).isEqualTo("Run cancelled");
         assertThat(expired.getDecidedAt()).isNotNull();
 
-        // Already-decided approval is left completely untouched.
         assertThat(alreadyDecided.getStatus()).isEqualTo(ApprovalStatus.APPROVED);
         assertThat(alreadyDecided.getReason()).isEqualTo("already approved");
     }
 
     @Test
     void cancelAllPendingForRun_leavesSpecReviewApprovalsAlive() {
-        RunContext ctx = ctx();
+        UUID runId = UUID.randomUUID();
         Approval specReview = TestDataBuilder.anApproval()
-                .withRunId(ctx.getRunId())
+                .withRunId(runId)
                 .withApprovalType(Approval.ApprovalType.SPEC_REVIEW)
                 .withStatus(ApprovalStatus.PENDING)
                 .withReason("Spec ready for review")
                 .build();
         approvalStore.put(specReview.getId(), specReview);
-        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(specReview));
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(specReview));
 
-        gate.cancelAllPendingForRun(ctx.getRunId());
+        gate.cancelAllPendingForRun(runId);
 
-        // SPEC_REVIEW approvals are governed by the spec-approval flow, not the run lifecycle.
         assertThat(specReview.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(specReview.getReason()).isEqualTo("Spec ready for review");
         verify(approvalRepository, never()).save(any());
     }
 
+    @Test
+    void cancelAllPendingForRun_leavesReviewRequestsAlive() {
+        // REVIEW_REQUEST is a display-only post-run prompt (the review card); the
+        // run ending must never expire it.
+        UUID runId = UUID.randomUUID();
+        Approval review = TestDataBuilder.anApproval()
+                .withRunId(runId)
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason("review the card")
+                .build();
+        review.setAskType(Approval.AskType.REVIEW_REQUEST);
+        approvalStore.put(review.getId(), review);
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(review));
+
+        gate.cancelAllPendingForRun(runId);
+
+        assertThat(review.getStatus()).isEqualTo(ApprovalStatus.PENDING);
+        verify(approvalRepository, never()).save(any());
+    }
+
     /**
      * R20.5: ACP permission asks are cancelled by the ACP permission coordinator (their companion
-     * row and delivery state must move with them), so the legacy run sweep must skip them.
+     * row and delivery state must move with them), so this run sweep must skip them.
      */
     @Test
     void cancelAllPendingForRun_leavesAcpPermissionAsksAlive() {
-        RunContext ctx = ctx();
+        UUID runId = UUID.randomUUID();
         Approval acpAsk = TestDataBuilder.anApproval()
-                .withRunId(ctx.getRunId())
+                .withRunId(runId)
                 .withStatus(ApprovalStatus.PENDING)
                 .withReason("ACP permission request: mcp__aria__write_file")
                 .build();
         acpAsk.setSource(ApprovalSource.ACP_PERMISSION);
         approvalStore.put(acpAsk.getId(), acpAsk);
-        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(acpAsk));
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(acpAsk));
 
-        gate.cancelAllPendingForRun(ctx.getRunId());
+        gate.cancelAllPendingForRun(runId);
 
         assertThat(acpAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(acpAsk.getReason()).isEqualTo("ACP permission request: mcp__aria__write_file");
@@ -333,8 +268,8 @@ class ApprovalGateTest {
      */
     @Test
     void cancelAllPendingForRun_leavesClarificationAsksAlive() {
-        RunContext ctx = ctx();
-        Approval clarification = Approval.builder().id(UUID.randomUUID()).runId(ctx.getRunId())
+        UUID runId = UUID.randomUUID();
+        Approval clarification = Approval.builder().id(UUID.randomUUID()).runId(runId)
                 .status(ApprovalStatus.PENDING)
                 .askType(Approval.AskType.QUESTION)
                 .source(ApprovalSource.CLARIFICATION)
@@ -342,9 +277,9 @@ class ApprovalGateTest {
                 .content("Which database?")
                 .build();
         approvalStore.put(clarification.getId(), clarification);
-        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(clarification));
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(clarification));
 
-        gate.cancelAllPendingForRun(ctx.getRunId());
+        gate.cancelAllPendingForRun(runId);
 
         assertThat(clarification.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(clarification.getReason()).isNull();
@@ -353,52 +288,46 @@ class ApprovalGateTest {
 
     /**
      * Task 3 pin: a native ask is stamped {@code ACP_PERMISSION} at registration
-     * (PermissionCoordinator.register), so the legacy run-end sweep must leave it
-     * to the ACP permission coordinator's own {@code cancelPendingForRun} — this
-     * is the guard the source stamp makes effective for native rows.
+     * (PermissionCoordinator.register), so the run-end sweep must leave it to
+     * the ACP permission coordinator's own {@code cancelPendingForRun}.
      */
     @Test
     void cancelAllPendingForRunLeavesNativeAsksAlone() {
-        RunContext ctx = ctx();
-        Approval nativeAsk = Approval.builder().id(UUID.randomUUID()).runId(ctx.getRunId())
+        UUID runId = UUID.randomUUID();
+        Approval nativeAsk = Approval.builder().id(UUID.randomUUID()).runId(runId)
                 .status(ApprovalStatus.PENDING)
                 .source(ApprovalSource.ACP_PERMISSION)
                 .approvalType(Approval.ApprovalType.TOOL_CALL)
                 .build();
-        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(nativeAsk));
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(nativeAsk));
 
-        gate.cancelAllPendingForRun(ctx.getRunId());
+        gate.cancelAllPendingForRun(runId);
 
         assertThat(nativeAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         verify(approvalRepository, never()).save(nativeAsk);
     }
 
     /**
-     * R-RFUX6 pin: the run-end sweep is an expiry path, so every legacy TOOL_CALL ask it
-     * settles must publish the same {@link ApprovalExpiredEvent} the timeout and scheduled
-     * sweep paths publish — the ask's {@code approval.requested} notification must flip and
-     * an expiry notice must be raised (D6: no silent lapse). SPEC_REVIEW asks are outside the
-     * sweep and must stay silent.
+     * R-RFUX6 pin: the run-end sweep is an expiry path, so every legacy TOOL_CALL
+     * ask it settles must publish the same {@link ApprovalExpiredEvent} the
+     * scheduled sweep publishes — the ask's {@code approval.requested}
+     * notification must flip and an expiry notice must be raised (D6: no silent
+     * lapse). SPEC_REVIEW asks are outside the sweep and must stay silent.
      */
     @Test
     void cancelAllPendingForRun_publishesExpiredEventForSettledLegacyAsk_only() {
-        RunContext ctx = ctx();
-        Approval legacyAsk = TestDataBuilder.anApproval()
-                .withRunId(ctx.getRunId())
-                .withStatus(ApprovalStatus.PENDING)
-                .withReason("Agent requests approval to execute deploy {}")
-                .build();
-        approvalStore.put(legacyAsk.getId(), legacyAsk);
+        UUID runId = UUID.randomUUID();
+        Approval legacyAsk = storePendingApproval(runId, "Agent requests approval to execute deploy {}");
         Approval specReview = TestDataBuilder.anApproval()
-                .withRunId(ctx.getRunId())
+                .withRunId(runId)
                 .withApprovalType(Approval.ApprovalType.SPEC_REVIEW)
                 .withStatus(ApprovalStatus.PENDING)
                 .withReason("Spec ready for review")
                 .build();
         approvalStore.put(specReview.getId(), specReview);
-        when(approvalRepository.findByRunId(ctx.getRunId())).thenReturn(List.of(legacyAsk, specReview));
+        when(approvalRepository.findByRunId(runId)).thenReturn(List.of(legacyAsk, specReview));
 
-        gate.cancelAllPendingForRun(ctx.getRunId());
+        gate.cancelAllPendingForRun(runId);
 
         assertThat(legacyAsk.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
         assertThat(legacyAsk.getReason()).isEqualTo("Run cancelled");
@@ -409,81 +338,27 @@ class ApprovalGateTest {
         verify(eventPublisher, times(1)).publishEvent(captor.capture());
         ApprovalExpiredEvent event = captor.getValue();
         assertThat(event.getApprovalId()).isEqualTo(legacyAsk.getId());
-        assertThat(event.getRunId()).isEqualTo(ctx.getRunId());
+        assertThat(event.getRunId()).isEqualTo(runId);
         assertThat(event.getReason()).isEqualTo("Run cancelled");
         assertThat(event.getToolName()).isNull();
     }
 
-    @Test
-    void cancelPendingApproval_unknownId_doesNotAffectOtherPendingApprovals() throws Exception {
-        RunContext ctx = ctx();
-        CompletableFuture<ApprovalDecision> future = runAsync(() ->
-                gate.requestApproval(action("deploy", "{}"), ctx));
-        UUID approvalId = waitForApprovalId();
-
-        gate.cancelPendingApproval(UUID.randomUUID());
-
-        // The unrelated in-flight approval must still be decidable normally.
-        gate.decideApproval(approvalId, true, "still fine");
-        ApprovalDecision decision = future.get(5, TimeUnit.SECONDS);
-        assertThat(decision.isApproved()).isTrue();
-        assertThat(decision.reason()).isEqualTo("still fine");
-    }
-
-    @Test
-    void requestTurnApproval_nullActionList_autoApprovesWithoutPersisting() {
-        ApprovalDecision decision = gate.requestTurnApproval(ctx(), null);
-
-        assertThat(decision.isApproved()).isTrue();
-        assertThat(decision.reason()).isEqualTo("No actions requiring approval");
-        assertThat(approvalStore).isEmpty();
-        assertThat(toolCallStore).isEmpty();
-    }
-
     // ---- helpers ----
 
-    private static Action action(String name, String arguments) {
-        return new Action(name, ActionType.HIGH_RISK, arguments, null);
-    }
-
-    private RunContext ctx() {
-        UUID runId = UUID.randomUUID();
-        UUID agentId = UUID.randomUUID();
-        Agent agent = TestDataBuilder.anAgent().withId(agentId).build();
-        AgentSession session = TestDataBuilder.anAgentSession().withRunId(runId).withAgentId(agentId).build();
-        return new RunContext(runId, agentId, agent, session);
-    }
-
-    /** Run an approval call on a separate thread so the main thread can publish a decision. */
-    private CompletableFuture<ApprovalDecision> runAsync(java.util.concurrent.Callable<ApprovalDecision> call) {
-        CompletableFuture<ApprovalDecision> future = new CompletableFuture<>();
-        Executors.newSingleThreadExecutor().submit(() -> {
-            try {
-                future.complete(call.call());
-            } catch (Throwable t) {
-                future.completeExceptionally(t);
-            }
-        });
-        return future;
-    }
-
-    /**
-     * Spin until the approval gate has published an ApprovalRequestedEvent (i.e. created
-     * the approval entity AND registered the blocking future); capture the approval id
-     * via the event publisher mock.
-     */
-    private UUID waitForApprovalId() throws InterruptedException, ExecutionException, TimeoutException {
-        ArgumentCaptor<ApprovalRequestedEvent> captor =
-                ArgumentCaptor.forClass(ApprovalRequestedEvent.class);
-        long deadline = System.currentTimeMillis() + 5_000;
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                verify(eventPublisher, times(1)).publishEvent(captor.capture());
-                return captor.getValue().getApprovalId();
-            } catch (AssertionError ignore) {
-                Thread.sleep(20);
-            }
-        }
-        throw new TimeoutException("ApprovalRequestedEvent was never published");
+    private Approval storePendingApproval(UUID runId, String reason) {
+        ToolCall toolCall = toolCallRepository.save(ToolCall.builder()
+                .runId(runId)
+                .toolName("deploy")
+                .arguments("{}")
+                .status(ToolCallStatus.PENDING)
+                .build());
+        Approval approval = TestDataBuilder.anApproval()
+                .withRunId(runId)
+                .withToolCallId(toolCall.getId())
+                .withStatus(ApprovalStatus.PENDING)
+                .withReason(reason)
+                .build();
+        approvalStore.put(approval.getId(), approval);
+        return approval;
     }
 }

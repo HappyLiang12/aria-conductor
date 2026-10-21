@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ul>
  *
  * <p>The probe logic lives in {@code e2e/qoder/slice-a/04-permissions.mjs} (a Node ESM
- * script, executed in-sandbox via {@code OpenCodeSandboxManager#runCommand}); this test
+ * script, executed in-sandbox via the sandbox SDK command path); this test
  * boots the sandbox, injects the Qoder PAT as the {@code QODER_PERSONAL_ACCESS_TOKEN}
  * sandbox environment variable (environment only, never argv — see
  * {@link QoderSandboxHarness#boot(String, String, Map)}), uploads the script, runs it and

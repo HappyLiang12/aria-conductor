@@ -87,7 +87,7 @@ class DashboardSummaryIntegrationTest extends BaseH2IntegrationTest {
         return Agent.builder()
                 .name(namePrefix + UUID.randomUUID())
                 .role("test")
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .healthStatus(healthStatus)
                 .build();
     }

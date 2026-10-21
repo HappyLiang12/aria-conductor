@@ -281,15 +281,15 @@
 <!-- backup -->
 <g id="node16" class="node">
 <title>backup</title>
-<path fill="#f8fafc" stroke="#64748b" d="M917.62,-286C917.62,-286 758.38,-286 758.38,-286 752.38,-286 746.38,-280 746.38,-274 746.38,-274 746.38,-262 746.38,-262 746.38,-256 752.38,-250 758.38,-250 758.38,-250 917.62,-250 917.62,-250 923.62,-250 929.62,-256 929.62,-262 929.62,-262 929.62,-274 929.62,-274 929.62,-280 923.62,-286 917.62,-286"/>
-<text xml:space="preserve" text-anchor="middle" x="838" y="-264.5" font-family="Helvetica,sans-Serif" font-size="10.00">Recovery: DB backup + Flyway repair</text>
+<path fill="#f8fafc" stroke="#64748b" d="M916.25,-286C916.25,-286 757.75,-286 757.75,-286 751.75,-286 745.75,-280 745.75,-274 745.75,-274 745.75,-262 745.75,-262 745.75,-256 751.75,-250 757.75,-250 757.75,-250 916.25,-250 916.25,-250 922.25,-250 928.25,-256 928.25,-262 928.25,-262 928.25,-274 928.25,-274 928.25,-280 922.25,-286 916.25,-286"/>
+<text xml:space="preserve" text-anchor="middle" x="837" y="-264.5" font-family="Helvetica,sans-Serif" font-size="10.00">Recovery: restore pre&#45;upgrade backup</text>
 </g>
 <!-- r05&#45;&gt;backup -->
 <g id="edge16" class="edge">
 <title>r05&#45;&gt;backup</title>
-<path fill="none" stroke="#d97706" stroke-dasharray="5,2" d="M812.82,-357.97C817.45,-341.61 824.53,-316.59 830.01,-297.24"/>
-<polygon fill="#d97706" stroke="#d97706" points="833.32,-298.37 832.68,-287.8 826.59,-296.47 833.32,-298.37"/>
-<text xml:space="preserve" text-anchor="middle" x="845.17" y="-316.7" font-family="Helvetica,sans-Serif" font-size="9.00">requires</text>
+<path fill="none" stroke="#d97706" stroke-dasharray="5,2" d="M812.66,-357.97C817.14,-341.61 823.98,-316.59 829.27,-297.24"/>
+<polygon fill="#d97706" stroke="#d97706" points="832.59,-298.37 831.86,-287.8 825.84,-296.52 832.59,-298.37"/>
+<text xml:space="preserve" text-anchor="middle" x="844.49" y="-316.7" font-family="Helvetica,sans-Serif" font-size="9.00">requires</text>
 </g>
 <!-- packs -->
 <g id="node19" class="node">

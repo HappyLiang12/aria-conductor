@@ -127,7 +127,8 @@ contained: R-03 has a safe fallback, R-04 is documented in the coverage map, and
 that proves its postconditions. At review time, merge required explicit operator confirmation per
 the project's merge protocol; the PR was merged on 2026-10-21 as `60d542f1`.
 
-Recommended before merge: confirm the release note includes the V69 backup/repair guidance and the
+Recommended before deploying the upgrade: confirm the release note includes the V69 backup/restore
+guidance and the
 "cancel records state; compute is bounded by the deadline" operator wording.
 
 Recommended after merge: open the R-01 follow-up (coordinator-owned verified cancel), the R-03

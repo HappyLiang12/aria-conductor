@@ -48,7 +48,7 @@ digraph RiskMap {
     color="#fdba74";
     db [label="Existing database", fillcolor="#e2e8f0"];
     v69 [label="V69 retirement migration\nNATIVE->ADK, delete assignments,\nexpire legacy-gate asks,\ndelete config keys", fillcolor="#e2e8f0"];
-    backup [label="Recovery: DB backup + Flyway repair", fillcolor="#f8fafc"];
+    backup [label="Recovery: restore pre-upgrade backup", fillcolor="#f8fafc"];
     r05 [label="R-05 MEDIUM 1 x 3 = 3\nirreversible data removal", fillcolor="#fef3c7", color="#d97706"];
     migtest [label="MigrationIntegrationTest\npostconditions verified in CI", fillcolor="#dcfce7", color="#16a34a"];
 

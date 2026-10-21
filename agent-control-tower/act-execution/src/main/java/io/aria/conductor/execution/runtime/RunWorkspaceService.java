@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
+import static io.aria.conductor.execution.runtime.WorkspaceGuidance.refusal;
+
 /**
  * Lease-based workspace ownership (spec 5.2). Every acquisition records the
  * canonical local root, the user-owned source root, the platform-owned run
@@ -56,6 +58,9 @@ public class RunWorkspaceService implements WorkspaceService {
     private static final String BASELINE_FILE = "baseline.manifest";
     private static final String MANIFEST_FILE = "manifest.txt";
     private static final String CHANGES_FILE = "changes.txt";
+
+    /** Operator-facing next step for every workspace-admission refusal. */
+    private static final String WORKSPACE_HINT = WorkspaceGuidance.SETTINGS_HINT;
 
     /** Generated secret-bearing files never enter retained artifacts. */
     private static final List<String> SECRET_FILE_NAMES = List.of(
@@ -134,17 +139,20 @@ public class RunWorkspaceService implements WorkspaceService {
     private WorkspaceLease acquireDirect(ExecutionSpec spec, AgentExecutionSettings settings) {
         String raw = settings.workspacePath();
         if (raw == null || raw.isBlank()) {
-            throw new IllegalArgumentException("Direct workspace requires an explicitly selected directory");
+            throw refusal("Direct workspace requires an explicitly selected directory."
+                    + WORKSPACE_HINT, "WORKSPACE_DIRECT_REQUIRED");
         }
         Path selected = Path.of(raw);
         if (!Files.isDirectory(selected)) {
-            throw new IllegalArgumentException("Direct workspace directory does not exist: " + raw);
+            throw refusal("Direct workspace directory does not exist: " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_DIRECT_MISSING");
         }
         Path sourceRoot;
         try {
             sourceRoot = selected.toRealPath();
         } catch (IOException e) {
-            throw new IllegalArgumentException("Direct workspace directory does not exist: " + raw, e);
+            throw refusal("Direct workspace directory does not exist: " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_DIRECT_MISSING", e);
         }
         Path configRoot = configRootUnchecked(spec.runId());
         rejectRuntimeRootInsideSource(sourceRoot);
@@ -164,7 +172,8 @@ public class RunWorkspaceService implements WorkspaceService {
     private WorkspaceLease acquireWorktree(ExecutionSpec spec, AgentExecutionSettings settings) {
         String raw = settings.workspacePath();
         if (raw == null || raw.isBlank()) {
-            throw new IllegalArgumentException("Worktree workspace requires a repository path");
+            throw refusal("Worktree workspace requires a repository path."
+                    + WORKSPACE_HINT, "WORKSPACE_REPOSITORY_REQUIRED");
         }
         Path repository = Path.of(raw);
         Path repoRoot = resolveRepository(repository, raw);
@@ -219,12 +228,14 @@ public class RunWorkspaceService implements WorkspaceService {
         if (raw != null && !raw.isBlank()) {
             Path source = Path.of(raw);
             if (!Files.isDirectory(source)) {
-                throw new IllegalArgumentException("Sandbox workspace source directory does not exist: " + raw);
+                throw refusal("Sandbox workspace source directory does not exist: " + raw
+                        + "." + WORKSPACE_HINT, "WORKSPACE_SANDBOX_SOURCE_MISSING");
             }
             try {
                 sourceRoot = source.toRealPath();
             } catch (IOException e) {
-                throw new IllegalArgumentException("Sandbox workspace source directory does not exist: " + raw, e);
+                throw refusal("Sandbox workspace source directory does not exist: " + raw
+                        + "." + WORKSPACE_HINT, "WORKSPACE_SANDBOX_SOURCE_MISSING", e);
             }
             rejectRuntimeRootInsideSource(sourceRoot);
         }
@@ -384,21 +395,25 @@ public class RunWorkspaceService implements WorkspaceService {
 
     private Path resolveRepository(Path repository, String raw) {
         if (!Files.isDirectory(repository)) {
-            throw new IllegalArgumentException("Worktree workspace requires a git repository: " + raw);
+            throw refusal("Worktree workspace requires a git repository: " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_NOT_GIT");
         }
         GitResult probe;
         try {
             probe = git(repository, "rev-parse", "--git-dir");
         } catch (IOException e) {
-            throw new IllegalArgumentException("Worktree workspace requires a git repository: " + raw, e);
+            throw refusal("Worktree workspace requires a git repository: " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_NOT_GIT", e);
         }
         if (probe.exitCode() != 0) {
-            throw new IllegalArgumentException("Worktree workspace requires a git repository: " + raw);
+            throw refusal("Worktree workspace requires a git repository: " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_NOT_GIT");
         }
         try {
             return repository.toRealPath();
         } catch (IOException e) {
-            throw new IllegalArgumentException("Worktree workspace requires a git repository: " + raw, e);
+            throw refusal("Worktree workspace requires a git repository: " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_NOT_GIT", e);
         }
     }
 
@@ -406,18 +421,21 @@ public class RunWorkspaceService implements WorkspaceService {
         if (ref.startsWith("-")) {
             // Git refnames cannot begin with a dash; rejecting the shape up front keeps the
             // operator string out of git's option parser entirely.
-            throw new IllegalArgumentException("Cannot resolve worktree base ref '" + ref + "' in " + raw);
+            throw refusal("Cannot resolve worktree base ref '" + ref + "' in " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_BASE_REF_UNRESOLVED");
         }
         GitResult result;
         try {
             result = git(repository, "rev-parse", "--verify", "--quiet", ref + "^{commit}");
         } catch (IOException e) {
-            throw new IllegalArgumentException("Cannot resolve worktree base ref '" + ref + "' in " + raw, e);
+            throw refusal("Cannot resolve worktree base ref '" + ref + "' in " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_BASE_REF_UNRESOLVED", e);
         }
         String commit = result.output().trim();
         // Only a full lowercase hexadecimal commit is accepted: any other stdout is not a commit.
         if (result.exitCode() != 0 || !COMMIT_SHA.matcher(commit).matches()) {
-            throw new IllegalArgumentException("Cannot resolve worktree base ref '" + ref + "' in " + raw);
+            throw refusal("Cannot resolve worktree base ref '" + ref + "' in " + raw
+                    + "." + WORKSPACE_HINT, "WORKSPACE_BASE_REF_UNRESOLVED");
         }
         return commit;
     }

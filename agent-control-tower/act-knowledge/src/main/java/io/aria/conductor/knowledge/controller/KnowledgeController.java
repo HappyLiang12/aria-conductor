@@ -1,6 +1,7 @@
 package io.aria.conductor.knowledge.controller;
 
 import io.aria.conductor.agent.dto.WorkflowResponse;
+import io.aria.conductor.common.exception.ActionableFailure;
 import io.aria.conductor.common.model.KnowledgeStatus;
 import io.aria.conductor.common.model.KnowledgeType;
 import io.aria.conductor.knowledge.dto.*;
@@ -13,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -131,13 +133,33 @@ public class KnowledgeController {
      * not server errors.
      */
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<String> handleIllegalArgument(IllegalArgumentException e) {
-        return ResponseEntity.badRequest().body(e.getMessage());
+    public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException e) {
+        return rejection(e, "Invalid workflow request.");
     }
 
     /** State errors from template instantiation (e.g. template/version state mismatch). */
     @ExceptionHandler(IllegalStateException.class)
-    public ResponseEntity<String> handleIllegalState(IllegalStateException e) {
-        return ResponseEntity.badRequest().body(e.getMessage());
+    public ResponseEntity<Map<String, String>> handleIllegalState(IllegalStateException e) {
+        return rejection(e, "The workflow template is not in a valid state.");
+    }
+
+    /**
+     * This module-local handler must not bypass the actionable contract: a
+     * failure that names a repair surface keeps its code/surface in the body.
+     */
+    private static ResponseEntity<Map<String, String>> rejection(RuntimeException e, String fallback) {
+        Map<String, String> body = new LinkedHashMap<>();
+        body.put("error", messageOf(e, fallback));
+        if (e instanceof ActionableFailure actionable) {
+            body.put("code", actionable.code());
+            body.put("surface", actionable.surface().name());
+        }
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    /** Map.of rejects null values, so a message-less exception must not turn a 400 into a 500. */
+    private static String messageOf(RuntimeException e, String fallback) {
+        String message = e.getMessage();
+        return message == null || message.isBlank() ? fallback : message;
     }
 }

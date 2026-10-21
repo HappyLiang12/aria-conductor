@@ -149,17 +149,19 @@ export async function revokeOperatorSession(): Promise<void> {
 }
 
 /**
- * The backend's own error message when one was served (`{ error }` for
- * rejections, `{ reason }` for a refused credential test, `{ detail }` as the
- * last resort), otherwise the caller's fallback. Operator-only routes explain
- * themselves (401 `Operator credential required`, 403 `Operator authority
- * required`, CSRF/Origin refusals), so the exact backend wording is surfaced
- * instead of a generic retry line.
+ * The backend's own error message when one was served. `{ message }` first: the
+ * shared exception handler puts the actionable detail there and the reason
+ * phrase ("Bad Request") in `error`. Then `{ error }` for the controllers that
+ * serve rejections as `{ error }`, `{ reason }` for a refused credential test,
+ * `{ detail }` as the last resort. Operator-only routes explain themselves, so
+ * the exact backend wording is surfaced instead of a generic retry line. Call
+ * sites that want the transport message (network/timeout/status) as the
+ * fallback pass `(error as Error)?.message` themselves.
  */
 export function apiErrorMessage(error: unknown, fallback: string): string {
   const data = (error as { response?: { data?: Record<string, unknown> } } | undefined)?.response
     ?.data;
-  for (const key of ['error', 'reason', 'detail']) {
+  for (const key of ['message', 'error', 'reason', 'detail']) {
     const value = data?.[key];
     if (typeof value === 'string' && value.trim() !== '') {
       return value;

@@ -131,4 +131,33 @@ class RunInputCoordinatorTest {
 
         assertThat(future.get(1, TimeUnit.SECONDS).finalizeRequested()).isTrue();
     }
+
+    @Test
+    void aTerminationFailureCarriesItsRepairSurfaceAndIsConsumedOnce() {
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.",
+                "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
+        coordinator.recordTerminationIntent(runId);
+
+        RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(runId);
+        assertThat(failure.message()).isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
+        assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(coordinator.consumeTerminationFailure(runId)).isNull();
+    }
+
+    @Test
+    void consumingTheFailureAlsoClearsTheStickyWakeUpIntent() {
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.",
+                "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
+        coordinator.consumeTerminationFailure(runId);
+
+        // The run settled; a later park must wait for an answer instead of
+        // immediately finalizing on an intent that outlived its run.
+        CompletableFuture<RunInputCoordinator.OperatorInput> future = coordinator.requestInput(runId, "q?");
+
+        assertThat(future).isNotDone();
+        verify(publisher).publishEvent(any(RunWaitingForInputEvent.class));
+    }
 }

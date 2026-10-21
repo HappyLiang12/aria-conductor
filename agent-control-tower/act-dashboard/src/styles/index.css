@@ -60,13 +60,13 @@ body.afterhours {
 }
 
 /* ---------- Top header ---------- */
+.top-stack { position: sticky; top: 0; z-index: 50; }
 .topbar {
   display: flex; align-items: center; gap: 18px;
   padding: 14px 22px;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(20,28,55,.85), rgba(13,20,38,.6));
   backdrop-filter: blur(10px);
-  position: sticky; top: 0; z-index: 50;
   flex-wrap: wrap;
 }
 .brand { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; }
@@ -1323,8 +1323,8 @@ body.light .ai-fab { background: radial-gradient(circle at 30% 30%, #eef2ff 0%, 
   align-items: stretch;
 }
 .rail {
-  position: sticky; top: 67px; align-self: start;
-  height: calc(100vh - 67px);
+  position: sticky; top: var(--top-stack-h, 67px); align-self: start;
+  height: calc(100vh - var(--top-stack-h, 67px));
   display: flex; flex-direction: column; gap: 4px;
   padding: 14px 10px; box-sizing: border-box;
   border-right: 1px solid var(--line);
@@ -2139,6 +2139,7 @@ body.light .ai-compose .row { background: #ffffff; }
 .notif-bell-btn { background: none; border: none; font-size: 1.3rem; cursor: pointer; position: relative; padding: 4px 8px; border-radius: 6px; color: var(--text); }
 .notif-bell-btn:hover { background: var(--bg-2); }
 .notif-badge { position: absolute; top: -2px; right: -2px; background: var(--red); color: #fff; font-size: 0.65rem; font-weight: bold; min-width: 16px; height: 16px; border-radius: 8px; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+.notif-error-dot { position: absolute; top: -3px; left: -3px; background: var(--red); color: #fff; font-size: 0.6rem; font-weight: bold; min-width: 13px; height: 13px; border-radius: 7px; display: flex; align-items: center; justify-content: center; padding: 0 2px; }
 .notif-dropdown { position: absolute; top: 100%; right: 0; margin-top: 8px; width: 360px; max-height: 480px; background: var(--bg-1); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); z-index: 1000; overflow: hidden; }
 .notif-dropdown-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .notif-dropdown-title { font-weight: 600; font-size: 0.95rem; }

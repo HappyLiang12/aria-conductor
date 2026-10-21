@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createKnowledge, getKnowledgeYaml, updateKnowledgeContent } from '../api/knowledge';
+import { apiErrorMessage } from '../api/operatorSession';
 import { extractTemplateParams } from '../utils/workflowTemplateParams';
 import type { KnowledgeItem } from '../types';
 
@@ -22,7 +23,12 @@ export default function TemplateEditorModal({ item, onClose, onSaved }: Props) {
     if (item) {
       getKnowledgeYaml(item.id)
         .then((y) => setYaml(y || ''))
-        .catch(() => setYaml(''))
+        .catch((err) => {
+          // Never leave the editor silently empty: a failed read would look like
+          // a template with no content.
+          setYaml('');
+          setError(apiErrorMessage(err, 'Failed to load the template YAML.'));
+        })
         .finally(() => setLoading(false));
     }
   }, [item]);
@@ -46,8 +52,8 @@ export default function TemplateEditorModal({ item, onClose, onSaved }: Props) {
         } as any);
       }
       onSaved();
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e?.message || 'Save failed');
+    } catch (e: unknown) {
+      setError(apiErrorMessage(e, (e as Error)?.message ?? 'Save failed'));
     } finally {
       setSaving(false);
     }

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/kanban';
 import type { KanbanRejection } from '../api/kanban';
 import { executeHousekeeping } from '../api/housekeeping';
+import { apiErrorMessage } from '../api/operatorSession';
 import { listAgentTemplates, listAgents } from '../api/agents';
 import type {
   CreateKanbanItemRequest,
@@ -104,16 +105,9 @@ function batchConfirmMessage(kind: BatchKind, n: number): string {
   }
 }
 
-/** One-line failure reason for the batch summary (409 body shape when present). */
+/** One-line failure reason for the batch summary (backend body when present). */
 function batchFailureReason(err: unknown): string {
-  const data = (err as { response?: { data?: KanbanRejection & { error?: string } } } | null)
-    ?.response?.data;
-  return (
-    data?.message
-    ?? data?.error
-    ?? (err as { message?: string } | null)?.message
-    ?? 'transition refused'
-  );
+  return apiErrorMessage(err, (err as Error)?.message ?? 'transition refused');
 }
 
 interface NewItemDraft {
@@ -756,9 +750,10 @@ export default function KanbanBoard() {
                   setClearConfirmOpen(false);
                   try {
                     await executeHousekeeping({ categories: ['kanban'], confirm: true });
-                  } catch {
-                    // single-flight conflict or bad request: refresh anyway so the
-                    // operator sees the current board state.
+                  } catch (err) {
+                    // Single-flight conflict or bad request: say what the backend said,
+                    // then refresh anyway so the operator sees the current board state.
+                    setError(apiErrorMessage(err, 'Clearing the finished cards failed.'));
                   } finally {
                     queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
                   }

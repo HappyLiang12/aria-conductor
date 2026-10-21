@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentSkills, retireAgent } from '../api/agents';
 import { getAgentTelemetry } from '../api/dashboard';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
-import { apiErrorMessage } from '../api/operatorSession';
+import { presentError, type PresentedError } from '../api/errorPresentation';
 import type {
   Agent,
   AgentCore,
@@ -15,6 +15,7 @@ import type {
 import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import ErrorNotice from '../components/ErrorNotice';
 import { estimateCost } from '../utils/pricing';
 
 interface CreateAgentError extends Error {
@@ -157,7 +158,7 @@ export default function CrewPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<AddAgentForm>(EMPTY_FORM);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PresentedError | null>(null);
   // H3 bulk retire selection.
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [retireBusy, setRetireBusy] = useState(false);
@@ -241,13 +242,14 @@ export default function CrewPage() {
       : form.adkProvider === ''
         ? 'Select an agent core'
         : !selectedCoreInfo
-          ? `Unsupported agent core: ${form.adkProvider}`
+          ? `Unsupported agent core: ${form.adkProvider}. Select one in Configure > Runtime.`
           : !supportedModes.includes(form.executionMode)
-            ? `Unsupported execution mode: ${form.adkProvider}/${form.executionMode}`
+            ? `Unsupported execution mode: ${form.adkProvider}/${form.executionMode}.`
+              + ' Select the fleet runtime in Configure > Runtime.'
             : form.executionMode === 'HOST' && trimmedWorkspacePath === ''
               ? form.workspaceMode === 'WORKTREE'
-                ? 'Host worktree mode requires a repository path'
-                : 'Direct mode requires an explicitly selected directory'
+                ? 'Host worktree mode requires a repository path.'
+                : 'Direct mode requires an explicitly selected directory.'
               : null;
 
   // The inventory is the only core source: before it answers, no core has been
@@ -300,12 +302,12 @@ export default function CrewPage() {
         queryClient.invalidateQueries({ queryKey: ['agents'], refetchType: 'active' });
         setDialogOpen(false);
         setForm(EMPTY_FORM);
-        setError('Agent created, but applying the recommended skills failed. Adjust them on the agent card.');
+        setError({ text: 'Agent created, but applying the recommended skills failed. Adjust them on the agent card.' });
       } else {
         // The admission policy's exact rejection ("Unsupported agent core: …",
         // "Unsupported execution mode: …", "Direct workspace requires …") is
         // surfaced instead of a generic message.
-        setError(apiErrorMessage(e, e?.message ?? 'Failed to create agent'));
+        setError(presentError(e, e?.message ?? 'Failed to create agent'));
       }
     },
   });
@@ -408,7 +410,7 @@ export default function CrewPage() {
     e.preventDefault();
     const name = form.name.trim();
     if (!name) {
-      setError('Name is required');
+      setError({ text: 'Name is required' });
       return;
     }
     if (submissionBlocked) {
@@ -746,7 +748,9 @@ export default function CrewPage() {
             <div style={{ marginTop: 10, color: 'var(--amber)', fontSize: 11.5 }}>{selectionError}</div>
           )}
           {error && (
-            <div style={{ marginTop: 10, color: 'var(--red)', fontSize: 11.5 }}>{error}</div>
+            <div style={{ marginTop: 10 }}>
+              <ErrorNotice presented={error} />
+            </div>
           )}
 
           <div className="actions">

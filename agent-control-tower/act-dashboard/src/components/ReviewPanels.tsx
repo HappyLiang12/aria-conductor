@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { transitionKanbanItem } from '../api/kanban';
 import { answerAsk, approveApproval, finalizeRun, rejectApproval } from '../api/approvals';
-import { apiErrorMessage, applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { applyOperatorHeaders, isOperatorRejection } from '../api/operatorSession';
+import { presentError, type PresentedError } from '../api/errorPresentation';
+import ErrorNotice from './ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import {
   NativePermissionFacts,
@@ -39,7 +41,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
   const queryClient = useQueryClient();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [requestFeedback, setRequestFeedback] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PresentedError | null>(null);
   const [operatorRejected, setOperatorRejected] = useState(false);
 
   // A native permission ask is authorizable exactly once, never in bulk: the
@@ -81,7 +83,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
     },
     onError: (err: unknown) => {
       setOperatorRejected(isOperatorRejection(err));
-      setError(apiErrorMessage(err, 'Action rejected — please retry.'));
+      setError(presentError(err, 'Action rejected — please retry.'));
     },
   });
   // Waiting-input (2026-10-05): end a run parked in WAITING_INPUT with the
@@ -94,7 +96,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['runs'] });
     },
-    onError: (err: unknown) => setError(apiErrorMessage(err, 'Finalize rejected — please retry.')),
+    onError: (err: unknown) => setError(presentError(err, 'Finalize rejected — please retry.')),
   });
   // Card-level fallback (spec 10.1): send the whole card back to the agent
   // with feedback even while asks are still pending on it.
@@ -107,7 +109,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       queryClient.invalidateQueries({ queryKey: ['kanban-items'] });
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
     },
-    onError: () => setError('Action rejected — please retry.'),
+    onError: (err: unknown) => setError(presentError(err, 'Request changes failed — the card is unchanged.')),
   });
 
   const resolve = (args: { ask: Approval; approved: boolean; answer?: string }) => {
@@ -201,11 +203,13 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       >
         ✎ Request changes
       </button>
-      {error && <div className="kanban-form-error">{error}</div>}
+      {error && <ErrorNotice className="kanban-form-error" presented={error} />}
       {operatorRejected && (
         <div className="ask-ctx">
-          Approvals are operator-only — establish the operator session (Providers page, Operator
-          access) and retry. Nothing was decided by the refused call.
+          Approvals are operator-only. On this machine, loopback requests are the operator
+          automatically — reload the page and retry. From a remote machine, the operator who
+          runs the backend must grant access (the server's operator credential); the dashboard
+          has no remote token entry. Nothing was decided by the refused call.
         </div>
       )}
     </div>
@@ -287,7 +291,7 @@ export function ShortApprovalView({
 }) {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PresentedError | null>(null);
   const move = useMutation({
     mutationFn: ({ status, feedback: fb }: { status: KanbanStatus; feedback?: string }) =>
       transitionKanbanItem(item.id, { status, feedback: fb }),
@@ -297,7 +301,7 @@ export function ShortApprovalView({
       queryClient.invalidateQueries({ queryKey: ['kanban'] });
       setError(null);
     },
-    onError: () => setError('Action rejected — the card is unchanged.'),
+    onError: (err: unknown) => setError(presentError(err, 'Move failed — the card is unchanged.')),
   });
 
   // Task 7: the linked run's outcome drives both the chip and the copy — a
@@ -322,7 +326,7 @@ export function ShortApprovalView({
         value={feedback}
         onChange={(e) => setFeedback(e.target.value)}
       />
-      {error && <div className="kanban-form-error">{error}</div>}
+      {error && <ErrorNotice className="kanban-form-error" presented={error} />}
       <div className="ask-actions">
         <button className="btn primary" onClick={() => move.mutate({ status: 'DONE' })}>Approve</button>
         <button className="btn" onClick={() => { move.mutate({ status: 'TODO', feedback: feedback.trim() || undefined }); setFeedback(''); }}>Request changes</button>

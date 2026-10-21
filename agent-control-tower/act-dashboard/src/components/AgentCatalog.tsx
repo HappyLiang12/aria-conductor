@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getTemplates, createFromTemplate } from '../api/agents';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from './ErrorNotice';
 import type { AgentTemplate } from '../types';
 
 /**
@@ -31,7 +33,10 @@ export function AgentCatalog() {
   return (
     <div className="template-grid" data-testid="agent-catalog">
       {isLoading && <div>Loading templates...</div>}
-      {error && <div>Failed to load templates</div>}
+      {error && <ErrorNotice presented={presentError(error, 'Failed to load templates.')} />}
+      {deployMutation.error && (
+        <ErrorNotice presented={presentError(deployMutation.error, 'The agent could not be deployed.')} />
+      )}
       {templates?.map((tpl) => {
         const isPending = deployMutation.isPending && deployMutation.variables?.id === tpl.id;
         return (

@@ -20,12 +20,13 @@ vi.mock('../../components/Layout', () => ({
   useWebSocketContext: () => ({ lastMessage: null, isConnected: true }),
 }));
 
-import { listWorkflows, deleteWorkflow } from '../../api/workflows';
+import { listWorkflows, deleteWorkflow, retryWorkflow } from '../../api/workflows';
 import { listRuns } from '../../api/runs';
 import { listAgents } from '../../api/agents';
 
 const mockListWorkflows = listWorkflows as Mock;
 const mockDeleteWorkflow = deleteWorkflow as Mock;
+const mockRetryWorkflow = retryWorkflow as Mock;
 const mockListRuns = listRuns as Mock;
 const mockListAgents = listAgents as Mock;
 
@@ -41,6 +42,17 @@ function chain() {
     ],
     createdAt: '2026-09-01T10:00:00Z',
     completedAt: '2026-09-01T10:05:00Z',
+  };
+}
+
+function failedChain() {
+  return {
+    ...chain(),
+    status: 'FAILED',
+    currentStepIndex: 0,
+    steps: [
+      { index: 0, agentId: 'a-1', promptTemplate: 'draft the spec', status: 'FAILED', runId: null, outputPreview: null },
+    ],
   };
 }
 
@@ -99,7 +111,10 @@ describe('WorkflowsPage delete confirmation (Task 10)', () => {
   });
 
   it('surfaces the failure when the confirmed delete is rejected', async () => {
-    mockDeleteWorkflow.mockRejectedValue(new Error('boom'));
+    // The backend's own refusal wording is surfaced, not the axios status line.
+    mockDeleteWorkflow.mockRejectedValue({
+      response: { data: { message: 'Workflow delete refused: an active run owns it' } },
+    });
 
     renderPage(<WorkflowsPage />);
     await clickDelete();
@@ -108,6 +123,25 @@ describe('WorkflowsPage delete confirmation (Task 10)', () => {
     // The dialog must never strand open on a rejection...
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     // ...and the failure must not be silent: the page's inline error banner shows it.
-    expect(await screen.findByRole('alert')).toHaveTextContent('Operation failed: boom');
+    expect(await screen.findByRole('alert'))
+      .toHaveTextContent('Workflow delete refused: an active run owns it');
+  });
+
+  it('clears the failure banner after a later retry succeeds', async () => {
+    mockListWorkflows.mockResolvedValue([failedChain()]);
+    mockRetryWorkflow.mockRejectedValueOnce({
+      response: { data: { message: 'Retry refused: the step is still running.' } },
+    });
+
+    renderPage(<WorkflowsPage />);
+    await userEvent.click(await screen.findByRole('button', { name: /Retry Step/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Retry refused: the step is still running.',
+    );
+
+    mockRetryWorkflow.mockResolvedValueOnce(undefined);
+    await userEvent.click(screen.getByRole('button', { name: /Retry Step/ }));
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 });

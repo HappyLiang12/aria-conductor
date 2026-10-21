@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listProviders, createProvider, updateProvider, deleteProvider, testProvider, activateProvider } from '../api/llmProviders';
+import { apiErrorMessage } from '../api/operatorSession';
 import type { LlmProvider, LlmProviderType, CreateLlmProviderRequest } from '../types';
 
 interface ToastMessage {
@@ -57,7 +58,7 @@ export function SettingsPage() {
       setFormErrors({});
       addToast('Provider created successfully', 'success');
     },
-    onError: () => addToast('Failed to create provider', 'error'),
+    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to create provider'), 'error'),
   });
 
   const updateMutation = useMutation({
@@ -69,7 +70,7 @@ export function SettingsPage() {
       setFormErrors({});
       addToast('Provider updated successfully', 'success');
     },
-    onError: () => addToast('Failed to update provider', 'error'),
+    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to update provider'), 'error'),
   });
 
   const deleteMutation = useMutation({
@@ -79,7 +80,7 @@ export function SettingsPage() {
       setConfirmDelete({ open: false, id: '', name: '' });
       addToast('Provider deleted', 'success');
     },
-    onError: () => addToast('Failed to delete provider', 'error'),
+    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to delete provider'), 'error'),
   });
 
   const activateMutation = useMutation({
@@ -88,7 +89,7 @@ export function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ['llm-providers'] });
       addToast('Provider activated', 'success');
     },
-    onError: () => addToast('Failed to activate provider', 'error'),
+    onError: (err: unknown) => addToast(apiErrorMessage(err, 'Failed to activate provider'), 'error'),
   });
 
   const addToast = (message: string, type: ToastMessage['type']) => {
@@ -138,8 +139,8 @@ export function SettingsPage() {
     try {
       const result = await testProvider(id);
       addToast(result.message, result.success ? 'success' : 'error');
-    } catch {
-      addToast('Connection test failed', 'error');
+    } catch (err) {
+      addToast(apiErrorMessage(err, 'Connection test failed'), 'error');
     } finally {
       setTestingId(null);
     }

@@ -43,6 +43,17 @@ public class RunInputCoordinator {
      */
     private final Set<UUID> terminationIntent = ConcurrentHashMap.newKeySet();
 
+    /**
+     * Why the run is being terminated (e.g. the run deadline), consumed once by
+     * the engine's completion path. The verified-stop hook records the intent
+     * without a reason for an operator cancel, so an absent entry is expected.
+     */
+    private final Map<UUID, TerminationFailure> terminationFailures = new ConcurrentHashMap<>();
+
+    /** Operator-facing termination reason plus the stable repair surface, when one exists. */
+    public record TerminationFailure(String message, String code, String surface) {
+    }
+
     public RunInputCoordinator(ApplicationEventPublisher eventPublisher) {
         this.eventPublisher = eventPublisher;
     }
@@ -103,11 +114,34 @@ public class RunInputCoordinator {
      * {@link #requestInput} cannot be missed in favor of a stranded intent.
      */
     public void recordTerminationIntent(UUID runId) {
+        recordTerminationIntent(runId, null, null, null);
+    }
+
+    /**
+     * Records a sticky termination intent together with the stable code/surface
+     * of the failure that caused it (null when the escalation has no repair
+     * surface, e.g. an operator cancel). An existing entry is kept: the first
+     * failure that settled the run is the one the operator sees.
+     */
+    public void recordTerminationIntent(UUID runId, String reason, String code, String surface) {
+        if (reason != null && !reason.isBlank()) {
+            terminationFailures.putIfAbsent(runId, new TerminationFailure(reason, code, surface));
+        }
         PendingInput waiting = pending.remove(runId);
         if (waiting != null) {
             waiting.future().complete(new OperatorInput(null, true));
             return;
         }
         terminationIntent.add(runId);
+    }
+
+    /**
+     * Consumes the recorded termination reason and its repair surface. The run
+     * is settling, so its sticky wake-up intent is cleared too: no later park
+     * can belong to this run, and the set must not outlive it.
+     */
+    public TerminationFailure consumeTerminationFailure(UUID runId) {
+        terminationIntent.remove(runId);
+        return terminationFailures.remove(runId);
     }
 }

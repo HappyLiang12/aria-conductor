@@ -64,8 +64,9 @@ qoder:
 # Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
 aria:
   # Mode-neutral run deadline of a coordinated execution attempt
-  # (TaskDeadlineProperties; the frozen spec deadline and the engine task path
-  # both read this key). Default 45, same value as the legacy provider knob above.
+  # (TaskDeadlineProperties). New runs freeze the operator value at admission;
+  # the operator value lives in System Config (aria.tasks.deadline-minutes,
+  # seeded by V73) and this property is the fallback when no row exists.
   tasks:
     deadline-minutes: 45
   # Concurrent run execution (run admission queue): the rest wait PENDING with

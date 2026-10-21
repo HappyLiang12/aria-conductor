@@ -7,6 +7,8 @@ import {
 } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice, { RunErrorNotice } from './ErrorNotice';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -192,12 +194,6 @@ export function TaskDrawer() {
 
   const validTransitions = item ? TRANSITIONS[item.status] : [];
 
-  // GlobalExceptionHandler puts the human reason in `message` and the HTTP
-  // phrase in `error` (e.g. "Bad Request"); prefer the reason when present.
-  const errData = (transitionMutation.error as { response?: { data?: { message?: string; error?: string } } } | null)
-    ?.response?.data;
-  const errMsg = errData?.message ?? errData?.error;
-
   return (
     <>
       {open && (
@@ -277,6 +273,11 @@ export function TaskDrawer() {
                 <div className="dz-title">
                   <RunOutcomeChip outcome={runOutcome} />
                 </div>
+              )}
+              {asksQuery.isError && (
+                <ErrorNotice
+                  presented={presentError(asksQuery.error, "Failed to load this task's asks.")}
+                />
               )}
               {pendingAsks.length > 0 && (
                 <DecisionPanel key={item.id} item={item} pendingAsks={pendingAsks} />
@@ -403,7 +404,11 @@ export function TaskDrawer() {
                             marginTop: 8,
                           }}
                         >
-                          {linkedRun.errorMessage}
+                          <RunErrorNotice
+                            message={linkedRun.errorMessage}
+                            surface={linkedRun.errorSurface}
+                            code={linkedRun.errorCode}
+                          />
                         </div>
                       )}
                       {linkedRun.finalOutput && (
@@ -446,7 +451,12 @@ export function TaskDrawer() {
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
                 />
-                {errMsg && <div className="evidence-error">{errMsg}</div>}
+                {transitionMutation.error && (
+                  <ErrorNotice
+                    className="evidence-error"
+                    presented={presentError(transitionMutation.error, 'The transition was refused.')}
+                  />
+                )}
               </div>
 
               {validTransitions.length > 1 && (

@@ -2,6 +2,7 @@ package io.aria.conductor.aria.listener;
 
 import io.aria.conductor.aria.service.NotificationService;
 import io.aria.conductor.common.event.*;
+import io.aria.conductor.common.model.RunStatus;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -21,9 +22,16 @@ public class NotificationTriggerListener {
             case FAILED -> "Run failed";
             default -> "Run finished with status: " + event.getStatus();
         };
+        String body = "Run " + event.getRunId() + " finished with status " + event.getStatus() + ".";
+        // A COMPLETED run can carry non-fatal tool errors in its persisted record;
+        // announcing them as a "Reason" would contradict the success title.
+        if (event.getStatus() != RunStatus.COMPLETED
+                && event.getErrorMessage() != null && !event.getErrorMessage().isBlank()) {
+            body += " Reason: " + event.getErrorMessage();
+        }
         notificationService.create("run." + event.getStatus().name().toLowerCase().replace("_", "."),
                 title,
-                "Run " + event.getRunId() + " finished with status " + event.getStatus() + ".",
+                body,
                 "RUN", event.getRunId().toString());
     }
 

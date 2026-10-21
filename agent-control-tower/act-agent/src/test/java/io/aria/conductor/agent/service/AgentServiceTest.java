@@ -8,6 +8,8 @@ import io.aria.conductor.agent.dto.UpdateAgentRequest;
 import io.aria.conductor.agent.eligibility.AgentPickupEligibility;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.AriaConstants;
+import io.aria.conductor.common.exception.ActionableIllegalStateException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSkillId;
 import io.aria.conductor.common.model.AgentType;
@@ -330,9 +332,13 @@ class AgentServiceTest {
         when(agentRepository.findAll()).thenReturn(List.of(fleetAgent("opencode", ExecutionMode.SANDBOX)));
 
         assertThatThrownBy(() -> service.createAgent(aCreateRequest("qoder", ExecutionMode.HOST)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Runtime mixing is not allowed")
-                .hasMessageContaining("PUT /api/v1/agents/runtime");
+                .isInstanceOfSatisfying(ActionableIllegalStateException.class, rejection -> {
+                    assertThat(rejection.getMessage())
+                            .contains("Runtime mixing is not allowed")
+                            .contains("PUT /api/v1/agents/runtime");
+                    assertThat(rejection.code()).isEqualTo("FLEET_RUNTIME_MIXING_NOT_ALLOWED");
+                    assertThat(rejection.surface()).isEqualTo(ErrorSurface.RUNTIME);
+                });
         verify(agentRepository, never()).save(any());
     }
 
@@ -345,8 +351,11 @@ class AgentServiceTest {
                 fleetAgent("qoder", ExecutionMode.HOST))); // fleet already mixed
 
         assertThatThrownBy(() -> service.updateAgent(agentId, anUpdateRequest("opencode", ExecutionMode.HOST)))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("The fleet runtime is mixed");
+                .isInstanceOfSatisfying(ActionableIllegalStateException.class, rejection -> {
+                    assertThat(rejection.getMessage()).contains("The fleet runtime is mixed");
+                    assertThat(rejection.code()).isEqualTo("FLEET_RUNTIME_MIXED");
+                    assertThat(rejection.surface()).isEqualTo(ErrorSurface.RUNTIME);
+                });
         verify(agentRepository, never()).save(any());
     }
 

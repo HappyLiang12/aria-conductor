@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useWebSocketContext } from './Layout';
 import { getUnreadCount, listNotifications, markRead, markAllRead } from '../api/ariaNotifications';
 import { composeSynthesis } from '../api/ariaConversations';
+import { apiErrorMessage } from '../api/operatorSession';
 import type { Notification } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { formatTimestamp } from '../utils/formatTime';
@@ -12,14 +13,21 @@ export function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [countError, setCountError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const { lastMessage } = useWebSocketContext();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
   // Fetch initial unread count on mount
   useEffect(() => {
-    getUnreadCount().then(c => setUnreadCount(c.unreadCount)).catch(() => {});
+    getUnreadCount()
+      .then(c => {
+        setUnreadCount(c.unreadCount);
+        setCountError(null);
+      })
+      .catch((err) => setCountError(apiErrorMessage(err, 'The unread notification count could not be loaded.')));
   }, []);
 
   // Listen for aria.notification WebSocket events
@@ -32,10 +40,10 @@ export function NotificationBell() {
     setOpen(prev => !prev);
     if (!open) {
       setLoading(true);
-      setError(false);
+      setListError(null);
       listNotifications(0, 20)
         .then(data => setNotifications(data.content))
-        .catch(() => setError(true))
+        .catch((err) => setListError(apiErrorMessage(err, 'Notifications could not be loaded.')))
         .finally(() => setLoading(false));
     }
   };
@@ -43,19 +51,25 @@ export function NotificationBell() {
   const handleMarkRead = async (id: string) => {
     try {
       await markRead(id);
+      setActionError(null);
       setUnreadCount(prev => Math.max(0, prev - 1));
       setNotifications(prev =>
         prev.map(n => n.id === id ? { ...n, isRead: true } : n)
       );
-    } catch { /* silent */ }
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'The notification could not be marked read.'));
+    }
   };
 
   const handleMarkAllRead = async () => {
     try {
       await markAllRead();
+      setActionError(null);
       setUnreadCount(0);
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-    } catch { /* silent */ }
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'Notifications could not be marked read.'));
+    }
   };
 
   const getNavRoute = (notification: Notification): string | null =>
@@ -88,10 +102,16 @@ export function NotificationBell() {
     try {
       const { prompt } = await composeSynthesis(notification.resourceId);
       if (!notification.isRead) {
+        // handleMarkRead owns its failure notice; clearing it here would hide a
+        // mark-read rejection every time the compose call itself succeeds.
         await handleMarkRead(notification.id);
+      } else {
+        setActionError(null);
       }
       window.dispatchEvent(new CustomEvent('aria:compose', { detail: { prompt } }));
-    } catch { /* silent — same contract as markRead */ }
+    } catch (err) {
+      setActionError(apiErrorMessage(err, 'The synthesis prompt could not be composed.'));
+    }
   };
 
   const typeEmoji: Record<string, string> = {
@@ -141,6 +161,11 @@ export function NotificationBell() {
       >
         🔔
         {unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+        {countError && (
+          // The failure notice otherwise lives inside the closed dropdown, so the
+          // bell would keep looking healthy with no count at all.
+          <span className="notif-error-dot" role="img" aria-label={countError} title={countError}>!</span>
+        )}
       </button>
 
       {open && (
@@ -157,10 +182,20 @@ export function NotificationBell() {
             </button>
           </div>
           <div className="notif-dropdown-list" aria-live="polite">
+            {countError && (
+              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
+                {countError}
+              </div>
+            )}
+            {actionError && (
+              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">
+                {actionError}
+              </div>
+            )}
             {loading ? (
               <div className="notif-empty">Loading…</div>
-            ) : error ? (
-              <div className="notif-empty" style={{ color: 'var(--red)' }}>Failed to load notifications</div>
+            ) : listError ? (
+              <div className="notif-empty" style={{ color: 'var(--red)' }} role="alert">{listError}</div>
             ) : notifications.length === 0 ? (
               <div className="notif-empty">No notifications yet</div>
             ) : (

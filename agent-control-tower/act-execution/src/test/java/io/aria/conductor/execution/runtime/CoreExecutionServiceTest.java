@@ -11,6 +11,7 @@ import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.credential.CoreCredentialService;
@@ -72,6 +73,8 @@ class CoreExecutionServiceTest {
     private static final UUID APPROVAL = UUID.fromString("00000000-0000-0000-0000-0000000000a9");
     private static final Instant NOW = Instant.now();
     private static final Instant DEADLINE = NOW.plus(Duration.ofMinutes(45));
+    /** A deadline short enough for a real scheduler, long enough that a stopped world cannot miss it. */
+    private static final Instant NEAR_DEADLINE = NOW.plusSeconds(1);
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final AgentExecutionSettings SETTINGS =
             new AgentExecutionSettings("qoder", ExecutionMode.HOST, WorkspaceMode.DIRECT, "C:/work", null);
@@ -460,6 +463,46 @@ class CoreExecutionServiceTest {
         service.openRuntime(spec(), adapter);
     }
 
+    /** Blocks until the persisted runtime state reaches {@code expected}; fails the test on timeout. */
+    private void awaitRuntimeState(String expected, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (expected.equals(binding.getRuntimeState())) {
+                return;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while waiting for " + expected, e);
+            }
+        }
+        throw new AssertionError("runtime state did not reach " + expected + " within " + timeout
+                + " (last: " + binding.getRuntimeState() + ")");
+    }
+
+    /**
+     * The timer thread records the termination failure after its persisted stop,
+     * so a run that already observed the state may still be a few instructions
+     * ahead of it; consume with a bounded wait instead of racing that last step.
+     */
+    private RunInputCoordinator.TerminationFailure awaitTerminationFailure(Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(RUN);
+            if (failure != null) {
+                return failure;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while waiting for the termination failure", e);
+            }
+        }
+        return null;
+    }
+
     // ------------------------------------------------------------------ execute
 
     @Test
@@ -716,6 +759,33 @@ class CoreExecutionServiceTest {
     }
 
     @Test
+    void aTerminationReasonIsRecordedOnlyAfterTheStopIsVerified() {
+        runOwnedInProcess();
+        String reason = "Run deadline reached at 2026-10-20T12:00:00Z"
+                + " (aria.tasks.deadline-minutes in Configure > System Config).";
+        backend.proofs.add(new StopProof(RUN, false));
+
+        ControlAck refused = service.cancel(RUN, reason, "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG")
+                .toCompletableFuture().join();
+
+        assertThat(refused.verified()).isFalse();
+        assertThat(coordinator.consumeTerminationFailure(RUN))
+                .as("a refused stop leaves the run alive, so it must not carry the deadline failure")
+                .isNull();
+
+        backend.proofs.add(new StopProof(RUN, true));
+        ControlAck stopped = service.cancel(RUN, reason, "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG")
+                .toCompletableFuture().join();
+
+        assertThat(stopped).isEqualTo(new ControlAck(ControlState.STOPPED, true));
+        RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(RUN);
+        assertThat(failure).isNotNull();
+        assertThat(failure.message()).isEqualTo(reason);
+        assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+    }
+
+    @Test
     void aForeignStopProofNeverPersistsACancellation() {
         runOwnedInProcess();
         UUID otherRun = UUID.fromString("00000000-0000-0000-0000-0000000000a8");
@@ -781,7 +851,7 @@ class CoreExecutionServiceTest {
         ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler();
         service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
                 new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
-                CLOCK, Duration.ofMinutes(5), scheduler);
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, taskDeadlines);
         // The frozen deadline elapses while the prompt is in flight: the timer target fires now.
         session.duringPrompt = scheduler::fireDeadline;
 
@@ -801,6 +871,114 @@ class CoreExecutionServiceTest {
         // The task was armed from the injected clock and the frozen deadline, then cancelled in the finally.
         assertThat(scheduler.delayMillis).isEqualTo(Duration.ofMinutes(45).toMillis());
         assertThat(scheduler.cancelled).isTrue();
+        // The deadline is recorded with its repair identity so the settling run can
+        // tell the operator which System Config key to change.
+        RunInputCoordinator.TerminationFailure deadlineFailure = coordinator.consumeTerminationFailure(RUN);
+        assertThat(deadlineFailure).isNotNull();
+        assertThat(deadlineFailure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(deadlineFailure.surface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(deadlineFailure.message())
+                .contains("Run deadline reached at")
+                .contains("aria.tasks.deadline-minutes in Configure > System Config");
+    }
+
+    /**
+     * R-01: the manual scheduler above proves the timer target's behavior but not
+     * that the real executor ever fires it. Here the executor is real, the frozen
+     * deadline is a second away on the service's clock, and the prompt blocks
+     * until the timer thread has driven the verified stop.
+     */
+    @Test
+    void theRealDeadlineTimerStopsAnInFlightPromptAndRecordsTheFailureIdentity() {
+        ScheduledThreadPoolExecutor scheduler = new ScheduledThreadPoolExecutor(1, runnable -> {
+            Thread thread = new Thread(runnable, "deadline-test");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                    new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                    CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, taskDeadlines);
+            binding.setDeadline(NEAR_DEADLINE);
+            ExecutionSpec nearDeadlineSpec = new ExecutionSpec(RUN, AGENT, "qoder", ExecutionMode.HOST, SETTINGS,
+                    "qoder:operator", "rev-1", NEAR_DEADLINE);
+            session.duringPrompt = () -> awaitRuntimeState("CANCELLED/BACKEND_SUSPEND", Duration.ofSeconds(10));
+
+            CoreResult result = service.execute(nearDeadlineSpec, adapter, task());
+
+            assertThat(result.cancelled()).isTrue();
+            assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+            assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                    "open-session", "prompt", "session-cancel", "stop-writers", "stop-writers",
+                    "capture", "destroy", "release");
+            assertThat(backend.stopProofs).containsExactly(new StopProof(RUN, true), new StopProof(RUN, true));
+            assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+            RunInputCoordinator.TerminationFailure failure = awaitTerminationFailure(Duration.ofSeconds(5));
+            assertThat(failure).isNotNull();
+            assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+            assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+            assertThat(failure.message()).startsWith("Run deadline reached at " + NEAR_DEADLINE);
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
+    /**
+     * The core session enforces the same turn deadline the coordinator timer
+     * does, so either enforcer can win. Here the session's own timeout wins (the
+     * timer target never fires): the run must still settle CANCELLED with the
+     * deadline identity instead of a generic FAILED.
+     */
+    @Test
+    void aSessionTimeoutAtTheDeadlineSettlesCancelledWithTheDeadlineIdentity() {
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler();
+        service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, taskDeadlines);
+        binding.setDeadline(NOW);
+        ExecutionSpec elapsed = new ExecutionSpec(RUN, AGENT, "qoder", ExecutionMode.HOST, SETTINGS,
+                "qoder:operator", "rev-1", NOW);
+        session.promptFailure = new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
+                "The prompt of run " + RUN + " exceeded the run deadline " + NOW);
+
+        CoreResult result = service.execute(elapsed, adapter, task());
+
+        assertThat(result.cancelled()).isTrue();
+        assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "prompt", "stop-writers", "capture", "destroy", "release");
+        RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(RUN);
+        assertThat(failure).isNotNull();
+        assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(failure.message()).startsWith("Run deadline reached at " + NOW);
+        assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+    }
+
+    /**
+     * R-01 companion: when the deadline's stop is refused the run keeps running,
+     * completes on its own, and must carry no deadline identity -- the reason is
+     * recorded only after a verified stop.
+     */
+    @Test
+    void aRefusedDeadlineStopLeavesTheCompletedRunWithoutAFailureIdentity() {
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler();
+        service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, taskDeadlines);
+        backend.proofs.add(new StopProof(RUN, false));
+        session.duringPrompt = scheduler::fireDeadline;
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.cancelled()).isFalse();
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+        assertThat(coordinator.consumeTerminationFailure(RUN))
+                .as("a refused deadline stop leaves the run alive, so it must not carry the deadline failure")
+                .isNull();
+        // The refused stop, then the finalizer's verified re-stop that clears the pending control.
+        assertThat(backend.stopProofs).containsExactly(new StopProof(RUN, false), new StopProof(RUN, true));
+        assertThat(service.pendingControl(RUN)).isEmpty();
     }
 
     @Test
@@ -930,12 +1108,18 @@ class CoreExecutionServiceTest {
     }
 
     @Test
-    void aFollowUpTurnGetsAFreshPerTurnDeadlineWindow() throws Exception {
-        // The follow-up turn's window is armed from the task deadline policy (60 minutes here),
-        // not from the run's frozen deadline (45 minutes past the fixed clock's now): the second
-        // armed instant is strictly later than the first even on this fixed clock.
-        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
-        turnDeadlines.setDeadlineMinutes(60);
+    void aFollowUpTurnGetsAFreshPerTurnDeadlineWindowFromTheAttemptFrozenPolicy() throws Exception {
+        // The follow-up turn's window is armed from the policy frozen when the
+        // attempt started (60 minutes here), not from the run's frozen deadline
+        // (45 minutes past the fixed clock's now) and never from a second live
+        // read: a System Config change while the run is parked must not move it.
+        int[] reads = {0};
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties() {
+            @Override
+            public Duration deadline() {
+                return Duration.ofMinutes(++reads[0] == 1 ? 60 : 1);
+            }
+        };
         ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
         service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
                 new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
@@ -952,9 +1136,10 @@ class CoreExecutionServiceTest {
         service.execute(spec(), adapter, task());
         answerer.join();
 
-        assertThat(scheduler.scheduledInstants()).hasSize(2);
-        assertThat(scheduler.scheduledInstants().get(1))
-                .isAfter(scheduler.scheduledInstants().get(0));
+        assertThat(reads[0]).as("the attempt freezes the policy once, at its start").isEqualTo(1);
+        assertThat(scheduler.scheduledInstants()).containsExactly(
+                NOW.plus(Duration.ofMinutes(45)),
+                NOW.plus(Duration.ofMinutes(60)));
     }
 
     /**

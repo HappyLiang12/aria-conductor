@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.credential;
 
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.model.CoreCredential;
 import io.aria.conductor.common.security.ActorPrincipal;
 import io.aria.conductor.execution.repository.CoreCredentialRepository;
@@ -50,8 +52,12 @@ public class CoreCredentialService {
         }
         String coreId = coreIdOf(credentialRef);
         CoreCredential row = credentials.findById(coreId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Runtime credential is not configured: " + credentialRef));
+                .orElseThrow(() -> new ActionableIllegalArgumentException(
+                        "Qoder runtime credential is not configured (" + credentialRef + ")."
+                                + " Save a Qoder personal access token in Configure > LLM Providers"
+                                + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
+                                + " then re-dispatch the run.",
+                        "RUNTIME_CREDENTIAL_NOT_CONFIGURED", ErrorSurface.LLM_PROVIDERS));
         return new SecretBundle(credentialRef, Map.of(row.getEnvironmentVariable(), row.getValue()));
     }
 

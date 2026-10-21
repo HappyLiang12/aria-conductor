@@ -5,6 +5,8 @@ import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
@@ -139,8 +141,12 @@ class RunServiceTest {
         CreateRunRequest request = CreateRunRequest.builder()
                 .agentId(agentId).promptSeed("p").maxIterations(5).build();
 
+        String expectedCode = status == HealthStatus.RETIRED ? "AGENT_RETIRED" : "AGENT_UNHEALTHY";
         assertThatThrownBy(() -> service.createRun(request))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOfSatisfying(ActionableIllegalArgumentException.class, rejection -> {
+                    assertThat(rejection.code()).isEqualTo(expectedCode);
+                    assertThat(rejection.surface()).isEqualTo(ErrorSurface.CREW);
+                });
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
     }
@@ -274,6 +280,22 @@ class RunServiceTest {
         assertThatThrownBy(() -> service.getRun(id))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining(id.toString());
+    }
+
+    @Test
+    void runResponseCarriesThePersistedErrorIdentity() {
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withStatus(RunStatus.FAILED).build();
+        run.setErrorMessage("Run deadline reached at 2026-10-20T12:00:00Z.");
+        run.setErrorCode("RUN_DEADLINE_REACHED");
+        run.setErrorSurface("SYSTEM_CONFIG");
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+
+        RunResponse response = service.getRun(id);
+
+        assertThat(response.getErrorMessage()).isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
+        assertThat(response.getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(response.getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
     }
 
     // ---------------------------------------------------------------------

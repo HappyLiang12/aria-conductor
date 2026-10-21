@@ -45,18 +45,6 @@ class DomainExceptionMessageTest {
     }
 
     @Test
-    void budgetExceeded_formatsUsedAndLimit() {
-        BudgetExceededException ex = new BudgetExceededException(5000L, 4096L);
-        assertThat(ex).hasMessage("Token budget exceeded: used 5000, limit 4096");
-    }
-
-    @Test
-    void budgetExceeded_passThroughConstructorKeepsRawMessage() {
-        BudgetExceededException ex = new BudgetExceededException("over budget");
-        assertThat(ex).hasMessage("over budget");
-    }
-
-    @Test
     void approvalTimeout_formatsApprovalId() {
         UUID id = UUID.fromString("11111111-1111-1111-1111-111111111111");
         ApprovalTimeoutException ex = new ApprovalTimeoutException(id);
@@ -73,7 +61,6 @@ class DomainExceptionMessageTest {
     void allDomainExceptions_areRuntimeExceptions() {
         assertThat(new ResourceNotFoundException("x")).isInstanceOf(RuntimeException.class);
         assertThat(new InvalidStateTransitionException("x")).isInstanceOf(RuntimeException.class);
-        assertThat(new BudgetExceededException("x")).isInstanceOf(RuntimeException.class);
         assertThat(new ApprovalTimeoutException("x")).isInstanceOf(RuntimeException.class);
     }
 }

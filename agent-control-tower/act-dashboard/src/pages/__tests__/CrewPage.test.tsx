@@ -304,7 +304,9 @@ describe('CrewPage core, mode and Host workspace selection (Task 15)', () => {
     fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'dev' } });
 
     expect(screen.getByLabelText('Agent core')).toHaveValue('langchain');
-    expect(screen.getByText('Unsupported agent core: langchain')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Unsupported agent core: langchain. Select one in Configure > Runtime.',
+    )).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hire Agent' })).toBeDisabled();
   });
 

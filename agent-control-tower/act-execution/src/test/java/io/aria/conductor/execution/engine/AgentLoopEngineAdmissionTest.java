@@ -20,6 +20,7 @@ import io.aria.conductor.execution.runtime.CoreResult;
 import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,6 +77,7 @@ class AgentLoopEngineAdmissionTest {
     @Mock KnowledgeContextProvider knowledgeProvider;
     @Mock WorkspaceManager workspaceManager;
     @Mock ApprovalRepository approvalRepository;
+    @Mock RunInputCoordinator inputCoordinator;
     @Mock(name = "coreExecutionServiceProvider")
     org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
     @Mock(name = "coreRunLauncherProvider")
@@ -148,7 +150,7 @@ class AgentLoopEngineAdmissionTest {
                 workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, recordingQueue, null /* KanbanRepository */,
-                null /* RunInputCoordinator */);
+                inputCoordinator);
         stubStatusWrites();
     }
 

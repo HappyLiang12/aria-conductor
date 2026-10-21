@@ -193,7 +193,10 @@ class CoreCredentialControllerTest extends WebMvcTestBase {
         verify(repository).deleteById("qoder");
         assertThatThrownBy(() -> credentials.resolve("qoder:operator"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Runtime credential is not configured: qoder:operator");
+                .hasMessage("Qoder runtime credential is not configured (qoder:operator)."
+                        + " Save a Qoder personal access token in Configure > LLM Providers"
+                        + " > Qoder runtime credential (API: PUT /api/v1/cores/qoder/credential),"
+                        + " then re-dispatch the run.");
         verifyNoInteractions(probe);
     }
 
@@ -218,7 +221,9 @@ class CoreCredentialControllerTest extends WebMvcTestBase {
     @Test
     void testWithoutCredentialIsConflict() throws Exception {
         mvc.perform(post("/api/v1/cores/qoder/credential/test").with(loopback()))
-                .andExpect(status().isConflict());
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("RUNTIME_CREDENTIAL_NOT_CONFIGURED"))
+                .andExpect(jsonPath("$.surface").value("LLM_PROVIDERS"));
         verifyNoInteractions(probe);
     }
 

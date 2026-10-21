@@ -63,10 +63,21 @@ class GlobalExceptionHandlerMappingTest {
     }
 
     @Test
-    void handleBudgetExceeded_maps429() {
-        var response = handler.handleBudgetExceeded(new BudgetExceededException(150, 100));
-        assertStandardBody(response, HttpStatus.TOO_MANY_REQUESTS);
-        assertThat(response.getBody().get("message")).isEqualTo("Token budget exceeded: used 150, limit 100");
+    void actionableIllegalArgument_carriesCodeAndSurface() {
+        var response = handler.handleBadRequest(new ActionableIllegalArgumentException(
+                "A workspace repository is required.", "WORKSPACE_REPOSITORY_REQUIRED", ErrorSurface.CREW));
+
+        assertStandardBody(response, HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody())
+                .containsEntry("code", "WORKSPACE_REPOSITORY_REQUIRED")
+                .containsEntry("surface", "CREW");
+    }
+
+    @Test
+    void plainIllegalArgument_carriesNoRepairIdentity() {
+        var response = handler.handleBadRequest(new IllegalArgumentException("bad input"));
+
+        assertThat(response.getBody()).doesNotContainKeys("code", "surface");
     }
 
     @Test
@@ -158,7 +169,8 @@ class GlobalExceptionHandlerMappingTest {
         var response = handler.handleDataIntegrity(
                 new DataIntegrityViolationException("boom", new RuntimeException("unique violation")));
         assertStandardBody(response, HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody().get("message")).isEqualTo("Data integrity violation");
+        assertThat(response.getBody().get("message"))
+                .isEqualTo("Data integrity violation. Retry; if it persists, check the backend log.");
     }
 
     @Test
@@ -173,7 +185,7 @@ class GlobalExceptionHandlerMappingTest {
     void handlePersistence_nonH2_maps500Generic() {
         var response = handler.handlePersistence(new PersistenceException("failure", new RuntimeException("sql error")));
         assertStandardBody(response, HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody().get("message")).isEqualTo("Database error");
+        assertThat(response.getBody().get("message")).isEqualTo("Database error. Retry; if it persists, check the backend log.");
     }
 
     @Test
@@ -194,7 +206,8 @@ class GlobalExceptionHandlerMappingTest {
     void handleGeneral_nonH2_returnsOpaqueMessage() {
         var response = handler.handleGeneral(new RuntimeException("secret detail"));
         assertStandardBody(response, HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody().get("message")).isEqualTo("An unexpected error occurred");
+        assertThat(response.getBody().get("message"))
+                .isEqualTo("An unexpected error occurred. Check the backend log for the stack trace.");
     }
 
     @Test

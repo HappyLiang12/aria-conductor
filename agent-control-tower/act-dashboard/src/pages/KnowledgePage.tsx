@@ -8,6 +8,9 @@ import {
   getKnowledgeYaml,
 } from '../api/knowledge';
 import { listAgents } from '../api/agents';
+import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from '../components/ErrorNotice';
 import { useWebSocketContext } from '../components/Layout';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -103,7 +106,7 @@ export function KnowledgePage() {
   const { lastMessage } = useWebSocketContext();
 
   // queries
-  const { data: itemsRaw, isLoading: loadingItems } = useQuery({
+  const { data: itemsRaw, isLoading: loadingItems, error: itemsError } = useQuery({
     queryKey: ['knowledge'],
     queryFn: () => listKnowledge(),
   });
@@ -151,7 +154,7 @@ export function KnowledgePage() {
       setConfirmReview(null);
     },
     onError: (err) =>
-      setToast(`Review failed: ${(err as Error)?.message || 'Unknown error'}`),
+      setToast(apiErrorMessage(err, (err as Error)?.message ?? 'Review failed.')),
   });
 
   const batchMut = useMutation({
@@ -165,7 +168,7 @@ export function KnowledgePage() {
       setConfirmReview(null);
     },
     onError: (err) =>
-      setToast(`Review failed: ${(err as Error)?.message || 'Unknown error'}`),
+      setToast(apiErrorMessage(err, (err as Error)?.message ?? 'Review failed.')),
   });
 
   const createMut = useMutation({
@@ -177,7 +180,7 @@ export function KnowledgePage() {
       setFormError(null);
       setToast('Knowledge submitted for review');
     },
-    onError: () => setFormError('Submission failed. Please retry.'),
+    onError: (err: unknown) => setFormError(apiErrorMessage(err, 'Submission failed.')),
   });
 
   // realtime
@@ -293,7 +296,7 @@ export function KnowledgePage() {
     setConfirmingPromote(false);
     updateKnowledge(target.id, { status: 'PROMOTED' })
       .then(() => queryClient.invalidateQueries({ queryKey: ['knowledge'] }))
-      .catch(() => setToast('Promote failed. Please retry.'))
+      .catch((err) => setToast(apiErrorMessage(err, 'Promote failed.')))
       .finally(() => setConfirmingPromote(false));
   };
 
@@ -316,6 +319,12 @@ export function KnowledgePage() {
           </button>
         </div>
       </div>
+
+      {itemsError && (
+        <div style={{ marginBottom: 16 }}>
+          <ErrorNotice presented={presentError(itemsError, 'Failed to load the knowledge library.')} />
+        </div>
+      )}
 
       {/* ---------- 1. Promotion Path ---------- */}
       <section className="panel" style={{ marginBottom: 16 }}>
@@ -466,7 +475,7 @@ export function KnowledgePage() {
               {loadingItems && (
                 <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: '12px 0' }}>Loading…</div>
               )}
-              {!loadingItems && visiblePending.length === 0 && (
+              {!loadingItems && !itemsError && visiblePending.length === 0 && (
                 <div
                   style={{
                     color: 'var(--text-mute)',
@@ -586,7 +595,7 @@ export function KnowledgePage() {
 
           <div className="kb-layout">
             <div className="unified-list">
-              {filteredApproved.length === 0 && (
+              {!itemsError && filteredApproved.length === 0 && (
                 <div
                   style={{
                     color: 'var(--text-mute)',

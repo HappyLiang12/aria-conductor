@@ -6,6 +6,9 @@ import {
   type HousekeepingScanResult,
 } from '../api/housekeeping';
 import { useWebSocketContext } from './Layout';
+import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import { ErrorNotice } from './ErrorNotice';
 
 /** Default category selection: stuck + approvals are opt-in (destructive-adjacent). */
 const DEFAULT_CHECKED: Record<string, boolean> = {
@@ -85,7 +88,7 @@ export default function HousekeepingPanel() {
           .join(' · '),
       );
     } catch (e) {
-      setReceipt(`⚠ Cleanup failed: ${(e as Error)?.message ?? 'unknown error'}`);
+      setReceipt('Cleanup failed: ' + apiErrorMessage(e, (e as Error)?.message ?? 'unknown error'));
     }
   };
 
@@ -100,6 +103,9 @@ export default function HousekeepingPanel() {
       </h2>
 
       {scanQuery.isLoading && <div className="mini-spinner">Scanning…</div>}
+      {scanQuery.isError && (
+        <ErrorNotice presented={presentError(scanQuery.error, 'The housekeeping scan failed.')} />
+      )}
 
       {categories.map((c) => (
         <div key={c.key} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '8px 12px', marginBottom: 8 }}>

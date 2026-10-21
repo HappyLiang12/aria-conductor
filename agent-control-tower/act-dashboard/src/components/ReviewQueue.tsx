@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { approveApproval, listApprovals, rejectApproval } from '../api/approvals';
 import { apiErrorMessage, applyOperatorHeaders } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import { ErrorNotice } from './ErrorNotice';
 import DiffPreview from './DiffPreview';
 import {
   NativePermissionFacts,
@@ -77,11 +79,9 @@ export default function ReviewQueue({ runId }: { runId?: string } = {}) {
           </div>
         )}
         {error && (
-          <div style={{ padding: '8px 4px', color: 'var(--red)', fontSize: 12 }}>
-            Failed to load approvals.
-          </div>
+          <ErrorNotice presented={presentError(error, 'Failed to load approvals.')} />
         )}
-        {!isLoading && items.length === 0 && (
+        {!isLoading && !error && items.length === 0 && (
           <div style={{ padding: '12px 4px', color: 'var(--text-mute)', fontSize: 12 }}>
             No pending approvals — queue is clear.
           </div>

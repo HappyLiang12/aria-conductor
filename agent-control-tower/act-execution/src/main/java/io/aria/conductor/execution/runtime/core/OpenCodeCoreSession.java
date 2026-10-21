@@ -97,12 +97,17 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
      */
     @Override
     public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events) {
+        return prompt(task, events, spec.deadline());
+    }
+
+    @Override
+    public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events, Instant deadline) {
         Objects.requireNonNull(task, "task");
         Objects.requireNonNull(events, "events");
-        if (spec.deadline() == null) {
+        if (deadline == null) {
             return CompletableFuture.failedFuture(noDeadlineRefusal());
         }
-        Duration timeout = remaining();
+        Duration timeout = remaining(deadline);
         if (timeout.isZero()) {
             return CompletableFuture.failedFuture(new TaskExecutionException(
                     TaskExecutionException.Cause.TIMEOUT,
@@ -185,15 +190,8 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
         client.close();
     }
 
-    /** The remaining run budget; zero means the run may not start another prompt. */
-    private Duration remaining() {
-        Instant deadline = spec.deadline();
-        if (deadline == null) {
-            // Unreachable: prompt() refuses a null deadline up front. Kept as a
-            // hard failure so the silent "HTTP client default timeout" fallback
-            // cannot come back through a future caller.
-            throw noDeadlineRefusal();
-        }
+    /** The remaining budget of the turn's deadline; zero means no prompt may start. */
+    private static Duration remaining(Instant deadline) {
         Duration remaining = Duration.between(Instant.now(), deadline);
         return remaining.isNegative() ? Duration.ZERO : remaining;
     }

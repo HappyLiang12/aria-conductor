@@ -3,7 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAgent } from '../api/agents';
 import { listRuns, getRunProgress, pauseRun, resumeRun, cancelRun, injectRunMessage } from '../api/runs';
 import { RuntimeBadge } from './RuntimeBadge';
+import { RunErrorNotice } from './ErrorNotice';
 import { useDrawerContext } from './DrawerContext';
+import { apiErrorMessage } from '../api/operatorSession';
 import { useWebSocketContext } from './Layout';
 import { eventLabel } from '../utils/eventLabels';
 import { formatClock } from '../utils/formatTime';
@@ -212,7 +214,7 @@ export function AgentDrawer() {
         // against the replayed backlog rows too (existing S11 pattern).
         backlog.forEach((p) => markSeqSeen(rk, p.seq));
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
         console.warn('[drawer] progress backlog fetch failed');
         // Review fix: surface the failure in the stream itself — a silent
@@ -223,7 +225,7 @@ export function AgentDrawer() {
             id: `err-${Date.now()}`,
             ts: fmtTime(new Date()),
             tag: 'think',
-            msg: 'History unavailable (fetch failed)',
+            msg: 'History unavailable: ' + apiErrorMessage(err, 'fetch failed'),
           },
         ]);
       });
@@ -519,7 +521,11 @@ export function AgentDrawer() {
                       marginBottom: 12,
                     }}
                   >
-                    {replayRun.errorMessage}
+                    <RunErrorNotice
+                      message={replayRun.errorMessage}
+                      surface={replayRun.errorSurface}
+                      code={replayRun.errorCode}
+                    />
                   </div>
                 </>
               )}

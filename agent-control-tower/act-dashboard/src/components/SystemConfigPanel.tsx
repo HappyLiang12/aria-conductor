@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listConfig, updateConfig, resetConfig, type SystemConfig } from '../api/systemConfig';
+import { apiErrorMessage } from '../api/operatorSession';
+import { RUN_DEADLINE } from '../utils/runDeadline';
 
 /* ── category metadata ── */
 
@@ -26,6 +28,20 @@ const CATEGORIES: CategoryDef[] = [
     keys: [
       { key: 'llm.request.timeout.seconds', label: 'LLM Request Timeout', min: 30, max: 3600, step: 1, unit: 's' },
       { key: 'aria.sse.timeout.ms', label: 'Aria SSE Timeout', min: 30000, max: 3600000, step: 1000, unit: 'ms' },
+    ],
+  },
+  {
+    icon: '⚙️',
+    title: 'Execution',
+    keys: [
+      {
+        key: RUN_DEADLINE.key,
+        label: 'Run Deadline',
+        min: RUN_DEADLINE.minMinutes,
+        max: RUN_DEADLINE.maxMinutes,
+        step: 1,
+        unit: 'min',
+      },
     ],
   },
   {
@@ -87,7 +103,7 @@ export function SystemConfigPanel() {
       });
       pushToast(`Saved ${updated.configKey}`, 'success');
     },
-    onError: () => pushToast('Failed to save value', 'error'),
+    onError: (err: unknown) => pushToast(apiErrorMessage(err, 'Failed to save value'), 'error'),
   });
 
   const resetMutation = useMutation({
@@ -103,7 +119,7 @@ export function SystemConfigPanel() {
       });
       pushToast(`Reset ${updated.configKey}`, 'success');
     },
-    onError: () => pushToast('Failed to reset value', 'error'),
+    onError: (err: unknown) => pushToast(apiErrorMessage(err, 'Failed to reset value'), 'error'),
   });
 
   const currentVal = (key: string): string =>
@@ -178,9 +194,13 @@ export function SystemConfigPanel() {
               const dirty = isDirty(meta.key);
               const desc = configMap[meta.key]?.description ?? '';
               const numVal = Number(val);
-              const outOfRange =
+              // An out-of-range or fractional value is silently clamped/rejected
+              // by the runtime, so it must never look saved. Every key on this
+              // panel is an integer.
+              const invalidValue =
                 val !== '' &&
-                (!isNaN(numVal) && (numVal < meta.min || numVal > meta.max));
+                (!Number.isFinite(numVal) || !Number.isInteger(numVal)
+                  || numVal < meta.min || numVal > meta.max);
 
               return (
                 <div
@@ -196,7 +216,7 @@ export function SystemConfigPanel() {
                       ? 'rgba(91,140,255,.06)'
                       : 'rgba(255,255,255,.02)',
                     border: `1px solid ${
-                      outOfRange
+                      invalidValue
                         ? 'rgba(255,107,122,.5)'
                         : dirty
                         ? 'rgba(91,140,255,.35)'
@@ -252,10 +272,13 @@ export function SystemConfigPanel() {
                       min={meta.min}
                       max={meta.max}
                       step={meta.step}
+                      aria-label={meta.label}
+                      aria-invalid={invalidValue || undefined}
+                      title={invalidValue ? `Value must be a whole number between ${meta.min} and ${meta.max}` : undefined}
                       value={val}
                       onChange={(e) => handleChange(meta.key, e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleSave(meta.key);
+                        if (e.key === 'Enter' && !invalidValue) handleSave(meta.key);
                       }}
                       style={{
                         width: '100%',
@@ -287,8 +310,8 @@ export function SystemConfigPanel() {
                     <button
                       type="button"
                       className="btn"
-                      title="Save"
-                      disabled={!dirty || saveMutation.isPending}
+                      title={`Save ${meta.label}`}
+                      disabled={!dirty || invalidValue || saveMutation.isPending}
                       onClick={() => handleSave(meta.key)}
                       style={{
                         padding: '5px 8px',

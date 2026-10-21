@@ -6,6 +6,7 @@ import { getRun } from '../api/runs';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DecisionPanel, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
+import { RunErrorNotice } from './ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem } from '../types';
 
@@ -241,7 +242,11 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
                         marginTop: 8,
                       }}
                     >
-                      {linkedRun.errorMessage}
+                      <RunErrorNotice
+                        message={linkedRun.errorMessage}
+                        surface={linkedRun.errorSurface}
+                        code={linkedRun.errorCode}
+                      />
                     </div>
                   )}
                   {linkedRun.finalOutput && (

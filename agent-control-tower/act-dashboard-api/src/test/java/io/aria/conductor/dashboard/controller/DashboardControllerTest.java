@@ -104,7 +104,8 @@ class DashboardControllerTest {
         mockMvc.perform(get("/api/v1/dashboard/summary"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.status").value(500))
-                .andExpect(jsonPath("$.message").value("An unexpected error occurred"));
+                .andExpect(jsonPath("$.message").value(
+                        "An unexpected error occurred. Check the backend log for the stack trace."));
     }
 
     @Test

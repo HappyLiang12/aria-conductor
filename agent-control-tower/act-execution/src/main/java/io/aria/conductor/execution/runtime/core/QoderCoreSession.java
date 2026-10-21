@@ -123,9 +123,14 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
 
     @Override
     public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events) {
+        return prompt(task, events, spec.deadline());
+    }
+
+    @Override
+    public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events, Instant deadline) {
         Objects.requireNonNull(task, "task");
         Objects.requireNonNull(events, "events");
-        if (spec.deadline() == null) {
+        if (deadline == null) {
             return CompletableFuture.failedFuture(noDeadlineRefusal());
         }
         CompletableFuture<CoreResult> promptFuture;
@@ -160,7 +165,7 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
             clearPromptIfCurrent(promptFuture);
             return CompletableFuture.failedFuture(translate(e));
         }
-        scheduleDeadline(promptFuture);
+        scheduleDeadline(promptFuture, deadline);
         // The captured stage is returned, never the field: a concurrent clear
         // (a close, or an event handled on the reader thread) may null the field
         // between the guarded block and here, and a null return would surface as
@@ -456,14 +461,7 @@ public final class QoderCoreSession implements CoreSession, AutoCloseable {
         output = null;
     }
 
-    private void scheduleDeadline(CompletableFuture<CoreResult> future) {
-        Instant deadline = spec.deadline();
-        if (deadline == null) {
-            // Unreachable: prompt() refuses a null deadline up front. Kept as a
-            // hard failure so the silent "scheduled without any deadline" path
-            // cannot come back through a future caller.
-            throw noDeadlineRefusal();
-        }
+    private void scheduleDeadline(CompletableFuture<CoreResult> future, Instant deadline) {
         long millis = Duration.between(Instant.now(), deadline).toMillis();
         if (millis <= 0) {
             completeTimedOut(future, deadline);

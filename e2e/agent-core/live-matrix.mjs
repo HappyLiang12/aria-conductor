@@ -31,6 +31,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..');
 
 const QODER_PINNED_MODEL = 'efficient';
+/** The System Config key every new run freezes as its admission deadline. */
+const RUN_DEADLINE_CONFIG_KEY = 'aria.tasks.deadline-minutes';
 const CORES = ['qoder', 'opencode'];
 const MODES = ['HOST', 'SANDBOX'];
 // Environment prerequisite set of the SANDBOX combinations (recorded by Task 1).
@@ -434,16 +436,13 @@ function startBackend(opts, backendLog) {
     ...pins,
   };
   if (opts.backendTaskDeadlineMinutes !== null) {
-    // The expiry case asserts an ask reaching EXPIRED. A run-owned core session's
-    // ask expires with the RUN's deadline (the approval gate's own window is the
-    // legacy path's bound), and the frozen deadline is read from aria.tasks.* at
-    // run creation; a system property beats application.yml and is inherited by
-    // the JVM the start script spawns. The approval window is aligned to the same
-    // value so both bounds agree.
+    // Only the approval window is a Spring property. The run deadline is not:
+    // V73 seeds aria.tasks.deadline-minutes in system_config and new runs freeze
+    // that value, so the harness sets the key through the System Config API
+    // after the backend is healthy (see main()).
     const minutes = opts.backendTaskDeadlineMinutes;
     const existing = process.env.JAVA_TOOL_OPTIONS ? ` ${process.env.JAVA_TOOL_OPTIONS}` : '';
-    env.JAVA_TOOL_OPTIONS =
-      `-Daria.tasks.deadline-minutes=${minutes} -Dapprovals.timeout-ms=${minutes * 60000}${existing}`;
+    env.JAVA_TOOL_OPTIONS = `-Dapprovals.timeout-ms=${minutes * 60000}${existing}`;
     pins.JAVA_TOOL_OPTIONS = env.JAVA_TOOL_OPTIONS;
   }
   opts.backendPins = pins;
@@ -937,6 +936,25 @@ async function main() {
       capture(`health: ${health.detail}`);
       row.backendPins = opts.backendPins ? { ...opts.backendPins } : null;
       if (!health.ok) throw new Error(`backend never became healthy: ${health.detail}`);
+    }
+
+    if (opts.backendTaskDeadlineMinutes !== null) {
+      // New runs freeze the System Config value at admission; a JVM property no
+      // longer reaches them once V73 seeded the row. Setting the key through the
+      // API keeps the harness on the same operator surface as the dashboard.
+      const minutes = String(opts.backendTaskDeadlineMinutes);
+      const updated = await api.call('PUT', `/api/v1/system-config/${RUN_DEADLINE_CONFIG_KEY}`,
+        { value: minutes });
+      capture(`run deadline set through System Config: ${RUN_DEADLINE_CONFIG_KEY}=${minutes} (HTTP ${updated.status})`);
+      if (updated.status >= 300) {
+        throw new Error(`System Config refused ${RUN_DEADLINE_CONFIG_KEY}=${minutes}`
+          + ` (HTTP ${updated.status}): ${updated.record.body}`);
+      }
+      const readBack = await api.get(`/api/v1/system-config/${RUN_DEADLINE_CONFIG_KEY}`);
+      if (readBack.status !== 200 || readBack.json?.configValue !== minutes) {
+        throw new Error(`System Config did not persist ${RUN_DEADLINE_CONFIG_KEY}=${minutes}`
+          + ` (HTTP ${readBack.status}, value ${JSON.stringify(readBack.json?.configValue)})`);
+      }
     }
 
     section(`live matrix ${opts.core}/${opts.mode}`);

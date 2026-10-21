@@ -56,6 +56,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 /**
  * Run engine — starts a run on its run-owned core (through the coordinator and
@@ -407,7 +408,7 @@ public class AgentLoopEngine {
             completeRun(ctx, result.cancelled() ? RunStatus.CANCELLED : RunStatus.COMPLETED);
         } catch (Exception e) {
             log.error("Coordinated core run failed: runId={}", ctx.getRunId(), e);
-            ctx.addError(e.getMessage());
+            ctx.addError(e);
             String errMsg = e.getMessage() != null ? e.getMessage() : "Unknown error";
             tryEmit(emitter, "done", donePayload(ctx, errMsg));
             tryEmit(emitter, "error", Map.of("message", errMsg));
@@ -581,7 +582,8 @@ public class AgentLoopEngine {
                     settleOrphanedClarificationAsks(run.getId());
                 }
                 eventPublisher.publishEvent(new RunCompletedEvent(
-                        this, run.getId(), run.getAgentId(), RunStatus.FAILED, null));
+                        this, run.getId(), run.getAgentId(), RunStatus.FAILED, null,
+                        run.getErrorMessage(), run.getErrorCode(), run.getErrorSurface()));
             } catch (Exception e) {
                 log.error("Failed to recover orphaned run {}: {}", run.getId(), e.getMessage(), e);
             }
@@ -972,7 +974,7 @@ public class AgentLoopEngine {
 
 
     /**
-     * Mirrors {@link #recordTrajectory} for the task path: persists the final task
+     * Mirrors {@link #recordTrajectory} for the core-run path: persists the final
      * output as an assistant trajectory entry (next turn after the existing max) so
      * the following session turn can see the previous conclusion. Written only on
      * success with non-blank output — failure/abort paths write nothing, matching
@@ -1115,6 +1117,46 @@ public class AgentLoopEngine {
     }
 
 
+    /** The reason persisted/published with a settling run, plus its repair identity. */
+    record CompletionFailure(String message, String code, String surface) {
+    }
+
+    /**
+     * The operator-facing reason persisted with a settling run: a verified
+     * termination reason (e.g. the run deadline) wins because it carries the
+     * repair identity, else the joined turn errors, else an honest fallback for
+     * a failure that carried no message. The termination entry is always
+     * consumed so a stale intent cannot outlive its run, and it is applied only
+     * when the run did not complete -- a stop that was refused (e.g. at the
+     * deadline) leaves the prompt free to finish normally. Null entries are
+     * filtered so the dashboard never renders the literal "null", and an
+     * oversized join is bounded so persisting it can never fail the completion.
+     */
+    private CompletionFailure completionError(RunContext ctx, RunStatus finalStatus) {
+        RunInputCoordinator.TerminationFailure termination =
+                inputCoordinator.consumeTerminationFailure(ctx.getRunId());
+        String joined = ctx.getErrors().stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(text -> !text.isEmpty())
+                .collect(Collectors.joining("; "));
+        if (finalStatus != RunStatus.COMPLETED
+                && termination != null && termination.message() != null && !termination.message().isBlank()) {
+            return new CompletionFailure(boundedError(termination.message()),
+                    termination.code(), termination.surface());
+        }
+        if (!joined.isEmpty()) {
+            return new CompletionFailure(boundedError(joined), ctx.getErrorCode(), ctx.getErrorSurface());
+        }
+        return new CompletionFailure(finalStatus == RunStatus.FAILED
+                ? "Run failed without an error message; check the backend log for the failure details."
+                : "", null, null);
+    }
+
+    static String boundedError(String message) {
+        return RunErrorText.bound(message);
+    }
+
     /**
      * Completes the run — updates DB entities and clears state.
      * Note: @Transactional omitted because this is a self-invocation from within the same class.
@@ -1123,6 +1165,8 @@ public class AgentLoopEngine {
     protected void completeRun(RunContext ctx, RunStatus finalStatus) {
         log.info("Completing run: runId={}, status={}, iterations={}, tokens={}",
                 ctx.getRunId(), finalStatus, ctx.getIterationCount(), ctx.getTotalTokensUsed());
+
+        CompletionFailure completionError = completionError(ctx, finalStatus);
 
         // Tracks whether an external actor (e.g. RunService.cancelRun) already moved this run to a
         // terminal state AND published its RunCompletedEvent. In that case we must neither overwrite
@@ -1151,8 +1195,10 @@ public class AgentLoopEngine {
                 run.setIterationCount(ctx.getIterationCount());
                 run.setTotalTokensUsed(ctx.getTotalTokensUsed());
                 run.setCompletedAt(Instant.now());
-                if (!ctx.getErrors().isEmpty()) {
-                    run.setErrorMessage(String.join("; ", ctx.getErrors()));
+                if (!completionError.message().isEmpty()) {
+                    run.setErrorMessage(completionError.message());
+                    run.setErrorCode(completionError.code());
+                    run.setErrorSurface(completionError.surface());
                 }
                 // Store the final output (last assistant response)
                 if (ctx.getLastAssistantResponse() != null) {
@@ -1225,7 +1271,10 @@ public class AgentLoopEngine {
         if (!alreadyTerminatedExternally.get()) {
             try {
                 eventPublisher.publishEvent(new RunCompletedEvent(
-                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus, ctx.getLastAssistantResponse()));
+                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus,
+                        ctx.getLastAssistantResponse(),
+                        completionError.message().isEmpty() ? null : completionError.message(),
+                        completionError.code(), completionError.surface()));
             } catch (Exception e) {
                 log.warn("Failed to publish run completed event: {}", e.getMessage());
             }
@@ -1250,7 +1299,7 @@ public class AgentLoopEngine {
             // No context — try to update run directly
             runRepository.findById(runId).ifPresent(run -> {
                 run.setStatus(RunStatus.FAILED);
-                run.setErrorMessage(errorMessage);
+                run.setErrorMessage(RunErrorText.bound(errorMessage));
                 run.setCompletedAt(Instant.now());
                 runRepository.save(run);
             });

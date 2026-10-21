@@ -36,6 +36,7 @@ import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RunAdmissionProperties;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
+import io.aria.conductor.execution.runtime.RunInputCoordinator;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
@@ -104,6 +105,7 @@ class AgentLoopEngineCoreDispatchTest {
     @Mock CoreExecutionService coordinator;
     @Mock RunExecutionBindingRepository bindings;
     @Mock TaskDeadlineProperties taskDeadlineProperties;
+    @Mock RunInputCoordinator inputCoordinator;
 
     private Agent agent;
     private Run run;
@@ -204,7 +206,7 @@ class AgentLoopEngineCoreDispatchTest {
                 workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
                 approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
                 coreRunLauncherProvider, unlimitedAdmission(), null /* KanbanRepository */,
-                null /* RunInputCoordinator */);
+                inputCoordinator);
     }
 
     /**
@@ -232,7 +234,8 @@ class AgentLoopEngineCoreDispatchTest {
 
         await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.FAILED);
         assertThat(run.getErrorMessage())
-                .isEqualTo("Direct workspace requires an explicitly selected directory");
+                .isEqualTo("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
         verifyNoInteractions(coordinator);
         verify(bindings, never()).save(any());
     }

@@ -37,11 +37,6 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
     }
 
-    @ExceptionHandler(BudgetExceededException.class)
-    public ResponseEntity<Map<String, Object>> handleBudgetExceeded(BudgetExceededException ex) {
-        return buildResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
-    }
-
     @ExceptionHandler(ApprovalTimeoutException.class)
     public ResponseEntity<Map<String, Object>> handleApprovalTimeout(ApprovalTimeoutException ex) {
         return buildResponse(HttpStatus.REQUEST_TIMEOUT, ex.getMessage());
@@ -49,14 +44,14 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException ex) {
-        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
+        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
     }
 
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
         // Governance rejections (e.g. assigning a disabled/non-approved tool or non-SKILL skill)
         // are client input conflicts, not server errors — return 4xx instead of falling through to 500.
-        return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), ex);
     }
 
     @ExceptionHandler(PickupRejectedException.class)
@@ -108,7 +103,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
         log.error("Data integrity violation", ex);
-        String message = "Data integrity violation";
+        String message = "Data integrity violation. Retry; if it persists, check the backend log.";
         if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
             String detail = ex.getMostSpecificCause().getMessage();
             message = "Data integrity violation: " + (detail != null ? detail : "no details");
@@ -119,7 +114,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(PersistenceException.class)
     public ResponseEntity<Map<String, Object>> handlePersistence(PersistenceException ex) {
         log.error("Persistence error", ex);
-        String message = "Database error";
+        String message = "Database error. Retry; if it persists, check the backend log.";
         if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
             Throwable cause = ex.getCause();
             String detail = cause != null ? cause.getMessage() : ex.getMessage();
@@ -137,7 +132,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneral(Exception ex) {
         log.error("Unhandled exception: {} - {}", ex.getClass().getSimpleName(), ex.getMessage(), ex);
-        String message = "An unexpected error occurred";
+        String message = "An unexpected error occurred. Check the backend log for the stack trace.";
         if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
             message = ex.getClass().getSimpleName() + ": " +
                       (ex.getMessage() != null ? ex.getMessage() : "no details");
@@ -146,11 +141,22 @@ public class GlobalExceptionHandler {
     }
 
     private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message) {
+        return buildResponse(status, message, null);
+    }
+
+    private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message,
+                                                              Throwable failure) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("timestamp", Instant.now().toString());
         body.put("status", status.value());
         body.put("error", status.getReasonPhrase());
         body.put("message", message);
+        // Stable next-step contract: the dashboard opens the named surface instead
+        // of matching the human-readable message.
+        if (failure instanceof ActionableFailure actionable) {
+            body.put("code", actionable.code());
+            body.put("surface", actionable.surface().name());
+        }
         return ResponseEntity.status(status).body(body);
     }
 }

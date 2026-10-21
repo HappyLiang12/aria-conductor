@@ -101,16 +101,19 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         UUID missingPathRun = UUID.randomUUID();
         assertThatThrownBy(() -> service().acquire(hostSpec(missingPathRun, WorkspaceMode.DIRECT, null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Direct workspace requires an explicitly selected directory");
+                .hasMessage("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
         UUID blankPathRun = UUID.randomUUID();
         assertThatThrownBy(() -> service().acquire(hostSpec(blankPathRun, WorkspaceMode.DIRECT, "   ", null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Direct workspace requires an explicitly selected directory");
+                .hasMessage("Direct workspace requires an explicitly selected directory."
+                        + " Edit the agent's workspace settings in Crew.");
         Path missing = temp.resolve("missing-directory");
         UUID absentRun = UUID.randomUUID();
         assertThatThrownBy(() -> service().acquire(hostSpec(absentRun, WorkspaceMode.DIRECT, missing.toString(), null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Direct workspace directory does not exist: " + missing);
+                .hasMessage("Direct workspace directory does not exist: " + missing
+                        + ". Edit the agent's workspace settings in Crew.");
 
         assertThat(leases.findByRunId(missingPathRun)).isEmpty();
         assertThat(leases.findByRunId(blankPathRun)).isEmpty();
@@ -246,7 +249,8 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         Path plain = Files.createDirectories(temp.resolve("not-a-repository"));
         assertThatThrownBy(() -> service().acquire(hostSpec(plainRun, WorkspaceMode.WORKTREE, plain.toString(), null)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Worktree workspace requires a git repository: " + plain);
+                .hasMessage("Worktree workspace requires a git repository: " + plain
+                        + ". Edit the agent's workspace settings in Crew.");
         assertThat(leases.findByRunId(plainRun)).isEmpty();
         assertThat(Files.notExists(runtimeRoot.resolve("worktrees").resolve(plainRun.toString()))).isTrue();
 
@@ -255,7 +259,8 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         UUID badRefRun = UUID.randomUUID();
         assertThatThrownBy(() -> service().acquire(hostSpec(badRefRun, WorkspaceMode.WORKTREE, repo.toString(), "no-such-ref")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Cannot resolve worktree base ref 'no-such-ref' in " + repo);
+                .hasMessage("Cannot resolve worktree base ref 'no-such-ref' in " + repo
+                        + ". Edit the agent's workspace settings in Crew.");
         assertThat(leases.findByRunId(badRefRun)).isEmpty();
         assertThat(Files.notExists(runtimeRoot.resolve("worktrees").resolve(badRefRun.toString()))).isTrue();
     }
@@ -313,7 +318,8 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         UUID runId = UUID.randomUUID();
         assertThatThrownBy(() -> service().acquire(hostSpec(runId, WorkspaceMode.WORKTREE, repo.toString(), "--all")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Cannot resolve worktree base ref '--all' in " + repo);
+                .hasMessage("Cannot resolve worktree base ref '--all' in " + repo
+                        + ". Edit the agent's workspace settings in Crew.");
         assertThat(leases.findByRunId(runId)).isEmpty();
         assertThat(Files.notExists(runtimeRoot.resolve("worktrees").resolve(runId.toString()))).isTrue();
     }
@@ -1041,7 +1047,8 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         List<String> expectedArgv = new ArrayList<>(shimCommand);
         expectedArgv.addAll(List.of("-C", repo.toString(), "rev-parse", "--git-dir"));
         assertThat(failure).isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Worktree workspace requires a git repository: " + repo);
+                .hasMessage("Worktree workspace requires a git repository: " + repo
+                        + ". Edit the agent's workspace settings in Crew.");
         assertThat(failure).hasRootCauseMessage("git timed out after 1s: " + expectedArgv);
         assertThat(leases.findByRunId(runId)).isEmpty();
     }

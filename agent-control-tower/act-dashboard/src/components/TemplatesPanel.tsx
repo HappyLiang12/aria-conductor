@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listKnowledge, retireKnowledge, approveKnowledge, createKnowledge, getKnowledgeYaml } from '../api/knowledge';
 import { instantiateWorkflowTemplate } from '../api/knowledge';
 import { extractTemplateParams } from '../utils/workflowTemplateParams';
+import { apiErrorMessage } from '../api/operatorSession';
 import TemplateEditorModal from './TemplateEditorModal';
 import RunTemplateModal from './RunTemplateModal';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -24,10 +25,8 @@ export default function TemplatesPanel({ onInstantiate }: Props) {
 
   // Same surface convention as KanbanBoard: extract the server-provided message
   // when the API client produced an axios error, else fall back to err.message.
-  const describeActionError = (e: unknown): string => {
-    const anyE = e as { response?: { data?: { message?: string } }; message?: string };
-    return anyE?.response?.data?.message || anyE?.message || 'Request failed';
-  };
+  const describeActionError = (e: unknown): string =>
+    apiErrorMessage(e, (e as { message?: string } | undefined)?.message || 'Request failed');
 
   const { data: templates, isLoading, error } = useQuery({
     queryKey: ['knowledge', 'WORKFLOW'],

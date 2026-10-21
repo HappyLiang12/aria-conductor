@@ -5,6 +5,8 @@ import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
+import io.aria.conductor.common.exception.ErrorSurface;
 import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
@@ -94,10 +96,18 @@ public class RunService {
         Agent agent = agentService.findAgentOrThrow(request.getAgentId());
 
         if (agent.getHealthStatus() == HealthStatus.RETIRED) {
-            throw new IllegalArgumentException("Cannot create run for retired agent: " + agent.getId());
+            throw new ActionableIllegalArgumentException(
+                    "Cannot create run for a retired agent ("
+                    + agent.getId() + "). Retired agents cannot take new runs;"
+                    + " create a new agent in Crew and dispatch to it.",
+                    "AGENT_RETIRED", ErrorSurface.CREW);
         }
         if (agent.getHealthStatus() == HealthStatus.UNHEALTHY) {
-            throw new IllegalArgumentException("Cannot create run for unhealthy agent: " + agent.getId());
+            throw new ActionableIllegalArgumentException(
+                    "Cannot create run for an unhealthy agent ("
+                    + agent.getId() + "). Check the agent's configuration in Crew;"
+                    + " unhealthy agents are excluded from dispatch until their health is repaired.",
+                    "AGENT_UNHEALTHY", ErrorSurface.CREW);
         }
 
         log.info("Creating run for agent: agentId={}, prompt={}", request.getAgentId(),
@@ -304,6 +314,8 @@ public class RunService {
                 .totalTokensUsed(run.getTotalTokensUsed())
                 .iterationCount(run.getIterationCount())
                 .errorMessage(run.getErrorMessage())
+                .errorCode(run.getErrorCode())
+                .errorSurface(run.getErrorSurface())
                 .finalOutput(run.getFinalOutput())
                 .coreId(binding == null ? null : binding.getCoreId())
                 .executionMode(binding == null || binding.getExecutionMode() == null

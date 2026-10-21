@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.engine;
 
+import io.aria.conductor.common.exception.ActionableFailure;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.execution.llm.LlmMessage;
 
@@ -27,6 +28,12 @@ public class RunContext {
     private long totalTokensUsed;
     private final List<String> errors = new ArrayList<>();
     private String lastAssistantResponse;
+    /**
+     * Stable identity of the actionable failure recorded by
+     * {@link #addError(Throwable)}.
+     */
+    private String errorCode;
+    private String errorSurface;
     /**
      * The conversation turns that precede this run, supplied by the caller for
      * message assembly only. They are never persisted as this run's trajectory
@@ -59,6 +66,29 @@ public class RunContext {
     }
 
     public void addError(String error) { this.errors.add(error); }
+
+    /**
+     * Records a failure and, when it names a repair surface, the stable
+     * code/surface the dashboard uses to offer the fixing action.
+     */
+    public void addError(Throwable failure) {
+        if (failure == null) {
+            return;
+        }
+        String message = failure.getMessage();
+        this.errors.add(message != null ? message : "unknown error");
+        if (failure instanceof ActionableFailure actionable) {
+            if (this.errorCode == null) {
+                this.errorCode = actionable.code();
+            }
+            if (this.errorSurface == null) {
+                this.errorSurface = actionable.surface().name();
+            }
+        }
+    }
+
+    public String getErrorCode() { return errorCode; }
+    public String getErrorSurface() { return errorSurface; }
 
     public String getLastAssistantResponse() { return lastAssistantResponse; }
     public void setLastAssistantResponse(String response) { this.lastAssistantResponse = response; }

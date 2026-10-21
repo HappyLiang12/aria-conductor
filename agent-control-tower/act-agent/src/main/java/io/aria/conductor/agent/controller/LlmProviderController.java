@@ -56,7 +56,9 @@ public class LlmProviderController {
         boolean success = providerService.testConnection(id);
         return ResponseEntity.ok(java.util.Map.of(
                 "success", success,
-                "message", success ? "Connection successful" : "Connection failed"
+                "message", success ? "Connection successful"
+                        : "Connection failed. Check the provider's base URL and API key"
+                                + " in Configure > LLM Providers."
         ));
     }
 

@@ -246,4 +246,106 @@ class AgentLoopEngineWaitingInputTest {
             assertThat(a.getReason()).isEqualTo("run cancelled");
         });
     }
+
+    @Test
+    void completeRunCancelledPersistsTheRecordedTerminationReason() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+        when(inputCoordinator.consumeTerminationFailure(runId))
+                .thenReturn(new RunInputCoordinator.TerminationFailure(
+                        "Run deadline reached at 2026-10-20T12:00:00Z"
+                                + " (aria.tasks.deadline-minutes in Configure > System Config)."
+                                + " Re-dispatch with a longer deadline or split the task.",
+                        "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG"));
+
+        engine.completeRun(ctx, RunStatus.CANCELLED);
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getErrorMessage())
+                .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z"
+                        + " (aria.tasks.deadline-minutes in Configure > System Config)."
+                        + " Re-dispatch with a longer deadline or split the task.");
+        assertThat(saved.getValue().getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(saved.getValue().getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
+
+        // The dashboard reads the same repair identity from the completion event.
+        ArgumentCaptor<RunCompletedEvent> published = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue().getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(published.getValue().getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(published.getValue().getErrorMessage()).contains("Run deadline reached");
+    }
+
+    @Test
+    void completeRunCompletedConsumesButDoesNotPersistAStaleTerminationFailure() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        Run run = new Run();
+        when(runRepository.findById(runId)).thenReturn(Optional.of(run));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+        // A refused deadline stop leaves the run free to finish normally; the recorded
+        // intent must be consumed (not leak) and must not label the COMPLETED run.
+        when(inputCoordinator.consumeTerminationFailure(runId))
+                .thenReturn(new RunInputCoordinator.TerminationFailure(
+                        "Run deadline reached at 2026-10-20T12:00:00Z",
+                        "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG"));
+
+        engine.completeRun(ctx, RunStatus.COMPLETED);
+
+        verify(inputCoordinator).consumeTerminationFailure(runId);
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getStatus()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(saved.getValue().getErrorMessage()).isNull();
+        assertThat(saved.getValue().getErrorCode()).isNull();
+        assertThat(saved.getValue().getErrorSurface()).isNull();
+
+        ArgumentCaptor<RunCompletedEvent> published = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(published.capture());
+        assertThat(published.getValue().getErrorMessage()).isNull();
+        assertThat(published.getValue().getErrorCode()).isNull();
+        assertThat(published.getValue().getErrorSurface()).isNull();
+    }
+
+    @Test
+    void completeRunFailureWithoutAMessagePersistsAnHonestFallbackInsteadOfNull() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        ctx.addError((String) null);
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+
+        engine.completeRun(ctx, RunStatus.FAILED);
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        assertThat(saved.getValue().getErrorMessage()).isEqualTo(
+                "Run failed without an error message; check the backend log for the failure details.");
+    }
+
+    @Test
+    void completeRunBoundsAnOversizedFailureBeforePersistingIt() {
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        ctx.addError("x".repeat(5000));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+
+        engine.completeRun(ctx, RunStatus.FAILED);
+
+        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
+        verify(runRepository).save(saved.capture());
+        // error_message is VARCHAR(2000): bounded below the column limit with an
+        // honest marker naming exactly how much text was dropped.
+        assertThat(saved.getValue().getErrorMessage())
+                .hasSize(1887)
+                .endsWith("... [truncated, 3150 more characters]");
+    }
 }

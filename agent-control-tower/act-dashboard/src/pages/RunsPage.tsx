@@ -7,6 +7,8 @@ import { useWebSocketContext } from '../components/Layout';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import { StatusBadge } from '../components/StatusBadge';
 import { RuntimeBadge } from '../components/RuntimeBadge';
+import { RunErrorNotice, ErrorNotice } from '../components/ErrorNotice';
+import { presentError, type PresentedError } from '../api/errorPresentation';
 import type { CreateRunRequest, RunStatus, SessionTrajectory, ToolCall } from '../types';
 
 export function RunsPage() {
@@ -17,6 +19,7 @@ export function RunsPage() {
   const [filterAgent, setFilterAgent] = useState<string>('');
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [actionError, setActionError] = useState<PresentedError | null>(null);
 
   const [form, setForm] = useState<CreateRunRequest>({ agentId: '', promptSeed: '', maxIterations: 10 });
 
@@ -37,22 +40,36 @@ export function RunsPage() {
       setShowForm(false);
       setForm({ agentId: '', promptSeed: '', maxIterations: 10 });
       setFormErrors({});
+      setActionError(null);
     },
+    onError: (err: unknown) => setActionError(presentError(err, 'The run could not be started.')),
   });
 
   const cancelMutation = useMutation({
     mutationFn: cancelRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
+    onError: (err: unknown) => setActionError(presentError(err, 'The cancel request was refused.')),
   });
 
   const pauseMutation = useMutation({
     mutationFn: pauseRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
+    onError: (err: unknown) => setActionError(presentError(err, 'The pause request was refused.')),
   });
 
   const resumeMutation = useMutation({
     mutationFn: resumeRun,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['runs'] }),
+    onSuccess: () => {
+      setActionError(null);
+      queryClient.invalidateQueries({ queryKey: ['runs'] });
+    },
+    onError: (err: unknown) => setActionError(presentError(err, 'The resume request was refused.')),
   });
 
   useEffect(() => {
@@ -111,6 +128,12 @@ export function RunsPage() {
           {showForm ? 'Cancel' : '+ Start Run'}
         </button>
       </div>
+
+      {actionError && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorNotice presented={actionError} />
+        </div>
+      )}
 
       {/* Filters */}
       <div className="filter-bar">
@@ -178,9 +201,9 @@ export function RunsPage() {
       )}
 
       {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading runs...</span></div>}
-      {error && <div className="error-state">Failed to load runs. Please retry.</div>}
+      {error && <ErrorNotice presented={presentError(error, 'Failed to load runs.')} />}
 
-      {filteredRuns.length === 0 && !isLoading && (
+      {!error && filteredRuns.length === 0 && !isLoading && (
         <div className="empty-state">
           {runs?.length === 0 ? 'No runs yet. Start one above.' : 'No runs match your filter criteria.'}
         </div>
@@ -246,19 +269,19 @@ export function RunsPage() {
   );
 }
 
-function RunDetailView({ runId, run, agentName }: { runId: string; run: { status: string; totalTokensUsed: number; errorMessage: string | null }; agentName: string }) {
+function RunDetailView({ runId, run, agentName }: { runId: string; run: { status: string; totalTokensUsed: number; errorMessage: string | null; errorSurface?: string | null; errorCode?: string | null }; agentName: string }) {
   // S3: live while RUNNING (5s), stops at terminal status.
   const live = run.status === 'RUNNING';
   const [trajCollapsed, setTrajCollapsed] = useState(false);
   const [toolsCollapsed, setToolsCollapsed] = useState(false);
-  const { data: trajectory, isLoading: trajLoading } = useQuery({
+  const { data: trajectory, isLoading: trajLoading, error: trajError } = useQuery({
     queryKey: ['run-trajectory', runId],
     queryFn: () => getRunTrajectory(runId),
     enabled: true,
     refetchInterval: live ? 5000 : false,
   });
 
-  const { data: toolCalls, isLoading: toolsLoading } = useQuery({
+  const { data: toolCalls, isLoading: toolsLoading, error: toolsError } = useQuery({
     queryKey: ['run-toolcalls', runId],
     queryFn: () => getRunToolCalls(runId),
     enabled: true,
@@ -276,7 +299,14 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
             <div className="detail-info-item"><span>Status</span><StatusBadge status={run.status} /></div>
             <div className="detail-info-item"><span>Tokens Used</span><strong>{run.totalTokensUsed.toLocaleString()}</strong></div>
             {run.errorMessage && (
-              <div className="detail-info-item error-detail"><span>Error</span><span className="error-text">{run.errorMessage}</span></div>
+              <div className="detail-info-item error-detail" style={{ display: 'block' }}>
+                <span>Error</span>
+                <RunErrorNotice
+                  message={run.errorMessage}
+                  surface={run.errorSurface}
+                  code={run.errorCode}
+                />
+              </div>
             )}
           </div>
         </div>
@@ -293,7 +323,10 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
           </h4>
           {!trajCollapsed && (<>
           {trajLoading && <div className="mini-spinner">Loading...</div>}
-          {!trajLoading && (!trajectory || trajectory.length === 0) && <div className="empty-mini">No trajectory data yet.</div>}
+          {trajError && (
+            <ErrorNotice presented={presentError(trajError, 'Failed to load the session trajectory.')} />
+          )}
+          {!trajLoading && !trajError && (!trajectory || trajectory.length === 0) && <div className="empty-mini">No trajectory data yet.</div>}
           {trajectory && trajectory.length > 0 && (
             <div className="trajectory-list">
               {trajectory.map((turn) => (
@@ -323,7 +356,10 @@ function RunDetailView({ runId, run, agentName }: { runId: string; run: { status
           </h4>
           {!toolsCollapsed && (<>
           {toolsLoading && <div className="mini-spinner">Loading...</div>}
-          {!toolsLoading && (!toolCalls || toolCalls.length === 0) && <div className="empty-mini">No tool calls yet.</div>}
+          {toolsError && (
+            <ErrorNotice presented={presentError(toolsError, 'Failed to load the tool calls.')} />
+          )}
+          {!toolsLoading && !toolsError && (!toolCalls || toolCalls.length === 0) && <div className="empty-mini">No tool calls yet.</div>}
           {toolCalls && toolCalls.length > 0 && (
             <div className="toolcall-list">
               {toolCalls.map((tc) => (

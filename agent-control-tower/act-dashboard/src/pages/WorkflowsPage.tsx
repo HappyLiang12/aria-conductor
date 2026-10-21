@@ -3,6 +3,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listWorkflows, cancelWorkflow, retryWorkflow, deleteWorkflow, mergeWorkflows, executeYaml, resubmitApproval } from '../api/workflows';
 import { listRuns } from '../api/runs';
 import { listAgents } from '../api/agents';
+import { apiErrorMessage } from '../api/operatorSession';
+import { presentError } from '../api/errorPresentation';
+import ErrorNotice from '../components/ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import { useWebSocketContext } from '../components/Layout';
 import TemplatesPanel from '../components/TemplatesPanel';
@@ -238,17 +241,29 @@ export function WorkflowsPage() {
   // Mutations
   const cancelMutation = useMutation({
     mutationFn: (id: string) => cancelWorkflow(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Cancel failed.')),
   });
 
   const retryMutation = useMutation({
     mutationFn: ({ id, stepIndex }: { id: string; stepIndex: number }) => retryWorkflow(id, stepIndex),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Retry step failed.')),
   });
 
   const resubmitMutation = useMutation({
     mutationFn: (id: string) => resubmitApproval(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Resubmit failed.')),
   });
 
   const deleteMutation = useMutation({
@@ -265,21 +280,27 @@ export function WorkflowsPage() {
     // rendered in this page's existing inline error banner.
     onError: (err: unknown) => {
       setDeletingId(null);
-      setDeleteError(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`);
+      setDeleteError(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.'));
     },
   });
 
   const mergeMutation = useMutation({
     mutationFn: ({ sourceIds, name }: { sourceIds: string[]; name: string }) => mergeWorkflows(sourceIds, name),
     onSuccess: () => {
+      setDeleteError(null);
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
       setSelectedIds([]);
     },
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'Merge failed.')),
   });
 
   const executeYamlMutation = useMutation({
     mutationFn: (yamlContent: string) => executeYaml(yamlContent),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workflows'] }),
+    onSuccess: () => {
+      setDeleteError(null);
+      queryClient.invalidateQueries({ queryKey: ['workflows'] });
+    },
+    onError: (err: unknown) => setDeleteError(apiErrorMessage(err, 'YAML execution failed.')),
   });
 
   // Real-time invalidation on workflow.* or run.* WS events
@@ -381,12 +402,16 @@ export function WorkflowsPage() {
 
       {activeTab === 'chains' && (<>
       {isLoading && <div style={{ color: 'var(--muted, #94a3b8)' }}>Loading workflows...</div>}
-      {error && <div style={{ color: 'var(--err, #ef4444)' }}>Failed to load workflows</div>}
+      {error && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorNotice presented={presentError(error, 'Failed to load workflows.')} />
+        </div>
+      )}
       {deleteError && (
         <div role="alert" style={{ color: 'var(--err, #ef4444)' }}>{deleteError}</div>
       )}
 
-      {sorted.length === 0 && !isLoading && (
+      {!error && sorted.length === 0 && !isLoading && (
         <div style={{
           textAlign: 'center',
           padding: 40,

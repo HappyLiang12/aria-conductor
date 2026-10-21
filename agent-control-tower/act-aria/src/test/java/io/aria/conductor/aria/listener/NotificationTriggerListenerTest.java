@@ -36,6 +36,27 @@ class NotificationTriggerListenerTest {
     }
 
     @Test
+    void onRunCompleted_withFailedStatusCarriesTheFailureReason() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.FAILED, null,
+                "Qoder runtime credential is not configured (qoder:operator). Save one in Configure."));
+        verify(notificationService).create("run.failed", "Run failed",
+                "Run " + runId + " finished with status FAILED."
+                        + " Reason: Qoder runtime credential is not configured (qoder:operator)."
+                        + " Save one in Configure.",
+                "RUN", runId.toString());
+    }
+
+    @Test
+    void onRunCompleted_withCompletedStatusAndNonFatalErrorsKeepsTheSuccessBodyClean() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(), RunStatus.COMPLETED, null,
+                "Action run_agent failed: transient tool timeout"));
+        verify(notificationService).create("run.completed", "Run completed successfully",
+                "Run " + runId + " finished with status COMPLETED.", "RUN", runId.toString());
+    }
+
+    @Test
     void onApprovalRequested() {
         UUID approvalId = UUID.randomUUID();
         listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, UUID.randomUUID(), UUID.randomUUID()));

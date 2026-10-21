@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { ReviewWorkspace } from '../ReviewWorkspace';
 import { DrawerProvider, useDrawerContext } from '../DrawerContext';
 import type { Approval, KanbanItem, Run } from '../../types';
@@ -97,11 +98,13 @@ function renderWorkspace(seedItems?: KanbanItem[]) {
   });
   if (seedItems) qc.setQueryData(['kanban-items'], seedItems);
   const utils = render(
-    <QueryClientProvider client={qc}>
-      <DrawerProvider>
-        <Harness />
-      </DrawerProvider>
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <DrawerProvider>
+          <Harness />
+        </DrawerProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
   return { ...utils, qc };
 }
@@ -203,6 +206,26 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(await screen.findByText(/Run completed/)).toBeInTheDocument();
     expect(screen.queryByText(/NEEDS YOUR DECISION/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No pending asks/)).not.toBeInTheDocument();
+  });
+
+  it('renders the repair action from the linked run surface, not the message text', async () => {
+    // No legacy text matcher matches this wording; only errorSurface can.
+    mockedGetKanbanItem.mockResolvedValue(mkItem({ linkedRunId: 'run-7' }));
+    mockedGetRun.mockResolvedValue(mkRun({
+      status: 'FAILED',
+      finalOutput: null,
+      errorMessage: 'The operator credential for this core is missing.',
+      errorSurface: 'LLM_PROVIDERS',
+      errorCode: 'RUNTIME_CREDENTIAL_NOT_CONFIGURED',
+    }));
+    renderWorkspace();
+    await openReview();
+    await screen.findByText('Spec task');
+
+    expect(await screen.findByText('The operator credential for this core is missing.'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Configure → LLM Providers' }))
+      .toBeInTheDocument();
   });
 
   it('renders the outcome chip from the fetched linked run when the payload has no runOutcome (Task 7)', async () => {

@@ -4,6 +4,7 @@ import {
   listJobs, createJob, updateJob, deleteJob, pauseJob, resumeJob,
 } from '../api/ariaJobs';
 import type { ScheduledJob, CreateScheduledJobRequest, JobCategory, JobStatus } from '../types';
+import { apiErrorMessage } from '../api/operatorSession';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
 
@@ -96,14 +97,14 @@ export function ScheduledJobsPage() {
   const categoryParam = categoryFilter === 'ALL' ? undefined : categoryFilter;
   const statusParam = statusFilter || undefined;
 
-  const { data: jobs = [], isLoading, isError } = useQuery({
+  const { data: jobs = [], isLoading, isError, error: jobsError } = useQuery({
     queryKey: ['scheduled-jobs', categoryParam, statusParam],
     queryFn: () => listJobs({ category: categoryParam, status: statusParam }),
   });
 
-  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setDeletingJob(null); }, onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); setDeletingJob(null); } });
-  const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
-  const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(`Operation failed: ${(err as Error)?.message || 'Unknown error'}`); } });
+  const deleteMut = useMutation({ mutationFn: deleteJob, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }); setDeletingJob(null); }, onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.')); setDeletingJob(null); } });
+  const pauseMut = useMutation({ mutationFn: pauseJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.')); } });
+  const resumeMut = useMutation({ mutationFn: resumeJob, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scheduled-jobs'] }), onError: (err: unknown) => { setToastMsg(apiErrorMessage(err, (err as Error)?.message ?? 'Operation failed.')); } });
 
   const categoryEmoji: Record<string, string> = { REMINDER: '🔔', MONITOR: '📊', BRIEF: '📋' };
 
@@ -201,7 +202,7 @@ export function ScheduledJobsPage() {
       </div>
 
       {isLoading && <div className="loading-spinner"><div className="spinner" /><span>Loading jobs…</span></div>}
-      {isError && <div className="evidence-error">Failed to load jobs.</div>}
+      {isError && <div className="evidence-error">{apiErrorMessage(jobsError, 'Failed to load jobs.')}</div>}
 
       {!isLoading && !isError && jobs.length === 0 && (
         <div className="card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>

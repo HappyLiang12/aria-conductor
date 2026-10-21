@@ -194,11 +194,13 @@ export function SystemConfigPanel() {
               const dirty = isDirty(meta.key);
               const desc = configMap[meta.key]?.description ?? '';
               const numVal = Number(val);
-              // An out-of-range value is silently clamped by the runtime, so it must
-              // never look saved: block Save instead of only tinting the border.
+              // An out-of-range or fractional value is silently clamped/rejected
+              // by the runtime, so it must never look saved. Every key on this
+              // panel is an integer.
               const invalidValue =
                 val !== '' &&
-                (!Number.isFinite(numVal) || numVal < meta.min || numVal > meta.max);
+                (!Number.isFinite(numVal) || !Number.isInteger(numVal)
+                  || numVal < meta.min || numVal > meta.max);
 
               return (
                 <div
@@ -272,7 +274,7 @@ export function SystemConfigPanel() {
                       step={meta.step}
                       aria-label={meta.label}
                       aria-invalid={invalidValue || undefined}
-                      title={invalidValue ? `Value must be between ${meta.min} and ${meta.max}` : undefined}
+                      title={invalidValue ? `Value must be a whole number between ${meta.min} and ${meta.max}` : undefined}
                       value={val}
                       onChange={(e) => handleChange(meta.key, e.target.value)}
                       onKeyDown={(e) => {

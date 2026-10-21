@@ -54,17 +54,31 @@ class V73SeedTaskDeadlineConfigTest {
     }
 
     @Test
-    void reseedingTheDeadlineDoesNotDuplicateTheRow() throws SQLException {
-        try (Connection connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/migration/V73__seed_task_deadline_config.sql"));
-            ScriptUtils.executeSqlScript(connection,
-                    new ClassPathResource("db/migration/V73__seed_task_deadline_config.sql"));
-        }
+    void reseedingTheDeadlineNeitherDuplicatesNorOverwritesTheOperatorValue() throws SQLException {
+        // The seed is a not-exists insert, never an upsert: a repair/rerun must
+        // leave the value the operator set through System Config untouched.
+        jdbc.update("UPDATE system_config SET config_value = '7' WHERE config_key = ?",
+                SystemConfigKeys.TASK_DEADLINE_MINUTES);
+        try {
+            try (Connection connection = dataSource.getConnection()) {
+                ScriptUtils.executeSqlScript(connection,
+                        new ClassPathResource("db/migration/V73__seed_task_deadline_config.sql"));
+                ScriptUtils.executeSqlScript(connection,
+                        new ClassPathResource("db/migration/V73__seed_task_deadline_config.sql"));
+            }
 
-        Integer rows = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM system_config WHERE config_key = ?",
-                Integer.class, SystemConfigKeys.TASK_DEADLINE_MINUTES);
-        assertThat(rows).isEqualTo(1);
+            Integer rows = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM system_config WHERE config_key = ?",
+                    Integer.class, SystemConfigKeys.TASK_DEADLINE_MINUTES);
+            assertThat(rows).isEqualTo(1);
+            assertThat(jdbc.queryForObject(
+                    "SELECT config_value FROM system_config WHERE config_key = ?",
+                    String.class, SystemConfigKeys.TASK_DEADLINE_MINUTES)).isEqualTo("7");
+        } finally {
+            // The in-memory database is shared by this class's tests.
+            jdbc.update("UPDATE system_config SET config_value = ? WHERE config_key = ?",
+                    String.valueOf(SystemConfigKeys.TASK_DEADLINE_DEFAULT_MINUTES),
+                    SystemConfigKeys.TASK_DEADLINE_MINUTES);
+        }
     }
 }

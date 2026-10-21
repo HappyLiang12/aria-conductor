@@ -13,6 +13,7 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.approval.NativePermission;
 import io.aria.conductor.execution.approval.PermissionChoice;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
@@ -100,6 +101,10 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     static final String STATE_COMPLETED = "COMPLETED";
     static final String STATE_FAILED = "FAILED";
     static final String STATE_CANCELLED = "CANCELLED";
+
+    /** The deadline failure's stable identity: every deadline path records this pair. */
+    static final String DEADLINE_FAILURE_CODE = "RUN_DEADLINE_REACHED";
+    static final String DEADLINE_FAILURE_SURFACE = "SYSTEM_CONFIG";
 
     /** A publisher that discards every event: the default when no application context is wired. */
     private static final ApplicationEventPublisher NOOP_PUBLISHER = event -> { };
@@ -312,34 +317,41 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
 
         RunRuntimeRegistry.RunRuntime runtime = openRuntime(spec, adapter);
         CoreResult result = null;
-        String failure = null;
+        RuntimeException failure = null;
+        Instant turnDeadline = null;
         CoreTask nextTask = task;
-        boolean firstTurn = true;
+        // Frozen for this whole attempt: a System Config change made while the run
+        // executes never extends or shortens one of its turns. The first turn
+        // targets the admission-frozen deadline; every later turn gets this same
+        // window from its own start, because the clarification wait itself is
+        // unbounded by design.
+        Duration turnWindow = taskDeadlines.deadline();
+        // True on the attempt's first turn and on the first turn after an
+        // answer-time migration: both target the run's (re)frozen binding deadline.
+        boolean targetFrozenDeadline = true;
         // The loop's view of the runtime selection: the frozen spec at dispatch, and
         // the migrated (superseding) spec after an answer-time core migration. Every
         // core-dependent loop decision (the parking gate below) consults the CURRENT
         // selection, never the one the run was dispatched with.
         ExecutionSpec current = spec;
         while (true) {
-            // The first turn aims at the run's frozen deadline; a follow-up turn
-            // gets a fresh per-turn window from now. Each window only bounds its
-            // own in-flight prompt and is disarmed as soon as that prompt ends.
-            ScheduledFuture<?> deadlineTask = firstTurn
-                    ? scheduleDeadline(runtime)
-                    : scheduleDeadline(runtime, clock.instant().plus(taskDeadlines.deadline()));
+            turnDeadline = targetFrozenDeadline ? runtime.spec().deadline()
+                    : clock.instant().plus(turnWindow);
+            ScheduledFuture<?> deadlineTask = scheduleDeadline(runtime, turnDeadline);
             // The lambda below captures the runtime this turn runs on; the
             // answer-time migration may reassign the loop's runtime field for the
             // NEXT turn, so the turn runs on an effectively-final snapshot.
             RunRuntimeRegistry.RunRuntime turnRuntime = runtime;
             CoreResult turnResult;
             try {
-                turnResult = turnRuntime.session().prompt(nextTask, event -> handleEvent(turnRuntime, event))
+                turnResult = turnRuntime.session()
+                        .prompt(nextTask, event -> handleEvent(turnRuntime, event), turnDeadline)
                         .toCompletableFuture().join();
             } catch (CompletionException e) {
-                failure = messageOf(e.getCause());
+                failure = causeOf(e.getCause());
                 break;
             } catch (RuntimeException e) {
-                failure = messageOf(e);
+                failure = e;
                 break;
             } finally {
                 deadlineTask.cancel(false);
@@ -406,8 +418,9 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                 try {
                     // The superseding deadline freezes at the persistence granularity, the
                     // same shape the launcher's own freeze uses: a finer value cannot
-                    // survive a TIMESTAMP round trip and would refuse the relaunch.
-                    Instant migratedDeadline = clock.instant().plus(taskDeadlines.deadline())
+                    // survive a TIMESTAMP round trip and would refuse the relaunch. The
+                    // window is the attempt's frozen one, never a fresh System Config read.
+                    Instant migratedDeadline = clock.instant().plus(turnWindow)
                             .truncatedTo(ChronoUnit.SECONDS);
                     RunExecutionBinding superseding = CoreRunLauncher.refreezeBinding(bindings, spec.runId(),
                             agent, migratedDeadline, "operator runtime migration");
@@ -423,11 +436,12 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                     throw migrationFailure;
                 }
                 nextTask = new CoreTask("", trajectoryHistory(spec.runId()), input.answer());
+                targetFrozenDeadline = true;
             } else {
                 // Same-session continuation: the bare answer is the whole next turn.
                 nextTask = new CoreTask("", List.of(), input.answer());
+                targetFrozenDeadline = false;
             }
-            firstTurn = false;
         }
 
         try {
@@ -437,19 +451,29 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             recordPendingControl(runtime, ControlState.STOPPED, "Finalization for run " + spec.runId()
                     + " failed: " + messageOf(finalizationFailure));
             if (failure != null) {
-                finalizationFailure.addSuppressed(new IllegalStateException(failure));
+                finalizationFailure.addSuppressed(failure);
             }
             throw finalizationFailure;
         }
 
-        String state = runtime.writersVerifiedStopped() && STATE_CANCELLED.equals(runtime.controlState())
+        boolean deadlineReached = isDeadlineTimeout(failure, turnDeadline);
+        String state = deadlineReached || (runtime.writersVerifiedStopped()
+                && STATE_CANCELLED.equals(runtime.controlState()))
                 ? STATE_CANCELLED
                 : failure != null ? STATE_FAILED : STATE_COMPLETED;
         runtime.recordVerifiedStop(state); // only a completed finalization verifies the stop
         persistTerminal(runtime, state, result);
         actorTokens.revokeRun(spec.runId());
+        if (deadlineReached) {
+            // The session's own timeout won the race against the coordinator
+            // timer. Finalization verified the stop, so the run carries the same
+            // deadline identity the timer path records and settles CANCELLED.
+            inputs.recordTerminationIntent(spec.runId(), deadlineMessage(turnDeadline),
+                    DEADLINE_FAILURE_CODE, DEADLINE_FAILURE_SURFACE);
+            return new CoreResult(runtime.session().sessionId(), null, null, true, false);
+        }
         if (failure != null) {
-            throw new IllegalStateException("Run " + spec.runId() + " failed: " + failure);
+            throw new IllegalStateException("Run " + spec.runId() + " failed: " + messageOf(failure));
         }
         boolean cancelled = STATE_CANCELLED.equals(state);
         return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled,
@@ -1072,16 +1096,14 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
 
     // ------------------------------------------------------------------ deadline
 
-    private ScheduledFuture<?> scheduleDeadline(RunRuntimeRegistry.RunRuntime runtime) {
-        return scheduleDeadline(runtime, runtime.spec().deadline());
-    }
-
     /**
-     * Arms the run-deadline enforcement against an explicit instant: the first
-     * turn targets the run's frozen deadline, a follow-up turn of the
-     * clarification loop gets a fresh window from now. The armed target behaves
-     * identically -- pending asks expire at their own window, then the run is
-     * stopped through the verified cancel path -- only the armed instant differs.
+     * Arms the run-deadline enforcement against the turn's deadline: the run's
+     * frozen deadline on the first turn (and after an answer-time migration), a
+     * fresh per-turn window from now on a clarification follow-up. The armed
+     * target behaves identically -- pending asks expire at their own window,
+     * then the run is stopped through the verified cancel path -- only the
+     * armed instant differs. The core session receives the same instant, so
+     * whichever enforcer wins the race attributes the run to the deadline.
      */
     private ScheduledFuture<?> scheduleDeadline(RunRuntimeRegistry.RunRuntime runtime, Instant deadline) {
         UUID runId = runtime.spec().runId();
@@ -1107,15 +1129,38 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                     // would show a cancellation with no explanation. The cancel records
                     // it only after its stop is verified, so a refused stop does not
                     // leave a deadline failure on a run that kept running.
-                    cancel(runId, "Run deadline reached at " + deadline
-                                    + " (aria.tasks.deadline-minutes in Configure > System Config)."
-                                    + " Re-dispatch with a longer deadline or split the task.",
-                            "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
+                    cancel(runId, deadlineMessage(deadline), DEADLINE_FAILURE_CODE, DEADLINE_FAILURE_SURFACE);
                 }
             } catch (RuntimeException e) {
                 log.error("Run {}: enforcing the run deadline failed: {}", runId, e.getMessage());
             }
         }, delayMillis, TimeUnit.MILLISECONDS);
+    }
+
+    /** The operator-facing deadline reason, naming the one key that changes it. */
+    static String deadlineMessage(Instant deadline) {
+        return "Run deadline reached at " + deadline
+                + " (aria.tasks.deadline-minutes in Configure > System Config)."
+                + " Re-dispatch with a longer deadline or split the task.";
+    }
+
+    /**
+     * True when the turn failed because its deadline elapsed. A session's prompt
+     * uses TIMEOUT only for the turn deadline it was handed (OpenCode bounds the
+     * request by the remaining budget, Qoder by the scheduled deadline), so this
+     * is the race-losing half of one deadline event, never a second failure class.
+     */
+    private static boolean isDeadlineTimeout(RuntimeException failure, Instant turnDeadline) {
+        return turnDeadline != null
+                && failure instanceof TaskExecutionException taskFailure
+                && taskFailure.cause() == TaskExecutionException.Cause.TIMEOUT;
+    }
+
+    private static RuntimeException causeOf(Throwable failure) {
+        if (failure instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        return new IllegalStateException(messageOf(failure), failure);
     }
 
     // ------------------------------------------------------------------ persistence

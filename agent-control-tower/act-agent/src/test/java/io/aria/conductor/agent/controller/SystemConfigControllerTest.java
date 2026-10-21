@@ -98,7 +98,9 @@ class SystemConfigControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("value", ""))))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("A value is required for system config key: my.key."));
+                .andExpect(jsonPath("$.error").value("A value is required for system config key: my.key."))
+                .andExpect(jsonPath("$.code").value("INVALID_SYSTEM_CONFIG_VALUE"))
+                .andExpect(jsonPath("$.surface").value("SYSTEM_CONFIG"));
     }
 
     @Test
@@ -157,12 +159,28 @@ class SystemConfigControllerTest {
     }
 
     @Test
-    void resetToDefault_returnsConfig() throws Exception {
-        when(service.getByKey("my.key")).thenReturn(config("my.key", "600"));
+    void resetToDefault_writesTheSeedDefaultInsteadOfReturningTheCurrentValue() throws Exception {
+        when(service.getByKey("llm.request.timeout.seconds"))
+                .thenReturn(config("llm.request.timeout.seconds", "120"));
+        when(service.updateValue("llm.request.timeout.seconds", "600"))
+                .thenReturn(config("llm.request.timeout.seconds", "600"));
+
+        mockMvc.perform(post("/api/v1/system-config/llm.request.timeout.seconds/reset"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configKey").value("llm.request.timeout.seconds"))
+                .andExpect(jsonPath("$.configValue").value("600"));
+        verify(service).updateValue("llm.request.timeout.seconds", "600");
+    }
+
+    @Test
+    void resetToDefault_returns400ForAKeyWithoutARecordedDefault() throws Exception {
+        when(service.getByKey("my.key")).thenReturn(config("my.key", "42"));
 
         mockMvc.perform(post("/api/v1/system-config/my.key/reset"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.configKey").value("my.key"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("NO_SYSTEM_CONFIG_DEFAULT"))
+                .andExpect(jsonPath("$.surface").value("SYSTEM_CONFIG"));
+        verify(service, never()).updateValue(anyString(), anyString());
     }
 
     @Test

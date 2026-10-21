@@ -63,23 +63,6 @@ class GlobalExceptionHandlerMappingTest {
     }
 
     @Test
-    void handleBudgetExceeded_maps429() {
-        var response = handler.handleBudgetExceeded(new BudgetExceededException(150, 100));
-        assertStandardBody(response, HttpStatus.TOO_MANY_REQUESTS);
-        assertThat(response.getBody().get("message")).isEqualTo("Token budget exceeded: used 150, limit 100."
-                + " Split the task into smaller runs.");
-    }
-
-    @Test
-    void handleBudgetExceeded_reportsTheSystemConfigRepairSurface() {
-        var response = handler.handleBudgetExceeded(new BudgetExceededException(150, 100));
-
-        assertThat(response.getBody())
-                .containsEntry("code", "TOKEN_BUDGET_EXCEEDED")
-                .containsEntry("surface", "SYSTEM_CONFIG");
-    }
-
-    @Test
     void actionableIllegalArgument_carriesCodeAndSurface() {
         var response = handler.handleBadRequest(new ActionableIllegalArgumentException(
                 "A workspace repository is required.", "WORKSPACE_REPOSITORY_REQUIRED", ErrorSurface.CREW));

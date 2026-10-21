@@ -1,5 +1,7 @@
 package io.aria.conductor.common.exception;
 
+import java.util.Objects;
+
 /** A conflict that names the surface the operator must repair. */
 public class ActionableIllegalStateException extends IllegalStateException implements ActionableFailure {
 
@@ -8,8 +10,10 @@ public class ActionableIllegalStateException extends IllegalStateException imple
 
     public ActionableIllegalStateException(String message, String code, ErrorSurface surface) {
         super(message);
-        this.code = code;
-        this.surface = surface;
+        // The identity is consumed as code()/surface() by the engine and the
+        // error handler; a null half would fail far from its creation.
+        this.code = Objects.requireNonNull(code, "code");
+        this.surface = Objects.requireNonNull(surface, "surface");
     }
 
     @Override

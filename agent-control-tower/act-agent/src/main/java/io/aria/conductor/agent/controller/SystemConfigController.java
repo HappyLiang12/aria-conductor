@@ -15,6 +15,18 @@ import java.util.Map;
 @RequestMapping("/api/v1/system-config")
 public class SystemConfigController {
 
+    /**
+     * Seed defaults of the keys the dashboard can reset. They mirror the seed
+     * migrations: V14 (LLM), V17 (report) and V73 (run deadline).
+     */
+    private static final Map<String, String> DEFAULTS = Map.of(
+            "llm.request.timeout.seconds", "600",
+            "aria.sse.timeout.ms", "600000",
+            "report.generate.max.tokens", "16384",
+            "report.amend.max.tokens", "16384",
+            SystemConfigKeys.TASK_DEADLINE_MINUTES,
+            String.valueOf(SystemConfigKeys.TASK_DEADLINE_DEFAULT_MINUTES));
+
     private final SystemConfigService systemConfigService;
 
     public SystemConfigController(SystemConfigService systemConfigService) {
@@ -44,8 +56,10 @@ public class SystemConfigController {
         try {
             String value = body == null ? null : body.get("value");
             if (value == null || value.isBlank()) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "A value is required for system config key: " + key + "."));
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "A value is required for system config key: " + key + ".",
+                        "code", "INVALID_SYSTEM_CONFIG_VALUE",
+                        "surface", "SYSTEM_CONFIG"));
             }
             if (SystemConfigKeys.TASK_DEADLINE_MINUTES.equals(key) && !isValidTaskDeadline(value)) {
                 // The runtime clamps an out-of-range value silently, so accepting it
@@ -82,10 +96,18 @@ public class SystemConfigController {
     @PostMapping("/{key}/reset")
     public ResponseEntity<?> resetToDefault(@PathVariable String key) {
         try {
-            SystemConfig config = systemConfigService.getByKey(key);
-            // The default value is embedded in the description — extract from migration defaults
-            // For now, just return current value (actual reset would require storing defaults separately)
-            return ResponseEntity.ok(config);
+            systemConfigService.getByKey(key); // unknown keys keep their 404
+            String defaultValue = DEFAULTS.get(key);
+            if (defaultValue == null) {
+                // Never answer a reset with the unchanged value: a success toast
+                // for a write that did not happen is worse than an honest refusal.
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "No default is recorded for system config key: " + key
+                                + ". Set the value explicitly instead.",
+                        "code", "NO_SYSTEM_CONFIG_DEFAULT",
+                        "surface", "SYSTEM_CONFIG"));
+            }
+            return ResponseEntity.ok(systemConfigService.updateValue(key, defaultValue));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404)
                     .body(Map.of("error", "Unknown system config key: " + key

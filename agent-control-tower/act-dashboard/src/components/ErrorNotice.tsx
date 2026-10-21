@@ -6,6 +6,20 @@ import {
 } from '../api/errorPresentation';
 
 /**
+ * A path action is the only one that needs router state. It lives in its own
+ * component so a notice with a Configure action (a window event) can render
+ * outside a Router, e.g. inside a modal test.
+ */
+function PathActionButton({ action }: { action: { path: string; label: string } }) {
+  const navigate = useNavigate();
+  return (
+    <button type="button" className="btn" onClick={() => navigate(action.path)}>
+      {action.label}
+    </button>
+  );
+}
+
+/**
  * One error surface for the dashboard: the backend's own text plus, when the
  * failure names a configuration surface, the button that opens it.
  */
@@ -13,7 +27,7 @@ export function ErrorNotice({ presented, className }: {
   presented: PresentedError;
   className?: string;
 }) {
-  const navigate = useNavigate();
+  const action = presented.action;
   return (
     <div
       className={className ? `error-notice ${className}` : 'error-notice'}
@@ -23,22 +37,13 @@ export function ErrorNotice({ presented, className }: {
       <span className="error-text" style={{ flex: '1 1 240px', wordBreak: 'break-word' }}>
         {presented.text}
       </span>
-      {presented.action && (
-        <button
-          type="button"
-          className="btn"
-          onClick={() => {
-            const action = presented.action!;
-            if ('tab' in action) {
-              openConfigure(action.tab);
-            } else {
-              navigate(action.path);
-            }
-          }}
-        >
-          {presented.action.label}
-        </button>
-      )}
+      {action && ('tab' in action
+        ? (
+          <button type="button" className="btn" onClick={() => openConfigure(action.tab)}>
+            {action.label}
+          </button>
+        )
+        : <PathActionButton action={action} />)}
     </div>
   );
 }

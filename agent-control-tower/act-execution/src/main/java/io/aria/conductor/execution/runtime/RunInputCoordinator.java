@@ -114,16 +114,7 @@ public class RunInputCoordinator {
      * {@link #requestInput} cannot be missed in favor of a stranded intent.
      */
     public void recordTerminationIntent(UUID runId) {
-        recordTerminationIntent(runId, null);
-    }
-
-    /**
-     * Records a sticky termination intent together with the operator-facing
-     * reason the run should carry when it settles. The first reason wins when
-     * more than one escalation races to settle the same run.
-     */
-    public void recordTerminationIntent(UUID runId, String reason) {
-        recordTerminationIntent(runId, reason, null, null);
+        recordTerminationIntent(runId, null, null, null);
     }
 
     /**
@@ -144,14 +135,13 @@ public class RunInputCoordinator {
         terminationIntent.add(runId);
     }
 
-    /** Consumes the recorded termination reason; null when the run ended without one. */
-    public String consumeTerminationReason(UUID runId) {
-        TerminationFailure failure = terminationFailures.remove(runId);
-        return failure == null ? null : failure.message();
-    }
-
-    /** Consumes the recorded termination reason and its repair surface. */
+    /**
+     * Consumes the recorded termination reason and its repair surface. The run
+     * is settling, so its sticky wake-up intent is cleared too: no later park
+     * can belong to this run, and the set must not outlive it.
+     */
     public TerminationFailure consumeTerminationFailure(UUID runId) {
+        terminationIntent.remove(runId);
         return terminationFailures.remove(runId);
     }
 }

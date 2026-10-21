@@ -133,19 +133,6 @@ class RunInputCoordinatorTest {
     }
 
     @Test
-    void aTerminationReasonSurvivesTheBareIntentRecordedRightAfterAndIsConsumedOnce() {
-        // The deadline records its reason, then the verified-stop path records the
-        // bare intent; the second call must not erase the reason the engine persists.
-        UUID runId = UUID.randomUUID();
-        coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.");
-        coordinator.recordTerminationIntent(runId);
-
-        assertThat(coordinator.consumeTerminationReason(runId))
-                .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z.");
-        assertThat(coordinator.consumeTerminationReason(runId)).isNull();
-    }
-
-    @Test
     void aTerminationFailureCarriesItsRepairSurfaceAndIsConsumedOnce() {
         UUID runId = UUID.randomUUID();
         coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.",
@@ -157,5 +144,20 @@ class RunInputCoordinatorTest {
         assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
         assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
         assertThat(coordinator.consumeTerminationFailure(runId)).isNull();
+    }
+
+    @Test
+    void consumingTheFailureAlsoClearsTheStickyWakeUpIntent() {
+        UUID runId = UUID.randomUUID();
+        coordinator.recordTerminationIntent(runId, "Run deadline reached at 2026-10-20T12:00:00Z.",
+                "RUN_DEADLINE_REACHED", "SYSTEM_CONFIG");
+        coordinator.consumeTerminationFailure(runId);
+
+        // The run settled; a later park must wait for an answer instead of
+        // immediately finalizing on an intent that outlived its run.
+        CompletableFuture<RunInputCoordinator.OperatorInput> future = coordinator.requestInput(runId, "q?");
+
+        assertThat(future).isNotDone();
+        verify(publisher).publishEvent(any(RunWaitingForInputEvent.class));
     }
 }

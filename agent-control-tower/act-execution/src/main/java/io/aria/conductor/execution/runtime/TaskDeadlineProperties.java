@@ -14,13 +14,15 @@ import java.time.Duration;
  * The run deadline policy of a coordinated execution attempt
  * ({@code aria.tasks.*}). One frozen deadline is read from here when a run's
  * {@link ExecutionSpec} is frozen, and it is the hard upper bound of the whole
- * attempt: every core session refuses a prompt without it (Task 11) and the
- * coordinator stops the runtime when the deadline elapses.
+ * attempt: every core session refuses a prompt without it and the coordinator
+ * stops the runtime when the deadline elapses.
  *
- * <p>Task 13 replaces the previous use of the OpenCode-specific
- * {@code OpenCodeProperties#maxTaskMinutes} for this deadline: the deadline
- * belongs to the mode-neutral run, not to one provider. The default is 45
- * minutes.
+ * <p>The System Config key {@code aria.tasks.deadline-minutes} is the operator
+ * control and takes precedence; this property is the fallback for a database
+ * without the seeded row (V73). A coordinated attempt reads the value once at
+ * its start, so a mid-run change never moves a live run's deadline or window.
+ *
+ * <p>The default is 45 minutes.
  */
 @Slf4j
 @Data

@@ -11,6 +11,7 @@ import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.credential.CoreCredentialService;
@@ -923,6 +924,38 @@ class CoreExecutionServiceTest {
     }
 
     /**
+     * The core session enforces the same turn deadline the coordinator timer
+     * does, so either enforcer can win. Here the session's own timeout wins (the
+     * timer target never fires): the run must still settle CANCELLED with the
+     * deadline identity instead of a generic FAILED.
+     */
+    @Test
+    void aSessionTimeoutAtTheDeadlineSettlesCancelledWithTheDeadlineIdentity() {
+        ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler();
+        service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), scheduler, coordinator, eventPublisher, taskDeadlines);
+        binding.setDeadline(NOW);
+        ExecutionSpec elapsed = new ExecutionSpec(RUN, AGENT, "qoder", ExecutionMode.HOST, SETTINGS,
+                "qoder:operator", "rev-1", NOW);
+        session.promptFailure = new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
+                "The prompt of run " + RUN + " exceeded the run deadline " + NOW);
+
+        CoreResult result = service.execute(elapsed, adapter, task());
+
+        assertThat(result.cancelled()).isTrue();
+        assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "prompt", "stop-writers", "capture", "destroy", "release");
+        RunInputCoordinator.TerminationFailure failure = coordinator.consumeTerminationFailure(RUN);
+        assertThat(failure).isNotNull();
+        assertThat(failure.code()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(failure.surface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(failure.message()).startsWith("Run deadline reached at " + NOW);
+        assertThat(runtimes.find(RUN).orElseThrow().finalized()).isTrue();
+    }
+
+    /**
      * R-01 companion: when the deadline's stop is refused the run keeps running,
      * completes on its own, and must carry no deadline identity -- the reason is
      * recorded only after a verified stop.
@@ -1075,12 +1108,18 @@ class CoreExecutionServiceTest {
     }
 
     @Test
-    void aFollowUpTurnGetsAFreshPerTurnDeadlineWindow() throws Exception {
-        // The follow-up turn's window is armed from the task deadline policy (60 minutes here),
-        // not from the run's frozen deadline (45 minutes past the fixed clock's now): the second
-        // armed instant is strictly later than the first even on this fixed clock.
-        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties();
-        turnDeadlines.setDeadlineMinutes(60);
+    void aFollowUpTurnGetsAFreshPerTurnDeadlineWindowFromTheAttemptFrozenPolicy() throws Exception {
+        // The follow-up turn's window is armed from the policy frozen when the
+        // attempt started (60 minutes here), not from the run's frozen deadline
+        // (45 minutes past the fixed clock's now) and never from a second live
+        // read: a System Config change while the run is parked must not move it.
+        int[] reads = {0};
+        TaskDeadlineProperties turnDeadlines = new TaskDeadlineProperties() {
+            @Override
+            public Duration deadline() {
+                return Duration.ofMinutes(++reads[0] == 1 ? 60 : 1);
+            }
+        };
         ManualDeadlineScheduler scheduler = new ManualDeadlineScheduler(CLOCK);
         service = new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
                 new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
@@ -1097,9 +1136,10 @@ class CoreExecutionServiceTest {
         service.execute(spec(), adapter, task());
         answerer.join();
 
-        assertThat(scheduler.scheduledInstants()).hasSize(2);
-        assertThat(scheduler.scheduledInstants().get(1))
-                .isAfter(scheduler.scheduledInstants().get(0));
+        assertThat(reads[0]).as("the attempt freezes the policy once, at its start").isEqualTo(1);
+        assertThat(scheduler.scheduledInstants()).containsExactly(
+                NOW.plus(Duration.ofMinutes(45)),
+                NOW.plus(Duration.ofMinutes(60)));
     }
 
     /**

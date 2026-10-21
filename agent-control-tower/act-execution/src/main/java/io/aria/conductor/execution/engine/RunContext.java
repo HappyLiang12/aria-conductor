@@ -72,17 +72,11 @@ public class RunContext {
      * code/surface the dashboard uses to offer the fixing action.
      */
     public void addError(Throwable failure) {
-        addError("", failure);
-    }
-
-    /** Records a prefixed failure while preserving its actionable identity. */
-    public void addError(String messagePrefix, Throwable failure) {
         if (failure == null) {
             return;
         }
         String message = failure.getMessage();
-        this.errors.add((messagePrefix == null ? "" : messagePrefix)
-                + (message != null ? message : "unknown error"));
+        this.errors.add(message != null ? message : "unknown error");
         if (failure instanceof ActionableFailure actionable) {
             if (this.errorCode == null) {
                 this.errorCode = actionable.code();

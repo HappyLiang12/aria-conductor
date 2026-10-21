@@ -2,26 +2,24 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
 import { BACKEND, apiCall, seedAdkAgent, seedRun, approveRunApproval, pollRunTerminal, uniqueName } from '../fixtures';
 
 /**
- * API-layer FAULT INJECTION for the task-level (opencode) run path.
+ * API-layer FAULT INJECTION for a run-owned core run (opencode).
  *
  * These specs drive the real backend over REST (no browser) so they are fast
  * and deterministic enough to sit in the CI api shard. They exercise the
- * failure paths of the exchangeable-provider engine:
- *   D1-2  opencode serve exceeds the task budget → run ABORTED (timeout path)
- *   D2-2  an executing run is cancelled → terminal within 15s
+ * failure paths of the run-owned execution runtime:
+ *   D1-2 an opencode run exceeds the run deadline → CANCELLED with
+ *        RUN_DEADLINE_REACHED / SYSTEM_CONFIG
+ *   D2-2 an executing run is cancelled → terminal within 15s
  *
  * Prerequisites: backend on ${API_URL:-localhost:8080} with an active LLM
- * provider and a reachable OpenSandbox (8090). The task budget is the
- * mode-neutral run deadline aria.tasks.deadline-minutes (INT minutes, min 1,
- * default 45), frozen into the task when the run starts; the
- * opencode.max-task-minutes property is only a fallback for a caller that
- * passes no deadline and is never the knob for this path. The timeout case
- * needs that deadline set to 1 and a long-generation prompt (LLM streaming
- * longer than 60s), so D1-2 reads the System Config value and skips itself
- * unless it is 1: this spec never mutates a global setting that parallel
- * shards share. Without a live sandbox the run fails SANDBOX_UNAVAILABLE
- * before any deadline can fire, so D1-2 also skips itself when the opencode
- * provider health probe is not healthy.
+ * provider and a reachable OpenSandbox (8090). The deadline is the mode-neutral
+ * run deadline aria.tasks.deadline-minutes (INT minutes, min 1, default 45),
+ * frozen into the run's binding at admission. The timeout case needs that key
+ * set to 1 and a long-generation prompt (LLM streaming longer than 60s), so
+ * D1-2 reads the System Config value and skips itself unless it is 1: this spec
+ * never mutates a global setting that parallel shards share. Without a live
+ * sandbox the run fails before any deadline can fire, so D1-2 also skips itself
+ * when the opencode provider health probe is not healthy.
  */
 
 const HAS_LLM_KEY = !!(
@@ -30,18 +28,18 @@ const HAS_LLM_KEY = !!(
   process.env.DEEPSEEK_API_KEY
 );
 
-/** The one deadline the task path freezes into TaskContext.maxDuration. */
+/** The System Config key every new run freezes as its admission deadline. */
 const DEADLINE_KEY = 'aria.tasks.deadline-minutes';
 
 const TERMINAL = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
 
-test.describe('OpenCode task-path fault injection', () => {
-  test('D1-2 serve over budget → run ABORTED (timeout path)', async ({ request }) => {
+test.describe('OpenCode run-owned fault injection', () => {
+  test('D1-2 run over deadline → CANCELLED with the deadline identity', async ({ request }) => {
     test.skip(!HAS_LLM_KEY, 'requires an LLM key for a real opencode run');
 
     // The timeout path can only fire inside a live sandbox: without one the
-    // run fails with SANDBOX_UNAVAILABLE before the deadline is reached, which
-    // would green-wash a tautological assertion. Skip explicitly instead.
+    // run fails before the deadline is reached, which would green-wash a
+    // tautological assertion. Skip explicitly instead.
     const health = await apiCall(request, 'GET', '/adk/providers/opencode/health');
     test.skip(
       health.status !== 200 || health.data?.healthy !== true,
@@ -54,13 +52,13 @@ test.describe('OpenCode task-path fault injection', () => {
       : undefined;
     test.skip(
       configuredDeadline !== '1',
-      `requires ${DEADLINE_KEY}=1 so the frozen task deadline fires inside the poll window`
+      `requires ${DEADLINE_KEY}=1 so the frozen run deadline fires inside the poll window`
         + ` (Configure > System Config currently serves ${configuredDeadline ?? `HTTP ${deadlineConfig.status}`})`,
     );
 
     const agent = await seedAdkAgent(request, { adkProvider: 'opencode' });
-    // Long-generation prompt: the task is frozen with a 1-minute deadline at
-    // dispatch, so the sendMessage deadline fires while the LLM is still streaming.
+    // Long-generation prompt: the run freezes a 1-minute deadline at admission,
+    // so the deadline fires while the core is still streaming.
     const run = await seedRun(
       request,
       agent.id,
@@ -70,16 +68,22 @@ test.describe('OpenCode task-path fault injection', () => {
     await approveRunApproval(request, run.id);
 
     const terminal = await pollRunTerminal(request, run.id, 240_000);
-    console.log(`D1-2 run ${run.id} terminal: ${terminal.status}`);
+    console.log(`D1-2 run ${run.id} terminal: ${terminal.status}`
+      + ` (${terminal.errorCode ?? 'no code'}/${terminal.errorSurface ?? 'no surface'})`);
 
-    // Strong assertion — with a 1-minute deadline and a long-generation prompt
-    // the deadline MUST fire. Anything else means the run did not freeze the
-    // configured deadline (config mismatch) and the test should fail loudly.
+    // Both enforcers -- the coordinator's timer and the core session's own
+    // prompt timeout -- settle the run as CANCELLED at the deadline, and both
+    // persist the same repair identity. The assertion is strong on purpose:
+    // any other ending means the run did not freeze the configured deadline
+    // (config mismatch) and the test should fail loudly.
     expect(
       terminal.status,
-      `expected ABORTED (timeout path), got ${terminal.status}: ${terminal.errorMessage ?? ''}`,
-    ).toBe('ABORTED');
-    expect(terminal.errorMessage, 'ABORTED run must carry a reason').toBeTruthy();
+      `expected CANCELLED at the run deadline, got ${terminal.status}: ${terminal.errorMessage ?? ''}`,
+    ).toBe('CANCELLED');
+    expect(terminal.errorCode, 'the deadline must carry its stable failure code').toBe('RUN_DEADLINE_REACHED');
+    expect(terminal.errorSurface).toBe('SYSTEM_CONFIG');
+    expect(terminal.errorMessage, 'the deadline reason must name the key that changes it')
+      .toContain('aria.tasks.deadline-minutes');
   });
 
   test('D2-2 cancel an executing opencode run → terminal within 15s', async ({ request }) => {
@@ -90,10 +94,10 @@ test.describe('OpenCode task-path fault injection', () => {
     await approveRunApproval(request, run.id);
 
     // Note: the run flips to RUNNING as soon as it leaves PENDING — the
-    // approval gate and sandbox preparation happen while already RUNNING — so
-    // this poll may catch it before the task actually starts. A cancel in that
-    // window still goes through the engine cancel path (pending abort or
-    // abortTask) and must stop the run quickly.
+    // approval gate and environment preparation happen while already RUNNING —
+    // so this poll may catch it before the prompt actually starts. A cancel in
+    // that window still goes through the coordinator's verified stop path and
+    // must stop the run quickly.
     const started = await pollUntilAnyStatus(request, run.id, ['RUNNING', 'INITIALIZING', ...TERMINAL], 120_000);
     console.log(`D2-2 run ${run.id} status before cancel: ${started.status}`);
     if (TERMINAL.includes(started.status)) {

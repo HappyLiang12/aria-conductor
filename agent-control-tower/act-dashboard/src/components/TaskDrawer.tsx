@@ -7,14 +7,12 @@ import {
 } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
 import { getRun } from '../api/runs';
-import { apiErrorMessage } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
-import ErrorNotice from './ErrorNotice';
+import ErrorNotice, { RunErrorNotice } from './ErrorNotice';
 import { useDrawerContext, dispatchOpenAgentDrawer } from './DrawerContext';
 import { DecisionPanel, RunOutcomeChip, ShortApprovalView, runOutcomeFromStatus } from './ReviewPanels';
 import { MarkdownViewer } from './MarkdownViewer';
 import { ConfirmDialog } from './ConfirmDialog';
-import { RunErrorNotice } from './ErrorNotice';
 import { formatTimestamp } from '../utils/formatTime';
 import type { KanbanItem, KanbanPriority, KanbanStatus } from '../types';
 
@@ -195,12 +193,6 @@ export function TaskDrawer() {
   };
 
   const validTransitions = item ? TRANSITIONS[item.status] : [];
-
-  // GlobalExceptionHandler serves the human reason in `message`; the shared
-  // parser also reads the { error } rejections some controllers return.
-  const errMsg = transitionMutation.error
-    ? apiErrorMessage(transitionMutation.error, 'The transition was refused.')
-    : null;
 
   return (
     <>
@@ -459,7 +451,12 @@ export function TaskDrawer() {
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
                 />
-                {errMsg && <div className="evidence-error">{errMsg}</div>}
+                {transitionMutation.error && (
+                  <ErrorNotice
+                    className="evidence-error"
+                    presented={presentError(transitionMutation.error, 'The transition was refused.')}
+                  />
+                )}
               </div>
 
               {validTransitions.length > 1 && (

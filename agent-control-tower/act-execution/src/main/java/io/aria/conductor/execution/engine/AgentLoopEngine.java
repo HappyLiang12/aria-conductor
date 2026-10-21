@@ -974,7 +974,7 @@ public class AgentLoopEngine {
 
 
     /**
-     * Mirrors {@link #recordTrajectory} for the task path: persists the final task
+     * Mirrors {@link #recordTrajectory} for the core-run path: persists the final
      * output as an assistant trajectory entry (next turn after the existing max) so
      * the following session turn can see the previous conclusion. Written only on
      * success with non-blank output — failure/abort paths write nothing, matching
@@ -1122,30 +1122,31 @@ public class AgentLoopEngine {
     }
 
     /**
-     * The operator-facing reason persisted with a settling run: the joined turn
-     * errors, else the recorded termination reason (e.g. the run deadline), else
-     * an honest fallback for a failure that carried no message. Null entries are
+     * The operator-facing reason persisted with a settling run: a verified
+     * termination reason (e.g. the run deadline) wins because it carries the
+     * repair identity, else the joined turn errors, else an honest fallback for
+     * a failure that carried no message. The termination entry is always
+     * consumed so a stale intent cannot outlive its run, and it is applied only
+     * when the run did not complete -- a stop that was refused (e.g. at the
+     * deadline) leaves the prompt free to finish normally. Null entries are
      * filtered so the dashboard never renders the literal "null", and an
      * oversized join is bounded so persisting it can never fail the completion.
      */
     private CompletionFailure completionError(RunContext ctx, RunStatus finalStatus) {
+        RunInputCoordinator.TerminationFailure termination =
+                inputCoordinator.consumeTerminationFailure(ctx.getRunId());
         String joined = ctx.getErrors().stream()
                 .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(text -> !text.isEmpty())
                 .collect(Collectors.joining("; "));
-        if (!joined.isEmpty()) {
-            return new CompletionFailure(boundedError(joined), ctx.getErrorCode(), ctx.getErrorSurface());
-        }
-        // Always consumed so a stale intent cannot outlive its run; applied only
-        // when the run did not complete, because a stop that was refused (e.g. at
-        // the deadline) leaves the prompt free to finish normally.
-        RunInputCoordinator.TerminationFailure termination =
-                inputCoordinator.consumeTerminationFailure(ctx.getRunId());
         if (finalStatus != RunStatus.COMPLETED
                 && termination != null && termination.message() != null && !termination.message().isBlank()) {
             return new CompletionFailure(boundedError(termination.message()),
                     termination.code(), termination.surface());
+        }
+        if (!joined.isEmpty()) {
+            return new CompletionFailure(boundedError(joined), ctx.getErrorCode(), ctx.getErrorSurface());
         }
         return new CompletionFailure(finalStatus == RunStatus.FAILED
                 ? "Run failed without an error message; check the backend log for the failure details."

@@ -6,6 +6,13 @@ import org.springframework.context.ApplicationEvent;
 
 import java.util.UUID;
 
+/**
+ * A run reached a terminal state. {@code errorMessage} is the operator-facing
+ * reason and {@code errorCode}/{@code errorSurface} are the stable repair
+ * identity the dashboard turns into an action; they match the run row's
+ * persisted columns. The shorter constructors predate the identity and leave it
+ * null (e.g. an operator cancel with no repair surface).
+ */
 @Getter
 public class RunCompletedEvent extends ApplicationEvent {
 

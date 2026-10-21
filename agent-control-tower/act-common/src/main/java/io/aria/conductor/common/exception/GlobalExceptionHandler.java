@@ -37,11 +37,6 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
     }
 
-    @ExceptionHandler(BudgetExceededException.class)
-    public ResponseEntity<Map<String, Object>> handleBudgetExceeded(BudgetExceededException ex) {
-        return buildResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage(), ex);
-    }
-
     @ExceptionHandler(ApprovalTimeoutException.class)
     public ResponseEntity<Map<String, Object>> handleApprovalTimeout(ApprovalTimeoutException ex) {
         return buildResponse(HttpStatus.REQUEST_TIMEOUT, ex.getMessage());

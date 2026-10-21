@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.agent.service.SystemConfigService;
+import io.aria.conductor.common.config.SystemConfigKeys;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -19,8 +20,10 @@ class TaskDeadlinePropertiesTest {
 
     @Test
     void deadlineReadsTheConfiguredMinutes() {
-        when(systemConfigService.getInt("aria.tasks.deadline-minutes",
-                TaskDeadlineProperties.DEFAULT_DEADLINE_MINUTES, 1, 1440)).thenReturn(90);
+        when(systemConfigService.getInt(SystemConfigKeys.TASK_DEADLINE_MINUTES,
+                SystemConfigKeys.TASK_DEADLINE_DEFAULT_MINUTES,
+                SystemConfigKeys.TASK_DEADLINE_MIN_MINUTES,
+                SystemConfigKeys.TASK_DEADLINE_MAX_MINUTES)).thenReturn(90);
         TaskDeadlineProperties properties = new TaskDeadlineProperties(systemConfigService);
 
         assertThat(properties.deadline()).isEqualTo(Duration.ofMinutes(90));
@@ -28,8 +31,10 @@ class TaskDeadlinePropertiesTest {
 
     @Test
     void deadlineFallsBackToTheBoundDefaultWhenSystemConfigFails() {
-        when(systemConfigService.getInt("aria.tasks.deadline-minutes",
-                TaskDeadlineProperties.DEFAULT_DEADLINE_MINUTES, 1, 1440))
+        when(systemConfigService.getInt(SystemConfigKeys.TASK_DEADLINE_MINUTES,
+                SystemConfigKeys.TASK_DEADLINE_DEFAULT_MINUTES,
+                SystemConfigKeys.TASK_DEADLINE_MIN_MINUTES,
+                SystemConfigKeys.TASK_DEADLINE_MAX_MINUTES))
                 .thenThrow(new RuntimeException("database unavailable"));
         TaskDeadlineProperties properties = new TaskDeadlineProperties(systemConfigService);
 

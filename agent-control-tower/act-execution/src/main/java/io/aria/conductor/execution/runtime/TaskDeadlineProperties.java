@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.agent.service.SystemConfigService;
+import io.aria.conductor.common.config.SystemConfigKeys;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,7 +29,7 @@ import java.time.Duration;
 public class TaskDeadlineProperties {
 
     /** The documented default run deadline in minutes. */
-    public static final int DEFAULT_DEADLINE_MINUTES = 45;
+    public static final int DEFAULT_DEADLINE_MINUTES = SystemConfigKeys.TASK_DEADLINE_DEFAULT_MINUTES;
 
     /** Hard run deadline in minutes; the System Config key overrides it for new runs. */
     private int deadlineMinutes = DEFAULT_DEADLINE_MINUTES;
@@ -51,11 +52,13 @@ public class TaskDeadlineProperties {
         try {
             if (systemConfigService != null) {
                 minutes = systemConfigService.getInt(
-                        "aria.tasks.deadline-minutes", deadlineMinutes, 1, 1440);
+                        SystemConfigKeys.TASK_DEADLINE_MINUTES, deadlineMinutes,
+                        SystemConfigKeys.TASK_DEADLINE_MIN_MINUTES,
+                        SystemConfigKeys.TASK_DEADLINE_MAX_MINUTES);
             }
         } catch (Exception e) {
-            log.warn("Failed to read 'aria.tasks.deadline-minutes' from SystemConfig, using default {}",
-                    deadlineMinutes, e);
+            log.warn("Failed to read '{}' from SystemConfig, using default {}",
+                    SystemConfigKeys.TASK_DEADLINE_MINUTES, deadlineMinutes, e);
         }
         return Duration.ofMinutes(minutes);
     }

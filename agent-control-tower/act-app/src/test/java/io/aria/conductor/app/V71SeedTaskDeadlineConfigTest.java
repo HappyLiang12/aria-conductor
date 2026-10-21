@@ -1,5 +1,6 @@
 package io.aria.conductor.app;
 
+import io.aria.conductor.common.config.SystemConfigKeys;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,10 +41,16 @@ class V71SeedTaskDeadlineConfigTest {
     void seedsTheRunDeadlineAtTheDocumentedDefault() {
         Map<String, Object> row = jdbc.queryForMap(
                 "SELECT config_value, description FROM system_config WHERE config_key = ?",
-                "aria.tasks.deadline-minutes");
+                SystemConfigKeys.TASK_DEADLINE_MINUTES);
 
-        assertThat(row.get("config_value")).isEqualTo("45");
-        assertThat((String) row.get("description")).contains("range: 1-1440");
+        // The seeded row and the runtime/controller constants must agree: a value
+        // or range changed on one side alone leaves the operator editing a number
+        // the runtime never applies, or reading a range the API rejects.
+        assertThat(row.get("config_value"))
+                .isEqualTo(String.valueOf(SystemConfigKeys.TASK_DEADLINE_DEFAULT_MINUTES));
+        assertThat((String) row.get("description")).contains("range: "
+                + SystemConfigKeys.TASK_DEADLINE_MIN_MINUTES + "-"
+                + SystemConfigKeys.TASK_DEADLINE_MAX_MINUTES);
     }
 
     @Test
@@ -57,7 +64,7 @@ class V71SeedTaskDeadlineConfigTest {
 
         Integer rows = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM system_config WHERE config_key = ?",
-                Integer.class, "aria.tasks.deadline-minutes");
+                Integer.class, SystemConfigKeys.TASK_DEADLINE_MINUTES);
         assertThat(rows).isEqualTo(1);
     }
 }

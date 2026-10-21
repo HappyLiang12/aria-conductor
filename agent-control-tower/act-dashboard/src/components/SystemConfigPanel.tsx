@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listConfig, updateConfig, resetConfig, type SystemConfig } from '../api/systemConfig';
 import { apiErrorMessage } from '../api/operatorSession';
+import { RUN_DEADLINE } from '../utils/runDeadline';
 
 /* ── category metadata ── */
 
@@ -45,7 +46,14 @@ const CATEGORIES: CategoryDef[] = [
     icon: '⚙️',
     title: 'Execution',
     keys: [
-      { key: 'aria.tasks.deadline-minutes', label: 'Run Deadline', min: 1, max: 1440, step: 1, unit: 'min' },
+      {
+        key: RUN_DEADLINE.key,
+        label: 'Run Deadline',
+        min: RUN_DEADLINE.minMinutes,
+        max: RUN_DEADLINE.maxMinutes,
+        step: 1,
+        unit: 'min',
+      },
     ],
   },
   {

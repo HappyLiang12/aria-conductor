@@ -2,8 +2,15 @@ import { apiErrorMessage } from './operatorSession';
 
 export type ConfigureTab = 'llm' | 'runtime' | 'config';
 
+/**
+ * The repair surfaces the backend error contract can serve. This tuple mirrors
+ * io.aria.conductor.common.exception.ErrorSurface; errorSurfaceContract.test.ts
+ * reads the Java enum and fails when the two drift.
+ */
+export const ERROR_SURFACES = ['LLM_PROVIDERS', 'RUNTIME', 'SYSTEM_CONFIG', 'CREW'] as const;
+
 /** Stable repair surfaces served by the backend error contract. */
-export type ErrorSurface = 'LLM_PROVIDERS' | 'RUNTIME' | 'SYSTEM_CONFIG' | 'CREW';
+export type ErrorSurface = (typeof ERROR_SURFACES)[number];
 
 /** The operator's next step shown beside an error. */
 export type ErrorAction =

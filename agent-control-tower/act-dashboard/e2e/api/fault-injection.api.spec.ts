@@ -11,13 +11,17 @@ import { BACKEND, apiCall, seedAdkAgent, seedRun, approveRunApproval, pollRunTer
  *   D2-2  an executing run is cancelled → terminal within 15s
  *
  * Prerequisites: backend on ${API_URL:-localhost:8080} with an active LLM
- * provider and a reachable OpenSandbox (8090). Run-time budget comes from
- * opencode.max-task-minutes — an INT minutes property (min 1). The effective
- * sendMessage deadline is min(max-task-minutes, maxRounds × 2min), so the
- * timeout case needs --opencode.max-task-minutes=1 plus a long-generation
- * prompt (LLM streaming longer than 60s). Without a live sandbox the run
- * fails SANDBOX_UNAVAILABLE before any deadline can fire, so D1-2 skips
- * itself when the opencode provider health probe is not healthy.
+ * provider and a reachable OpenSandbox (8090). The task budget is the
+ * mode-neutral run deadline aria.tasks.deadline-minutes (INT minutes, min 1,
+ * default 45), frozen into the task when the run starts; the
+ * opencode.max-task-minutes property is only a fallback for a caller that
+ * passes no deadline and is never the knob for this path. The timeout case
+ * needs that deadline set to 1 and a long-generation prompt (LLM streaming
+ * longer than 60s), so D1-2 reads the System Config value and skips itself
+ * unless it is 1: this spec never mutates a global setting that parallel
+ * shards share. Without a live sandbox the run fails SANDBOX_UNAVAILABLE
+ * before any deadline can fire, so D1-2 also skips itself when the opencode
+ * provider health probe is not healthy.
  */
 
 const HAS_LLM_KEY = !!(
@@ -25,6 +29,9 @@ const HAS_LLM_KEY = !!(
   process.env.LLM_PROVIDER_API_KEY ||
   process.env.DEEPSEEK_API_KEY
 );
+
+/** The one deadline the task path freezes into TaskContext.maxDuration. */
+const DEADLINE_KEY = 'aria.tasks.deadline-minutes';
 
 const TERMINAL = ['COMPLETED', 'FAILED', 'ABORTED', 'CANCELLED'];
 
@@ -41,9 +48,19 @@ test.describe('OpenCode task-path fault injection', () => {
       'requires a reachable OpenSandbox (opencode provider health probe)',
     );
 
+    const deadlineConfig = await apiCall(request, 'GET', `/system-config/${DEADLINE_KEY}`);
+    const configuredDeadline = deadlineConfig.status === 200
+      ? deadlineConfig.data?.configValue
+      : undefined;
+    test.skip(
+      configuredDeadline !== '1',
+      `requires ${DEADLINE_KEY}=1 so the frozen task deadline fires inside the poll window`
+        + ` (Configure > System Config currently serves ${configuredDeadline ?? `HTTP ${deadlineConfig.status}`})`,
+    );
+
     const agent = await seedAdkAgent(request, { adkProvider: 'opencode' });
-    // Long-generation prompt: with opencode.max-task-minutes=1 the sendMessage
-    // deadline fires while the LLM is still streaming.
+    // Long-generation prompt: the task is frozen with a 1-minute deadline at
+    // dispatch, so the sendMessage deadline fires while the LLM is still streaming.
     const run = await seedRun(
       request,
       agent.id,
@@ -55,9 +72,9 @@ test.describe('OpenCode task-path fault injection', () => {
     const terminal = await pollRunTerminal(request, run.id, 240_000);
     console.log(`D1-2 run ${run.id} terminal: ${terminal.status}`);
 
-    // Strong assertion — with a 1-minute budget and a long-generation prompt
-    // the deadline MUST fire. Anything else means the budget was not injected
-    // (config mismatch) and the test should fail loudly, not warn.
+    // Strong assertion — with a 1-minute deadline and a long-generation prompt
+    // the deadline MUST fire. Anything else means the run did not freeze the
+    // configured deadline (config mismatch) and the test should fail loudly.
     expect(
       terminal.status,
       `expected ABORTED (timeout path), got ${terminal.status}: ${terminal.errorMessage ?? ''}`,

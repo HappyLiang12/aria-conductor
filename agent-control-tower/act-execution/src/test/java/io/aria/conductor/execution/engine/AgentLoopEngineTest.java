@@ -5,8 +5,6 @@ import io.aria.conductor.common.model.Approval;
 import io.aria.conductor.common.model.ApprovalStatus;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.UUID;
@@ -15,14 +13,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class AgentLoopEngineTest {
 
-    // ── escapeJson round-trip via parseTrajectoryToolCalls ──────────────
+    // ── parseTrajectoryToolCalls ─────────────────────────────────────────
 
     @Test
-    void shouldRoundTripToolCallsWithNormalArgs() {
-        String toolCallsJson = AgentLoopEngine.buildToolCallsJson(List.of(
-                new LlmToolCall("call_1", "search", "{\"query\":\"cats\"}")
-        ));
-        List<LlmToolCall> parsed = AgentLoopEngine.parseTrajectoryToolCalls(toolCallsJson);
+    void shouldParseToolCallsWithNormalArgs() {
+        List<LlmToolCall> parsed = AgentLoopEngine.parseTrajectoryToolCalls(
+                "[{\"id\":\"call_1\",\"name\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"cats\\\"}\"}]");
 
         assertThat(parsed).hasSize(1);
         assertThat(parsed.get(0).id()).isEqualTo("call_1");
@@ -30,27 +26,15 @@ class AgentLoopEngineTest {
         assertThat(parsed.get(0).arguments()).isEqualTo("{\"query\":\"cats\"}");
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {
-            "line1\nline2",
-            "tab\there",
-            "return\rhere",
-            "back\\slash",
-            "quote\"here",
-            "混合\n\t\r\\\"控制字符"
-    })
-    void shouldRoundTripToolCallsWithControlCharacters(String argsContent) {
-        String jsonArgs = "{\"text\":\"" + argsContent + "\"}";
-        String toolCallsJson = AgentLoopEngine.buildToolCallsJson(List.of(
-                new LlmToolCall("call_x", "test_tool", jsonArgs)
-        ));
-        List<LlmToolCall> parsed = AgentLoopEngine.parseTrajectoryToolCalls(toolCallsJson);
+    @Test
+    void shouldParseToolCallsWithEscapedControlCharacters() {
+        String argsJson = "{\\n\\t\\r\\\\\\\"";
+        List<LlmToolCall> parsed = AgentLoopEngine.parseTrajectoryToolCalls(
+                "[{\"id\":\"call_x\",\"name\":\"test_tool\",\"arguments\":\"" + argsJson + "\"}]");
 
         assertThat(parsed).hasSize(1);
-        assertThat(parsed.get(0).arguments()).isEqualTo(jsonArgs);
+        assertThat(parsed.get(0).arguments()).isEqualTo("{\n\t\r\\\"");
     }
-
-    // ── parseTrajectoryToolCalls edge cases ──────────────────────────────
 
     @Test
     void shouldReturnEmptyOnNullInput() {
@@ -80,11 +64,9 @@ class AgentLoopEngineTest {
 
     @Test
     void shouldHandleMultipleToolCalls() {
-        String toolCallsJson = AgentLoopEngine.buildToolCallsJson(List.of(
-                new LlmToolCall("id1", "tool_a", "{}"),
-                new LlmToolCall("id2", "tool_b", "{\"x\":1}")
-        ));
-        List<LlmToolCall> parsed = AgentLoopEngine.parseTrajectoryToolCalls(toolCallsJson);
+        List<LlmToolCall> parsed = AgentLoopEngine.parseTrajectoryToolCalls(
+                "[{\"id\":\"id1\",\"name\":\"tool_a\",\"arguments\":\"{}\"},"
+                        + "{\"id\":\"id2\",\"name\":\"tool_b\",\"arguments\":\"{\\\"x\\\":1}\"}]");
 
         assertThat(parsed).hasSize(2);
         assertThat(parsed.get(0).id()).isEqualTo("id1");
@@ -167,30 +149,5 @@ class AgentLoopEngineTest {
     void invalidConfigShouldFallBackToRunLevel() {
         Agent agent = agentWithConfig("not json");
         assertThat(AgentLoopEngine.parseMaxIterationsFromConfig(agent, 7)).isEqualTo(7);
-    }
-
-    // ── toolResultContent: human-denial feedback (#32) ──────────────────
-
-    @Test
-    void deniedResultShouldProduceExplicitNonRetryableMessage() {
-        String content = AgentLoopEngine.toolResultContent(
-                io.aria.conductor.execution.pipeline.ActionResult.denied("reviewer blocked the push"));
-        assertThat(content).startsWith("DENIED BY HUMAN REVIEWER:");
-        assertThat(content).contains("reviewer blocked the push");
-        assertThat(content).contains("Do not retry");
-    }
-
-    @Test
-    void successResultShouldReturnOutput() {
-        String content = AgentLoopEngine.toolResultContent(
-                io.aria.conductor.execution.pipeline.ActionResult.success("done"));
-        assertThat(content).isEqualTo("done");
-    }
-
-    @Test
-    void failedResultShouldUseErrorPrefix() {
-        String content = AgentLoopEngine.toolResultContent(
-                io.aria.conductor.execution.pipeline.ActionResult.failed("boom"));
-        assertThat(content).isEqualTo("ERROR: boom");
     }
 }

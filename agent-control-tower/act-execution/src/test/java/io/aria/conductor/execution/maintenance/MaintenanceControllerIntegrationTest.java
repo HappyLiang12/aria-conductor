@@ -106,7 +106,7 @@ class MaintenanceControllerIntegrationTest {
         for (UUID id : List.of(BA_BUILTIN_ID, DEV_BUILTIN_ID, QA_BUILTIN_ID)) {
             assertThat(builtin(id).getAdkProvider()).isEqualTo("opencode");
             assertThat(builtin(id).getExecutionMode()).isEqualTo(ExecutionMode.SANDBOX);
-            assertThat(builtin(id).getAgentType()).isEqualTo(AgentType.NATIVE);
+            assertThat(builtin(id).getAgentType()).isEqualTo(AgentType.ADK);
             assertThat(builtin(id).getHealthStatus()).isEqualTo(HealthStatus.HEALTHY);
             assertThat(builtin(id).getModel()).isNull();
         }
@@ -206,7 +206,7 @@ class MaintenanceControllerIntegrationTest {
     /* ------------------------------------------------------------------ */
 
     private Agent agent(UUID id, String name, String role, String provider) {
-        return Agent.builder().id(id).name(name).role(role).agentType(AgentType.NATIVE)
+        return Agent.builder().id(id).name(name).role(role).agentType(AgentType.ADK)
                 .adkProvider(provider)
                 .executionMode("opencode".equals(provider) ? ExecutionMode.SANDBOX : null)
                 .config("{}").healthStatus(HealthStatus.HEALTHY).pickupEnabled(true).build();

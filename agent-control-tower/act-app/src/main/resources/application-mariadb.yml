@@ -42,12 +42,6 @@ adk:
   # Supported production cores are exactly qoder and opencode (no fallback).
   default-provider: ${ADK_DEFAULT_PROVIDER:opencode}
 
-circuit-breaker:
-  max-tokens-per-run: 100000
-  max-iterations: 50
-  error-rate-threshold: 0.5
-  max-iteration-latency-ms: 300000
-
 aria:
   system-prompt: |
     You are Aria, the AI operator assistant for Aria Conductor.

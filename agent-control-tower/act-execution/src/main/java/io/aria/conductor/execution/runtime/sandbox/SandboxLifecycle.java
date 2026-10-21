@@ -64,8 +64,7 @@ import java.util.function.LongSupplier;
  *
  * <p>The SDK is reached only through the {@link SandboxSdk} seam so the ordering
  * and the refusal rules can be tested with a recording double. {@link OpenSandboxSdk}
- * is the production implementation; it also serves the legacy
- * {@code OpenCodeSandboxManager} facade, so the SDK endpoint/upload/renew/kill
+ * is the production implementation, so the SDK endpoint/upload/renew/kill
  * semantics exist exactly once.
  *
  * <p>Nothing here builds a shell string from caller-supplied argv: the launch
@@ -732,8 +731,7 @@ public class SandboxLifecycle implements AutoCloseable {
      * with backoff, endpoints scheme-completed, long-running cores started on a
      * background thread, text-oriented bounded workspace upload.
      *
-     * <p>It is also the single SDK access path for the legacy
-     * {@code OpenCodeSandboxManager} facade, so no second copy of these rules can
+     * <p>It is the single SDK access path, so no second copy of these rules can
      * drift.
      */
     @Slf4j

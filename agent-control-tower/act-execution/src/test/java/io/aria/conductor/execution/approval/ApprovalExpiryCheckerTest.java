@@ -39,19 +39,17 @@ import static org.mockito.Mockito.when;
 /**
  * Tests for the scheduled {@link ApprovalExpiryChecker} sweep: every overdue
  * PENDING approval returned by the repository query is marked EXPIRED (with
- * audit fields) and its blocked waiter is released via the gate; when nothing
- * is overdue the sweep performs no writes. Decided/fresh approvals are
- * protected by the query filter itself, which is asserted on the captured
- * query arguments. Native ({@code ACP_PERMISSION}) rows are owned by the
- * {@link PermissionCoordinator}: the sweep skips them in its own loop and
- * settles their overdue asks through the coordinator (R-RFUX2), so no native
- * ask is ever settled silently.
+ * audit fields); when nothing is overdue the sweep performs no writes.
+ * Decided/fresh approvals are protected by the query filter itself, which is
+ * asserted on the captured query arguments. Native ({@code ACP_PERMISSION})
+ * rows are owned by the {@link PermissionCoordinator}: the sweep skips them in
+ * its own loop and settles their overdue asks through the coordinator
+ * (R-RFUX2), so no native ask is ever settled silently.
  */
 @ExtendWith(MockitoExtension.class)
 class ApprovalExpiryCheckerTest {
 
     @Mock private ApprovalRepository approvalRepository;
-    @Mock private ApprovalGate approvalGate;
     @Mock private PermissionCoordinator permissionCoordinator;
     @Mock private ApprovalDecisionLockRepository decisionLocks;
     @Mock private AcpPermissionRequestRepository permissionRepository;
@@ -59,7 +57,7 @@ class ApprovalExpiryCheckerTest {
     @Mock private ApplicationEventPublisher eventPublisher;
 
     @Test
-    void checkExpiredApprovals_marksOverduePendingAsExpiredAndUnblocksWaiters() {
+    void checkExpiredApprovals_marksOverduePendingAsExpired() {
         Instant before = Instant.now();
         UUID runId = UUID.randomUUID();
         Approval overdue1 = TestDataBuilder.anApproval()
@@ -77,7 +75,7 @@ class ApprovalExpiryCheckerTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of(overdue1, overdue2));
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate, permissionCoordinator)
+        new ApprovalExpiryChecker(approvalRepository, permissionCoordinator)
                 .checkExpiredApprovals();
 
         // Both entities are mutated in place with the expiry outcome and audit fields.
@@ -91,12 +89,6 @@ class ApprovalExpiryCheckerTest {
         ArgumentCaptor<Approval> savedCaptor = ArgumentCaptor.forClass(Approval.class);
         verify(approvalRepository, times(2)).save(savedCaptor.capture());
         assertThat(savedCaptor.getAllValues()).containsExactly(overdue1, overdue2);
-
-        // Any thread blocked on these approvals is released through the gate.
-        ArgumentCaptor<UUID> cancelledCaptor = ArgumentCaptor.forClass(UUID.class);
-        verify(approvalGate, times(2)).cancelPendingApproval(cancelledCaptor.capture());
-        assertThat(cancelledCaptor.getAllValues())
-                .containsExactlyInAnyOrder(overdue1.getId(), overdue2.getId());
     }
 
     @Test
@@ -105,7 +97,7 @@ class ApprovalExpiryCheckerTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(any(ApprovalStatus.class), any(Instant.class)))
                 .thenReturn(List.of());
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate, permissionCoordinator)
+        new ApprovalExpiryChecker(approvalRepository, permissionCoordinator)
                 .checkExpiredApprovals();
         Instant after = Instant.now();
 
@@ -118,7 +110,6 @@ class ApprovalExpiryCheckerTest {
         assertThat(cutoffCaptor.getValue()).isBetween(before, after);
 
         verify(approvalRepository, never()).save(any());
-        verify(approvalGate, never()).cancelPendingApproval(any());
     }
 
     @Test
@@ -133,13 +124,12 @@ class ApprovalExpiryCheckerTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of());
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate, permissionCoordinator)
+        new ApprovalExpiryChecker(approvalRepository, permissionCoordinator)
                 .checkExpiredApprovals();
 
         assertThat(fresh.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(fresh.getReason()).isEqualTo("still fresh");
         assertThat(fresh.getDecidedAt()).isNull();
-        verify(approvalGate, never()).cancelPendingApproval(fresh.getId());
     }
 
     /**
@@ -167,18 +157,16 @@ class ApprovalExpiryCheckerTest {
                 .thenReturn(List.of(legacy, nativeAsk));
         when(permissionCoordinator.expireOverdueNativeAsks(any(Instant.class))).thenReturn(1);
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate, permissionCoordinator)
+        new ApprovalExpiryChecker(approvalRepository, permissionCoordinator)
                 .checkExpiredApprovals();
         Instant after = Instant.now();
 
         // The legacy row is settled by the checker exactly as before ...
         assertThat(legacy.getStatus()).isEqualTo(ApprovalStatus.EXPIRED);
         assertThat(legacy.getReason()).isEqualTo("Auto-rejected: approval expired");
-        verify(approvalGate).cancelPendingApproval(legacy.getId());
         // ... the native row is left to the coordinator alone — never touched here.
         assertThat(nativeAsk.getStatus()).isEqualTo(ApprovalStatus.PENDING);
         assertThat(nativeAsk.getDecidedAt()).isNull();
-        verify(approvalGate, never()).cancelPendingApproval(nativeAsk.getId());
         // The coordinator sweep ran with the sweep's own instant.
         ArgumentCaptor<Instant> asOf = ArgumentCaptor.forClass(Instant.class);
         verify(permissionCoordinator).expireOverdueNativeAsks(asOf.capture());
@@ -239,7 +227,7 @@ class ApprovalExpiryCheckerTest {
                 });
 
         Clock clock = Clock.fixed(now, ZoneOffset.UTC);
-        ApprovalGate gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher, 30_000L);
+        ApprovalGate gate = new ApprovalGate(approvalRepository, toolCallRepository, eventPublisher);
         PermissionCoordinator coordinator = new PermissionCoordinator(gate, approvalRepository,
                 decisionLocks, permissionRepository, new WriteGrantService(permissionRepository, clock),
                 new PlatformMcpAutoApproval(new McpProperties()), eventPublisher, clock);
@@ -259,7 +247,7 @@ class ApprovalExpiryCheckerTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of(legacy, approvalStore.get(approvalId)));
 
-        new ApprovalExpiryChecker(approvalRepository, gate, coordinator).checkExpiredApprovals();
+        new ApprovalExpiryChecker(approvalRepository, coordinator).checkExpiredApprovals();
 
         // The native ask settled through the coordinator path: the recorded
         // expiry adjudication ...

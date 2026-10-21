@@ -22,16 +22,14 @@ import static org.mockito.Mockito.when;
 /**
  * SDD regression pin (Task 11): the scheduled sweep in {@link ApprovalExpiryChecker} is a GENERIC
  * scan over every overdue PENDING approval — it must also expire SPEC_REVIEW approvals that the
- * spec-driven workflow raised (they carry {@code approvalType = SPEC_REVIEW} and have no
- * in-memory gate future). The spec-driven chain itself stays WAITING_APPROVAL: the checker only
- * marks the approval EXPIRED and notifies the gate, whose {@code cancelPendingApproval} is a
- * no-op for approvals without a future. The chain resumes via the user's resubmit-approval.
+ * spec-driven workflow raised (they carry {@code approvalType = SPEC_REVIEW}). The spec-driven
+ * chain itself stays WAITING_APPROVAL: the checker only marks the approval EXPIRED; the chain
+ * resumes via the user's resubmit-approval.
  */
 @ExtendWith(MockitoExtension.class)
 class ApprovalExpiryCheckerSddTest {
 
     @Mock private ApprovalRepository approvalRepository;
-    @Mock private ApprovalGate approvalGate;
     @Mock private PermissionCoordinator permissionCoordinator;
 
     @Test
@@ -46,7 +44,7 @@ class ApprovalExpiryCheckerSddTest {
         when(approvalRepository.findByStatusAndExpiresAtBefore(eq(ApprovalStatus.PENDING), any(Instant.class)))
                 .thenReturn(List.of(specReview));
 
-        new ApprovalExpiryChecker(approvalRepository, approvalGate, permissionCoordinator)
+        new ApprovalExpiryChecker(approvalRepository, permissionCoordinator)
                 .checkExpiredApprovals();
 
         // The generic sweep expired the SPEC_REVIEW approval like any other overdue PENDING row.
@@ -57,10 +55,5 @@ class ApprovalExpiryCheckerSddTest {
         // The mutated entity (not a copy) is persisted.
         verify(approvalRepository).save(argThat(x ->
                 x.getId().equals(specReview.getId()) && x.getStatus() == ApprovalStatus.EXPIRED));
-
-        // The gate is notified; for SPEC_REVIEW there is no in-memory future, so the gate's
-        // cancelPendingApproval is a null-safe no-op (the checker never touches the workflow
-        // chain — it stays WAITING_APPROVAL until the user re-requests via resubmit-approval).
-        verify(approvalGate).cancelPendingApproval(specReview.getId());
     }
 }

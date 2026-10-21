@@ -54,7 +54,7 @@ class ReviewAskRepairMigrationIntegrationTest extends BaseH2IntegrationTest {
         UUID agentId = UUID.randomUUID();
         jdbcTemplate.update(
                 "INSERT INTO agents (id, name, agent_type, health_status, created_at) "
-                        + "VALUES (CAST(? AS UUID), ?, 'NATIVE', 'HEALTHY', CURRENT_TIMESTAMP)",
+                        + "VALUES (CAST(? AS UUID), ?, 'ADK', 'HEALTHY', CURRENT_TIMESTAMP)",
                 agentId.toString(), "review-ask-repair-agent");
 
         // approvals.run_id carries an FK to runs, so the asks need a real run row.

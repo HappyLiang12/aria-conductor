@@ -35,7 +35,7 @@ async function apiCall(
 async function createAgent(page: Page): Promise<string> {
   const { status, data } = await apiCall(page, 'POST', '/agents', {
     name: `WfYamlAgent-${Date.now()}`,
-    agentType: 'NATIVE',
+    agentType: 'ADK',
     description: 'YAML E2E agent',
   });
   expect(status).toBe(201);

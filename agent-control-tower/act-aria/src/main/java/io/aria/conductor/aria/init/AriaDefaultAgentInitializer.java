@@ -1,9 +1,6 @@
 package io.aria.conductor.aria.init;
 
 import io.aria.conductor.common.model.*;
-import io.aria.conductor.common.repository.AgentToolRepository;
-import io.aria.conductor.common.repository.ToolDefinitionRepository;
-import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.LlmProviderRepository;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.execution.maintenance.LegacySetupService;
@@ -15,15 +12,11 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
- * Ensures the Aria default agent exists at startup with all approved tools assigned.
+ * Ensures the Aria default agent exists at startup.
  * Idempotent — safe to run on every startup.
  *
  * <p>Task 18 cutover: the Aria row is created through
@@ -156,59 +149,11 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
             Do not invent repository names or URLs.
             """;
 
-    private static final String ARIA_ROLE = "AI operator assistant for the Aria Conductor. Helps manage AI agents, execute commands, and answer system questions.";
-
-    private static final String ARIA_CONFIG = "{\"maxToolCallRounds\":15}";
-
-    /**
-     * Orchestration-only tool allowlist for Aria (#25). Aria is the operator assistant and must
-     * delegate development work (clone/edit/commit/push/PR) to worker agents — so the git pack,
-     * file, shell and raw-HTTP tools are deliberately EXCLUDED here. Names not present in the DB
-     * are simply ignored; any granted tool outside this set is pruned at startup (idempotent).
-     */
-    private static final Set<String> ARIA_ORCHESTRATION_TOOLS = Set.of(
-            // agents
-            "list_agents", "get_agent", "create_agent", "update_agent", "retire_agent", "delete_agent",
-            // runs
-            "run_agent", "get_run_status", "list_runs", "list_running_runs", "get_run",
-            "pause_run", "resume_run", "cancel_run",
-            // approvals
-            "list_pending_approvals", "decide_approval",
-            // knowledge
-            "store_knowledge", "create_knowledge", "list_knowledge", "query_knowledge",
-            "search_knowledge", "review_knowledge", "retire_knowledge",
-            // kanban
-            "create_kanban_item", "list_kanban_items", "update_kanban_item", "transition_kanban_item",
-            // definition of done
-            "init_dod", "submit_dod_review", "get_dod_status",
-            // reports
-            "generate_report", "list_reports", "amend_report",
-            // dashboard
-            "get_dashboard_summary",
-            // workflows (BA->Dev->QA multi-agent orchestration)
-            "create_workflow", "get_workflow", "list_workflows", "cancel_workflow", "retry_workflow_step",
-            "instantiate_template",
-            // web (issue/content discovery for orchestration)
-            "web_search", "web_fetch",
-            // HITL
-            "request_approval",
-            // housekeeping (operator cleanup; execute is approval-gated)
-            "housekeeping_scan", "housekeeping_execute");
-
-    private final AgentRepository agentRepository;
-    private final ToolDefinitionRepository toolDefinitionRepository;
-    private final AgentToolRepository agentToolRepository;
     private final LlmProviderRepository llmProviderRepository;
     private final LegacySetupService legacySetupService;
 
-    public AriaDefaultAgentInitializer(AgentRepository agentRepository,
-                                       ToolDefinitionRepository toolDefinitionRepository,
-                                       AgentToolRepository agentToolRepository,
-                                       LlmProviderRepository llmProviderRepository,
+    public AriaDefaultAgentInitializer(LlmProviderRepository llmProviderRepository,
                                        LegacySetupService legacySetupService) {
-        this.agentRepository = agentRepository;
-        this.toolDefinitionRepository = toolDefinitionRepository;
-        this.agentToolRepository = agentToolRepository;
         this.llmProviderRepository = llmProviderRepository;
         this.legacySetupService = legacySetupService;
     }
@@ -233,7 +178,7 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         log.info("Initializing Aria default agent...");
 
-        // Boot hardening: steps 1-3 run inside the HIGHEST_PRECEDENCE ApplicationRunner —
+        // Boot hardening: both steps run inside the HIGHEST_PRECEDENCE ApplicationRunner —
         // an exception there used to abort the whole JVM before any other runner, and the
         // DEGRADED reconciler could never retry because the app was already dead. Degrade
         // instead: every step is idempotent and retried on the next boot, so log ERROR
@@ -278,47 +223,8 @@ public class AriaDefaultAgentInitializer implements ApplicationRunner {
                             + "(POST /api/v1/llm-providers, or set LLM_BASE_URL/LLM_MODEL to override the deepseek fallback).");
                 }
             }
-
-            // 3. Assign Aria the orchestration-only tool set (#25) and prune anything outside it.
-            // Aria orchestrates workers; she must NOT hold git/file/shell/http tools herself.
-            List<ToolDefinition> approvedTools = toolDefinitionRepository.findAllApprovedAndEnabled();
-            Map<String, String> orchestrationToolIds = approvedTools.stream()
-                    .filter(t -> ARIA_ORCHESTRATION_TOOLS.contains(t.getName()))
-                    .collect(Collectors.toMap(ToolDefinition::getName, ToolDefinition::getId, (a, b) -> a));
-            int assigned = 0;
-            for (String toolId : orchestrationToolIds.values()) {
-                AgentToolId atId = new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), toolId);
-                if (!agentToolRepository.existsById(atId)) {
-                    AgentTool agentTool = new AgentTool();
-                    agentTool.setId(atId);
-                    agentTool.setAssignedBy("system");
-                    agentToolRepository.save(agentTool);
-                    assigned++;
-                }
-            }
-            // Prune any previously-granted tools that fall outside the orchestration allowlist (idempotent).
-            Set<String> allowedIds = Set.copyOf(orchestrationToolIds.values());
-            List<String> existingToolIds = agentToolRepository.findToolIdsByAgentId(AriaConstants.ARIA_AGENT_ID.toString());
-            int pruned = 0;
-            for (String existingToolId : existingToolIds) {
-                if (!allowedIds.contains(existingToolId)) {
-                    agentToolRepository.deleteById(new AgentToolId(AriaConstants.ARIA_AGENT_ID.toString(), existingToolId));
-                    pruned++;
-                }
-            }
-            if (orchestrationToolIds.isEmpty()) {
-                // Escalated from INFO (degraded-silent finding #7): Aria silently ending up
-                // with zero orchestration tools is never healthy — it means the migration-seeded
-                // APPROVED tool definitions are missing/renamed.
-                log.warn("Aria has 0 orchestration tools — check tool seed migrations V38/V41/V49 "
-                        + "(approved tools found: {}, assigned: {}, pruned: {}); Aria cannot orchestrate without them",
-                        approvedTools.size(), assigned, pruned);
-            } else {
-                log.info("Aria default agent initialized: {} orchestration tools assigned ({} already present), {} pruned, total approved tools: {}",
-                        assigned, orchestrationToolIds.size() - assigned, pruned, approvedTools.size());
-            }
         } catch (Exception e) {
-            log.error("Aria initialization (agent setup / LLM bootstrap / tool assignment) failed — "
+            log.error("Aria initialization (agent setup / LLM bootstrap) failed — "
                             + "continuing startup in degraded state; every step is idempotent and retried on the next boot. Cause: {}",
                     e.getMessage(), e);
         }

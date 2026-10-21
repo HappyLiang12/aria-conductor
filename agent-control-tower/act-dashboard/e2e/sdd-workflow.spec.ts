@@ -47,7 +47,7 @@ async function ensureRoleAgents(request: Parameters<typeof apiCall>[0]) {
       const created = await apiCall(request, 'POST', '/agents', {
         name: `sdd-${role}-${Date.now()}`,
         role,
-        agentType: 'NATIVE',
+        agentType: 'ADK',
       });
       expect(created.status, `create ${role} agent: ${JSON.stringify(created.data)}`).toBe(201);
     }
@@ -131,10 +131,10 @@ test('development-workflow: spec approval then PASS verdict completes the chain'
   //    link (the versioned spec item is named exactly `spec-<chainId>`), and a
   //    null toolCallId (no tool gate involved). On the deterministic harness the
   //    spec content is exactly the BA run's fixture completion: the coordinator
-  //    prefers the BA sandbox's /workspace/spec.md and falls back to the run's
-  //    finalOutput when that read is unavailable (the harness process transport
-  //    has no sandbox command channel), so the recorded content is that exact
-  //    deterministic text -- never a markdown assumption about a fixture.
+  //    prefers the spec.md the runtime exports into the BA run's result directory
+  //    and falls back to the run's finalOutput when that file is absent (the
+  //    harness process transport writes no spec.md), so the recorded content is
+  //    that exact deterministic text -- never a markdown assumption about a fixture.
   const approval = await waitingSpecReview(request, chain.id);
   expect(approval.content).toBe('fixture-complete');
   expect(approval.knowledgeItemId).toMatch(/^[0-9a-f-]{36}$/);

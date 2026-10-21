@@ -618,7 +618,6 @@ public class PermissionCoordinator {
         approval.setDecidedAt(now);
         approvals.save(approval);
         markDeliveryExpired(row);
-        approvalGate.cancelPendingApproval(approval.getId());
         eventPublisher.publishEvent(new ApprovalExpiredEvent(this, approval.getId(),
                 approval.getRunId(), approval.getReason(), row.getToolName()));
     }

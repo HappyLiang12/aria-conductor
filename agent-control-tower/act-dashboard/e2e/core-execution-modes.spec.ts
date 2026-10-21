@@ -22,7 +22,8 @@ import {
  *
  * Carries the coverage-map rows whose replacement is this spec:
  *  - adk-providers.spec.ts (provider inventory → core catalog)
- *  - harness-governance.spec.ts (execution settings contract)
+ *  - harness-governance.spec.ts (execution settings contract; the source spec was
+ *    retired with the legacy tool surface on 2026-10-21)
  *  - journey-agent-run-report.spec.ts / journey-crew-deploy-run.spec.ts /
  *    runs-page.spec.ts / kanban-board.spec.ts / multi-agent-lifecycle.spec.ts
  *    (run path on the deterministic harness)

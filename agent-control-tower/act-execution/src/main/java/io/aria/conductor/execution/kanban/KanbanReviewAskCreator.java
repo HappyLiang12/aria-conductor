@@ -98,8 +98,7 @@ public class KanbanReviewAskCreator {
                         // SPEC_REVIEW made SpecReviewCoordinator's idempotency
                         // guard and every "pending spec approval for run" lookup
                         // mistake it for the gate, stalling chains. Human-only
-                        // decision is enforced on askType=REVIEW_REQUEST instead
-                        // (ApprovalToolHandler).
+                        // decision is enforced on askType=REVIEW_REQUEST instead.
                         .approvalType(Approval.ApprovalType.TOOL_CALL)
                         .askType(Approval.AskType.REVIEW_REQUEST)
                         .kanbanItemId(item.getId())

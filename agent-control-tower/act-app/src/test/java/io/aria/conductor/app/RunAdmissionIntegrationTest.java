@@ -148,12 +148,12 @@ class RunAdmissionIntegrationTest {
     void overLimitRunsWaitPendingWithTodoCardsAndStartWhenASlotFrees() {
         Agent holderAgent = agentRepository.save(Agent.builder()
                 .name("admission-holder-" + UUID.randomUUID())
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .healthStatus(HealthStatus.HEALTHY)
                 .build());
         Agent waiterAgent = agentRepository.save(Agent.builder()
                 .name("admission-waiter-" + UUID.randomUUID())
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .healthStatus(HealthStatus.HEALTHY)
                 .build());
 

@@ -204,10 +204,10 @@
                         <exclude>**/*ContractTest.java</exclude>
                     </excludes>
                     <!-- forkCount=1: several existing tests assert real wall-clock timing with
-                         tight thresholds (CircuitBreaker 30ms iteration latency, AdkHttpClient 3s
-                         health probe). Parallel forks cause CPU contention that flakes them.
-                         Parallelism comes from the CI module-group matrix (4 runners), not local
-                         forks — keep this at 1 for deterministic timing tests. -->
+                         tight thresholds (core HTTP client health probes and retry delays).
+                         Parallel forks cause CPU contention that flakes them. Parallelism
+                         comes from the CI module-group matrix (4 runners), not local forks —
+                         keep this at 1 for deterministic timing tests. -->
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
                     <argLine>@{argLine} --enable-preview -XX:+EnableDynamicAgentLoading</argLine>

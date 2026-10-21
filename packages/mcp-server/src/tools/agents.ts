@@ -19,13 +19,14 @@ export const agentTools = [
     description: 'Register a new agent in the control tower.',
     inputSchema: z.object({
       name: z.string().describe('Agent display name'),
-      agentType: z.enum(['ADK', 'NATIVE']).describe('Agent type: ADK or NATIVE'),
+      agentType: z.enum(['ADK']).optional().describe('Agent type (only ADK is supported; defaults to ADK)'),
       description: z.string().optional().describe('Agent description'),
       systemPrompt: z.string().optional().describe('System prompt for the agent'),
       modelId: z.string().optional().describe('LLM model identifier'),
-      adkProvider: z.enum(['qoder', 'opencode']).optional().describe('ADK runtime core: qoder or opencode'),
+      adkProvider: z.enum(['qoder', 'opencode']).optional().describe('Agent core: qoder or opencode'),
     }),
-    handler: async (body: Record<string, unknown>) => toJsonResult(await http.post('/api/v1/agents', body)),
+    handler: async (body: Record<string, unknown>) =>
+      toJsonResult(await http.post('/api/v1/agents', { ...body, agentType: body.agentType ?? 'ADK' })),
   },
   {
     name: 'update_agent',
@@ -36,7 +37,7 @@ export const agentTools = [
       description: z.string().optional().describe('Agent description'),
       systemPrompt: z.string().optional().describe('System prompt'),
       modelId: z.string().optional().describe('LLM model identifier'),
-      adkProvider: z.enum(['qoder', 'opencode']).optional().describe('ADK runtime core: qoder or opencode'),
+      adkProvider: z.enum(['qoder', 'opencode']).optional().describe('Agent core: qoder or opencode'),
     }),
     handler: async ({ id, ...body }: { id: string;[k: string]: unknown }) =>
       toJsonResult(await http.put(`/api/v1/agents/${id}`, body)),

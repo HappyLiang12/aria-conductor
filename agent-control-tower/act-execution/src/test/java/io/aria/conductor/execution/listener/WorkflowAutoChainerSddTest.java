@@ -12,9 +12,6 @@ import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.opencode.OpenCodeAdkProvider;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.dod.DoDStageReview;
@@ -65,11 +62,6 @@ class WorkflowAutoChainerSddTest {
     @Mock private DoDService dodService;
     @Mock private WorkflowChainRepository chainRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
-    @Mock private GitBranchService gitBranchService;
-    @Mock private OpenCodeAdkProvider openCodeAdkProvider;
-    @Mock private AdkProviderRegistry providerRegistry;
-    @Mock private AgentRepository agentRepository;
-    @Mock private AdkProvider runtimeProvider;
 
     private WorkflowAutoChainer chainer;
 
@@ -79,8 +71,7 @@ class WorkflowAutoChainerSddTest {
 
     @BeforeEach
     void setUp() {
-        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher,
-                gitBranchService, openCodeAdkProvider, providerRegistry, agentRepository);
+        chainer = new WorkflowAutoChainer(workflowService, dodService, chainRepository, eventPublisher);
     }
 
     // ---- 1. BA: hand off to the coordinator, do NOT advance ----
@@ -150,48 +141,6 @@ class WorkflowAutoChainerSddTest {
         verifyAdvancedEvent(0, 1, WorkflowChain.Status.RUNNING);
     }
 
-    // ---- 3b. DEV backend push fallback: no new commit -> sandbox git commit+push ----
-
-    @Test
-    void devCompletion_noNewCommit_triggersBackendPush() {
-        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, runId);
-        String repoUrl = "https://github.com/acme/repo.git";
-        chain = chainWithTemplateParams(devStep,
-                "{\"repoUrl\":\"" + repoUrl + "\",\"specCommitSha\":\"base-sha-1\"}");
-        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
-        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
-        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
-        when(dodService.getStatus(chain.getId().toString())).thenReturn(record("dev"));
-        when(workflowService.advanceWorkflow(chain.getId(), 0, "dev done")).thenReturn(true);
-        when(gitBranchService.branchHeadSha(repoUrl, "sdd/" + chain.getId()))
-                .thenReturn(Optional.of("base-sha-1"));
-
-        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "dev done"));
-
-        verify(openCodeAdkProvider).runSandboxCommand(eq(agentId),
-                contains("git push origin sdd/" + chain.getId()));
-        verify(workflowService).advanceWorkflow(chain.getId(), 0, "dev done");
-    }
-
-    @Test
-    void devCompletion_branchHeadAdvanced_skipsFallback() {
-        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, runId);
-        String repoUrl = "https://github.com/acme/repo.git";
-        chain = chainWithTemplateParams(devStep,
-                "{\"repoUrl\":\"" + repoUrl + "\",\"specCommitSha\":\"base-sha-1\"}");
-        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
-        when(workflowService.findStepIndex(chain, runId)).thenReturn(0);
-        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
-        when(dodService.getStatus(chain.getId().toString())).thenReturn(record("dev"));
-        when(workflowService.advanceWorkflow(chain.getId(), 0, "dev done")).thenReturn(true);
-        when(gitBranchService.branchHeadSha(repoUrl, "sdd/" + chain.getId()))
-                .thenReturn(Optional.of("advanced-sha-2"));
-
-        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "dev done"));
-
-        verify(openCodeAdkProvider, never()).runSandboxCommand(any(), anyString());
-        verify(workflowService).advanceWorkflow(chain.getId(), 0, "dev done");
-    }
 
     // ---- 4. QA: verdict PASS -> advance (and capture REPORT_ID) ----
 
@@ -238,59 +187,6 @@ class WorkflowAutoChainerSddTest {
         verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
     }
 
-    // ---- 5d. QA: verdict DEFECT -> rescheduled Dev step's provider instance reset (R9-F3) ----
-
-    @Test
-    void qaCompletion_verdictDefect_resetsDevProviderInstance() {
-        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
-        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
-        chain = chainWith(devStep, qaStep);
-        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
-        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
-        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
-        DoDRecord record = record("qa");
-        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        when(dodService.latestQaReview(record)).thenReturn(review("DEFECT", "parser crashes on empty input"));
-        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
-        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
-        // The reset is routed by core through the provider registry (mode-neutral), not one concrete provider.
-        Agent devAgent = Agent.builder().id(devStep.getAgentId()).name("dev").adkProvider("opencode").build();
-        when(agentRepository.findById(devStep.getAgentId())).thenReturn(Optional.of(devAgent));
-        when(providerRegistry.getProvider("opencode")).thenReturn(runtimeProvider);
-
-        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
-
-        // The rescheduled Dev agent's run runtime must be reset so the rerun
-        // prepares a fresh environment + session instead of reusing a stale one.
-        verify(runtimeProvider).resetRuntime(devStep.getAgentId());
-        verify(workflowService).rescheduleStep(chain.getId(), 0, "parser crashes on empty input");
-    }
-
-    @Test
-    void qaCompletion_verdictDefect_qoderCoreHasNoAgentScopedRuntimeToReset() {
-        // A first-delivery core: no AdkProvider bean serves qoder and its runtimes are
-        // run-owned, so the reset is a truthful no-op -- never a fail-closed resolution
-        // error logged per DEFECT loop-back.
-        WorkflowStep devStep = step(WorkflowStep.StepKind.DEV, UUID.randomUUID());
-        WorkflowStep qaStep = step(WorkflowStep.StepKind.QA, runId);
-        chain = chainWith(devStep, qaStep);
-        when(workflowService.findChainByRunId(runId)).thenReturn(chain);
-        when(workflowService.findStepIndex(chain, runId)).thenReturn(1);
-        when(workflowService.stepAt(chain, 1)).thenReturn(qaStep);
-        DoDRecord record = record("qa");
-        when(dodService.getStatus(chain.getId().toString())).thenReturn(record);
-        when(dodService.latestQaReview(record)).thenReturn(review("DEFECT", "parser crashes on empty input"));
-        when(workflowService.findStepIndexByKind(chain, WorkflowStep.StepKind.DEV)).thenReturn(0);
-        when(workflowService.stepAt(chain, 0)).thenReturn(devStep);
-        Agent devAgent = Agent.builder().id(devStep.getAgentId()).name("dev").adkProvider("qoder").build();
-        when(agentRepository.findById(devStep.getAgentId())).thenReturn(Optional.of(devAgent));
-
-        chainer.onRunCompleted(completed(RunStatus.COMPLETED, "qa output"));
-
-        verify(providerRegistry, never()).resolve(any(Agent.class));
-        verify(runtimeProvider, never()).resetRuntime(any());
-        verify(workflowService).rescheduleStep(chain.getId(), 0, "parser crashes on empty input");
-    }
 
     // ---- 5b. QA: verdict DEFECT -> QA step must be COMPLETED, not left RUNNING ----
 

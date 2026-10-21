@@ -69,7 +69,7 @@ class KanbanAutoDispatchIntegrationTest {
     void externalRunIsNotDuplicatedByAutoDispatch() {
         Agent agent = agentRepository.save(Agent.builder()
                 .name("auto-dispatch-guard-" + UUID.randomUUID())
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .healthStatus(HealthStatus.HEALTHY)
                 .build());
 
@@ -117,7 +117,7 @@ class KanbanAutoDispatchIntegrationTest {
     void runLinkedTodoCardIsNeverAutoDispatched() {
         Agent agent = agentRepository.save(Agent.builder()
                 .name("linked-todo-guard-" + UUID.randomUUID())
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .healthStatus(HealthStatus.HEALTHY)
                 .build());
         RunResponse run = runService.createRun(CreateRunRequest.builder()

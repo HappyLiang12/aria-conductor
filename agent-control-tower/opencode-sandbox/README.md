@@ -2,7 +2,7 @@
 
 Template sandbox image for the OpenCode agent runtime, used by
 [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) sandboxes created by
-Aria Conductor's `OpenCodeAdkProvider` (exchangeable agent provider architecture).
+Aria Conductor's run-owned OpenCode core runtime (HOST or SANDBOX mode).
 
 ## Purpose
 

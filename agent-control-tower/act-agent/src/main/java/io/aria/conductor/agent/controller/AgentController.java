@@ -5,14 +5,12 @@ import io.aria.conductor.agent.dto.AgentTemplateDTO;
 import io.aria.conductor.agent.dto.ApplyRuntimeRequest;
 import io.aria.conductor.agent.dto.ApplyRuntimeResult;
 import io.aria.conductor.agent.dto.CreateAgentRequest;
-import io.aria.conductor.agent.dto.AssignToolRequest;
 import io.aria.conductor.agent.dto.AssignSkillRequest;
 import io.aria.conductor.agent.dto.IdListRequest;
 import io.aria.conductor.agent.dto.RoleDefaultsResponse;
 import io.aria.conductor.agent.dto.UpdateAgentRequest;
 import io.aria.conductor.agent.service.AgentService;
 import io.aria.conductor.agent.service.AgentTemplateService;
-import io.aria.conductor.common.model.ToolDefinition;
 import io.aria.conductor.common.model.SkillContext;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -96,25 +94,6 @@ public class AgentController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    @GetMapping("/{id}/tools")
-    public ResponseEntity<List<ToolDefinition>> listAgentTools(@PathVariable UUID id) {
-        return ResponseEntity.ok(agentService.getAgentTools(id));
-    }
-
-    @PostMapping("/{id}/tools")
-    public ResponseEntity<List<ToolDefinition>> assignTool(@PathVariable UUID id,
-                                                           @Valid @RequestBody AssignToolRequest request) {
-        agentService.assignTool(id, request.getToolId());
-        return ResponseEntity.status(HttpStatus.CREATED).body(agentService.getAgentTools(id));
-    }
-
-    @DeleteMapping("/{id}/tools/{toolId}")
-    public ResponseEntity<List<ToolDefinition>> unassignTool(@PathVariable UUID id,
-                                                             @PathVariable String toolId) {
-        agentService.unassignTool(id, toolId);
-        return ResponseEntity.ok(agentService.getAgentTools(id));
-    }
-
     @GetMapping("/{id}/skills")
     public ResponseEntity<List<SkillContext>> listAgentSkills(@PathVariable UUID id) {
         return ResponseEntity.ok(agentService.getAgentSkills(id));
@@ -132,12 +111,6 @@ public class AgentController {
                                                             @PathVariable String skillId) {
         agentService.unassignSkill(id, skillId);
         return ResponseEntity.ok(agentService.getAgentSkills(id));
-    }
-
-    @PutMapping("/{id}/tools")
-    public ResponseEntity<List<ToolDefinition>> setTools(@PathVariable UUID id,
-                                                         @RequestBody IdListRequest request) {
-        return ResponseEntity.ok(agentService.setTools(id, request.getIds()));
     }
 
     @PutMapping("/{id}/skills")

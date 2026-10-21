@@ -87,7 +87,7 @@ class ModuleBoundaryTest {
     }
 
     /**
-     * Constructor injection only. Two legacy classes predate this rule and are
+     * Constructor injection only. One legacy class predates this rule and is
      * frozen; do NOT extend this list — refactor instead.
      */
     @Test
@@ -97,8 +97,7 @@ class ModuleBoundaryTest {
             @Override
             public boolean test(JavaClass javaClass) {
                 String name = javaClass.getFullName();
-                return name.equals("io.aria.conductor.execution.circuit.CircuitBreakerProperties")
-                        || name.equals("io.aria.conductor.dashboard.report.ReportProperties");
+                return name.equals("io.aria.conductor.dashboard.report.ReportProperties");
             }
         };
         ArchRule rule = fields()

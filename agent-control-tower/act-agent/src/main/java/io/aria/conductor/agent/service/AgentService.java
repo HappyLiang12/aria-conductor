@@ -11,18 +11,10 @@ import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.event.AgentCreatedEvent;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.Agent;
-import io.aria.conductor.common.model.AgentTool;
-import io.aria.conductor.common.model.AgentToolId;
 import io.aria.conductor.common.model.HealthStatus;
-import io.aria.conductor.common.model.HarnessProfile;
-import io.aria.conductor.common.model.ToolDefinition;
-import io.aria.conductor.common.model.VersionStatus;
 import io.aria.conductor.common.model.AgentSkill;
 import io.aria.conductor.common.model.AgentSkillId;
-import io.aria.conductor.common.repository.AgentToolRepository;
 import io.aria.conductor.common.repository.AgentSkillRepository;
-import io.aria.conductor.common.repository.ToolDefinitionRepository;
-import io.aria.conductor.common.repository.RoleToolTemplateRepository;
 import io.aria.conductor.common.repository.RoleSkillTemplateRepository;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
@@ -50,13 +42,9 @@ public class AgentService {
     private final AgentRepository agentRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
-    private final AgentToolRepository agentToolRepository;
-    private final ToolDefinitionRepository toolDefinitionRepository;
     private final SkillContextProvider skillProvider;
     private final AgentSkillRepository agentSkillRepository;
-    private final RoleToolTemplateRepository roleToolTemplateRepository;
     private final RoleSkillTemplateRepository roleSkillTemplateRepository;
-    private final HarnessProfileService harnessProfileService;
     private final AgentPickupEligibility eligibility;
     /**
      * The shared admission policy (Task 18 fix round 1): the write path refuses a
@@ -77,25 +65,17 @@ public class AgentService {
     public AgentService(AgentRepository agentRepository,
                         ApplicationEventPublisher eventPublisher,
                         ObjectMapper objectMapper,
-                        AgentToolRepository agentToolRepository,
-                        ToolDefinitionRepository toolDefinitionRepository,
                         SkillContextProvider skillProvider,
                         AgentSkillRepository agentSkillRepository,
-                        RoleToolTemplateRepository roleToolTemplateRepository,
                         RoleSkillTemplateRepository roleSkillTemplateRepository,
-                        HarnessProfileService harnessProfileService,
                         AgentPickupEligibility eligibility,
                         AgentExecutionPolicy executionPolicy) {
         this.agentRepository = agentRepository;
         this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
-        this.agentToolRepository = agentToolRepository;
-        this.toolDefinitionRepository = toolDefinitionRepository;
         this.skillProvider = skillProvider;
         this.agentSkillRepository = agentSkillRepository;
-        this.roleToolTemplateRepository = roleToolTemplateRepository;
         this.roleSkillTemplateRepository = roleSkillTemplateRepository;
-        this.harnessProfileService = harnessProfileService;
         this.eligibility = eligibility;
         this.executionPolicy = Objects.requireNonNull(executionPolicy, "executionPolicy");
     }
@@ -124,7 +104,7 @@ public class AgentService {
                 .workspaceMode(request.getWorkspaceMode())
                 .workspacePath(request.getWorkspacePath())
                 .workspaceBaseRef(request.getWorkspaceBaseRef())
-                .config(serializeConfig(withDefaultHarnessProfile(request.getConfig(), request.getRole())))
+                .config(serializeConfig(request.getConfig()))
                 .healthStatus(HealthStatus.HEALTHY)
                 .pickupEnabled(Boolean.TRUE)
                 .build();
@@ -187,9 +167,8 @@ public class AgentService {
         assertNoRuntimeMix(agent.getAdkProvider(), agent.getExecutionMode());
 
         // Write-time admission for a selection change (Task 18 fix round 1): only when
-        // this request touches the execution selection, so an unrelated edit of a legacy
-        // row (e.g. renaming an agent stored on a removed core) is never blocked by a
-        // selection the row already carried.
+        // this request touches the execution selection, so an unrelated edit of a row
+        // stored on a removed core is never blocked by a selection the row already carried.
         if (touchesExecutionSelection(request)) {
             validateExecutionSelection(agent);
         }
@@ -352,106 +331,6 @@ public class AgentService {
     }
 
     @Transactional
-    public void assignTool(UUID agentId, String toolId) {
-        Agent agent = findAgentOrThrow(agentId);
-        ToolDefinition tool = toolDefinitionRepository.findById(toolId)
-                .orElseThrow(() -> new ResourceNotFoundException("Tool", toolId));
-        // Governance: only APPROVED + enabled tools may be assigned to an agent.
-        if (!tool.isEnabled()) {
-            throw new IllegalStateException(
-                    "Tool '" + tool.getName() + "' is not approved/enabled and cannot be assigned");
-        }
-        AgentToolId id = new AgentToolId(agent.getId().toString(), toolId);
-        if (!agentToolRepository.existsById(id)) {
-            agentToolRepository.save(AgentTool.builder()
-                    .id(id)
-                    .assignedBy("user")
-                    .assignedAt(Instant.now())
-                    .build());
-            log.info("Assigned tool {} to agent {}", toolId, agentId);
-        }
-    }
-
-    @Transactional
-    public void unassignTool(UUID agentId, String toolId) {
-        Agent agent = findAgentOrThrow(agentId);
-        AgentToolId id = new AgentToolId(agent.getId().toString(), toolId);
-        if (agentToolRepository.existsById(id)) {
-            agentToolRepository.deleteById(id);
-            log.info("Unassigned tool {} from agent {}", toolId, agentId);
-        }
-    }
-
-    @Transactional(readOnly = true)
-    public List<ToolDefinition> getAgentTools(UUID agentId) {
-        Agent agent = findAgentOrThrow(agentId);
-        HarnessProfile profile = harnessProfileService.resolve(agent);
-        List<String> toolIds = agentToolRepository.findToolIdsByAgentId(agentId.toString());
-        if (!toolIds.isEmpty()) {
-            // Explicit user tool assignments are authoritative (UI-controlled); the profile denylist
-            // only hardens role-template DEFAULTS, so it is NOT applied to explicit grants.
-            return toolDefinitionRepository.findAllById(toolIds);
-        }
-        // No explicit grants: surface the role-template defaults the runtime AgentToolResolver
-        // would apply (incl. free-text role keyword mapping), so the API/dashboard reflect the
-        // tools a delegated worker can actually use (#25).
-        List<String> templateIds = resolveRoleTemplateToolIds(agent.getRole());
-        if (templateIds.isEmpty()) return List.of();
-        List<ToolDefinition> tools = toolDefinitionRepository.findAllById(templateIds).stream()
-                .filter(ToolDefinition::isEnabled)
-                .filter(this::isApprovedOrEnabled)
-                .collect(Collectors.toList());
-        return harnessProfileService.applyDenylist(tools, profile);
-    }
-
-    /**
-     * Mirror of the runtime role-template resolution: exact role match first, then a keyword
-     * mapping for free-text role descriptions (dev/qa/ba), then the generic WORKER fallback.
-     */
-    private List<String> resolveRoleTemplateToolIds(String role) {
-        String effectiveRole = (role != null && !role.isBlank()) ? role : "WORKER";
-        List<String> ids = roleToolTemplateRepository.findDefaultToolIdsByRole(effectiveRole);
-        if (ids.isEmpty() && !"WORKER".equals(effectiveRole)) {
-            String keywordRole = matchKeywordRole(effectiveRole);
-            if (keywordRole != null) {
-                ids = roleToolTemplateRepository.findDefaultToolIdsByRole(keywordRole);
-            }
-        }
-        if (ids.isEmpty() && !"WORKER".equals(effectiveRole)) {
-            ids = roleToolTemplateRepository.findDefaultToolIdsByRole("WORKER");
-        }
-        return ids;
-    }
-
-    private String matchKeywordRole(String role) {
-        String lower = role.toLowerCase();
-        if (lower.contains("dev")) return "dev";
-        if (lower.contains("qa") || lower.contains("tester")) return "qa";
-        if (lower.contains("ba") || lower.contains("analyst")) return "ba";
-        return null;
-    }
-
-    /**
-     * Weak models are far more reliable under the "weak-model-safe" harness profile, so newly
-     * created worker/dev agents adopt it unless the caller pinned a profile explicitly. The
-     * orchestrator and other roles keep the global default; existing agents are never modified.
-     */
-    private Map<String, Object> withDefaultHarnessProfile(Map<String, Object> requested, String role) {
-        Map<String, Object> config = requested == null
-                ? new java.util.HashMap<>() : new java.util.HashMap<>(requested);
-        if (config.containsKey("harnessProfile") || role == null || role.isBlank()) {
-            return config;
-        }
-        // Worker/dev roles adopt weak-model-safe: dev/qa/ba by keyword, or an explicit worker role.
-        // The orchestrator and other roles keep the global default.
-        boolean workerLike = role.toLowerCase().contains("worker") || matchKeywordRole(role) != null;
-        if (workerLike) {
-            config.put("harnessProfile", "weak-model-safe");
-        }
-        return config;
-    }
-
-    @Transactional
     public void assignSkill(UUID agentId, String skillId) {
         Agent agent = findAgentOrThrow(agentId);
         // Governance: only enabled + SKILL-stage skills may be assigned (mirrors tool governance).
@@ -483,34 +362,6 @@ public class AgentService {
                 agentSkillRepository.findSkillIdsByAgentId(agentId.toString()));
     }
 
-    /** Idempotent replace: sets the agent's tools to exactly the given ids (governance-checked). */
-    @Transactional
-    public List<ToolDefinition> setTools(UUID agentId, List<String> toolIds) {
-        Agent agent = findAgentOrThrow(agentId);
-        List<String> ids = toolIds == null ? List.of() : toolIds.stream().distinct().toList();
-        // Validate every id first so a bad/disabled id aborts before we mutate anything.
-        List<ToolDefinition> found = ids.isEmpty() ? List.of() : toolDefinitionRepository.findAllById(ids);
-        for (String toolId : ids) {
-            ToolDefinition tool = found.stream().filter(t -> t.getId().equals(toolId)).findFirst()
-                    .orElseThrow(() -> new ResourceNotFoundException("Tool", toolId));
-            if (!isApprovedOrEnabled(tool)) {
-                throw new IllegalStateException(
-                        "Tool '" + tool.getName() + "' is not approved/enabled and cannot be assigned");
-            }
-        }
-        agentToolRepository.deleteByAgentId(agent.getId().toString());
-        Instant now = Instant.now();
-        for (String toolId : ids) {
-            agentToolRepository.save(AgentTool.builder()
-                    .id(new AgentToolId(agent.getId().toString(), toolId))
-                    .assignedBy("user")
-                    .assignedAt(now)
-                    .build());
-        }
-        log.info("Set {} tools on agent {}", ids.size(), agentId);
-        return getAgentTools(agentId);
-    }
-
     /** Idempotent replace: sets the agent's skills to exactly the given ids (governance-checked). */
     @Transactional
     public List<SkillContext> setSkills(UUID agentId, List<String> skillIds) {
@@ -531,37 +382,20 @@ public class AgentService {
         return getAgentSkills(agentId);
     }
 
-    /** Recommended default tools + skills for a role (rule-based), with WORKER fallback. */
+    /** Recommended default skills for a role (rule-based), with WORKER fallback. */
     @Transactional(readOnly = true)
     public RoleDefaultsResponse getRoleDefaults(String role) {
         String effectiveRole = (role == null || role.isBlank()) ? "WORKER" : role;
-        List<String> toolIds = roleToolTemplateRepository.findDefaultToolIdsByRole(effectiveRole);
-        if (toolIds.isEmpty() && !"WORKER".equals(effectiveRole)) {
-            toolIds = roleToolTemplateRepository.findDefaultToolIdsByRole("WORKER");
-        }
-        List<ToolDefinition> tools = toolIds.isEmpty() ? List.of()
-                : toolDefinitionRepository.findAllById(toolIds).stream()
-                        .filter(this::isApprovedOrEnabled).toList();
         List<String> skillIds = roleSkillTemplateRepository.findDefaultSkillIdsByRole(effectiveRole);
         if (skillIds.isEmpty() && !"WORKER".equals(effectiveRole)) {
             skillIds = roleSkillTemplateRepository.findDefaultSkillIdsByRole("WORKER");
         }
-        List<SkillContext> skills = skillProvider.getEnabledSkillsByIds(skillIds);
-        return new RoleDefaultsResponse(tools, skills);
+        return new RoleDefaultsResponse(skillProvider.getEnabledSkillsByIds(skillIds));
     }
 
     Agent findAgentOrThrow(UUID id) {
         return agentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Agent", id));
-    }
-
-    /**
-     * Governance parity with the runtime {@code AgentToolResolver}: a tool is assignable /
-     * recommendable only when enabled AND approved (legacy tools with null status are allowed).
-     */
-    private boolean isApprovedOrEnabled(ToolDefinition tool) {
-        return tool.isEnabled()
-                && (tool.getStatus() == null || tool.getStatus() == VersionStatus.APPROVED);
     }
 
     AgentResponse toResponse(Agent agent) {
@@ -599,21 +433,6 @@ public class AgentService {
             response.setSkills(skillNames);
         } catch (Exception e) {
             log.warn("Failed to load skills for agent {}: {}", agent.getId(), e.getMessage());
-        }
-
-        // Populate tools
-        try {
-            List<String> toolIds = agentToolRepository.findToolIdsByAgentId(agent.getId().toString());
-            if (!toolIds.isEmpty()) {
-                List<String> toolNames = toolDefinitionRepository.findAllById(toolIds).stream()
-                        .filter(ToolDefinition::isEnabled)
-                        .map(ToolDefinition::getName)
-                        .sorted()
-                        .toList();
-                response.setTools(toolNames);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to load tools for agent {}: {}", agent.getId(), e.getMessage());
         }
 
         return response;

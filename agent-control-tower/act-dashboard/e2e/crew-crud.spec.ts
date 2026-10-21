@@ -48,7 +48,7 @@ test.describe('Crew page', () => {
   test('negative: blank agent name is rejected by the API', async ({ request }) => {
     const { status } = await apiCall(request, 'POST', '/agents', {
       name: '',
-      agentType: 'NATIVE',
+      agentType: 'ADK',
     });
     expect(status).toBeGreaterThanOrEqual(400);
   });

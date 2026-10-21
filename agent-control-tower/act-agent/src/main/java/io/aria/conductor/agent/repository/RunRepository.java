@@ -7,7 +7,9 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,6 +38,32 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
         RunStatus getStatus();
         String getFinalOutput();
     }
+
+    /**
+     * Single-statement status write that refuses to touch a terminal run. A read-then-
+     * save would let a cancel commit between the read and the save, and the stale save
+     * would resurrect the run; the condition is evaluated by the database atomically.
+     * Returns the number of rows updated (0 = the run is terminal or missing).
+     */
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE Run r SET r.status = :status, r.updatedAt = :updatedAt "
+            + "WHERE r.id = :id AND r.status NOT IN :terminal")
+    int updateStatusUnlessTerminal(@Param("id") UUID id,
+                                   @Param("status") RunStatus status,
+                                   @Param("updatedAt") Instant updatedAt,
+                                   @Param("terminal") List<RunStatus> terminal);
+
+    /**
+     * Persists the resolved iteration cap only while the run is still startable, so a
+     * queued/cancelled run never receives the write.
+     */
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE Run r SET r.maxIterations = :maxIterations WHERE r.id = :id AND r.status IN :startable")
+    int updateMaxIterationsIfStartable(@Param("id") UUID id,
+                                       @Param("maxIterations") int maxIterations,
+                                       @Param("startable") List<RunStatus> startable);
 
     /** Housekeeping S1: single-statement bulk delete of terminal runs (children purged first). */
     @Modifying

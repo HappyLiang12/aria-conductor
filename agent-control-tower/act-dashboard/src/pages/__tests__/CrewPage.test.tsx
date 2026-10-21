@@ -8,8 +8,7 @@ vi.mock('../../api/agents', () => ({
   listAgents: vi.fn().mockResolvedValue([]),
   createAgent: vi.fn().mockResolvedValue({ id: 'x' }),
   getTemplates: vi.fn().mockResolvedValue([]),
-  getRoleDefaults: vi.fn().mockResolvedValue({ tools: [], skills: [] }),
-  setAgentTools: vi.fn().mockResolvedValue({}),
+  getRoleDefaults: vi.fn().mockResolvedValue({ skills: [] }),
   setAgentSkills: vi.fn().mockResolvedValue({}),
   retireAgent: vi.fn().mockResolvedValue({}),
 }));
@@ -40,9 +39,6 @@ vi.mock('../../components/AgentCard', () => ({
 }));
 vi.mock('../../components/AgentCatalog', () => ({
   AgentCatalog: () => <div data-testid="agent-catalog" />,
-}));
-vi.mock('../../components/ManageToolsDialog', () => ({
-  ManageToolsDialog: () => null,
 }));
 
 function ui() {
@@ -330,7 +326,7 @@ describe('CrewPage core, mode and Host workspace selection (Task 15)', () => {
     await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(1));
     expect(createAgent).toHaveBeenCalledWith({
       name: 'Atlas-7',
-      agentType: 'NATIVE',
+      agentType: 'ADK',
       role: 'dev',
       model: undefined,
       provider: 'openai',
@@ -357,7 +353,7 @@ describe('CrewPage core, mode and Host workspace selection (Task 15)', () => {
     await waitFor(() => expect(createAgent).toHaveBeenCalledTimes(1));
     expect(createAgent).toHaveBeenCalledWith({
       name: 'Sandbox-1',
-      agentType: 'NATIVE',
+      agentType: 'ADK',
       role: 'dev',
       model: undefined,
       provider: 'openai',

@@ -3,13 +3,11 @@ package io.aria.conductor.execution.engine;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
-import io.aria.conductor.agent.service.HarnessProfileService;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.AgentSession;
 import io.aria.conductor.common.model.AgentType;
-import io.aria.conductor.common.model.HarnessProfile;
 import io.aria.conductor.common.model.HealthStatus;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
@@ -17,21 +15,12 @@ import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.common.service.KnowledgeContextProvider;
-import io.aria.conductor.common.service.ToolRegistry;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
-import io.aria.conductor.execution.adk.AdkSystemProperties;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
-import io.aria.conductor.execution.circuit.CircuitBreaker;
-import io.aria.conductor.execution.harness.ToolSteeringGuard;
 import io.aria.conductor.execution.llm.LlmMessage;
-import io.aria.conductor.execution.pipeline.ActionExecutionPipeline;
 import io.aria.conductor.execution.repository.ApprovalRepository;
-import io.aria.conductor.execution.repository.PromptCallRepository;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
-import io.aria.conductor.execution.repository.ToolCallRepository;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreAdapters;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
@@ -52,7 +41,6 @@ import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.TaskDeadlineProperties;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.tool.AgentSkillResolver;
-import io.aria.conductor.execution.tool.AgentToolResolver;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,7 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -85,13 +73,12 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Production-cutover dispatch coverage (Task 18 fix round 1): a run whose selected
- * core is in the production catalog must never execute through the legacy provider
- * path -- neither when the rest of the selection is invalid (the run fails with the
- * admission message) nor when the core is outside the catalog (the run fails with
- * the provider registry's explicit no-fallback refusal). The opencode provider
- * double is a real registry bean in both cases, so a green test proves the engine
- * never consults it while the run reaches the exact FAILED status and message.
+ * Production-cutover dispatch coverage: a run whose selected core is in the
+ * production catalog must never execute through a legacy provider path -- not
+ * when the rest of the selection is invalid (the run fails with the admission
+ * message) and not when the core is outside the catalog (the run fails with the
+ * explicit no-runtime refusal). The launcher/coordinator doubles prove no
+ * provider-level execution is started in either case.
  */
 @ExtendWith(MockitoExtension.class)
 class AgentLoopEngineCoreDispatchTest {
@@ -99,30 +86,16 @@ class AgentLoopEngineCoreDispatchTest {
     @Mock RunRepository runRepository;
     @Mock AgentRepository agentRepository;
     @Mock SessionStateManager sessionStateManager;
-    @Mock ActionExecutionPipeline actionPipeline;
-    @Mock CircuitBreaker circuitBreaker;
     @Mock ApprovalGate approvalGate;
     @Mock PermissionCoordinator permissionCoordinator;
-    @Mock PromptCallRepository promptCallRepository;
     @Mock SessionTrajectoryRepository trajectoryRepository;
-    @Mock ToolCallRepository toolCallRepository;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock WorkflowService workflowService;
     @Mock WorkflowChainRepository workflowChainRepository;
-    @Mock AgentToolResolver agentToolResolver;
     @Mock AgentSkillResolver agentSkillResolver;
-    @Mock ToolRegistry toolRegistry;
     @Mock KnowledgeContextProvider knowledgeProvider;
     @Mock WorkspaceManager workspaceManager;
-    @Mock HarnessProfileService harnessProfileService;
-    @Mock ToolSteeringGuard toolSteeringGuard;
     @Mock ApprovalRepository approvalRepository;
-    @Mock TaskDeadlineProperties taskDeadlineProperties;
-    /**
-     * No coordinator is deployed in this unit wiring: the run must fail before any
-     * coordinated execution is attempted (the engine's {@code runCoordinator()} then
-     * answers null, exactly like a legacy wiring without the cutover).
-     */
     @Mock(name = "coreExecutionServiceProvider")
     org.springframework.beans.factory.ObjectProvider<CoreExecutionService> coreExecutionServiceProvider;
     @Mock(name = "coreRunLauncherProvider")
@@ -130,8 +103,7 @@ class AgentLoopEngineCoreDispatchTest {
 
     @Mock CoreExecutionService coordinator;
     @Mock RunExecutionBindingRepository bindings;
-    /** The registered opencode provider bean double: must receive zero run interactions. */
-    @Mock AdkProvider opencodeProvider;
+    @Mock TaskDeadlineProperties taskDeadlineProperties;
 
     private Agent agent;
     private Run run;
@@ -147,7 +119,7 @@ class AgentLoopEngineCoreDispatchTest {
                 .id(agentId)
                 .name("worker")
                 .role("dev")
-                .agentType(AgentType.NATIVE)
+                .agentType(AgentType.ADK)
                 .provider("openai")
                 .model("gpt-4o")
                 .config("{\"systemPrompt\":\"You are a tester agent.\"}")
@@ -161,17 +133,32 @@ class AgentLoopEngineCoreDispatchTest {
                 .build();
 
         when(runRepository.findById(runId)).thenReturn(Optional.of(run));
-        when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
         when(agentRepository.findById(agentId)).thenReturn(Optional.of(agent));
-        when(harnessProfileService.resolve(agent)).thenReturn(HarnessProfile.defaults());
         when(sessionStateManager.loadOrCreateSession(runId, agentId))
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
-        when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
-        // buildMessages()/coreTask() only run when the dispatch reaches the core path
-        // (the invalid-selection case); the unknown-core case refuses before it.
+        lenient().when(workspaceManager.getOrProvision(runId)).thenReturn("/tmp/ws");
         lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreRunLauncher());
+        stubStatusWrites();
+    }
+
+    /** Mirrors the repository's conditional update onto the shared in-memory run double. */
+    private void stubStatusWrites() {
+        lenient().when(runRepository.updateStatusUnlessTerminal(any(), any(), any(), anyList()))
+                .thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    RunStatus status = invocation.getArgument(1);
+                    List<RunStatus> terminal = invocation.getArgument(3);
+                    return runRepository.findById(id)
+                            .filter(current -> !terminal.contains(current.getStatus()))
+                            .map(current -> {
+                                current.setStatus(status);
+                                return 1;
+                            })
+                            .orElse(0);
+                });
     }
 
     /** The production launcher over the production catalog, with the coordinator/bindings doubles. */
@@ -210,22 +197,14 @@ class AgentLoopEngineCoreDispatchTest {
         };
     }
 
-    /** The real registry of the cutover: exactly the opencode provider bean (the documented default). */
-    private AdkProviderRegistry providerRegistry() {
-        when(opencodeProvider.providerId()).thenReturn("opencode");
-        return new AdkProviderRegistry(List.of(opencodeProvider), new AdkSystemProperties());
-    }
-
     private AgentLoopEngine engine() {
         return new AgentLoopEngine(
-                runRepository, agentRepository, providerRegistry(), sessionStateManager,
-                actionPipeline, circuitBreaker, approvalGate, permissionCoordinator, promptCallRepository,
-                trajectoryRepository, toolCallRepository, eventPublisher, workflowService,
-                workflowChainRepository, agentToolResolver, agentSkillResolver, toolRegistry,
-                knowledgeProvider, workspaceManager, harnessProfileService, toolSteeringGuard,
-                approvalRepository, taskDeadlineProperties, coreExecutionServiceProvider,
-                null /* DoDService */, null /* KanbanService */, coreRunLauncherProvider,
-                unlimitedAdmission(), null /* KanbanRepository */, null /* RunInputCoordinator */);
+                runRepository, agentRepository, sessionStateManager, approvalGate,
+                permissionCoordinator, trajectoryRepository, eventPublisher, workflowService,
+                workflowChainRepository, agentSkillResolver, knowledgeProvider, workspaceManager,
+                approvalRepository, coreExecutionServiceProvider, null /* DoDService */,
+                coreRunLauncherProvider, unlimitedAdmission(), null /* KanbanRepository */,
+                null /* RunInputCoordinator */);
     }
 
     /**
@@ -239,24 +218,11 @@ class AgentLoopEngineCoreDispatchTest {
         return new RunAdmissionQueue(properties);
     }
 
-    /** No provider-level execution was started: every entry point of the bean double stays untouched. */
-    private void assertProviderPathNotTaken() {
-        verify(opencodeProvider, never()).prepareAgent(any(), any());
-        verify(opencodeProvider, never()).call(any(), any(), any());
-        verify(opencodeProvider, never()).call(any(), any(), any(), any());
-        verify(opencodeProvider, never()).executeTask(any(), any(), anyString(), any());
-        verify(opencodeProvider, never()).abortTask(any());
-        verify(opencodeProvider, never()).resetRuntime(any());
-        verify(opencodeProvider, never()).shutdownAgent(any());
-        verifyNoInteractions(coordinator);
-        verify(bindings, never()).save(any());
-    }
-
     @Test
-    void catalogCoreWithAnInvalidSelection_failsWithTheAdmissionMessage_andNeverUsesTheProvider() {
+    void catalogCoreWithAnInvalidSelection_failsWithTheAdmissionMessage_andNeverUsesTheCoordinator() {
         // A production core with a structurally invalid workspace selection: the run is
         // owned by the core path, so it must fail with the admission refusal instead of
-        // falling through to the legacy provider (even though opencode resolves here).
+        // executing through any other path.
         agent.setAdkProvider("opencode");
         agent.setExecutionMode(ExecutionMode.SANDBOX);
         agent.setWorkspaceMode(WorkspaceMode.DIRECT);
@@ -267,21 +233,72 @@ class AgentLoopEngineCoreDispatchTest {
         await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.FAILED);
         assertThat(run.getErrorMessage())
                 .isEqualTo("Direct workspace requires an explicitly selected directory");
-        assertProviderPathNotTaken();
+        verifyNoInteractions(coordinator);
+        verify(bindings, never()).save(any());
     }
 
     @Test
-    void coreOutsideTheCatalog_failsWithTheRegistryRefusal_andNeverUsesTheProvider() {
-        // A removed core: the launcher does not own the run and the registry refuses it
-        // explicitly ("there is no fallback"); the provider path is never entered.
+    void coreOutsideTheCatalog_failsWithTheNoRuntimeRefusal() {
+        // A removed core: the launcher does not own the run and there is no fallback;
+        // the run fails explicitly instead of being executed by a provider.
         agent.setAdkProvider("langchain");
 
         engine().startRun(runId);
 
         await().atMost(Duration.ofSeconds(15)).until(() -> run.getStatus() == RunStatus.FAILED);
-        assertThat(run.getErrorMessage()).isEqualTo("Unsupported ADK provider 'langchain' for agent "
-                + agentId + "; registered providers: [opencode] (there is no fallback)");
-        assertProviderPathNotTaken();
+        assertThat(run.getErrorMessage())
+                .isEqualTo("Core 'langchain' is served by its run-owned core runtime"
+                        + " (the core launcher/coordinator), which is not available in this wiring;"
+                        + " the run cannot execute");
+        verifyNoInteractions(coordinator);
+        verify(bindings, never()).save(any());
+    }
+
+    @Test
+    void cancelledBeforeDispatch_isNotResurrected_andNoCoreIsLaunched() {
+        // A cancel landing after admission writes CANCELLED while the runtime is not
+        // registered yet (owns() == false). The dispatch must not overwrite it, and
+        // no core may be launched for the cancelled run.
+        agent.setAdkProvider("opencode");
+        when(runRepository.findStateById(runId)).thenReturn(Optional.of(view(RunStatus.CANCELLED)));
+
+        engine().startRun(runId);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(runRepository, org.mockito.Mockito.atLeastOnce()).findStateById(runId));
+        verifyNoInteractions(coordinator);
+        verify(bindings, never()).save(any());
+    }
+
+    @Test
+    void cancelDuringProvisioning_preventsTheCoreLaunch() {
+        // PENDING at dispatch time, CANCELLED by the time the launch gate re-reads:
+        // the second committed-status check must stop the launch.
+        agent.setAdkProvider("opencode");
+        when(runRepository.findStateById(runId)).thenReturn(
+                Optional.of(view(RunStatus.PENDING)),
+                Optional.of(view(RunStatus.CANCELLED)));
+
+        engine().startRun(runId);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(runRepository, times(2)).findStateById(runId));
+        verifyNoInteractions(coordinator);
+        verify(bindings, never()).save(any());
+    }
+
+    private static RunRepository.RunStateView view(RunStatus status) {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return status;
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return null;
+            }
+        };
     }
 
     /**

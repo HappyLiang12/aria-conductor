@@ -6,16 +6,15 @@ import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
 import io.aria.conductor.app.BaseH2IntegrationTest;
 import io.aria.conductor.common.model.*;
-import io.aria.conductor.execution.adk.AdkProvider;
-import io.aria.conductor.execution.adk.AdkProviderRegistry;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
 import io.aria.conductor.execution.dod.DoDRecord;
 import io.aria.conductor.execution.dod.DoDService;
 import io.aria.conductor.execution.git.GitBranchService;
 import io.aria.conductor.execution.git.GitHandoffMetadata;
-import io.aria.conductor.execution.llm.LlmResponse;
 import io.aria.conductor.execution.repository.ApprovalRepository;
+import io.aria.conductor.execution.runtime.CoreResult;
+import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.knowledge.dto.ReviewDecisionRequest;
 import io.aria.conductor.knowledge.dto.UpdateKnowledgeRequest;
 import io.aria.conductor.knowledge.repository.KnowledgeItemRepository;
@@ -46,11 +45,11 @@ import static org.mockito.Mockito.when;
  * <p>Key design:
  * <ul>
  *   <li><b>Async run execution:</b> {@code AgentLoopEngine.startRun()} launches each agent
- *       run on a virtual thread. The engine calls the (mocked) {@link AdkProvider} on that
+ *       run on a virtual thread. The engine runs the (mocked) core launcher on that
  *       virtual thread, so run completion is asynchronous from the test thread.</li>
- *   <li><b>QA verdict gate:</b> The mock ADK's {@code call()} blocks on a
- *       {@link CompletableFuture} for the 3rd, 5th, 7th… invocation (i.e. every QA-run ADK
- *       call), giving the test thread a window to submit the stage review with the desired
+ *   <li><b>QA verdict gate:</b> The mock core launcher blocks on a
+ *       {@link CompletableFuture} for the 3rd, 5th, 7th… invocation (i.e. every QA-run core
+ *       execution), giving the test thread a window to submit the stage review with the desired
  *       verdict before the QA virtual thread completes.</li>
  *   <li><b>No &#64;Transactional:</b> Extends {@link BaseH2IntegrationTest} (no
  *       &#64;Transactional), so data committed by service-layer transactions is immediately
@@ -85,7 +84,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     private OpenCodeProperties openCodeProperties;
 
     @MockBean
-    private AdkProviderRegistry adkProviderRegistry;
+    private CoreRunLauncher coreRunLauncher;
 
     /**
      * Mocked so the WorkflowTemplateService credential pre-flight gate sees a usable git
@@ -138,7 +137,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         BlockingQueue<CompletableFuture<Void>> qaGates = new LinkedBlockingQueue<>();
         AtomicInteger adkCalls = new AtomicInteger(0);
 
-        configureMockAdk(qaGates, adkCalls);
+        configureCore(qaGates, adkCalls);
 
         // Create SDD chain (BA / DEV / QA) and initialise DoD record
         WorkflowResponse created = createSddChain("happy-path");
@@ -181,7 +180,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         BlockingQueue<CompletableFuture<Void>> qaGates = new LinkedBlockingQueue<>();
         AtomicInteger adkCalls = new AtomicInteger(0);
 
-        configureMockAdk(qaGates, adkCalls);
+        configureCore(qaGates, adkCalls);
 
         WorkflowResponse created = createSddChain("defect-loop");
         UUID chainId = created.getId();
@@ -223,7 +222,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         BlockingQueue<CompletableFuture<Void>> qaGates = new LinkedBlockingQueue<>();
         AtomicInteger adkCalls = new AtomicInteger(0);
 
-        configureMockAdk(qaGates, adkCalls);
+        configureCore(qaGates, adkCalls);
 
         WorkflowResponse created = createSddChain("spec-gap-loop");
         UUID chainId = created.getId();
@@ -266,7 +265,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         BlockingQueue<CompletableFuture<Void>> qaGates = new LinkedBlockingQueue<>();
         AtomicInteger adkCalls = new AtomicInteger(0);
 
-        configureMockAdk(qaGates, adkCalls);
+        configureCore(qaGates, adkCalls);
 
         WorkflowResponse created = createSddChain("max-attempts");
         UUID chainId = created.getId();
@@ -300,7 +299,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     void boundaries_qaWithoutVerdict_failsChain() throws Exception {
         // For this test the mock ADK returns instantly for ALL calls — no gating needed.
         AtomicInteger adkCalls = new AtomicInteger(0);
-        configureMockAdkNoGating(adkCalls);
+        configureCoreNoGating(adkCalls);
 
         WorkflowResponse created = createSddChain("no-verdict");
         UUID chainId = created.getId();
@@ -332,7 +331,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     void seedIntegrity_templateExistsAndInstantiates() throws Exception {
         // Configure mock ADK to return instantly (no gating needed for this test)
         AtomicInteger adkCalls = new AtomicInteger(0);
-        configureMockAdkNoGating(adkCalls);
+        configureCoreNoGating(adkCalls);
 
         UUID templateId = UUID.randomUUID();
 
@@ -480,7 +479,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     @Test
     void instantiateTemplate_injectsBranchNameSystemPlaceholder() {
         AtomicInteger adkCalls = new AtomicInteger(0);
-        configureMockAdkNoGating(adkCalls);
+        configureCoreNoGating(adkCalls);
 
         UUID templateId = createTemplateWithBranchName();
         WorkflowResponse response = workflowTemplateService.instantiateTemplate(
@@ -513,7 +512,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     @Test
     void instantiateTemplate_repoUrlFromSystemConfigWhenCallerOmits() {
         AtomicInteger adkCalls = new AtomicInteger(0);
-        configureMockAdkNoGating(adkCalls);
+        configureCoreNoGating(adkCalls);
 
         String configuredUrl = "https://github.com/acme/demo.git";
         openCodeProperties.setRepoUrl(configuredUrl);
@@ -542,7 +541,7 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
     @Test
     void instantiateTemplate_callerRepoUrlWins() {
         AtomicInteger adkCalls = new AtomicInteger(0);
-        configureMockAdkNoGating(adkCalls);
+        configureCoreNoGating(adkCalls);
 
         openCodeProperties.setRepoUrl("https://github.com/acme/system-default.git");
         String callerUrl = "https://github.com/acme/caller.git";
@@ -568,8 +567,8 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         Agent agent = Agent.builder()
                 .name(name)
                 .role("test-role")
-                .agentType(AgentType.NATIVE)
-                .adkProvider("langchain")
+                .agentType(AgentType.ADK)
+                .adkProvider("opencode")
                 .config("{}")
                 .healthStatus(HealthStatus.HEALTHY)
                 .build();
@@ -759,17 +758,15 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
         approvalGate.decideApproval(specApproval.getId(), true, "Spec approved by test");
     }
 
-    /** Configure mock ADK with QA gating via a gate queue. */
-    private void configureMockAdk(BlockingQueue<CompletableFuture<Void>> qaGates,
-                                  AtomicInteger adkCalls) {
-        AdkProvider mock = org.mockito.Mockito.mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(mock);
-        when(mock.isHealthy(any())).thenReturn(true);
-        when(mock.parseActionsFromResponse(any())).thenReturn(List.of());
-        when(mock.call(any(), any(), any(), any())).thenAnswer(inv -> {
+    /** Configure the core launcher double with QA gating via a gate queue. */
+    private void configureCore(BlockingQueue<CompletableFuture<Void>> qaGates,
+                               AtomicInteger coreCalls) {
+        when(coreRunLauncher.owns(any())).thenReturn(true);
+        when(coreRunLauncher.execute(any(), any(), any())).thenAnswer(inv -> {
             // Gate ONLY runs of this test's QA agent: agent UUIDs are unique per test, so
-            // leftover virtual threads from earlier tests (same shared mock) never interfere.
-            UUID agentId = inv.getArgument(0);
+            // leftover virtual threads from earlier tests (same shared double) never interfere.
+            Agent agent = inv.getArgument(1);
+            UUID agentId = agent.getId();
             String output;
             if (qaAgentId.equals(agentId)) {
                 output = QA_OUTPUT_PASS;
@@ -781,21 +778,21 @@ class SddWorkflowIntegrationTest extends BaseH2IntegrationTest {
             } else {
                 output = BA_OUTPUT;
             }
-            return new LlmResponse(output, 10, 20, "stop", List.of());
+            coreCalls.incrementAndGet();
+            return new CoreResult("sess-" + agentId, output, null, false);
         });
     }
 
-    /** Configure mock ADK without any gating — all calls return immediately. */
-    private void configureMockAdkNoGating(AtomicInteger adkCalls) {
-        AdkProvider mock = org.mockito.Mockito.mock(AdkProvider.class);
-        when(adkProviderRegistry.resolve(any())).thenReturn(mock);
-        when(mock.isHealthy(any())).thenReturn(true);
-        when(mock.parseActionsFromResponse(any())).thenReturn(List.of());
-        when(mock.call(any(), any(), any(), any())).thenAnswer(inv -> {
-            UUID agentId = inv.getArgument(0);
+    /** Configure the core launcher double without any gating — all runs return immediately. */
+    private void configureCoreNoGating(AtomicInteger coreCalls) {
+        when(coreRunLauncher.owns(any())).thenReturn(true);
+        when(coreRunLauncher.execute(any(), any(), any())).thenAnswer(inv -> {
+            Agent agent = inv.getArgument(1);
+            UUID agentId = agent.getId();
             String output = qaAgentId.equals(agentId) ? QA_OUTPUT_PASS
                     : devAgentId.equals(agentId) ? DEV_OUTPUT : BA_OUTPUT;
-            return new LlmResponse(output, 10, 20, "stop", List.of());
+            coreCalls.incrementAndGet();
+            return new CoreResult("sess-" + agentId, output, null, false);
         });
     }
 

@@ -30,9 +30,10 @@ public class RunExecutionListener {
     }
 
     /**
-     * Bridges the cancel signal from RunService (act-agent) to AgentLoopEngine (act-execution).
-     * RunService.cancelRun() publishes RunCompletedEvent(CANCELLED) but never signals the
-     * in-memory RunContext. This listener sets the volatile cancelled flag so the loop exits.
+     * Carries the cancelled terminal state from RunService (act-agent) to the
+     * engine's session bookkeeping. This path records the transition only: a
+     * live run-owned core is torn down by the coordinator's own finalization
+     * path, not by the recorded cancel.
      */
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentTools, setAgentSkills, retireAgent } from '../api/agents';
+import { listAgents, createAgent, getTemplates, getRoleDefaults, setAgentSkills, retireAgent } from '../api/agents';
 import { getAgentTelemetry } from '../api/dashboard';
 import { listAdkProviders, getAdkProviderHealth } from '../api/adk';
 import { apiErrorMessage } from '../api/operatorSession';
@@ -14,7 +14,6 @@ import type {
 } from '../types';
 import { AgentCard } from '../components/AgentCard';
 import { AgentCatalog } from '../components/AgentCatalog';
-import { ManageToolsDialog } from '../components/ManageToolsDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { estimateCost } from '../utils/pricing';
 
@@ -159,7 +158,6 @@ export default function CrewPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<AddAgentForm>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
-  const [toolsAgent, setToolsAgent] = useState<Agent | null>(null);
   // H3 bulk retire selection.
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [retireBusy, setRetireBusy] = useState(false);
@@ -167,7 +165,6 @@ export default function CrewPage() {
   // Bulk retire is destructive, so it is gated behind a confirmation: the
   // Retire selected… control only opens this flag, never the retire itself.
   const [confirmingRetire, setConfirmingRetire] = useState(false);
-  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
 
   const toggle = (prev: Set<string>, id: string, on: boolean) => {
@@ -259,11 +256,10 @@ export default function CrewPage() {
   // deliberately null while loading).
   const submissionBlocked = coreInventoryLoading || selectionError !== null;
 
-  // Pre-check the role's recommended tools + skills when the dialog opens or the role changes.
+  // Pre-check the role's recommended skills when the dialog opens or the role changes.
   // Reset to the (possibly still-loading) defaults so a stale prior-role selection is never persisted.
   useEffect(() => {
     if (!dialogOpen) return;
-    setSelectedTools(new Set((roleDefaults?.tools ?? []).map((t) => t.id)));
     setSelectedSkills(new Set((roleDefaults?.skills ?? []).map((s) => s.id)));
   }, [dialogOpen, roleDefaults]);
 
@@ -281,11 +277,8 @@ export default function CrewPage() {
     mutationFn: async (body: CreateAgentRequest): Promise<Agent> => {
       const agent = await createAgent(body);
       try {
-        // Persist the confirmed recommendations via the bulk-replace endpoints.
-        await Promise.all([
-          setAgentTools(agent.id, [...selectedTools]),
-          setAgentSkills(agent.id, [...selectedSkills]),
-        ]);
+        // Persist the confirmed skill recommendations.
+        await setAgentSkills(agent.id, [...selectedSkills]);
       } catch (e) {
         // The agent WAS created; only applying recommendations failed. Surface that
         // accurately (and let onSuccess reveal the agent) instead of "Failed to create".
@@ -307,7 +300,7 @@ export default function CrewPage() {
         queryClient.invalidateQueries({ queryKey: ['agents'], refetchType: 'active' });
         setDialogOpen(false);
         setForm(EMPTY_FORM);
-        setError('Agent created, but applying the recommended tools/skills failed. Adjust them in Manage Tools.');
+        setError('Agent created, but applying the recommended skills failed. Adjust them on the agent card.');
       } else {
         // The admission policy's exact rejection ("Unsupported agent core: …",
         // "Unsupported execution mode: …", "Direct workspace requires …") is
@@ -401,7 +394,6 @@ export default function CrewPage() {
   const openDialog = () => {
     setForm(EMPTY_FORM);
     setError(null);
-    setSelectedTools(new Set());
     setSelectedSkills(new Set());
     setDialogOpen(true);
   };
@@ -428,7 +420,7 @@ export default function CrewPage() {
     const selectedTemplate = templates?.find((t) => t.role === form.role);
     const body: CreateAgentRequest = {
       name,
-      agentType: selectedTemplate?.agentType || 'NATIVE',
+      agentType: selectedTemplate?.agentType || 'ADK',
       role: form.role,
       model: form.model.trim() || selectedTemplate?.model || undefined,
       provider: selectedTemplate?.provider || 'openai',
@@ -529,7 +521,6 @@ export default function CrewPage() {
                   key={a.id}
                   agent={a}
                   telemetry={telemetryByAgent.get(a.id)}
-                  onManageTools={setToolsAgent}
                   selected={selectedAgents.has(a.id)}
                   onSelect={() =>
                     setSelectedAgents((prev) => toggle(prev, a.id, !prev.has(a.id)))
@@ -732,25 +723,6 @@ export default function CrewPage() {
             </>
           )}
 
-          <div style={{ marginTop: 12 }}>
-            <label>Recommended tools <span style={{ textTransform: 'none', color: 'var(--text-mute)' }}>· {selectedTools.size} selected</span></label>
-            <div style={{ maxHeight: 132, overflowY: 'auto', border: '1px solid var(--border, #2a2a2a)', borderRadius: 6, padding: 6 }}>
-              {(roleDefaults?.tools ?? []).length === 0 && (
-                <div style={{ color: 'var(--text-mute)', fontSize: 12 }}>No default tools for this role.</div>
-              )}
-              {(roleDefaults?.tools ?? []).map((t) => (
-                <label key={t.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, padding: '2px 0' }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedTools.has(t.id)}
-                    onChange={(e) => setSelectedTools((p) => toggle(p, t.id, e.target.checked))}
-                  />
-                  <span>{t.displayName || t.name}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
           <div style={{ marginTop: 10 }}>
             <label>Recommended skills <span style={{ textTransform: 'none', color: 'var(--text-mute)' }}>· {selectedSkills.size} selected</span></label>
             <div style={{ maxHeight: 120, overflowY: 'auto', border: '1px solid var(--border, #2a2a2a)', borderRadius: 6, padding: 6 }}>
@@ -796,8 +768,6 @@ export default function CrewPage() {
           </div>
         </form>
       </div>
-
-      <ManageToolsDialog agent={toolsAgent} onClose={() => setToolsAgent(null)} />
 
       {/* Bulk retire confirmation — shared destructive-action dialog (Task 10) */}
       <ConfirmDialog

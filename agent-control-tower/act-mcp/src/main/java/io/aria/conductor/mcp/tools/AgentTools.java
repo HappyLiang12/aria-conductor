@@ -39,7 +39,7 @@ public class AgentTools implements McpTool {
     }
 
     @Tool(name = "get_agent",
-            description = "Get an agent by id: name, type (NATIVE/ADK), role, model, provider, healthStatus, skills and tools.")
+            description = "Get an agent by id: name, type, role, model, provider, healthStatus and skills.")
     public String getAgent(@ToolParam(description = "Agent id") UUID id) {
         try {
             return ToolResponses.ok(agentService.getAgent(id));
@@ -51,19 +51,19 @@ public class AgentTools implements McpTool {
     }
 
     @Tool(name = "create_agent",
-            description = "Create an agent. agentType is optional and defaults to NATIVE; ADK agents run on a governed core (qoder or opencode).")
+            description = "Create an agent on a governed core (qoder or opencode; opencode by default).")
     public String createAgent(
             @ToolParam(description = "Agent name") String name,
             @ToolParam(description = "Agent role, e.g. orchestrator, worker, developer", required = false) String role,
-            @ToolParam(description = "AgentType: NATIVE or ADK; blank defaults to NATIVE", required = false) String agentType,
+            @ToolParam(description = "AgentType: ADK; blank defaults to ADK", required = false) String agentType,
             @ToolParam(description = "Agent description", required = false) String description,
             @ToolParam(description = "LLM model id", required = false) String model,
             @ToolParam(description = "LLM provider name", required = false) String provider,
-            @ToolParam(description = "ADK core name: qoder or opencode", required = false) String adkProvider,
+            @ToolParam(description = "Agent core name: qoder or opencode", required = false) String adkProvider,
             @ToolParam(description = "Extra agent config", required = false) Map<String, Object> config) {
         try {
             AgentType type = agentType == null || agentType.isBlank()
-                    ? AgentType.NATIVE
+                    ? AgentType.ADK
                     : parseAgentType(agentType);
             CreateAgentRequest request = CreateAgentRequest.builder()
                     .name(name)
@@ -134,7 +134,7 @@ public class AgentTools implements McpTool {
         try {
             return AgentType.valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid agentType '" + raw + "'. Valid: NATIVE, ADK");
+            throw new IllegalArgumentException("Invalid agentType '" + raw + "'. Valid: ADK");
         }
     }
 }

@@ -29,10 +29,18 @@ describe('Agent tools', () => {
   it('create_agent → POST /api/v1/agents with body', async () => {
     fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: { id: UUID, name: 'new' } } });
     ctx = await createTestClient();
-    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'new', agentType: 'NATIVE' } });
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'new', agentType: 'ADK' } });
     expect(JSON.parse(resultText(r)).name).toBe('new');
     expect(fetchMock.calls[0].method).toBe('POST');
     expect((fetchMock.calls[0].body as any).name).toBe('new');
+  });
+
+  it('create_agent without agentType defaults to ADK in the POST body', async () => {
+    fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: { id: UUID, name: 'defaulted' } } });
+    ctx = await createTestClient();
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { name: 'defaulted' } });
+    expect(JSON.parse(resultText(r)).name).toBe('defaulted');
+    expect((fetchMock.calls[0].body as any).agentType).toBe('ADK');
   });
 
   it('create_agent with adkProvider=opencode → POST with adkProvider in body', async () => {
@@ -107,7 +115,7 @@ describe('Agent tools — validation & error mapping', () => {
   it('create_agent rejects missing required name', async () => {
     fetchMock = mockFetch({ '/api/v1/agents': { status: 201, body: {} } });
     ctx = await createTestClient();
-    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { agentType: 'NATIVE' } });
+    const r = await ctx.client.callTool({ name: 'create_agent', arguments: { agentType: 'ADK' } });
     expect(r.isError).toBe(true);
     expect(resultText(r)).toContain('Validation error');
     expect(fetchMock.calls).toHaveLength(0);

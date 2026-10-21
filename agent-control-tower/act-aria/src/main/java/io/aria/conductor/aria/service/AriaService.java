@@ -5,7 +5,6 @@ import io.aria.conductor.aria.dto.AriaChatRequest;
 import io.aria.conductor.aria.dto.AriaChatResponse;
 import io.aria.conductor.common.AriaConstants;
 import io.aria.conductor.aria.intent.IntentClassifier;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.model.*;
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.agent.repository.RunRepository;
@@ -14,9 +13,6 @@ import static io.aria.conductor.execution.engine.AgentLoopEngine.parseMaxIterati
 import io.aria.conductor.execution.llm.*;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
-import io.aria.conductor.execution.tool.ToolExecutionEngine;
-import io.aria.conductor.execution.tool.ToolExecutionResult;
-import io.aria.conductor.common.service.ToolRegistry;
 import io.aria.conductor.knowledge.dto.CreateKnowledgeRequest;
 import io.aria.conductor.knowledge.service.KnowledgeService;
 import io.aria.conductor.common.model.PromptCall;
@@ -56,23 +52,13 @@ public class AriaService {
      * Token budget for the context-compaction summarization call. Keep small — we only need
      * 2-3 sentences of recap, not a full transcript.
      */
-    private static final int COMPACTION_SUMMARY_TOKENS = 150;
-
-    private static final String COMPACTION_PROMPT_PREFIX =
-            "Summarize this conversation context in 2-3 sentences:\n";
-
     /** Marker prefix on the synthesized summary message so it is easy to identify in logs/UI. */
     private static final String COMPACTION_MARKER = "[Earlier context] ";
 
     private final AgentLoopEngine agentLoopEngine;
     private final AgentRepository agentRepository;
     private final RunRepository runRepository;
-    private final LlmClient llmClient;
-    private final LlmProperties llmProperties;
     private final IntentClassifier intentClassifier;
-    private final ToolRegistry toolRegistryService;
-    private final ToolExecutionEngine toolExecutionEngine;
-    private final ObjectMapper toolMapper = new ObjectMapper();
     private final KnowledgeService knowledgeService;
     private final SessionTrajectoryRepository trajectoryRepository;
     private final ToolCallRepository toolCallRepository;
@@ -80,22 +66,14 @@ public class AriaService {
     public AriaService(AgentLoopEngine agentLoopEngine,
                        AgentRepository agentRepository,
                        RunRepository runRepository,
-                       LlmClient llmClient,
-                       LlmProperties llmProperties,
                        IntentClassifier intentClassifier,
-                       ToolRegistry toolRegistryService,
-                       ToolExecutionEngine toolExecutionEngine,
                        KnowledgeService knowledgeService,
                        SessionTrajectoryRepository trajectoryRepository,
                        ToolCallRepository toolCallRepository) {
         this.agentLoopEngine = agentLoopEngine;
         this.agentRepository = agentRepository;
         this.runRepository = runRepository;
-        this.llmClient = llmClient;
-        this.llmProperties = llmProperties;
         this.intentClassifier = intentClassifier;
-        this.toolRegistryService = toolRegistryService;
-        this.toolExecutionEngine = toolExecutionEngine;
         this.knowledgeService = knowledgeService;
         this.trajectoryRepository = trajectoryRepository;
         this.toolCallRepository = toolCallRepository;

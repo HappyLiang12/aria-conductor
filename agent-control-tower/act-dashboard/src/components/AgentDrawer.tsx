@@ -607,22 +607,6 @@ export function AgentDrawer() {
                 )}
               </div>
 
-              {/* Assigned Tools */}
-              <div className="section-h">Assigned Tools</div>
-              <div className="files">
-                {agent.tools?.length ? agent.tools.map(t => (
-                  <div key={t} className="file">
-                    <span className="op edit">TOOL</span>
-                    <span>{t}</span>
-                  </div>
-                )) : (
-                  <div className="file">
-                    <span className="op read">--</span>
-                    <span>No tools assigned</span>
-                  </div>
-                )}
-              </div>
-
               {/* Config (collapsed) */}
               <details style={{marginTop: 12}}>
                 <summary className="section-h" style={{display:'inline',cursor:'pointer'}}>Config</summary>

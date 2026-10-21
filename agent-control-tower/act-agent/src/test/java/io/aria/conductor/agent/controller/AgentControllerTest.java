@@ -31,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * MockMvc slice coverage for the tool/skill assignment + role-defaults endpoints.
+ * MockMvc slice coverage for the skill assignment + role-defaults endpoints.
  * Uses standaloneSetup (no Spring context / Flyway) so it verifies routing, request
  * binding, validation, and status codes independently of the database.
  */
@@ -94,18 +94,6 @@ class AgentControllerTest {
     }
 
     @Test
-    void setTools_bulkReplace_delegatesWithIds() throws Exception {
-        UUID id = UUID.randomUUID();
-        when(agentService.setTools(eq(id), eq(List.of("t1", "t2")))).thenReturn(List.of());
-
-        mockMvc.perform(put("/api/v1/agents/" + id + "/tools")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("ids", List.of("t1", "t2")))))
-                .andExpect(status().isOk());
-        verify(agentService).setTools(eq(id), eq(List.of("t1", "t2")));
-    }
-
-    @Test
     void setSkills_bulkReplace_delegatesWithIds() throws Exception {
         UUID id = UUID.randomUUID();
         when(agentService.setSkills(eq(id), eq(List.of("s1")))).thenReturn(List.of());
@@ -118,14 +106,12 @@ class AgentControllerTest {
     }
 
     @Test
-    void getRoleDefaults_returnsToolsAndSkills() throws Exception {
+    void getRoleDefaults_returnsSkills() throws Exception {
         when(agentService.getRoleDefaults("dev")).thenReturn(new RoleDefaultsResponse(
-                List.of(ToolDefinition.builder().id("t1").name("read_file").enabled(true).build()),
                 List.of(new SkillContext("s1", "triage", "d", "t", "SKILL"))));
 
         mockMvc.perform(get("/api/v1/agents/role-defaults/dev"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.tools[0].name").value("read_file"))
                 .andExpect(jsonPath("$.skills[0].id").value("s1"));
     }
 

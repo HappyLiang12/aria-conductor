@@ -1,5 +1,5 @@
 // === Enums ===
-export type AgentType = 'NATIVE' | 'ADK';
+export type AgentType = 'ADK';
 export type AgentHealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'RETIRED';
 export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'WAITING_INPUT' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABORTED';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
@@ -51,7 +51,6 @@ export interface Agent {
   healthStatus: AgentHealthStatus;
   createdAt: string;
   skills?: string[];
-  tools?: string[];
   /** Optional: absent on responses from an older backend. */
   pickupEligible?: boolean;
   pickupIneligibleReasons?: string[];
@@ -489,19 +488,6 @@ export interface AgentTemplate {
   adkProvider?: AgentCore | (string & {});
   description: string;
 }
-
-// === Tool & Skill Definitions ===
-export interface ToolDefinition {
-  id: string; name: string; displayName?: string; description: string;
-  tier: 'TIER_1' | 'TIER_2' | 'TIER_3'; category: 'GENERAL' | 'PLATFORM' | 'ADVANCED';
-  handlerClass?: string; scriptType?: 'PYTHON' | 'SHELL'; script?: string;
-  parameters: string; sandboxMode: 'NONE' | 'PROCESS' | 'DOCKER'; enabled: boolean;
-  version: number; createdAt: string;
-}
-
-export interface AgentToolAssignment { agentId: string; toolIds: string[]; skillIds: string[]; }
-
-export interface SkillDefinitionUI { id: string; name: string; description: string; tier: string; toolDependencies: string[]; enabled: boolean; }
 
 // === Adk Provider (Exchangeable Agent Provider) ===
 export interface AdkProviderInfo {

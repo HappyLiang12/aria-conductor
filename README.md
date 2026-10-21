@@ -272,7 +272,7 @@ docker build -t aria-conductor/opencode-sandbox:1.1 agent-control-tower/opencode
 |--------|-------------|
 | `act-common` | Shared models, DTOs, repositories |
 | `act-agent` | Agent lifecycle management |
-| `act-execution` | Tool execution engine, LLM client, ADK integration (opencode + qoder cores) |
+| `act-execution` | LLM client, run-owned core runtime (coordinator, launcher, adapters, Host/Sandbox backends), approvals |
 | `act-knowledge` | Knowledge base management |
 | `act-aria` | Aria AI assistant service |
 | `act-dashboard-api` | Dashboard REST API controllers |
@@ -352,9 +352,9 @@ When the backend is running, access the Swagger UI:
 
 Aria Conductor is an early-stage project with known security trade-offs for easy local
 evaluation. **Do not expose a default deployment to untrusted networks.** In particular,
-the API currently has **no built-in authentication**, the `shell_exec` tool is disabled
-by default (`tools.shell.enabled`), and Docker services bind to `127.0.0.1` only. See
-[SECURITY.md](SECURITY.md) for the full list and how to report vulnerabilities.
+the API currently has **no built-in authentication**, and Docker services bind to
+`127.0.0.1` only. See [SECURITY.md](SECURITY.md) for the full list and how to report
+vulnerabilities.
 
 ## Contributing
 

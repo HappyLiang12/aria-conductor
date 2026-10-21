@@ -1,6 +1,6 @@
 package io.aria.conductor.execution.qoder;
 
-import io.aria.conductor.execution.adk.opencode.OpenCodeSandboxManager;
+import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -13,21 +13,20 @@ import java.util.UUID;
  * OpenSandbox sandbox from the pinned image, upload a staging directory into
  * {@code /workspace}, run blocking commands and always kill the sandbox.
  *
- * <p>This is a thin wrapper over the established in-sandbox driver
- * {@link OpenCodeSandboxManager} (the only allow-listed sandbox API of this
- * repository); it deliberately re-implements nothing. Two A1 findings are baked in:
+ * <p>This is a thin wrapper over the production sandbox SDK
+ * ({@link SandboxLifecycle.OpenSandboxSdk}) the core runtime itself uses; it
+ * deliberately re-implements nothing. Two A1 findings are baked in:
  * <ul>
- *   <li>{@code createSandbox} skips the SDK health check, so the exec channel can
+ *   <li>{@code create} skips the SDK health check, so the exec channel can
  *       still refuse connections for a few seconds after creation — {@link #boot}
- *       probes it with a trivial command (mirror of the production
- *       {@code OpenCodeAdkProvider#awaitExecdReady}).</li>
+ *       probes it with a trivial command.</li>
  *   <li>A failed boot must not leak a sandbox container: the sandbox is killed
  *       before the failure is rethrown.</li>
  * </ul>
  *
- * <p>{@link #upload} maps the staging root to {@code /workspace} through
- * {@code OpenCodeSandboxManager#uploadWorkspace}: text files only, depth &le; 3,
- * &le; 4 MiB per file, mode 644 (a shell script is therefore run as
+ * <p>{@link #upload} maps the staging root to {@code /workspace} through the
+ * production upload path: text files only, depth &le; 3, &le; 4 MiB per file,
+ * mode 644 (a shell script is therefore run as
  * {@code bash /workspace/<script>.sh}, not executed directly).
  *
  * <p>Plan Global Constraint: every local E2E Qoder run must use a zero-credit model.
@@ -38,19 +37,16 @@ import java.util.UUID;
  * {@code QODER_E2E_MODEL} and pin every {@code qodercli} invocation with it.
  *
  * <p>No Qoder credentials are required by {@link #boot(String, String)}: that flow ships
- * no PAT or model key to the sandbox. The sandbox-server connection is built with
- * {@code new OpenCodeSandboxManager(serverUrl, null)}, and the manager delegates to
- * {@code SandboxLifecycle#buildConnectionConfig}, which lets the OpenSandbox SDK fall back
- * to an {@code OPEN_SANDBOX_API_KEY} environment variable if one is set; the harness itself
- * neither reads nor prints that variable.
+ * no PAT or model key to the sandbox. The SDK connection is built with
+ * {@code new SandboxLifecycle.OpenSandboxSdk(serverUrl, null)}, which lets the
+ * OpenSandbox SDK fall back to an {@code OPEN_SANDBOX_API_KEY} environment variable
+ * if one is set; the harness itself neither reads nor prints that variable.
  *
  * <p>{@link #boot(String, String, Map)} forwards a caller-supplied env map to the
- * sandbox container (the manager's sanctioned {@code createSandbox(agentId, image, env)}
- * path). Authenticated gates (A3) use it to inject the Qoder PAT as
+ * sandbox container. Authenticated gates (A3) use it to inject the Qoder PAT as
  * {@code QODER_PERSONAL_ACCESS_TOKEN} — the environment is the only channel that
  * carries it, never argv, files or logs. The harness treats the values as opaque: it
- * neither reads, logs nor prints them (the manager logs the variable count only), and
- * tests must not print the map either.
+ * neither reads, logs nor prints them, and tests must not print the map either.
  */
 final class QoderSandboxHarness implements AutoCloseable {
 
@@ -60,19 +56,20 @@ final class QoderSandboxHarness implements AutoCloseable {
     /** Models priced at 0.00x Credit per the plan's frozen CLI facts. */
     private static final Set<String> ZERO_CREDIT_MODELS = Set.of("efficient", "lite");
 
-    /** Execd-readiness probe interval (mirrors {@code OpenCodeAdkProvider#awaitExecdReady}). */
+    /** Execd-readiness probe interval. */
     private static final Duration EXEC_READY_POLL_INTERVAL = Duration.ofMillis(500);
 
     /** Execd-readiness budget — a cold first boot of a sandbox image needs several seconds. */
     private static final Duration EXEC_READY_TIMEOUT = Duration.ofSeconds(90);
 
-    private final OpenCodeSandboxManager manager;
+    private final SandboxLifecycle.OpenSandboxSdk sdk;
     private final UUID agentId;
     private final String sandboxId;
     private final String e2eModel;
 
-    private QoderSandboxHarness(OpenCodeSandboxManager manager, UUID agentId, String sandboxId, String e2eModel) {
-        this.manager = manager;
+    private QoderSandboxHarness(SandboxLifecycle.OpenSandboxSdk sdk, UUID agentId,
+                                String sandboxId, String e2eModel) {
+        this.sdk = sdk;
         this.agentId = agentId;
         this.sandboxId = sandboxId;
         this.e2eModel = e2eModel;
@@ -96,46 +93,44 @@ final class QoderSandboxHarness implements AutoCloseable {
      */
     static QoderSandboxHarness boot(String serverUrl, String image, Map<String, String> sandboxEnv) {
         String e2eModel = resolveE2eModel(); // fail closed before any sandbox is created
-        OpenCodeSandboxManager manager = new OpenCodeSandboxManager(serverUrl, null);
-        if (!manager.isServerHealthy()) {
+        SandboxLifecycle.OpenSandboxSdk sdk = new SandboxLifecycle.OpenSandboxSdk(serverUrl, null);
+        if (!sdk.isServerHealthy()) {
             throw new IllegalStateException("OpenSandbox server is not reachable at " + serverUrl
                     + " (`podman compose up -d opensandbox-server` from the repository root)");
         }
         UUID agentId = UUID.randomUUID();
         String sandboxId = null;
         try {
-            sandboxId = manager.createSandbox(agentId, image, sandboxEnv);
-            awaitExecdReady(manager, sandboxId);
-            return new QoderSandboxHarness(manager, agentId, sandboxId, e2eModel);
+            sandboxId = sdk.create(image, sandboxEnv);
+            awaitExecdReady(sdk, sandboxId);
+            return new QoderSandboxHarness(sdk, agentId, sandboxId, e2eModel);
         } catch (RuntimeException e) {
-            manager.killSandbox(sandboxId);
+            sdk.kill(sandboxId);
             throw e;
         }
     }
 
     /** Upload a staging directory into the sandbox's {@code /workspace} (see class javadoc). */
     void upload(Path stagingDir) {
-        manager.uploadWorkspace(agentId, stagingDir);
+        sdk.uploadWorkspace(sandboxId, stagingDir);
     }
 
     /** Run a shell command in the sandbox and return its combined stdout/result text (blocking). */
     String run(String command) {
-        return manager.runCommand(sandboxId, command);
+        return sdk.runCommand(sandboxId, command);
     }
 
     /**
-     * Renew this sandbox's TTL through the production manager path
-     * ({@link OpenCodeSandboxManager#renewSandbox(String, Duration)}), so gates can exercise
-     * the same call the runtime uses (A5). The manager returns {@code void} and only logs the
-     * new expiry, so callers that need to observe the effect read it back through the SDK
-     * (e.g. {@code Sandbox.connector()} + {@code getInfo().getExpiresAt()}); this passthrough
-     * only exists because a second manager cannot target this harness's sandbox. Do not copy
-     * {@code Sandbox.resumer()} for such reads: it asks the server to resume the sandbox and is
-     * rejected with HTTP 409 Conflict while the sandbox is running (observed on every A5 read),
-     * so {@code Sandbox.connector()} is the attach path that works.
+     * Renew this sandbox's TTL through the production SDK path, so gates can exercise
+     * the same call the runtime uses (A5). Callers that need to observe the effect read
+     * it back through the SDK; this passthrough only exists because a second client
+     * cannot target this harness's sandbox. Do not copy {@code Sandbox.resumer()} for
+     * such reads: it asks the server to resume the sandbox and is rejected with HTTP
+     * 409 Conflict while the sandbox is running (observed on every A5 read), so
+     * {@code Sandbox.connector()} is the attach path that works.
      */
     void renew(Duration extension) {
-        manager.renewSandbox(sandboxId, extension);
+        sdk.renew(sandboxId, extension);
     }
 
     /** The OpenSandbox sandbox id (evidence / log correlation). */
@@ -160,7 +155,7 @@ final class QoderSandboxHarness implements AutoCloseable {
     /** Kill the sandbox (idempotent). */
     @Override
     public void close() {
-        manager.killSandbox(sandboxId);
+        sdk.kill(sandboxId);
     }
 
     /**
@@ -191,17 +186,17 @@ final class QoderSandboxHarness implements AutoCloseable {
     /**
      * Wait until the sandbox exec service accepts commands.
      *
-     * <p>{@code createSandbox} skips the SDK health check (the server reports a scheme-less
-     * endpoint), so the exec channel can still refuse connections for a few seconds after the
-     * sandbox is reported as created. Mirrors the production gate
-     * ({@code OpenCodeAdkProvider#awaitExecdReady}) with a trivial {@code true} command.
+     * <p>{@code create} skips the SDK health check (the server reports a scheme-less
+     * endpoint), so the exec channel can still refuse connections for a few seconds
+     * after the sandbox is reported as created. Probes with a trivial {@code true}
+     * command.
      */
-    private static void awaitExecdReady(OpenCodeSandboxManager manager, String sandboxId) {
+    private static void awaitExecdReady(SandboxLifecycle.OpenSandboxSdk sdk, String sandboxId) {
         long deadline = System.currentTimeMillis() + EXEC_READY_TIMEOUT.toMillis();
         Exception lastFailure = null;
         while (System.currentTimeMillis() < deadline) {
             try {
-                manager.runCommand(sandboxId, "true");
+                sdk.runCommand(sandboxId, "true");
                 return;
             } catch (Exception e) {
                 lastFailure = e;

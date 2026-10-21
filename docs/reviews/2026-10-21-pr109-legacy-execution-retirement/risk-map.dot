@@ -1,0 +1,93 @@
+digraph RiskMap {
+  rankdir=TB;
+  graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.45, labelloc="t",
+         label="Risk map - PR #109 retirement blast radius (solid = confirmed by code, dashed = inferred/unknown)"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#f8fafc", color="#64748b"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  subgraph cluster_cancel {
+    label="Path 1 - operator cancel";
+    fontsize=10;
+    color="#fca5a5";
+    op [label="Operator cancels a RUNNING run", fillcolor="#e2e8f0"];
+    rs [label="RunService.cancelRun\nSet CANCELLED + completedAt\npublish RunCompletedEvent", fillcolor="#e2e8f0"];
+    rel [label="RunExecutionListener\nagentLoopEngine.cancelRun", fillcolor="#e2e8f0"];
+    eng [label="AgentLoopEngine\nmirror status / session only", fillcolor="#e2e8f0"];
+    core_live [label="Live core keeps executing\nside effects + tokens", fillcolor="#fee2e2", color="#b91c1c"];
+    deadline [label="Wall-clock deadline\nonly bound", fillcolor="#fef9c3", color="#ca8a04"];
+    r01 [label="R-01 HIGH 2 x 3 = 6\ncancel is not a verified stop", fillcolor="#fee2e2", color="#b91c1c"];
+    r02 [label="R-02 HIGH 2 x 3 = 6\nno per-run token cap", fillcolor="#fee2e2", color="#b91c1c"];
+
+    op -> rs -> rel -> eng [color="#334155"];
+    rs -> r01 [label="state is terminal", color="#b91c1c"];
+    core_live -> deadline [label="runs until", color="#b91c1c"];
+    core_live -> r02 [label="burns tokens", color="#b91c1c"];
+    eng -> core_live [label="does not request StopProof", color="#b91c1c"];
+    r01 -> core_live [style=dashed, label="exposes", color="#b91c1c"];
+  }
+
+  subgraph cluster_sdd {
+    label="Path 2 - SDD spec review";
+    fontsize=10;
+    color="#fcd34d";
+    ba [label="BA core run writes spec.md", fillcolor="#e2e8f0"];
+    capture [label="RunWorkspaceService.capture\nverified stop proof -> result-root/<runId>", fillcolor="#e2e8f0"];
+    coord [label="SpecReviewCoordinator\nrecomputes result-root from\n@Value default", fillcolor="#e2e8f0"];
+    fallback [label="Fallback: finalOutput\n(truncated / summary)", fillcolor="#fef9c3", color="#ca8a04"];
+    r03 [label="R-03 MEDIUM 2 x 2 = 4\nconfig drift breaks spec fidelity", fillcolor="#fef3c7", color="#d97706"];
+
+    ba -> capture -> coord [color="#334155"];
+    coord -> fallback [label="file missing", style=dashed, color="#d97706"];
+    coord -> r03 [label="duplicated contract", color="#d97706"];
+    fallback -> r03 [style=dashed, color="#d97706"];
+  }
+
+  subgraph cluster_upgrade {
+    label="Path 3 - upgrade";
+    fontsize=10;
+    color="#fdba74";
+    db [label="Existing database", fillcolor="#e2e8f0"];
+    v69 [label="V69 retirement migration\nNATIVE->ADK, delete assignments,\nexpire legacy-gate asks,\ndelete config keys", fillcolor="#e2e8f0"];
+    backup [label="Recovery: DB backup + Flyway repair", fillcolor="#f8fafc"];
+    r05 [label="R-05 MEDIUM 1 x 3 = 3\nirreversible data removal", fillcolor="#fef3c7", color="#d97706"];
+    migtest [label="MigrationIntegrationTest\npostconditions verified in CI", fillcolor="#dcfce7", color="#16a34a"];
+
+    db -> v69 [color="#334155"];
+    v69 -> r05 [color="#d97706"];
+    r05 -> backup [style=dashed, label="requires", color="#d97706"];
+    v69 -> migtest [label="guarded by", color="#16a34a"];
+  }
+
+  subgraph cluster_retained {
+    label="Path 4 - retained surfaces";
+    fontsize=10;
+    color="#cbd5e1";
+    packs [label="ToolPackController\npack_credentials", fillcolor="#e2e8f0"];
+    git [label="GitBranchConfig\nGIT_PACK_ID handoff", fillcolor="#e2e8f0"];
+    deleted_e2e [label="Deleted: git-pack-governance.spec.ts\nagent-tool-skill-recommendations.spec.ts\nharness-governance.spec.ts", fillcolor="#f1f5f9"];
+    r04 [label="R-04 MEDIUM 2 x 2 = 4\npack credential E2E gap", fillcolor="#fef3c7", color="#d97706"];
+    r06 [label="R-06 LOW 2 x 1 = 2\nresidual tool vocabulary", fillcolor="#f1f5f9"];
+
+    git -> packs [label="resolves token", color="#334155"];
+    packs -> r06 [color="#64748b"];
+    deleted_e2e -> r04 [label="removed coverage", color="#d97706"];
+    packs -> r04 [style=dashed, label="no e2e now", color="#d97706"];
+  }
+
+  subgraph cluster_contract {
+    label="Path 5 - agent creation contract";
+    fontsize=10;
+    color="#cbd5e1";
+    rest [label="REST CreateAgentRequest\nagentType @NotNull", fillcolor="#e2e8f0"];
+    mcp [label="MCP create_agent\nblank -> ADK", fillcolor="#e2e8f0"];
+    r08 [label="R-08 LOW 1 x 2 = 2\nasymmetry must stay documented", fillcolor="#f1f5f9"];
+
+    rest -> r08 [color="#64748b"];
+    mcp -> r08 [color="#64748b"];
+  }
+
+  assumption [shape=box, style="rounded,dashed,filled", fillcolor="#ffffff", color="#6b7280",
+              label="A-01 UNKNOWN single-node assumption\nin-process admission + local result root"];
+  coord -> assumption [style=dashed, color="#6b7280"];
+  core_live -> assumption [style=dashed, color="#6b7280"];
+}

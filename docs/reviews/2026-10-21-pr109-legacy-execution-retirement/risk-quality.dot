@@ -1,0 +1,67 @@
+digraph RiskQuality {
+  rankdir=TB;
+  graph [fontname="Helvetica", fontsize=11, nodesep=0.3, ranksep=0.45, labelloc="t",
+         label="PR #109 legacy-execution retirement - quality attributes and observed risks (2026-10-21, head 02e4453e)"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#f8fafc", color="#64748b"];
+  edge [fontname="Helvetica", fontsize=9, color="#64748b"];
+
+  goal [shape=box, style="rounded,filled", fillcolor="#e0f2fe", color="#0284c7",
+        label="Review goal: retire the dead NATIVE/ADK path\nwithout run-state, data or cost regressions"];
+
+  qa [shape=box, style="rounded,filled", fillcolor="#fef9c3", color="#ca8a04",
+      label="Quality attributes at stake\nRun-state correctness | Operability | Data safety | Cost | Validation readiness"];
+
+  subgraph cluster_elements {
+    label="Architecture elements under review";
+    fontsize=10;
+    color="#94a3b8";
+    el_cancel [label="Cancel path\nRunService -> Listener -> Engine"];
+    el_runtime [label="Run-owned core runtime\nOpenCode / Qoder\nbounded by deadline"];
+    el_sdd [label="SDD spec handoff\ncapture -> result-root -> coordinator"];
+    el_v69 [label="Flyway V69\nretirement migration"];
+    el_packs [label="Retained packs + E2E\nToolPackController / coverage"];
+    el_approval [label="Approval settlement\nApprovalGate / sweep"];
+    el_mcp [label="Agent creation contract\nREST vs MCP"];
+    { rank=same; el_cancel; el_runtime; el_sdd; el_v69; el_packs; el_approval; el_mcp; }
+  }
+
+  subgraph cluster_risks {
+    label="Risk register (P x I = score)";
+    fontsize=10;
+    color="#94a3b8";
+    r01 [fillcolor="#fee2e2", color="#b91c1c", label="R-01 Cancel does not stop the live core\n2 x 3 = 6 HIGH (pre-existing)"];
+    r02 [fillcolor="#fee2e2", color="#b91c1c", label="R-02 No per-run token cap\n2 x 3 = 6 HIGH (accepted)"];
+    r03 [fillcolor="#fef3c7", color="#d97706", label="R-03 SDD spec read via duplicated\nfilesystem contract\n2 x 2 = 4 MEDIUM (introduced)"];
+    r04 [fillcolor="#fef3c7", color="#d97706", label="R-04 Pack credential E2E coverage\nremoved with governance specs\n2 x 2 = 4 MEDIUM (introduced)"];
+    r05 [fillcolor="#fef3c7", color="#d97706", label="R-05 V69 destructive migration\n1 x 3 = 3 MEDIUM (introduced)"];
+    r06 [fillcolor="#f1f5f9", color="#64748b", label="R-06 Residual tool/pack schema\n2 x 1 = 2 LOW"];
+    r07 [fillcolor="#f1f5f9", color="#64748b", label="R-07 Approval decide-vs-sweep race\n1 x 2 = 2 LOW (pre-existing)"];
+    r08 [fillcolor="#f1f5f9", color="#64748b", label="R-08 REST/MCP agentType asymmetry\n1 x 2 = 2 LOW (documented)"];
+    { rank=same; r01; r02; r03; r04; }
+    { rank=same; r05; r06; r07; r08; }
+  }
+
+  unknown [shape=box, style="rounded,dashed,filled", fillcolor="#ffffff", color="#6b7280",
+           label="A-01 Single-node assumption\nin-process admission + local result root\nconfidence: UNKNOWN"];
+
+  goal -> qa;
+  qa -> el_cancel [label="operability"];
+  qa -> el_runtime [label="correctness + cost"];
+  qa -> el_sdd [label="data correctness"];
+  qa -> el_v69 [label="data safety"];
+  qa -> el_packs [label="validation readiness"];
+  qa -> el_approval [label="correctness"];
+  qa -> el_mcp [label="contract clarity"];
+
+  el_cancel -> r01 [color="#b91c1c"];
+  el_runtime -> r02 [color="#b91c1c"];
+  el_sdd -> r03 [color="#d97706"];
+  el_packs -> r04 [color="#d97706"];
+  el_v69 -> r05 [color="#d97706"];
+  el_packs -> r06 [color="#64748b"];
+  el_approval -> r07 [color="#64748b"];
+  el_mcp -> r08 [color="#64748b"];
+
+  el_runtime -> unknown [style=dashed, label="multi-node?", color="#6b7280"];
+  el_sdd -> unknown [style=dashed, label="shared storage?", color="#6b7280"];
+}

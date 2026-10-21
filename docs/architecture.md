@@ -74,7 +74,8 @@ The AI operator assistant that helps manage the agent fleet. Aria can create age
 - LLM provider configuration is stored in the database and managed via API
 - Supports any OpenAI-compatible API (OpenAI, DeepSeek, etc.)
 - API keys are stored encrypted; providers can be activated/deactivated
-- Circuit breaker prevents runaway token consumption
+- Each run-owned core is bounded by the run's wall-clock deadline; there is no in-process
+  per-run token cap
 
 ## Agent Cores and Execution Modes
 

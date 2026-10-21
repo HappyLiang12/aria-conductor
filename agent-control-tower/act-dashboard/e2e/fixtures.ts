@@ -543,11 +543,14 @@ export async function pollRunTerminal(
  *    {@link decideApproval} (whose response is verified field by field, so an
  *    unprocessed decision throws rather than passing) and the wait continues
  *    until the run is terminal; or
- *  - the run reaches a terminal state with no undecided ask for it.
+ *  - the run reaches a terminal state: it can no longer be gated, so the helper
+ *    returns with only the asks it actually approved.
  *
- * A terminal run can no longer be gated, so the terminal check comes first: the
- * post-run REVIEW_REQUEST ask that the kanban review flow raises for the run's
- * mirror card is display-only and must never be counted as a settled gate.
+ * A terminal run can no longer be gated, so the terminal check comes first and
+ * skips the approval read entirely: the post-run REVIEW_REQUEST ask that the
+ * kanban review flow raises for the run's mirror card is display-only and must
+ * never be counted as a settled gate. Callers that assert an exact approved
+ * ask count still fail if fewer asks were approved before the terminal state.
  *
  * It never treats an absent ask as a pass: the returned outcome names which of
  * the two happened, and the caller asserts the exact terminal evidence either

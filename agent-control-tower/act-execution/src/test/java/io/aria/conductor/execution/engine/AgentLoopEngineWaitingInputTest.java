@@ -31,7 +31,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -66,6 +68,24 @@ class AgentLoopEngineWaitingInputTest {
                 null /* coreExecutionServiceProvider */, null /* DoDService */,
                 null /* coreRunLauncherProvider */, null /* RunAdmissionQueue */,
                 kanbanRepository, inputCoordinator);
+        stubStatusWrites();
+    }
+
+    /** Mirrors the repository's conditional update onto the shared in-memory run double. */
+    private void stubStatusWrites() {
+        lenient().when(runRepository.updateStatusUnlessTerminal(any(), any(), any(), anyList()))
+                .thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    RunStatus status = invocation.getArgument(1);
+                    List<RunStatus> terminal = invocation.getArgument(3);
+                    return runRepository.findById(id)
+                            .filter(current -> !terminal.contains(current.getStatus()))
+                            .map(current -> {
+                                current.setStatus(status);
+                                return 1;
+                            })
+                            .orElse(0);
+                });
     }
 
     private static Run runIn(UUID runId, UUID agentId, RunStatus status) {
@@ -82,7 +102,6 @@ class AgentLoopEngineWaitingInputTest {
         UUID agentId = UUID.randomUUID();
         Run run = runIn(runId, agentId, RunStatus.RUNNING);
         when(runRepository.findById(runId)).thenReturn(Optional.of(run));
-        when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
         KanbanItem card = new KanbanItem();
         card.setId("card-1");
         card.setLinkedRunId(runId.toString());
@@ -119,7 +138,6 @@ class AgentLoopEngineWaitingInputTest {
         UUID runId = UUID.randomUUID();
         Run run = runIn(runId, UUID.randomUUID(), RunStatus.WAITING_INPUT);
         when(runRepository.findById(runId)).thenReturn(Optional.of(run));
-        when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
         engine.addToActiveContextsForTest(runId, run.getAgentId());
 
         engine.onRunInputReceived(new RunInputReceivedEvent(this, runId));

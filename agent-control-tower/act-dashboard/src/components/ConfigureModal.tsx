@@ -190,7 +190,7 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
             aria-selected={activeTab === 'skills'}
             onClick={() => setActiveTab('skills')}
           >
-            🧰 Skills &amp; Tools
+            🧰 Skills
           </div>
           <div
             className={`tab${activeTab === 'llm' ? ' active' : ''}`}
@@ -251,7 +251,7 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
             {activeTab === 'gates'
               ? `${gates.filter((g) => g.on).length} of ${gates.length} gates require human approval`
               : activeTab === 'skills'
-              ? `${skills.length} tools configured · ${skills.filter((s) => s.permission === 'RW').length} with full access`
+              ? `${skills.length} skills configured · ${skills.filter((s) => s.permission === 'RW').length} with full access`
               : activeTab === 'llm'
               ? 'Configure LLM providers and the one-time Qoder runtime credential'
               : activeTab === 'runtime'

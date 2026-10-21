@@ -64,9 +64,6 @@ const EXIT_OK = 0;
 const EXIT_FAIL = 1;
 const EXIT_SKIP = 2;
 
-// Diagnosis endpoint hint printed while the BA agent runs (D7b / plan Task 5).
-const DIAGNOSIS_URL = `${BASE_URL}/api/v1/adk/opencode/sandboxes/{agentId}/diagnosis`;
-
 const log = (msg) => console.log(`[sdd-e2e] ${msg}`);
 const warn = (msg) => console.warn(`[sdd-e2e][warn] ${msg}`);
 
@@ -262,21 +259,9 @@ async function pollUntil(label, fn, predicate, timeoutMin) {
 
 async function step4PollBaCompletion(client, chainId) {
   log(`step 4: polling get_workflow for BA completion (timeout ${TIMEOUT_MIN}m).`);
-  log(`        live diagnosis hint: ${DIAGNOSIS_URL}`);
-  let printedAgent = false;
   await pollUntil(
     'BA completion',
-    async () => {
-      const wf = await getWorkflow(client, chainId);
-      if (wf && !printedAgent && Array.isArray(wf.steps) && wf.steps.length > 0) {
-        const ba = wf.steps[0];
-        if (ba && ba.agentId) {
-          log(`        BA agentId=${ba.agentId} -> diagnosis: ${DIAGNOSIS_URL.replace('{agentId}', ba.agentId)}`);
-          printedAgent = true;
-        }
-      }
-      return wf;
-    },
+    async () => getWorkflow(client, chainId),
     (wf) => wf && Array.isArray(wf.steps) && wf.steps[0] && wf.steps[0].status === 'COMPLETED',
     TIMEOUT_MIN,
   );

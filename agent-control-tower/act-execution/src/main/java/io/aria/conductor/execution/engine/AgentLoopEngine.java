@@ -224,7 +224,9 @@ public class AgentLoopEngine {
         // back onto the run so the stored record and UI reflect the effective cap.
         int maxIterations = parseMaxIterationsFromConfig(agent, run.getMaxIterations());
         if (run.getMaxIterations() != maxIterations) {
-            run.setMaxIterations(maxIterations);
+            // Conditional write: a queued run that was cancelled must not receive it.
+            runRepository.updateMaxIterationsIfStartable(run.getId(), maxIterations,
+                    List.of(RunStatus.PENDING, RunStatus.PAUSED));
         }
 
         // Run-owned cores pass the admission gate while the run is still PENDING:
@@ -245,11 +247,17 @@ public class AgentLoopEngine {
                         "Run " + run.getId() + " left PENDING while queued (" + afterAdmission + "); start aborted");
             }
             eventPublisher.publishEvent(new RunIterationEvent(this, run.getId(), run.getAgentId(),
-                    1, run.getMaxIterations()));
+                    1, maxIterations));
         }
 
-        // Update run status to INITIALIZING
-        updateRunStatus(run, RunStatus.INITIALIZING);
+        // Update run status to INITIALIZING. The write itself refuses a terminal run:
+        // a cancel committing after the re-read above must not be overwritten by a
+        // stale snapshot, or dispatchRun's guard would see a non-terminal status.
+        if (!updateRunStatusDirect(run.getId(), RunStatus.INITIALIZING)) {
+            admission.settle(run.getId());
+            throw new TaskExecutionException(TaskExecutionException.Cause.ABORTED,
+                    "Run " + run.getId() + " left PENDING while queued (terminal); start aborted");
+        }
 
         // Create/load session
         sessionStateManager.loadOrCreateSession(runId, agent.getId());
@@ -374,6 +382,7 @@ public class AgentLoopEngine {
             if (isTerminal(committed)) {
                 log.info("Run {} is already terminal ({}); core launch skipped", ctx.getRunId(), committed);
                 tryEmit(emitter, "done", donePayload(ctx, null));
+                abandonContext(ctx, committed);
                 return;
             }
             CoreResult result = launcher.execute(run, agent, coreTask(ctx));
@@ -425,9 +434,11 @@ public class AgentLoopEngine {
                 .orElse(snapshot.getStatus());
     }
 
+    private static final List<RunStatus> TERMINAL_STATUSES = List.of(
+            RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
+
     private static boolean isTerminal(RunStatus status) {
-        return status == RunStatus.COMPLETED || status == RunStatus.FAILED
-                || status == RunStatus.CANCELLED || status == RunStatus.ABORTED;
+        return TERMINAL_STATUSES.contains(status);
     }
 
     /** The accepted conversation as the core task: system material, history, current request. */
@@ -502,10 +513,11 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Records the cancellation of a run whose operator cancel was verified and
-     * persisted upstream: the run-owned core stop is verified by
-     * {@code RunService.cancelRun} through {@code RunRuntimeControlPort} before
-     * the {@code RunCompletedEvent} reaches this listener.
+     * Records the cancellation of a run whose operator cancel was persisted
+     * upstream. This listener mirrors the terminal state into the active context
+     * and its session; it does not stop the core. A live run-owned core is torn
+     * down by the coordinator's own finalization path, not by this recorded
+     * transition.
      */
     public void cancelRun(UUID runId) {
         RunContext ctx = activeContexts.get(runId);
@@ -882,9 +894,17 @@ public class AgentLoopEngine {
         RunStatus committed = committedStatus(ctx.getRunId(), run);
         if (isTerminal(committed)) {
             log.info("Run {} is already terminal ({}); dispatch skipped", ctx.getRunId(), committed);
+            abandonContext(ctx, committed);
             return;
         }
-        updateRunStatusDirect(ctx.getRunId(), RunStatus.RUNNING);
+        if (!updateRunStatusDirect(ctx.getRunId(), RunStatus.RUNNING)) {
+            // The conditional write lost the race to a terminal transition that
+            // committed after the read above; never launch and never leak the context.
+            RunStatus now = committedStatus(ctx.getRunId(), run);
+            log.info("Run {} became terminal ({}) before dispatch; dispatch skipped", ctx.getRunId(), now);
+            abandonContext(ctx, now);
+            return;
+        }
 
         // Provision the per-run scratch workspace that the diff preview reads.
         try {
@@ -1160,16 +1180,6 @@ public class AgentLoopEngine {
             log.warn("Session finalization failed for {} (non-fatal): {}", ctx.getRunId(), e.getMessage());
         }
 
-        // Publish run completed event for live dashboard updates — skip if an external actor already did.
-        if (!alreadyTerminatedExternally.get()) {
-            try {
-                eventPublisher.publishEvent(new RunCompletedEvent(
-                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus, ctx.getLastAssistantResponse()));
-            } catch (Exception e) {
-                log.warn("Failed to publish run completed event: {}", e.getMessage());
-            }
-        }
-
         // Cancel any pending approvals. An ask whose own core window already
         // closed is expired by that timeout first, so the run ending cannot
         // rewrite a timed-out permission ask as a cancellation.
@@ -1206,6 +1216,19 @@ public class AgentLoopEngine {
             }
         } catch (Exception e) {
             log.warn("Failed to settle clarification asks for {}: {}", ctx.getRunId(), e.getMessage(), e);
+        }
+
+        // Publish only after the run's own asks are settled: a listener that reacts
+        // to completion (kanban review, workflow chaining) must not observe a live
+        // CLARIFICATION gate that can no longer be answered.
+        // Skip if an external actor already published the terminal event.
+        if (!alreadyTerminatedExternally.get()) {
+            try {
+                eventPublisher.publishEvent(new RunCompletedEvent(
+                        this, ctx.getRunId(), ctx.getAgentId(), finalStatus, ctx.getLastAssistantResponse()));
+            } catch (Exception e) {
+                log.warn("Failed to publish run completed event: {}", e.getMessage());
+            }
         }
 
         // Cleanup per-run workspace
@@ -1277,31 +1300,45 @@ public class AgentLoopEngine {
         return null;
     }
 
-    private void updateRunStatus(Run run, RunStatus status) {
-        run.setStatus(status);
-        runRepository.save(run);
+    private boolean updateRunStatusDirect(UUID runId, RunStatus status) {
+        // A terminal state is never overwritten, and the database decides atomically:
+        // the cancel-vs-park interleave (cancel commits CANCELLED, the waiting
+        // listener's write races in behind it) would otherwise resurrect the run and
+        // completeRun's external-cancel guard would miss.
+        int updated = runRepository.updateStatusUnlessTerminal(runId, status, Instant.now(), TERMINAL_STATUSES);
+        if (updated == 0) {
+            log.warn("Refusing to update run {} to {}: the run is terminal or missing", runId, status);
+            return false;
+        }
+        return true;
     }
 
-    private void updateRunStatusDirect(UUID runId, RunStatus status) {
-        runRepository.findById(runId).ifPresent(run -> {
-            // A terminal state is never overwritten by a direct write: the
-            // cancel-vs-park interleave (cancel commits CANCELLED, the waiting
-            // listener's write races in behind it) would otherwise resurrect the
-            // run and completeRun's external-cancel guard would miss.
-            if (isTerminalStatus(run.getStatus())) {
-                log.warn("Refusing to overwrite terminal status of run {}: persisted={}, requested={}",
-                        runId, run.getStatus(), status);
-                return;
-            }
-            run.setStatus(status);
-            runRepository.save(run);
-        });
-    }
-
-    /** Terminal run states: no direct status write may ever overwrite one. */
-    private static boolean isTerminalStatus(RunStatus status) {
-        return status == RunStatus.COMPLETED || status == RunStatus.FAILED
-                || status == RunStatus.CANCELLED || status == RunStatus.ABORTED;
+    /**
+     * Finalizes the in-memory bookkeeping of a run that is already terminal in the
+     * database (a cancel won the race before dispatch/launch). The external path
+     * already recorded the terminal row and published its event, so this only
+     * clears the context the engine created for the abandoned attempt.
+     */
+    private void abandonContext(RunContext ctx, RunStatus terminalStatus) {
+        try {
+            SessionStatus sessionStatus = switch (terminalStatus) {
+                case COMPLETED -> SessionStatus.COMPLETED;
+                case FAILED -> SessionStatus.FAILED;
+                default -> SessionStatus.CANCELLED;
+            };
+            sessionStateManager.updateSessionStatus(ctx.getRunId(), sessionStatus);
+            sessionStateManager.clearSession(ctx.getRunId());
+        } catch (Exception e) {
+            log.warn("Session finalization failed for abandoned run {} (non-fatal): {}",
+                    ctx.getRunId(), e.getMessage());
+        }
+        try {
+            workspaceManager.cleanup(ctx.getRunId());
+        } catch (Exception e) {
+            log.warn("Workspace cleanup failed for abandoned run {} (non-fatal): {}",
+                    ctx.getRunId(), e.getMessage());
+        }
+        activeContexts.remove(ctx.getRunId());
     }
 
     // ---- SSE helpers —

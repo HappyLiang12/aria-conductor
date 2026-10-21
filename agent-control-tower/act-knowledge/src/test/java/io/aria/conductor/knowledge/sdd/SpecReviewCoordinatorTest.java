@@ -21,12 +21,15 @@ import io.aria.conductor.knowledge.service.KnowledgeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -35,8 +38,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-
-import java.util.List;
 
 @ExtendWith(MockitoExtension.class)
 class SpecReviewCoordinatorTest {
@@ -50,6 +51,8 @@ class SpecReviewCoordinatorTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock PlatformTransactionManager transactionManager;
     @Mock GitBranchService gitBranchService;
+
+    @TempDir Path runResultRoot;
 
     SpecReviewCoordinator coordinator;
 
@@ -101,7 +104,7 @@ class SpecReviewCoordinatorTest {
         coordinator = new SpecReviewCoordinator(
                 knowledgeService, itemRepository, versionRepository, approvalRepository,
                 chainRepository, workflowService, eventPublisher, transactionManager,
-                gitBranchService, 1800000L);
+                gitBranchService, runResultRoot.toString(), 1800000L);
     }
 
     @Test
@@ -123,6 +126,48 @@ class SpecReviewCoordinatorTest {
         assertThat(saved.getExpiresAt()).isNotNull();
         assertThat(chain.getStatus()).isEqualTo(WorkflowChain.Status.WAITING_APPROVAL);
         verify(eventPublisher).publishEvent(any(ApprovalRequestedEvent.class));
+    }
+
+    @Test
+    void onBaStepCompleted_readsTheFullSpecFromTheRunWorkspace() throws Exception {
+        String fullSpec = "# Spec\n\n## Requirements\n- Full spec body written to the run workspace.";
+        String summary = "Spec ready. SPEC_ID=123e4567-e89b-12d3-a456-426614174000";
+        Path runDir = Files.createDirectories(runResultRoot.resolve(baRunId.toString()));
+        Files.writeString(runDir.resolve("spec.md"), fullSpec);
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, summary));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && fullSpec.equals(r.getContent())));
+        ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(approvalCaptor.capture());
+        assertThat(approvalCaptor.getValue().getContent()).isEqualTo(fullSpec);
+        assertThat(approvalCaptor.getValue().getContent()).doesNotContain("SPEC_ID=");
+    }
+
+    @Test
+    void onBaStepCompleted_fallsBackToFinalOutputWhenTheSpecFileIsMissing() {
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && specContent.equals(r.getContent())));
+    }
+
+    @Test
+    void onBaStepCompleted_fallsBackToFinalOutputWhenTheSpecPathIsNotAFile() throws Exception {
+        Files.createDirectories(runResultRoot.resolve(baRunId.toString()).resolve("spec.md"));
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        coordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, specContent));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && specContent.equals(r.getContent())));
     }
 
     @Test

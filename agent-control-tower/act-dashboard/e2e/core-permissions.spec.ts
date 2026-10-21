@@ -33,7 +33,8 @@ import {
  * Carries the coverage-map rows whose replacement is this spec:
  *  - review-decision-zone.spec.ts + approvals-decision-flow.spec.ts
  *    (decision zone resolves the ask)
- *  - git-pack-governance.spec.ts (risk-tier gate + approval lifecycle)
+ *  - git-pack-governance.spec.ts (approval lifecycle; the tool-level risk-tier and
+ *    pack-registration half was retired with the legacy tool surface on 2026-10-21)
  *  - ops-approval-surface.spec.ts (approving from an operator surface)
  *  - api/approval-denial.api.spec.ts (denial reason persists, no denied effect)
  *  - api/git-pack-gate.api.spec.ts (block-then-resume)

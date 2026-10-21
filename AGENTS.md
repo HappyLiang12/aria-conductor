@@ -58,7 +58,7 @@ no removed provider to select.
 
 | Area | Risk | Check Command |
 |------|------|---------------|
-| Execution engine / core runtime | Runaway LLM calls, token overconsumption | `cd agent-control-tower && mvn test -pl act-execution` |
+| Execution engine / core runtime | Runaway LLM calls, unbounded token consumption (no per-run token cap; runs are bounded by the wall-clock deadline) | `cd agent-control-tower && mvn test -pl act-execution` |
 | Agent lifecycle / core admission | Agent startup failure, unsupported core/mode accepted | `cd agent-control-tower && mvn test -pl act-agent` |
 | Run coordinator / run-owned core runtime | Run stuck in RUNNING, unverifiable stop, frozen-binding mismatch | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*CoreExecution*"` |
 | Approval gate state machine | Invalid state transitions block workflows | `cd agent-control-tower && mvn test -pl act-common` |

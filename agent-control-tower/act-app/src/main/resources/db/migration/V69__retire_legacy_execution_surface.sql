@@ -1,4 +1,4 @@
--- V67: Retire the legacy NATIVE/ADK execution surface.
+-- V69: Retire the legacy NATIVE/ADK execution surface.
 --
 -- The run-owned core runtime is the only execution path: the in-JVM agent loop,
 -- its ToolHandler SPI, harness profiles and tool assignment UI/API have been
@@ -16,6 +16,9 @@ UPDATE tool_definitions SET enabled = FALSE WHERE enabled = TRUE;
 DELETE FROM agent_tools;
 DELETE FROM role_tool_templates;
 DELETE FROM skill_tools;
+-- The legacy denormalized assignment columns are no longer read by any code.
+UPDATE agents SET tool_ids = NULL, skill_ids = NULL
+WHERE tool_ids IS NOT NULL OR skill_ids IS NOT NULL;
 
 -- 4. Retire the TOOL knowledge entries that backed the legacy catalogue.
 UPDATE knowledge_items
@@ -23,10 +26,20 @@ SET status = 'RETIRED', retired_at = CURRENT_TIMESTAMP
 WHERE type = 'TOOL' AND status <> 'RETIRED';
 
 -- 5. Expire pending legacy tool approvals: the in-JVM executor that would have
---    run them is gone. Native ACP asks keep their own lifecycle.
+--    run them is gone. Only the removed gate's own asks qualify: a pending
+--    REVIEW_REQUEST or CLARIFICATION ask is live operator state, and ACP asks
+--    keep their own lifecycle, so all three must survive the upgrade.
 UPDATE approvals
 SET status = 'EXPIRED', reason = 'Legacy tool approval retired', decided_at = CURRENT_TIMESTAMP
-WHERE status = 'PENDING' AND approval_type = 'TOOL_CALL' AND source <> 'ACP_PERMISSION';
+WHERE status = 'PENDING'
+  AND approval_type = 'TOOL_CALL'
+  AND ask_type = 'APPROVAL'
+  AND source = 'LEGACY_GATE';
 
--- 6. Remove harness profile configuration; it only tuned the removed in-JVM loop.
-DELETE FROM system_config WHERE config_key LIKE 'harness.%';
+-- 6. Remove configuration that only tuned removed machinery: harness profiles
+--    shaped the in-JVM loop, and the circuit breaker / ADK runtime knobs have no
+--    reader in the run-owned core runtime (V69 is the retirement point for both).
+DELETE FROM system_config
+WHERE config_key LIKE 'harness.%'
+   OR config_key LIKE 'circuit.breaker.%'
+   OR config_key LIKE 'adk.%';

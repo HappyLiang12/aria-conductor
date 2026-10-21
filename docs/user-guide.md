@@ -169,7 +169,7 @@ Navigate to **Reports** in the sidebar.
 | Tip | Detail |
 |-----|--------|
 | **Model inheritance** | If an agent has no `model` set, it uses the active LLM provider's `defaultModel` |
-| **Token budget** | Runs have a 100K token safety limit. Hitting it causes FAILED status |
+| **Run deadline** | Runs are bounded by the configured wall-clock deadline; exceeding it finalizes the run as FAILED. There is no per-run token budget |
 | **WebSocket updates** | TopBar KPIs update in real-time via WebSocket. If WS disconnects, data may appear stale — refresh the page |
 | **Theme toggle** | TopBar right — switch between dark and light mode |
 | **Notifications bell** | Shows unread system events (run completed, approval needed, etc.) |
@@ -206,4 +206,4 @@ Full API docs: `http://localhost:8080/swagger-ui.html`
 5. Click **Details** when done → see the full trajectory
 6. Go to **Chat** → find the thread → see the conversation with handoff markers
 7. Inject a message: "Next time, include token costs in the summary" → Send
-8. Go to **Knowledge** → browse the Unified Library → see approved tools/skills
+8. Go to **Knowledge** → browse the Unified Library → see approved skills and knowledge

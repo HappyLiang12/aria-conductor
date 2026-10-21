@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>The probe logic lives in {@code e2e/qoder/slice-a/02-isolation.sh}; this test only
  * boots the sandbox, uploads the script plus the repository plugin bundle
  * ({@code agent-control-tower/qoder-sandbox/plugin/}), runs the script through
- * {@code OpenCodeSandboxManager#runCommand} and fails when the script reports a leak
+ * the sandbox SDK command path and fails when the script reports a leak
  * (non-zero exit / {@code A2-ISOLATION-RESULT: FAIL}).
  *
  * <p>No credentials are involved: the script observes the CLI's own startup log

@@ -15,7 +15,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,12 +69,12 @@ class AgentToolsTest {
     }
 
     @Test
-    void createAgent_defaultsToNativeType() {
+    void createAgent_defaultsToAdkType() {
         when(agentService.createAgent(any())).thenReturn(AgentResponse.builder()
                 .id(UUID.randomUUID()).name("developer").agentType(AgentType.ADK).build());
 
         String json = tools.createAgent("developer", "worker", null, "builds things",
-                "gpt-4o", "openai", "langchain", Map.of("harnessProfile", "weak-model-safe"));
+                "gpt-4o", "openai", "opencode", null);
 
         assertThat(json).contains("\"ok\":true").contains("developer");
         ArgumentCaptor<CreateAgentRequest> captor = ArgumentCaptor.forClass(CreateAgentRequest.class);

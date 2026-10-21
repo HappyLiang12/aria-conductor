@@ -40,8 +40,9 @@ curl -X POST http://localhost:8080/api/v1/agents \
   }'
 ```
 
-Required fields: `name`. Optional: `agentType` (only `ADK`; defaults to `ADK`), `adkProvider`
-(`opencode`, the default, or `qoder`), `role`, `model`, `provider`, `config`.
+Required fields: `name`, `agentType` (only `ADK`; the REST API requires it — the MCP
+`create_agent` tool may omit it and defaults to `ADK`). Optional: `adkProvider` (`opencode`,
+the default, or `qoder`), `role`, `model`, `provider`, `config`.
 
 ### 4. Start a Run
 
@@ -119,7 +120,7 @@ curl -X POST http://localhost:8080/api/v1/knowledge/{id}/review \
   -d '{"decision": "APPROVE", "reason": "Looks good"}'
 ```
 
-Types: `SKILL`, `SCRIPT`, `PROMPT`, `TOOL`, `TEMPLATE`, `GUIDELINE`
+Types: `SKILL`, `SCRIPT`, `PROMPT`, `TEMPLATE`, `GUIDELINE`
 
 ### 10. Approvals
 

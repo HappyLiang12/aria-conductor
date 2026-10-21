@@ -64,6 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -132,7 +133,7 @@ class AgentLoopEngineCoreDispatchTest {
                 .build();
 
         when(runRepository.findById(runId)).thenReturn(Optional.of(run));
-        when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
         when(agentRepository.findById(agentId)).thenReturn(Optional.of(agent));
         when(sessionStateManager.loadOrCreateSession(runId, agentId))
                 .thenReturn(org.mockito.Mockito.mock(AgentSession.class));
@@ -140,6 +141,24 @@ class AgentLoopEngineCoreDispatchTest {
         lenient().when(trajectoryRepository.findByRunIdOrderByTurnNumberAsc(runId)).thenReturn(List.of());
         lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreRunLauncher());
+        stubStatusWrites();
+    }
+
+    /** Mirrors the repository's conditional update onto the shared in-memory run double. */
+    private void stubStatusWrites() {
+        lenient().when(runRepository.updateStatusUnlessTerminal(any(), any(), any(), anyList()))
+                .thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    RunStatus status = invocation.getArgument(1);
+                    List<RunStatus> terminal = invocation.getArgument(3);
+                    return runRepository.findById(id)
+                            .filter(current -> !terminal.contains(current.getStatus()))
+                            .map(current -> {
+                                current.setStatus(status);
+                                return 1;
+                            })
+                            .orElse(0);
+                });
     }
 
     /** The production launcher over the production catalog, with the coordinator/bindings doubles. */

@@ -30,8 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * (model pinned to {@code efficient}), pin the facts B6/C2 need for run deadlines and TTL
  * renewal:
  * <ol>
- *   <li><b>production renewal path</b>: {@code OpenCodeSandboxManager#renewSandbox(id, 30m)}
- *       is exercised through {@link QoderSandboxHarness#renew(Duration)} and the sandbox's
+ *   <li><b>production renewal path</b>: the sandbox SDK renewal call is exercised through
+ *       {@link QoderSandboxHarness#renew(Duration)} and the sandbox's
  *       {@code expiresAt} is read back with a real SDK round trip (a {@code Sandbox.connector()}
  *       handle + {@code getInfo().getExpiresAt()}; {@code Sandbox.resumer()} is attempted first
  *       but a server-side resume of a running sandbox is rejected with HTTP 409, so in practice
@@ -57,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ol>
  *
  * <p>The probe logic lives in {@code e2e/qoder/slice-a/05-wait-renewal.mjs} (a Node ESM script
- * executed in-sandbox via {@code OpenCodeSandboxManager#runCommand}); this test boots the
+ * executed in-sandbox via the sandbox SDK command path); this test boots the
  * sandbox, injects the Qoder PAT as the {@code QODER_PERSONAL_ACCESS_TOKEN} sandbox
  * environment variable (environment only, never argv — see
  * {@link QoderSandboxHarness#boot(String, String, Map)}), uploads the script, runs it and
@@ -165,7 +165,7 @@ class QoderWaitRenewalE2ETest {
             System.out.println("[A5] sandbox " + sandboxId + " ready (model pin " + harness.e2eModel() + ")");
 
             // ---- Step 1: the production renewal path, with a real SDK read of the effect ----
-            // OpenCodeSandboxManager#renewSandbox returns void and only logs, so the observable
+            // The sandbox SDK renewal call returns void and only logs, so the observable
             // is the server-side expiresAt, read back through an attached SDK handle
             // (resumer() is tried first and 409s on a running sandbox; connector() is the read path).
             OffsetDateTime expiresBefore = readExpiresAt(sandboxId);

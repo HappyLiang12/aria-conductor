@@ -31,9 +31,9 @@ public class RunExecutionListener {
 
     /**
      * Carries the cancelled terminal state from RunService (act-agent) to the
-     * engine's session bookkeeping. The run-owned core itself was already
-     * stopped and verified by RunService.cancelRun() through the runtime-control
-     * port before this after-commit event fires.
+     * engine's session bookkeeping. This path records the transition only: a
+     * live run-owned core is torn down by the coordinator's own finalization
+     * path, not by the recorded cancel.
      */
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)

@@ -18,6 +18,7 @@ import io.aria.conductor.common.port.RunBindingReaderPort;
 import io.aria.conductor.common.port.RunRuntimeControlPort;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.test.TestDataBuilder;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -25,11 +26,14 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,6 +42,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -51,7 +59,18 @@ class RunServiceTest {
     @Mock org.springframework.beans.factory.ObjectProvider<RunRuntimeControlPort> runtimeControlProvider;
     @Mock RunRuntimeControlPort runtimeControl;
     @Mock RunBindingReaderPort bindingReader;
-    @InjectMocks RunService service;
+
+    private RunService service;
+
+    @BeforeEach
+    void setUp() {
+        // The real short-transaction writer over the mocked repository/publisher: the
+        // service's orchestration (verified stop -> one conditional write -> one event)
+        // is exercised end to end. The SQL condition itself is proven against real H2
+        // by RunRepositoryCancellationIntegrationTest.
+        service = new RunService(runRepository, agentService, eventPublisher, runtimeControlProvider,
+                bindingReader, new RunCancellationWriter(runRepository, eventPublisher));
+    }
 
     private Agent healthyAgent(UUID id) {
         return TestDataBuilder.anAgent().withId(id).withHealthStatus(HealthStatus.HEALTHY).build();
@@ -59,6 +78,39 @@ class RunServiceTest {
 
     private void stubSaveReturnsArgument() {
         when(runRepository.save(any(Run.class))).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    /** Mirrors the repository's atomic conditional cancel onto the in-memory run double. */
+    private void stubCancelUpdateWins() {
+        when(runRepository.cancelIfCancelable(any(UUID.class), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses())))
+                .thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    Instant completedAt = invocation.getArgument(2);
+                    Instant updatedAt = invocation.getArgument(3);
+                    Run current = runRepository.findById(id).orElse(null);
+                    if (current == null || !RunService.cancelableStatuses().contains(current.getStatus())) {
+                        return 0;
+                    }
+                    current.setStatus(RunStatus.CANCELLED);
+                    current.setCompletedAt(completedAt);
+                    current.setUpdatedAt(updatedAt);
+                    return 1;
+                });
+    }
+
+    private static RunRepository.RunStateView stateView(RunStatus status) {
+        return new RunRepository.RunStateView() {
+            @Override
+            public RunStatus getStatus() {
+                return status;
+            }
+
+            @Override
+            public String getFinalOutput() {
+                return null;
+            }
+        };
     }
 
     // ---------------------------------------------------------------------
@@ -513,18 +565,23 @@ class RunServiceTest {
     }
 
     @Test
-    void cancelRun_fromPending_setsCompletedAtAndPublishesCompletedEvent() {
+    void cancelRun_fromPending_writesTheConditionalCancelAndPublishesCompletedEvent() {
         UUID id = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withAgentId(agentId)
-                        .withStatus(RunStatus.PENDING).build()));
-        stubSaveReturnsArgument();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.PENDING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        stubCancelUpdateWins();
 
         RunResponse response = service.cancelRun(id);
 
         assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
         assertThat(response.getCompletedAt()).isNotNull();
+
+        verify(runRepository).cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses()));
+        assertThat(run.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(run.getCompletedAt()).isNotNull();
 
         ArgumentCaptor<RunCompletedEvent> event = ArgumentCaptor.forClass(RunCompletedEvent.class);
         verify(eventPublisher).publishEvent(event.capture());
@@ -539,29 +596,224 @@ class RunServiceTest {
                 TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED).build()));
 
         assertThatThrownBy(() -> service.cancelRun(id))
-                .isInstanceOf(InvalidStateTransitionException.class);
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+        verify(runRepository, never()).cancelIfCancelable(any(), any(), any(), any(), anyList());
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
-    void cancelRun_fromAborted_setsCancelledAndPublishesCompletedEvent() {
+    void cancelRun_fromAborted_writesTheConditionalCancelAndPublishesCompletedEvent() {
         UUID id = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withAgentId(agentId)
-                        .withStatus(RunStatus.ABORTED).build()));
-        stubSaveReturnsArgument();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.ABORTED).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        stubCancelUpdateWins();
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(response.getCompletedAt()).isNotNull();
+        // ABORTED stays cancelable: the atomic update's set is derived from VALID_TRANSITIONS.
+        verify(runRepository).cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses()));
+
+        ArgumentCaptor<RunCompletedEvent> event = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(event.getValue().getAgentId()).isEqualTo(agentId);
+    }
+
+    @Test
+    void cancelableStatuses_areExactlyTheStatusesWhoseTransitionsAllowCancel() {
+        assertThat(RunService.cancelableStatuses()).containsExactlyInAnyOrder(
+                RunStatus.PENDING, RunStatus.INITIALIZING, RunStatus.RUNNING,
+                RunStatus.PAUSED, RunStatus.WAITING_INPUT, RunStatus.ABORTED);
+    }
+
+    // ── #111: a coordinator-owned run is cancelled only after a verified stop ──
+
+    @Test
+    void cancelRun_ofACoordinatorOwnedRun_verifiesTheRuntimeBeforePersistingCancelled() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        stubCancelUpdateWins();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
 
         RunResponse response = service.cancelRun(id);
 
         assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
         assertThat(response.getCompletedAt()).isNotNull();
 
+        // The verified stop returns before the one conditional write is attempted.
+        InOrder persisted = inOrder(runtimeControl, runRepository);
+        persisted.verify(runtimeControl).cancel(id);
+        persisted.verify(runRepository).cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses()));
+
+        assertThat(run.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(run.getCompletedAt()).isNotNull();
+
+        ArgumentCaptor<RunCompletedEvent> events = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(events.capture());
+        assertThat(events.getAllValues()).hasSize(1);
+        assertThat(events.getValue().getStatus()).isEqualTo(RunStatus.CANCELLED);
+    }
+
+    @Test
+    void cancelRun_whenTheRuntimeRefuses_doesNotPersistCancelledAndSurfacesTheReason() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        doThrow(new IllegalStateException(
+                        "Run " + id + " was not stopped: core reported RUNNING (verified=false)"))
+                .when(runtimeControl).cancel(id);
+        // The committed state is still cancelable, so the refusal reason must survive.
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.RUNNING)));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Run " + id + " was not stopped: core reported RUNNING (verified=false)");
+        assertThat(run.getStatus()).isEqualTo(RunStatus.RUNNING);
+        assertThat(run.getCompletedAt()).isNull();
+        // A refused (or slow) stop never reaches the writer.
+        verify(runRepository, never()).cancelIfCancelable(any(), any(), any(), any(), anyList());
+        verify(runRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_whenTheRuntimeDisappearsAfterTheRunFinalized_surfacesTheTerminalTransition() {
+        // A runtime disappearing between owns() and cancel() is a benign race when the
+        // run finalized first: the operator must see the terminal outcome, not the
+        // missing-runtime message.
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        doThrow(new IllegalStateException(
+                        "Run " + id + " has no run-owned runtime in this process; there is nothing to cancel"))
+                .when(runtimeControl).cancel(id);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.COMPLETED)));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+        verify(runRepository, never()).cancelIfCancelable(any(), any(), any(), any(), anyList());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_ofARunNoRuntimeOwns_keepsTheRecordedTransition() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        stubCancelUpdateWins();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(false);
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(response.getCompletedAt()).isNotNull();
+        verify(runtimeControl, never()).cancel(any());
+        verify(runRepository).cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses()));
+
         ArgumentCaptor<RunCompletedEvent> event = ArgumentCaptor.forClass(RunCompletedEvent.class);
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().getStatus()).isEqualTo(RunStatus.CANCELLED);
-        assertThat(event.getValue().getAgentId()).isEqualTo(agentId);
+    }
+
+    @Test
+    void cancelRun_whenTheRunFinalizesDuringTheVerifiedStop_doesNotOverwriteTerminalState() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run running = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(running));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        // The database refuses the terminal write: the run COMPLETED while the stop was in flight.
+        when(runRepository.cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses())))
+                .thenReturn(0);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.COMPLETED)));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+        assertThat(running.getStatus()).isEqualTo(RunStatus.RUNNING);
+        verify(runtimeControl).cancel(id);
+        verify(runRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_whenANonOwnedRunFinalizesBeforeTheRecordedTransition_doesNotOverwriteTerminalState() {
+        // C2: the run finalizes between the first read and the owns() check. There is no
+        // verified stop on this branch, so the atomic update is the only guard.
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run running = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(running));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(false);
+        when(runRepository.cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses())))
+                .thenReturn(0);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.COMPLETED)));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+        verify(runtimeControl, never()).cancel(any());
+        verify(runRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_whenAConcurrentCancelAlreadyWon_publishesNoSecondEvent() {
+        UUID id = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        when(runRepository.cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses())))
+                .thenReturn(0);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.CANCELLED)));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Invalid state transition for Run: CANCELLED -> CANCELLED");
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_isNotSupported_soTheVerifiedStopRunsOutsideTheDatabaseTransaction() throws Exception {
+        Transactional annotation = RunService.class
+                .getMethod("cancelRun", UUID.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(annotation).isNotNull();
+        assertThat(annotation.propagation()).isEqualTo(Propagation.NOT_SUPPORTED);
     }
 
     // ---------------------------------------------------------------------

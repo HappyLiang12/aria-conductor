@@ -14,6 +14,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,6 +31,7 @@ import java.util.concurrent.Executors;
  *   <li>{@code POST /session} — create a session, returns {@code {id, ...}}</li>
  *   <li>{@code POST /session/:id/message} — send a message and wait for the response, returns {@code {info, parts}}</li>
  *   <li>{@code POST /session/:id/abort} — abort a running session, returns {@code boolean}</li>
+ *   <li>{@code GET /session/:id/message} — list session messages {@code [{info, parts}]} (progress pump)</li>
  *   <li>{@code GET /global/health} — returns {@code {healthy, version}}</li>
  * </ul>
  *
@@ -279,6 +281,90 @@ public class OpenCodeHttpClient implements AutoCloseable {
             log.debug("OpenCode health probe failed: {}", e.getMessage());
             return false;
         }
+    }
+
+    /** One session message as the progress pump reads it: {@code info.id} plus its parts. */
+    public record MessageSnapshot(String id, List<PartSnapshot> parts) {
+    }
+
+    /**
+     * Fault-tolerant snapshot of one message part; fields the core omits stay
+     * null. {@code output} is the completed tool part's native {@code state.output}
+     * (the real wire shape); it is null while the tool has not completed.
+     */
+    public record PartSnapshot(String id, String type, String text, String toolName, String state,
+            String output) {
+    }
+
+    /**
+     * One poll of {@link #listMessages}: the observed messages plus whether the
+     * poll degraded (non-2xx, I/O failure or malformed body). A successful empty
+     * list is NOT degraded: it is the ordinary "no message yet" shape, so the
+     * pump can distinguish it from a failed poll when applying backoff.
+     */
+    public record MessageListResult(List<MessageSnapshot> messages, boolean degraded) {
+    }
+
+    /**
+     * Pump polling timeout -- deliberately short; the five-minute task timeout
+     * must never be reused for a progress poll.
+     */
+    public static final Duration LIST_MESSAGES_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * List the session messages for the progress pump ({@code GET
+     * /session/:id/message}).
+     *
+     * <p>Degradation contract: any non-2xx, I/O failure or malformed body
+     * yields a result with an EMPTY message list and {@code degraded = true}
+     * (logged at debug). A readable empty array is a successful result with
+     * {@code degraded = false}. The pump must never blow up the prompt path; it
+     * treats both an empty successful list and a degraded one as "no data" and
+     * only applies backoff to the degraded flag.
+     */
+    public MessageListResult listMessages(String sessionId) {
+        try {
+            HttpResponse<String> resp = sendNoRetry("GET", "/session/" + sessionId + "/message",
+                    null, LIST_MESSAGES_TIMEOUT);
+            if (resp.statusCode() / 100 != 2) {
+                log.debug("OpenCode listMessages {} returned status {}", sessionId, resp.statusCode());
+                return degradedList();
+            }
+            JsonNode root = objectMapper.readTree(resp.body());
+            if (!root.isArray()) {
+                log.debug("OpenCode listMessages {} returned a non-array body", sessionId);
+                return degradedList();
+            }
+            List<MessageSnapshot> out = new ArrayList<>();
+            for (JsonNode msg : root) {
+                String id = msg.path("info").path("id").asText(null);
+                List<PartSnapshot> parts = new ArrayList<>();
+                JsonNode partsNode = msg.path("parts");
+                if (partsNode.isArray()) {
+                    for (JsonNode p : partsNode) {
+                        parts.add(new PartSnapshot(
+                                p.path("id").asText(null),
+                                p.path("type").asText(null),
+                                p.has("text") ? p.path("text").asText(null) : null,
+                                p.has("tool") ? p.path("tool").asText(null) : p.path("name").asText(null),
+                                p.path("state").path("status").asText(null),
+                                p.path("state").path("output").asText(null)));
+                    }
+                }
+                out.add(new MessageSnapshot(id, parts));
+            }
+            return new MessageListResult(out, false);
+        } catch (TaskExecutionException e) {
+            log.debug("OpenCode listMessages failed for {}: {}", sessionId, e.getMessage());
+            return degradedList();
+        } catch (Exception e) {
+            log.debug("OpenCode listMessages parse failed for {}: {}", sessionId, e.getMessage());
+            return degradedList();
+        }
+    }
+
+    private static MessageListResult degradedList() {
+        return new MessageListResult(List.of(), true);
     }
 
     // ---- internal helpers ----

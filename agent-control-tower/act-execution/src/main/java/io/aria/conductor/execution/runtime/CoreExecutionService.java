@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.RunInputReceivedEvent;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunExecutionBinding;
@@ -1057,9 +1058,52 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
 
     private void handleEvent(RunRuntimeRegistry.RunRuntime runtime, CoreEvent event) {
         runtimes.forward(runtime.spec().runId(), event);
-        if ("permission.request".equals(event.type())) {
+        if ("opencode.progress".equals(event.type())) {
+            publishProgress(runtime, event);
+        } else if ("permission.request".equals(event.type())) {
             registerAsk(runtime, event);
         }
+    }
+
+    /**
+     * Maps one {@code opencode.progress} core event onto the domain
+     * {@link RunProgressEvent} the persistence/broadcast listener consumes. A
+     * malformed payload, an unknown kind or a non-positive seq is logged and
+     * dropped: progress is observability, and it never breaks or fails the run.
+     * seq is the dashboard's dedupe key and the REST replay order, so seq 0 (a
+     * missing member) is not a usable identity.
+     */
+    private void publishProgress(RunRuntimeRegistry.RunRuntime runtime, CoreEvent event) {
+        UUID runId = runtime.spec().runId();
+        RunProgressEvent.Kind kind;
+        JsonNode payload;
+        try {
+            payload = mapper.readTree(event.payloadJson() == null ? "{}" : event.payloadJson());
+            String kindName = payload.path("kind").asText(null);
+            if (kindName == null) {
+                log.warn("Run {}: an opencode.progress payload without a kind is dropped", runId);
+                return;
+            }
+            try {
+                kind = RunProgressEvent.Kind.valueOf(kindName);
+            } catch (IllegalArgumentException e) {
+                log.warn("Run {}: unknown progress kind '{}' is dropped", runId, kindName);
+                return;
+            }
+        } catch (JsonProcessingException e) {
+            log.warn("Run {}: an unreadable opencode.progress payload is dropped: {}", runId, e.getMessage());
+            return;
+        }
+        long seq = payload.path("seq").asLong(0);
+        if (seq <= 0) {
+            log.warn("Run {}: progress seq {} is not positive; the payload is dropped", runId, seq);
+            return;
+        }
+        eventPublisher.publishEvent(new RunProgressEvent(this, runId, runtime.spec().agentId(),
+                payload.path("iteration").asInt(0), kind,
+                payload.hasNonNull("content") ? payload.path("content").asText() : "",
+                payload.hasNonNull("toolName") ? payload.path("toolName").asText() : null,
+                seq));
     }
 
     /**

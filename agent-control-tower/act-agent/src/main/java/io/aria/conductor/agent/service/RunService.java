@@ -20,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -32,6 +33,14 @@ import java.util.stream.Collectors;
 public class RunService {
 
     private static final Map<RunStatus, Set<RunStatus>> VALID_TRANSITIONS;
+
+    /**
+     * Every status whose recorded transition allows CANCELLED, derived from
+     * {@link #VALID_TRANSITIONS} so the atomic cancel's WHERE clause can never
+     * drift from the state machine. ABORTED is included on purpose: a task-level
+     * abort is still cancelable.
+     */
+    private static final List<RunStatus> CANCELABLE_STATUSES;
 
     static {
         Map<RunStatus, Set<RunStatus>> transitions = new EnumMap<>(RunStatus.class);
@@ -47,18 +56,33 @@ public class RunService {
         transitions.put(RunStatus.CANCELLED, EnumSet.noneOf(RunStatus.class));
         transitions.put(RunStatus.ABORTED, EnumSet.of(RunStatus.CANCELLED));
         VALID_TRANSITIONS = Collections.unmodifiableMap(transitions);
+        CANCELABLE_STATUSES = VALID_TRANSITIONS.entrySet().stream()
+                .filter(entry -> entry.getValue().contains(RunStatus.CANCELLED))
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    /** The statuses an atomic cancel may overwrite; see {@link #CANCELABLE_STATUSES}. */
+    static List<RunStatus> cancelableStatuses() {
+        return CANCELABLE_STATUSES;
     }
 
     private final RunRepository runRepository;
     private final AgentService agentService;
     private final ApplicationEventPublisher eventPublisher;
     /**
+     * The short transactional writer that owns the atomic CANCELLED transition
+     * and its completion event. Kept separate so the verified core stop runs
+     * outside any database transaction (fix round 1, I2).
+     */
+    private final RunCancellationWriter cancellationWriter;
+    /**
      * The run's runtime-control gate (Task 19, fix round 7), optional and
      * resolved lazily: when the runtime of a run is owned by the execution
-     * coordinator, the pause/resume is verified through this port before the new
-     * state is persisted, so a PAUSED acknowledgement can never be answered for a
-     * runtime that did not confirm it. A run no deployment owns keeps the plain
-     * recorded transition.
+     * coordinator, the pause/resume/cancel is verified through this port before
+     * the new state is persisted, so a PAUSED acknowledgement -- or a
+     * CANCELLED record -- can never be answered for a runtime that did not
+     * confirm it. A run no deployment owns keeps the plain recorded transition.
      */
     private final ObjectProvider<RunRuntimeControlPort> runtimeControlProvider;
     /**
@@ -75,7 +99,8 @@ public class RunService {
     public RunService(RunRepository runRepository,
                       AgentService agentService,
                       ApplicationEventPublisher eventPublisher) {
-        this(runRepository, agentService, eventPublisher, null, null);
+        this(runRepository, agentService, eventPublisher, null, null,
+                new RunCancellationWriter(runRepository, eventPublisher));
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -83,12 +108,14 @@ public class RunService {
                       AgentService agentService,
                       ApplicationEventPublisher eventPublisher,
                       ObjectProvider<RunRuntimeControlPort> runtimeControlProvider,
-                      @org.springframework.lang.Nullable RunBindingReaderPort bindingReader) {
+                      @org.springframework.lang.Nullable RunBindingReaderPort bindingReader,
+                      RunCancellationWriter cancellationWriter) {
         this.runRepository = runRepository;
         this.agentService = agentService;
         this.eventPublisher = eventPublisher;
         this.runtimeControlProvider = runtimeControlProvider;
         this.bindingReader = bindingReader;
+        this.cancellationWriter = cancellationWriter;
     }
 
     @Transactional
@@ -215,18 +242,46 @@ public class RunService {
         return toResponse(runRepository.save(run));
     }
 
-    @Transactional
+    /**
+     * Cancels a run. When the run's runtime is owned by the execution coordinator,
+     * the stop is verified on the run-owned core FIRST -- outside any database
+     * transaction, because the verified stop may block for up to 30 s and must
+     * never pin a connection -- and only then is the atomic CANCELLED write
+     * attempted. A refused stop throws with the exact reason and leaves the run
+     * in its prior state (nothing is written and no completion event is
+     * published). A run no runtime owns keeps the plain recorded transition, with
+     * the same atomic write guarding the run-finalizes-first race.
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RunResponse cancelRun(UUID id) {
         Run run = findRunOrThrow(id);
         validateTransition(run.getStatus(), RunStatus.CANCELLED);
-        log.info("Cancelling run: id={}", id);
-        run.setStatus(RunStatus.CANCELLED);
-        run.setCompletedAt(Instant.now());
-        Run saved = runRepository.save(run);
-
-        eventPublisher.publishEvent(new RunCompletedEvent(this, saved.getId(), saved.getAgentId(), RunStatus.CANCELLED));
-
-        return toResponse(saved);
+        log.info("Requesting verified cancel: id={}", id);
+        RunRuntimeControlPort control = runtimeControlProvider == null
+                ? null : runtimeControlProvider.getIfAvailable();
+        if (control != null && control.owns(run.getAgentId(), id)) {
+            try {
+                control.cancel(id);
+            } catch (IllegalStateException refused) {
+                // A runtime that vanished between owns() and cancel() may simply mean
+                // the run finalized first. Report the committed state instead of the
+                // missing-runtime message; every other refusal keeps its exact reason.
+                RunStatus committed = runRepository.findStateById(id)
+                        .map(RunRepository.RunStateView::getStatus)
+                        .orElse(null);
+                if (committed != null && !cancelableStatuses().contains(committed)) {
+                    throw new InvalidStateTransitionException("Run", committed.name(),
+                            RunStatus.CANCELLED.name());
+                }
+                throw refused;
+            }
+        }
+        // The conditional write is the only terminal write and publishes the
+        // completion event only when it wins, so a run that finalized while the
+        // stop was in flight is never overwritten and never gets a second event.
+        Run cancelled = cancellationWriter.cancel(id);
+        log.info("Run cancelled: id={}, status={}", cancelled.getId(), cancelled.getStatus());
+        return toResponse(cancelled);
     }
 
     @Transactional

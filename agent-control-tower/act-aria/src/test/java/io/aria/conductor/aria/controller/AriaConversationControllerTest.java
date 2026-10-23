@@ -7,6 +7,7 @@ import io.aria.conductor.agent.repository.AuditEventRepository;
 import io.aria.conductor.agent.repository.RunRepository;
 import io.aria.conductor.aria.dto.TimelineEntry;
 import io.aria.conductor.aria.service.AriaService;
+import io.aria.conductor.common.exception.GlobalExceptionHandler;
 import io.aria.conductor.common.model.Run;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -14,8 +15,8 @@ import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.repository.ToolCallRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -52,7 +53,9 @@ class AriaConversationControllerTest {
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new AriaConversationController(
                 runRepository, trajectoryRepository, auditEventRepository, toolCallRepository,
-                ariaService, runService)).build();
+                ariaService, runService))
+                .setControllerAdvice(new GlobalExceptionHandler(new MockEnvironment()))
+                .build();
     }
 
     private Run run(String conversationId, RunStatus status, Instant createdAt) {
@@ -343,20 +346,42 @@ class AriaConversationControllerTest {
         mockMvc.perform(delete("/api/v1/aria/conversations/conv-1"))
                 .andExpect(status().isNoContent());
 
-        // only the two active runs get soft-cancelled
-        ArgumentCaptor<Run> captor = ArgumentCaptor.forClass(Run.class);
-        verify(runRepository, org.mockito.Mockito.times(2)).save(captor.capture());
-        assertThat(captor.getAllValues())
-                .extracting(Run::getStatus)
-                .containsOnly(RunStatus.CANCELLED);
-        assertThat(captor.getAllValues())
-                .extracting(Run::getId)
-                .containsExactlyInAnyOrder(running.getId(), pending.getId());
+        // The active runs go through the verified cancel path; the delete never
+        // writes CANCELLED directly (I3).
+        verify(runService).cancelRun(running.getId());
+        verify(runService).cancelRun(pending.getId());
+        verify(runService, never()).cancelRun(completed.getId());
+        verify(runRepository, never()).save(any(Run.class));
 
         List<UUID> allIds = List.of(running.getId(), pending.getId(), completed.getId());
         verify(toolCallRepository).deleteByRunIdIn(allIds);
         verify(trajectoryRepository).deleteByRunIdIn(allIds);
         verify(auditEventRepository).deleteByConversationId("conv-1");
+    }
+
+    @Test
+    void delete_whenAVerifiedCancelIsRefused_returns409AndPurgesNothing() throws Exception {
+        Run running = run("conv-1", RunStatus.RUNNING, Instant.now());
+        Run pending = run("conv-1", RunStatus.PENDING, Instant.now());
+        when(runRepository.findByConversationIdOrderByCreatedAtAsc("conv-1"))
+                .thenReturn(List.of(running, pending));
+        String reason = "Run " + pending.getId()
+                + " was not stopped: core reported RUNNING (verified=false)";
+        when(runService.cancelRun(pending.getId()))
+                .thenThrow(new IllegalStateException(reason));
+
+        mockMvc.perform(delete("/api/v1/aria/conversations/conv-1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(reason));
+
+        // The refusal aborts the delete before any child data is purged: nothing
+        // was relabelled and no history was destroyed.
+        verify(runService).cancelRun(running.getId());
+        verify(runService).cancelRun(pending.getId());
+        verify(runRepository, never()).save(any(Run.class));
+        verify(toolCallRepository, never()).deleteByRunIdIn(any());
+        verify(trajectoryRepository, never()).deleteByRunIdIn(any());
+        verify(auditEventRepository, never()).deleteByConversationId(any());
     }
 
     @Test

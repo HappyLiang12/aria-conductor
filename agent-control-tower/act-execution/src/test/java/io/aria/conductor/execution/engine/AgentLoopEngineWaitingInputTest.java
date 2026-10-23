@@ -25,15 +25,22 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -69,7 +76,12 @@ class AgentLoopEngineWaitingInputTest {
                 null /* coreRunLauncherProvider */, null /* RunAdmissionQueue */,
                 kanbanRepository, inputCoordinator);
         stubStatusWrites();
+        stubCompletionWrites();
     }
+
+    /** Mirrors the engine's private TERMINAL_STATUSES. */
+    private static final List<RunStatus> TERMINAL_STATUSES = List.of(
+            RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
 
     /** Mirrors the repository's conditional update onto the shared in-memory run double. */
     private void stubStatusWrites() {
@@ -86,6 +98,61 @@ class AgentLoopEngineWaitingInputTest {
                             })
                             .orElse(0);
                 });
+    }
+
+    /** Mirrors the repository's conditional completion update onto the shared in-memory run double. */
+    private void stubCompletionWrites() {
+        lenient().when(runRepository.completeIfNotTerminal(any(), any(), anyInt(), anyLong(),
+                        any(), any(), any(), any(), any(), any(), anyList()))
+                .thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    RunStatus status = invocation.getArgument(1);
+                    Run current = runRepository.findById(id).orElse(null);
+                    if (current == null || TERMINAL_STATUSES.contains(current.getStatus())) {
+                        return 0;
+                    }
+                    current.setStatus(status);
+                    current.setIterationCount(invocation.getArgument(2));
+                    current.setTotalTokensUsed(invocation.getArgument(3));
+                    current.setCompletedAt(invocation.getArgument(4));
+                    String finalOutput = invocation.getArgument(5);
+                    if (finalOutput != null) {
+                        current.setFinalOutput(finalOutput);
+                    }
+                    String errorMessage = invocation.getArgument(6);
+                    if (errorMessage != null) {
+                        current.setErrorMessage(errorMessage);
+                    }
+                    String errorCode = invocation.getArgument(7);
+                    if (errorCode != null) {
+                        current.setErrorCode(errorCode);
+                    }
+                    String errorSurface = invocation.getArgument(8);
+                    if (errorSurface != null) {
+                        current.setErrorSurface(errorSurface);
+                    }
+                    current.setUpdatedAt(invocation.getArgument(9));
+                    return 1;
+                });
+    }
+
+    private record CompletionWrite(RunStatus status, String finalOutput, String errorMessage,
+                                   String errorCode, String errorSurface) {
+    }
+
+    /** The exact payload of the one conditional completion write completeRun issued. */
+    private CompletionWrite captureCompletionWrite(UUID runId, RunContext ctx) {
+        ArgumentCaptor<RunStatus> status = ArgumentCaptor.forClass(RunStatus.class);
+        ArgumentCaptor<String> finalOutput = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> errorMessage = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> errorCode = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> errorSurface = ArgumentCaptor.forClass(String.class);
+        verify(runRepository).completeIfNotTerminal(eq(runId), status.capture(),
+                eq(ctx.getIterationCount()), eq(ctx.getTotalTokensUsed()), any(Instant.class),
+                finalOutput.capture(), errorMessage.capture(), errorCode.capture(),
+                errorSurface.capture(), any(Instant.class), eq(TERMINAL_STATUSES));
+        return new CompletionWrite(status.getValue(), finalOutput.getValue(), errorMessage.getValue(),
+                errorCode.getValue(), errorSurface.getValue());
     }
 
     private static Run runIn(UUID runId, UUID agentId, RunStatus status) {
@@ -209,7 +276,8 @@ class AgentLoopEngineWaitingInputTest {
                 .askType(Approval.AskType.QUESTION).source(ApprovalSource.CLARIFICATION).build();
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of(ask));
-        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(
+                runIn(runId, ctx.getAgentId(), RunStatus.RUNNING)));
         when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
 
         engine.completeRun(ctx, RunStatus.COMPLETED);
@@ -231,7 +299,8 @@ class AgentLoopEngineWaitingInputTest {
                 .askType(Approval.AskType.QUESTION).source(ApprovalSource.CLARIFICATION).build();
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of(ask));
-        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(
+                runIn(runId, ctx.getAgentId(), RunStatus.RUNNING)));
         when(approvalRepository.save(any(Approval.class))).thenAnswer(inv -> inv.getArgument(0));
 
         engine.completeRun(ctx, RunStatus.CANCELLED);
@@ -251,7 +320,8 @@ class AgentLoopEngineWaitingInputTest {
     void completeRunCancelledPersistsTheRecordedTerminationReason() {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
-        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(
+                runIn(runId, ctx.getAgentId(), RunStatus.RUNNING)));
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
         when(inputCoordinator.consumeTerminationFailure(runId))
@@ -263,14 +333,14 @@ class AgentLoopEngineWaitingInputTest {
 
         engine.completeRun(ctx, RunStatus.CANCELLED);
 
-        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
-        verify(runRepository).save(saved.capture());
-        assertThat(saved.getValue().getErrorMessage())
+        CompletionWrite written = captureCompletionWrite(runId, ctx);
+        assertThat(written.status()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(written.errorMessage())
                 .isEqualTo("Run deadline reached at 2026-10-20T12:00:00Z"
                         + " (aria.tasks.deadline-minutes in Configure > System Config)."
                         + " Re-dispatch with a longer deadline or split the task.");
-        assertThat(saved.getValue().getErrorCode()).isEqualTo("RUN_DEADLINE_REACHED");
-        assertThat(saved.getValue().getErrorSurface()).isEqualTo("SYSTEM_CONFIG");
+        assertThat(written.errorCode()).isEqualTo("RUN_DEADLINE_REACHED");
+        assertThat(written.errorSurface()).isEqualTo("SYSTEM_CONFIG");
 
         // The dashboard reads the same repair identity from the completion event.
         ArgumentCaptor<RunCompletedEvent> published = ArgumentCaptor.forClass(RunCompletedEvent.class);
@@ -284,7 +354,7 @@ class AgentLoopEngineWaitingInputTest {
     void completeRunCompletedConsumesButDoesNotPersistAStaleTerminationFailure() {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
-        Run run = new Run();
+        Run run = runIn(runId, ctx.getAgentId(), RunStatus.RUNNING);
         when(runRepository.findById(runId)).thenReturn(Optional.of(run));
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
@@ -298,12 +368,11 @@ class AgentLoopEngineWaitingInputTest {
         engine.completeRun(ctx, RunStatus.COMPLETED);
 
         verify(inputCoordinator).consumeTerminationFailure(runId);
-        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
-        verify(runRepository).save(saved.capture());
-        assertThat(saved.getValue().getStatus()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(saved.getValue().getErrorMessage()).isNull();
-        assertThat(saved.getValue().getErrorCode()).isNull();
-        assertThat(saved.getValue().getErrorSurface()).isNull();
+        CompletionWrite written = captureCompletionWrite(runId, ctx);
+        assertThat(written.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(written.errorMessage()).isNull();
+        assertThat(written.errorCode()).isNull();
+        assertThat(written.errorSurface()).isNull();
 
         ArgumentCaptor<RunCompletedEvent> published = ArgumentCaptor.forClass(RunCompletedEvent.class);
         verify(eventPublisher).publishEvent(published.capture());
@@ -317,15 +386,16 @@ class AgentLoopEngineWaitingInputTest {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
         ctx.addError((String) null);
-        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(
+                runIn(runId, ctx.getAgentId(), RunStatus.RUNNING)));
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
 
         engine.completeRun(ctx, RunStatus.FAILED);
 
-        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
-        verify(runRepository).save(saved.capture());
-        assertThat(saved.getValue().getErrorMessage()).isEqualTo(
+        CompletionWrite written = captureCompletionWrite(runId, ctx);
+        assertThat(written.status()).isEqualTo(RunStatus.FAILED);
+        assertThat(written.errorMessage()).isEqualTo(
                 "Run failed without an error message; check the backend log for the failure details.");
     }
 
@@ -334,18 +404,39 @@ class AgentLoopEngineWaitingInputTest {
         UUID runId = UUID.randomUUID();
         RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
         ctx.addError("x".repeat(5000));
-        when(runRepository.findById(runId)).thenReturn(Optional.of(new Run()));
+        when(runRepository.findById(runId)).thenReturn(Optional.of(
+                runIn(runId, ctx.getAgentId(), RunStatus.RUNNING)));
         when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
                 .thenReturn(List.of());
 
         engine.completeRun(ctx, RunStatus.FAILED);
 
-        ArgumentCaptor<Run> saved = ArgumentCaptor.forClass(Run.class);
-        verify(runRepository).save(saved.capture());
+        CompletionWrite written = captureCompletionWrite(runId, ctx);
         // error_message is VARCHAR(2000): bounded below the column limit with an
         // honest marker naming exactly how much text was dropped.
-        assertThat(saved.getValue().getErrorMessage())
+        assertThat(written.errorMessage())
                 .hasSize(1887)
                 .endsWith("... [truncated, 3150 more characters]");
+    }
+
+    @Test
+    void completeRun_whenAnotherWriterOwnsTheTerminalTransition_publishesNoCompletionEvent() {
+        // I1: the conditional update lost because a cancel (or another completion)
+        // already committed the terminal transition and published its event. This
+        // completion owns neither the row nor the event.
+        UUID runId = UUID.randomUUID();
+        RunContext ctx = engine.addToActiveContextsForTest(runId, UUID.randomUUID());
+        // doReturn (not when) so the setup's mirroring answer is not executed while stubbing.
+        doReturn(0).when(runRepository).completeIfNotTerminal(any(), any(), anyInt(), anyLong(),
+                any(), any(), any(), any(), any(), any(), anyList());
+        when(approvalRepository.findByRunIdAndStatusAndSource(runId, ApprovalStatus.PENDING, ApprovalSource.CLARIFICATION))
+                .thenReturn(List.of());
+
+        engine.completeRun(ctx, RunStatus.COMPLETED);
+
+        verify(runRepository).completeIfNotTerminal(eq(runId), eq(RunStatus.COMPLETED),
+                eq(ctx.getIterationCount()), eq(ctx.getTotalTokensUsed()), any(Instant.class),
+                isNull(), isNull(), isNull(), isNull(), any(Instant.class), eq(TERMINAL_STATUSES));
+        verify(eventPublisher, never()).publishEvent(any(RunCompletedEvent.class));
     }
 }

@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -98,5 +99,42 @@ class CoordinatedRunRuntimeControlTest {
                 CompletableFuture.completedFuture(new ControlAck(ControlState.RUNNING, true)));
 
         control.resume(runId);
+    }
+
+    @Test
+    void cancel_passesOnAVerifiedStoppedAck() {
+        CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
+        when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
+        when(coordinator.cancel(runId)).thenReturn(
+                CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true)));
+
+        control.cancel(runId);
+
+        verify(coordinator).cancel(runId);
+    }
+
+    @Test
+    void cancel_refusalSurfacesTheExactPendingControlReason() {
+        CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
+        when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
+        when(coordinator.cancel(runId)).thenReturn(
+                CompletableFuture.completedFuture(new ControlAck(ControlState.RUNNING, false)));
+        String refusal = "Stop refused for run " + runId
+                + ": the backend reported allWritersStopped=false";
+        when(coordinator.pendingControl(runId)).thenReturn(Optional.of(new RunRuntimeRegistry.ControlRequest(
+                ControlState.STOPPED, Instant.now(), refusal)));
+
+        assertThatThrownBy(() -> control.cancel(runId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Run " + runId + " was not stopped: " + refusal);
+    }
+
+    @Test
+    void cancel_withoutCoordinator_refuses() {
+        CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
+
+        assertThatThrownBy(() -> control.cancel(runId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Run " + runId + " has no deployed run coordinator to verify the cancel");
     }
 }

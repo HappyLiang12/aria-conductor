@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.adk.opencode;
 
+import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo;
 import com.github.tomakehurst.wiremock.junit5.WireMockTest;
 import io.aria.conductor.execution.adk.TaskExecutionException;
@@ -13,11 +14,13 @@ import java.util.List;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath;
 import static com.github.tomakehurst.wiremock.client.WireMock.notMatching;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.verify;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -193,5 +196,125 @@ class OpenCodeHttpClientTest {
                 .isInstanceOf(TaskExecutionException.class)
                 .satisfies(e -> assertThat(((TaskExecutionException) e).cause())
                         .isEqualTo(TaskExecutionException.Cause.PROVIDER_ERROR));
+    }
+
+    // ---- listMessages (progress pump data source) ----
+
+    @Test
+    void listMessages_parsesMessageAndPartSnapshots() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                [
+                                  {
+                                    "info": { "id": "m1", "role": "assistant" },
+                                    "parts": [
+                                      { "id": "p1", "type": "reasoning", "text": "locating scheduler" },
+                                      { "id": "p2", "type": "tool", "tool": "bash", "state": { "status": "completed", "output": "ok" } }
+                                    ]
+                                  },
+                                  {
+                                    "info": { "id": "m2", "role": "assistant" },
+                                    "parts": [ { "id": "p3", "type": "text", "text": "done" } ]
+                                  }
+                                ]
+                                """)));
+
+        OpenCodeHttpClient.MessageListResult result = client.listMessages("sess-abc");
+
+        assertThat(result.degraded()).isFalse();
+        List<OpenCodeHttpClient.MessageSnapshot> snaps = result.messages();
+        assertThat(snaps).hasSize(2);
+        assertThat(snaps.get(0).id()).isEqualTo("m1");
+        assertThat(snaps.get(0).parts()).hasSize(2);
+        assertThat(snaps.get(0).parts().get(0).id()).isEqualTo("p1");
+        assertThat(snaps.get(0).parts().get(0).type()).isEqualTo("reasoning");
+        assertThat(snaps.get(0).parts().get(0).text()).isEqualTo("locating scheduler");
+        assertThat(snaps.get(0).parts().get(1).toolName()).isEqualTo("bash");
+        assertThat(snaps.get(0).parts().get(1).state()).isEqualTo("completed");
+        assertThat(snaps.get(0).parts().get(1).output()).isEqualTo("ok");
+        assertThat(snaps.get(1).id()).isEqualTo("m2");
+        assertThat(snaps.get(1).parts().get(0).text()).isEqualTo("done");
+    }
+
+    @Test
+    void listMessages_requestsTheExactSessionMessagesPath() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("[]")));
+
+        OpenCodeHttpClient.MessageListResult result = client.listMessages("sess-abc");
+        assertThat(result.messages()).isEmpty();
+        assertThat(result.degraded())
+                .as("a readable empty array is 'no data yet', not a degraded poll")
+                .isFalse();
+
+        verify(getRequestedFor(urlEqualTo("/session/sess-abc/message")));
+    }
+
+    @Test
+    void listMessages_non2xxReturnsDegradedEmptyResultWithoutThrowing() {
+        // No stub for the 404 case → WireMock answers 404; the pump must degrade,
+        // never blow up the task.
+        OpenCodeHttpClient.MessageListResult missing = client.listMessages("sess-missing");
+        assertThat(missing.messages()).isEmpty();
+        assertThat(missing.degraded()).isTrue();
+
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(500)));
+        OpenCodeHttpClient.MessageListResult serverError = client.listMessages("sess-abc");
+        assertThat(serverError.messages()).isEmpty();
+        assertThat(serverError.degraded()).isTrue();
+    }
+
+    @Test
+    void listMessages_malformedBodyReturnsDegradedEmptyResultWithoutThrowing() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("{not json")));
+        OpenCodeHttpClient.MessageListResult malformed = client.listMessages("sess-abc");
+        assertThat(malformed.messages()).isEmpty();
+        assertThat(malformed.degraded()).isTrue();
+
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"not\":\"an array\"}")));
+        OpenCodeHttpClient.MessageListResult nonArray = client.listMessages("sess-abc");
+        assertThat(nonArray.messages()).isEmpty();
+        assertThat(nonArray.degraded()).isTrue();
+    }
+
+    @Test
+    void listMessages_connectionFailureReturnsDegradedEmptyResultWithoutThrowing() {
+        stubFor(get(urlEqualTo("/session/sess-io/message"))
+                .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+
+        OpenCodeHttpClient.MessageListResult result = client.listMessages("sess-io");
+
+        assertThat(result.messages()).isEmpty();
+        assertThat(result.degraded()).isTrue();
+    }
+
+    @Test
+    void listMessages_toleratesMissingPartFields() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withBody("""
+                                [ { "info": { "id": "m1" }, "parts": [ { "type": "text" }, { } ] } ]
+                                """)));
+
+        OpenCodeHttpClient.MessageListResult result = client.listMessages("sess-abc");
+
+        assertThat(result.degraded()).isFalse();
+        List<OpenCodeHttpClient.MessageSnapshot> snaps = result.messages();
+        assertThat(snaps).hasSize(1);
+        assertThat(snaps.get(0).id()).isEqualTo("m1");
+        assertThat(snaps.get(0).parts()).hasSize(2);
+        assertThat(snaps.get(0).parts().get(0).id()).isNull();
+        assertThat(snaps.get(0).parts().get(0).text()).isNull();
+        assertThat(snaps.get(0).parts().get(0).toolName()).isNull();
+        assertThat(snaps.get(0).parts().get(0).state()).isNull();
+        assertThat(snaps.get(0).parts().get(0).output()).isNull();
+        assertThat(snaps.get(0).parts().get(1).type()).isNull();
     }
 }

@@ -2,6 +2,7 @@ package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.agent.repository.AgentRepository;
 import io.aria.conductor.common.event.RunInputReceivedEvent;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
@@ -12,6 +13,7 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.execution.adk.TaskExecutionException;
+import io.aria.conductor.execution.approval.NativePermission;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
 import io.aria.conductor.execution.approval.PermissionReply;
 import io.aria.conductor.execution.credential.CoreCredentialService;
@@ -22,6 +24,7 @@ import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.net.URI;
@@ -1023,6 +1026,94 @@ class CoreExecutionServiceTest {
         assertThat(observed).containsExactly(
                 new CoreEvent("session.update", RUN, "session-1", "1", "{\"seq\":1}"),
                 new CoreEvent("prompt.result", RUN, "session-1", "1", "{\"stopReason\":\"end\"}"));
+    }
+
+    @Test
+    void anOpencodeProgressCoreEventIsMappedToExactlyOneRunProgressEvent() {
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"TOOL_CALL\",\"content\":\"listing files\",\"toolName\":\"bash\","
+                        + "\"seq\":7,\"iteration\":0}"));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        List<RunProgressEvent> progress = publishedEvents.stream()
+                .filter(RunProgressEvent.class::isInstance)
+                .map(RunProgressEvent.class::cast)
+                .toList();
+        assertThat(progress).hasSize(1);
+        RunProgressEvent event = progress.get(0);
+        assertThat(event.getSource()).isSameAs(service);
+        assertThat(event.getRunId()).isEqualTo(RUN);
+        assertThat(event.getAgentId()).isEqualTo(AGENT);
+        assertThat(event.getIteration()).isZero();
+        assertThat(event.getKind()).isEqualTo(RunProgressEvent.Kind.TOOL_CALL);
+        assertThat(event.getContent()).isEqualTo("listing files");
+        assertThat(event.getToolName()).isEqualTo("bash");
+        assertThat(event.getSeq()).isEqualTo(7);
+    }
+
+    @Test
+    void anUnknownMissingKindOrMalformedProgressPayloadIsDroppedWithoutPublishingOrBreakingTheRun() {
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"DANCE\",\"content\":\"nope\",\"toolName\":null,\"seq\":1,\"iteration\":0}"));
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"content\":\"no kind member\",\"toolName\":null,\"seq\":1,\"iteration\":0}"));
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null, "{not json"));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        assertThat(published(RunProgressEvent.class)).isEmpty();
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+    }
+
+    @Test
+    void progressWithANonPositiveOrMissingSeqIsDropped() {
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"THINKING\",\"content\":\"zero\",\"toolName\":null,\"seq\":0,\"iteration\":0}"));
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"THINKING\",\"content\":\"negative\",\"toolName\":null,\"seq\":-3,\"iteration\":0}"));
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"THINKING\",\"content\":\"missing\",\"toolName\":null,\"iteration\":0}"));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        assertThat(published(RunProgressEvent.class))
+                .as("seq is the dashboard dedupe key and the replay order; 0/missing is not an identity")
+                .isEmpty();
+        assertThat(binding.getRuntimeState()).isEqualTo("COMPLETED/BACKEND_SUSPEND");
+    }
+
+    @Test
+    void aProgressEventDoesNotInterfereWithPermissionHandling() {
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"THINKING\",\"content\":\"considering\",\"toolName\":null,"
+                        + "\"seq\":3,\"iteration\":0}"));
+        session.events.add(new CoreEvent("permission.request", RUN, "session-1", "7",
+                "{\"requestId\":7,\"toolName\":\"write_file\",\"options\":"
+                        + "[{\"optionId\":\"proceed_once\",\"kind\":\"allow_once\"},"
+                        + "{\"optionId\":\"cancel\",\"kind\":\"reject_once\"}]}"));
+        when(permissions.register(any())).thenReturn(APPROVAL);
+
+        service.execute(spec(), adapter, task());
+
+        ArgumentCaptor<NativePermission> ask = ArgumentCaptor.forClass(NativePermission.class);
+        verify(permissions).register(ask.capture());
+        assertThat(ask.getValue().runId()).isEqualTo(RUN);
+        assertThat(ask.getValue().requestId()).isEqualTo("7");
+        assertThat(ask.getValue().toolName()).isEqualTo("write_file");
+        assertThat(ask.getValue().options()).hasSize(2);
+        assertThat(runtimes.find(RUN).orElseThrow().permissionAsks()).containsExactly(APPROVAL);
+        List<RunProgressEvent> progress = publishedEvents.stream()
+                .filter(RunProgressEvent.class::isInstance)
+                .map(RunProgressEvent.class::cast)
+                .toList();
+        assertThat(progress).hasSize(1);
+        assertThat(progress.get(0).getKind()).isEqualTo(RunProgressEvent.Kind.THINKING);
+        assertThat(progress.get(0).getContent()).isEqualTo("considering");
+        assertThat(progress.get(0).getSeq()).isEqualTo(3);
     }
 
     // ------------------------------------------------------------------ clarification waiting loop

@@ -717,6 +717,41 @@ class RunServiceTest {
     }
 
     @Test
+    void cancelRun_whenTheOwnedRuntimeVanishesWithANonTerminalRow_recordsTheTransition() {
+        // #111 parked/exited runtime: owns() said true, then the runtime exited in
+        // the window before cancel(). The committed row is still non-terminal, so
+        // there is no live core left to stop -- the recorded transition must still
+        // be written, not answered with the missing-runtime refusal.
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        Run run = TestDataBuilder.aRun().withId(id).withAgentId(agentId)
+                .withStatus(RunStatus.RUNNING).build();
+        when(runRepository.findById(id)).thenReturn(Optional.of(run));
+        stubCancelUpdateWins();
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true, false);
+        doThrow(new IllegalStateException(
+                        "Run " + id + " has no run-owned runtime in this process; there is nothing to cancel"))
+                .when(runtimeControl).cancel(id);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.RUNNING)));
+
+        RunResponse response = service.cancelRun(id);
+
+        assertThat(response.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(response.getCompletedAt()).isNotNull();
+        assertThat(run.getStatus()).isEqualTo(RunStatus.CANCELLED);
+        verify(runtimeControl).cancel(id);
+        verify(runRepository).cancelIfCancelable(eq(id), eq(RunStatus.CANCELLED),
+                any(Instant.class), any(Instant.class), eq(RunService.cancelableStatuses()));
+
+        ArgumentCaptor<RunCompletedEvent> events = ArgumentCaptor.forClass(RunCompletedEvent.class);
+        verify(eventPublisher).publishEvent(events.capture());
+        assertThat(events.getAllValues()).hasSize(1);
+        assertThat(events.getValue().getStatus()).isEqualTo(RunStatus.CANCELLED);
+        assertThat(events.getValue().getAgentId()).isEqualTo(agentId);
+    }
+
+    @Test
     void cancelRun_ofARunNoRuntimeOwns_keepsTheRecordedTransition() {
         UUID agentId = UUID.randomUUID();
         UUID id = UUID.randomUUID();

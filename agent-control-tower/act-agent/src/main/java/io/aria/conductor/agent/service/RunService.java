@@ -249,8 +249,11 @@ public class RunService {
      * never pin a connection -- and only then is the atomic CANCELLED write
      * attempted. A refused stop throws with the exact reason and leaves the run
      * in its prior state (nothing is written and no completion event is
-     * published). A run no runtime owns keeps the plain recorded transition, with
-     * the same atomic write guarding the run-finalizes-first race.
+     * published) -- unless the runtime vanished while the committed row is still
+     * non-terminal, in which case there is no live core left to stop and the
+     * recorded transition is written instead. A run no runtime owns keeps the
+     * plain recorded transition, with the same atomic write guarding the
+     * run-finalizes-first race.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RunResponse cancelRun(UUID id) {
@@ -273,7 +276,14 @@ public class RunService {
                     throw new InvalidStateTransitionException("Run", committed.name(),
                             RunStatus.CANCELLED.name());
                 }
-                throw refused;
+                if (control.owns(run.getAgentId(), id)) {
+                    // The runtime is still owned by this process and refused the stop:
+                    // a live core that did not confirm must remain an exact refusal.
+                    throw refused;
+                }
+                // The runtime vanished between owns() and cancel() while the committed
+                // row is still non-terminal: there is no live core left to stop, so
+                // fall through to the recorded transition.
             }
         }
         // The conditional write is the only terminal write and publishes the

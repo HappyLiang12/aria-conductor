@@ -303,6 +303,38 @@ class KanbanTransitionIntegrityIntegrationTest {
         assertThat(after.getStatus()).isEqualTo(KanbanStatus.REVIEW);
         assertThat(after.getLinkedRunId()).isEqualTo(runId.toString());
         assertThat(after.getLinkedAgentId()).isEqualTo(reviewAgentId);
+        // The linked run's cancel is deferred to the card transaction's commit: a
+        // rolled-back request-changes must leave the run live, not end it for a
+        // re-dispatch that never happened. (Cancelling inline used to commit the
+        // CANCELLED row and its RunCompletedEvent outside this rollback, and that
+        // event is what dragged the card to CANCELLED.)
+        assertThat(runRepository.findById(runId).orElseThrow().getStatus()).isEqualTo(RunStatus.RUNNING);
+    }
+
+    @Test
+    void committedRequestChangesCancelsTheLinkedRunAndRedispatches() {
+        KanbanItem card = kanbanService.create(CreateKanbanItemRequest.builder().title("changes commit").build());
+        KanbanItem running = kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.IN_PROGRESS).build());
+        UUID previousRunId = UUID.fromString(running.getLinkedRunId());
+        awaitRunning(previousRunId);
+        kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.REVIEW).build());
+
+        KanbanItem redispatched = kanbanTransitionService.transition(card.getId(), TransitionRequest.builder()
+                .status(KanbanStatus.TODO)
+                .feedback("address the review notes")
+                .build());
+
+        // The deferral must not drop the stop: once the card transaction commits,
+        // the previous attempt is cancelled...
+        assertThat(runRepository.findById(previousRunId).orElseThrow().getStatus())
+                .isEqualTo(RunStatus.CANCELLED);
+        // ...and the same gesture re-dispatches the card on a fresh run.
+        assertThat(redispatched.getStatus()).isEqualTo(KanbanStatus.IN_PROGRESS);
+        UUID freshRunId = UUID.fromString(redispatched.getLinkedRunId());
+        assertThat(freshRunId).isNotEqualTo(previousRunId);
+        assertThat(runRepository.findById(freshRunId)).isPresent();
     }
 
     @Test

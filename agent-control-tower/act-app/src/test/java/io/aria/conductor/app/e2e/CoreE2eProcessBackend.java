@@ -217,9 +217,38 @@ public final class CoreE2eProcessBackend implements ExecutionBackend {
         return state.controller.resume(resolve(handle), Objects.requireNonNull(deadline, "deadline"));
     }
 
+    /**
+     * Verified stop of the run's owned peer tree, with the harness-only
+     * already-gone fallback.
+     *
+     * <p>The real controller runs first and its answer is authoritative. Its
+     * production contract deliberately refuses a root that vanished without a
+     * kill from that stop (it can no longer enumerate or attribute whatever the
+     * root orphaned). The harness mock session, however, cancels a run by
+     * terminating its mock peer itself, so by the time the run finalizes the peer
+     * root is already gone and the controller answers {@code allWritersStopped=false}
+     * for a tree that has in fact stopped. The harness transports a
+     * single-process mock peer fixture, so a gone root with no controller binding
+     * left is a verified stopped writer tree here.
+     *
+     * <p>The fallback is therefore narrow on purpose: it applies only when the
+     * owned peer root is already gone ({@code ProcessHandle.of(rootPid).isEmpty()})
+     * and the controller no longer owns the record ({@code !controller.owns(owned)}).
+     * A live root, or one the controller still owns, keeps the controller's
+     * refusal unchanged — this must never mask a live peer or descendant. The
+     * production verified-stop contract is untouched.
+     */
     @Override
     public StopProof stopWriters(RuntimeHandle handle, Instant deadline) {
-        return state.controller.stop(resolve(handle), Objects.requireNonNull(deadline, "deadline"));
+        OwnedProcess owned = resolve(handle);
+        StopProof proof = state.controller.stop(owned, Objects.requireNonNull(deadline, "deadline"));
+        if (proof != null && proof.allWritersStopped()) {
+            return proof;
+        }
+        if (ProcessHandle.of(owned.rootPid()).isEmpty() && !state.controller.owns(owned)) {
+            return new StopProof(handle.runId(), true);
+        }
+        return proof;
     }
 
     @Override

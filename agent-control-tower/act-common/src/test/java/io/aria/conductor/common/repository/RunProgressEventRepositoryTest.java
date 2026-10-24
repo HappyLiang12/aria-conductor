@@ -37,6 +37,25 @@ class RunProgressEventRepositoryTest {
         assertThat(after).extracting(RunProgressEventEntity::getSeq).containsExactly(2L, 3L);
     }
 
+    /**
+     * The kind column is a VARCHAR(32) with no CHECK constraint, so a new kind is
+     * only proven persistable by round-tripping it: issue #103's ANSWER rows must
+     * survive the same (runId, seq) backlog replay as every other kind.
+     */
+    @Test
+    void answerKind_roundTripsThroughTheOrderedBacklog() {
+        UUID runId = UUID.randomUUID();
+        repository.saveAll(List.of(entry(runId, 1, "THINKING"), entry(runId, 2, "ANSWER"),
+                entry(runId, 3, "TOOL_RESULT")));
+
+        assertThat(repository.findByRunIdOrderBySeqAsc(runId))
+                .extracting(RunProgressEventEntity::getKind)
+                .containsExactly("THINKING", "ANSWER", "TOOL_RESULT");
+        assertThat(repository.findByRunIdAndSeqAfterOrderBySeqAsc(runId, 1L))
+                .extracting(RunProgressEventEntity::getKind)
+                .containsExactly("ANSWER", "TOOL_RESULT");
+    }
+
     @Test
     void deleteByCreatedAtBefore_removesOnlyOldRows() {
         UUID runId = UUID.randomUUID();

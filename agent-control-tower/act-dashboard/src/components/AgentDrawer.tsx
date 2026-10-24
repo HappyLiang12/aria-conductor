@@ -19,7 +19,7 @@ import type { Agent, AgentHealthStatus, Run } from '../types';
 interface StreamLine {
   id: string;
   ts: string;
-  tag: 'read' | 'edit' | 'run' | 'ok' | 'warn' | 'err' | 'think' | 'tool_call' | 'tool_result';
+  tag: 'read' | 'edit' | 'run' | 'ok' | 'warn' | 'err' | 'think' | 'answer' | 'tool_call' | 'tool_result';
   msg: string;
   // run.progress watermark (REST backlog rows and live WS frames alike) used to
   // dedupe backlog replay against lines already folded into the stream.
@@ -29,6 +29,7 @@ interface StreamLine {
     toolArgs?: string;
     toolResult?: string;
     thinking?: string;
+    answer?: string;
     skills?: string[];
   };
 }
@@ -62,16 +63,30 @@ function fmtTime(d: string | Date): string {
 // run.progress fold, so replayed history and live frames render identically.
 // TOLERANT: WS frames omit null toolName and carry no id/createdAt; REST rows
 // carry both.
+//
+// The kind table mirrors RunProgressEvent.Kind (act-common). THINKING is what the
+// model works out, ANSWER is what it says back — issue #103: the assistant's
+// reply used to arrive as THINKING and was rendered under the think affordance.
+// A kind missing here falls back to 'warn', so an unmapped new kind is loud, not
+// silently styled as something it is not.
+const PROGRESS_TAG: Record<string, StreamLine['tag']> = {
+  THINKING: 'think',
+  ANSWER: 'answer',
+  TOOL_CALL: 'run',
+  TOOL_RESULT: 'ok',
+  ERROR: 'err',
+};
+
+function truncate(text: string): string {
+  return text.length > 200 ? text.slice(0, 200) + '...' : text;
+}
+
 function progressToEntry(
   p: { kind: string; content: string; toolName?: string | null; createdAt?: string; seq?: number },
 ): StreamLine {
   const kind = String(p.kind ?? '');
   const content = String(p.content ?? '');
-  const tag: StreamLine['tag'] =
-    kind === 'THINKING' ? 'think'
-    : kind === 'TOOL_CALL' ? 'run'
-    : kind === 'TOOL_RESULT' ? 'ok'
-    : kind === 'ERROR' ? 'err' : 'warn';
+  const tag: StreamLine['tag'] = PROGRESS_TAG[kind] ?? 'warn';
   return {
     id: `prog-${p.seq ?? 'na'}-${p.createdAt ?? Math.random().toString(36).slice(2, 8)}`,
     ts: fmtTime(p.createdAt || new Date()),
@@ -79,9 +94,8 @@ function progressToEntry(
     msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
     seq: p.seq,
     detail: {
-      thinking: kind === 'THINKING' && content
-        ? (content.length > 200 ? content.slice(0, 200) + '...' : content)
-        : undefined,
+      thinking: kind === 'THINKING' && content ? truncate(content) : undefined,
+      answer: kind === 'ANSWER' && content ? truncate(content) : undefined,
       toolName: p.toolName ?? undefined,
       toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
     },
@@ -559,9 +573,10 @@ export function AgentDrawer() {
                       <span className="ts">{ln.ts}</span>
                       <span className={`tag ${ln.tag}`}>{ln.tag.toUpperCase()}</span>
                       <span className="msg">{ln.msg}</span>
-                      {ln.detail && (ln.detail.thinking || ln.detail.toolName || ln.detail.toolResult || ln.detail.skills) && (
+                      {ln.detail && (ln.detail.thinking || ln.detail.answer || ln.detail.toolName || ln.detail.toolResult || ln.detail.skills) && (
                         <div className="ln-detail">
                           {ln.detail.thinking && <div className="think">{ln.detail.thinking}</div>}
+                          {ln.detail.answer && <div className="answer">{ln.detail.answer}</div>}
                           {ln.detail.toolName && (
                             <div className="tool">⚙ {ln.detail.toolName}{ln.detail.toolArgs ? ` · ${ln.detail.toolArgs}` : ''}</div>
                           )}

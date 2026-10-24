@@ -228,6 +228,7 @@ class OpenCodeHttpClientTest {
         List<OpenCodeHttpClient.MessageSnapshot> snaps = result.messages();
         assertThat(snaps).hasSize(2);
         assertThat(snaps.get(0).id()).isEqualTo("m1");
+        assertThat(snaps.get(0).role()).isEqualTo("assistant");
         assertThat(snaps.get(0).parts()).hasSize(2);
         assertThat(snaps.get(0).parts().get(0).id()).isEqualTo("p1");
         assertThat(snaps.get(0).parts().get(0).type()).isEqualTo("reasoning");
@@ -236,7 +237,46 @@ class OpenCodeHttpClientTest {
         assertThat(snaps.get(0).parts().get(1).state()).isEqualTo("completed");
         assertThat(snaps.get(0).parts().get(1).output()).isEqualTo("ok");
         assertThat(snaps.get(1).id()).isEqualTo("m2");
+        assertThat(snaps.get(1).role()).isEqualTo("assistant");
         assertThat(snaps.get(1).parts().get(0).text()).isEqualTo("done");
+    }
+
+    /**
+     * #103: the client's job is a faithful snapshot, and the recorded message list
+     * answers the operator's user message next to the assistant's. The role of
+     * every entry is carried so the consumer can stream only assistant activity;
+     * the user message itself is not filtered here (a missing member stays null,
+     * never invented), which is what makes the pump's role rule testable at all.
+     */
+    @Test
+    void listMessages_carriesTheRoleOfEveryMessageIncludingTheUserTurn() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withBody("""
+                                [
+                                  {
+                                    "info": { "id": "u1", "role": "user" },
+                                    "parts": [ { "id": "up", "type": "text", "text": "the operator prompt" } ]
+                                  },
+                                  {
+                                    "info": { "id": "a1", "role": "assistant" },
+                                    "parts": [ { "id": "ar", "type": "reasoning", "text": "the assistant's thought" } ]
+                                  },
+                                  {
+                                    "info": { "id": "n1" },
+                                    "parts": []
+                                  }
+                                ]
+                                """)));
+
+        OpenCodeHttpClient.MessageListResult result = client.listMessages("sess-abc");
+
+        assertThat(result.degraded()).isFalse();
+        assertThat(result.messages()).extracting(OpenCodeHttpClient.MessageSnapshot::id)
+                .containsExactly("u1", "a1", "n1");
+        assertThat(result.messages()).extracting(OpenCodeHttpClient.MessageSnapshot::role)
+                .containsExactly("user", "assistant", null);
     }
 
     @Test

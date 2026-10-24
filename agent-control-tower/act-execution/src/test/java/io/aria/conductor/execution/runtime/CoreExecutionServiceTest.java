@@ -25,6 +25,8 @@ import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
 import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -1280,6 +1282,34 @@ class CoreExecutionServiceTest {
         assertThat(event.getContent()).isEqualTo("listing files");
         assertThat(event.getToolName()).isEqualTo("bash");
         assertThat(event.getSeq()).isEqualTo(7);
+    }
+
+    /**
+     * The producer's accepted-kind table is the enum itself, never a hand-kept
+     * list: every {@code RunProgressEvent.Kind} a core may report is published as
+     * itself with the payload fields intact (issue #103 added ANSWER; this test
+     * covers it without naming it, and covers it again for the next kind).
+     */
+    @ParameterizedTest
+    @EnumSource(RunProgressEvent.Kind.class)
+    void everyKnownProgressKindIsPublishedAsItselfWithItsPayloadFields(RunProgressEvent.Kind kind) {
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"" + kind.name() + "\",\"content\":\"fragment\",\"toolName\":null,"
+                        + "\"seq\":9,\"iteration\":0}"));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        List<RunProgressEvent> progress = publishedEvents.stream()
+                .filter(RunProgressEvent.class::isInstance)
+                .map(RunProgressEvent.class::cast)
+                .toList();
+        assertThat(progress).hasSize(1);
+        assertThat(progress.get(0).getKind()).isEqualTo(kind);
+        assertThat(progress.get(0).getContent()).isEqualTo("fragment");
+        assertThat(progress.get(0).getToolName()).isNull();
+        assertThat(progress.get(0).getSeq()).isEqualTo(9);
+        assertThat(progress.get(0).getIteration()).isZero();
     }
 
     @Test

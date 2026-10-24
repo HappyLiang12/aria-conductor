@@ -283,8 +283,18 @@ public class OpenCodeHttpClient implements AutoCloseable {
         }
     }
 
-    /** One session message as the progress pump reads it: {@code info.id} plus its parts. */
-    public record MessageSnapshot(String id, List<PartSnapshot> parts) {
+    /**
+     * One session message as the progress pump reads it: {@code info.id},
+     * {@code info.role} and its parts.
+     *
+     * <p>The role is part of the snapshot on purpose (issue #103): {@code GET
+     * /session/:id/message} answers the user message next to the assistant one,
+     * and a pump that could not tell them apart streamed the operator's own prompt
+     * as the assistant's thinking. A core that omits the member leaves it null —
+     * the snapshot stays faithful to the wire and the consumer decides what to
+     * stream.
+     */
+    public record MessageSnapshot(String id, String role, List<PartSnapshot> parts) {
     }
 
     /**
@@ -351,6 +361,7 @@ public class OpenCodeHttpClient implements AutoCloseable {
             List<MessageSnapshot> out = new ArrayList<>();
             for (JsonNode msg : root) {
                 String id = msg.path("info").path("id").asText(null);
+                String role = msg.path("info").path("role").asText(null);
                 List<PartSnapshot> parts = new ArrayList<>();
                 JsonNode partsNode = msg.path("parts");
                 if (partsNode.isArray()) {
@@ -364,7 +375,7 @@ public class OpenCodeHttpClient implements AutoCloseable {
                                 p.path("state").path("output").asText(null)));
                     }
                 }
-                out.add(new MessageSnapshot(id, parts));
+                out.add(new MessageSnapshot(id, role, parts));
             }
             return new MessageListResult(out, false);
         } catch (TaskExecutionException e) {

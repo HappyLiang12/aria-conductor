@@ -12,8 +12,15 @@ import java.util.UUID;
 @Getter
 public class RunProgressEvent extends ApplicationEvent {
 
-    /** Origin of the progress fragment. */
-    public enum Kind { THINKING, TOOL_CALL, TOOL_RESULT, STATUS, ERROR }
+    /**
+     * Origin of the progress fragment.
+     *
+     * <p>{@link #THINKING} is what the model works out; {@link #ANSWER} is what it
+     * says back (issue #103: both used to be THINKING, so the Live Activity Stream
+     * showed the reply under the think affordance). Every kind here is assistant
+     * activity — the operator's own prompt is never a progress fragment.
+     */
+    public enum Kind { THINKING, ANSWER, TOOL_CALL, TOOL_RESULT, STATUS, ERROR }
 
     private final UUID runId;
     private final UUID agentId;

@@ -162,6 +162,24 @@ describe('AgentDrawer live stream (S2)', () => {
     expect(container.querySelectorAll('.stream .ln').length).toBe(linesBefore);
   });
 
+  it('renders an ANSWER frame as the assistant answer, distinctly from thinking (issue #103)', async () => {
+    const { rerender, container } = ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'ANSWER', content: 'Consensus needs a majority.', seq: 4 }, timestamp: '2026-08-29T06:00:03Z' });
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
+    });
+
+    // The answer text reaches the screen (it used to be dropped: only THINKING
+    // filled the detail body), on its own affordance rather than 'think'.
+    expect(screen.getByText('Consensus needs a majority.')).toBeInTheDocument();
+    expect(screen.getByText('ANSWER')).toBeInTheDocument();
+    expect(screen.getByText('Agent Progress · answer')).toBeInTheDocument();
+    expect(container.querySelector('.stream .tag.answer')).not.toBeNull();
+    expect(container.querySelectorAll('.stream .tag.think')).toHaveLength(0);
+  });
+
   it('collapse toggle hides the stream body but keeps the header', async () => {
     const { rerender, container } = ui();
     await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
@@ -235,6 +253,28 @@ describe('AgentDrawer backlog replay + stub removal (Task 6)', () => {
       push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: 'live output', seq: 3 }, timestamp: '2026-09-06T06:00:04Z' });
     });
     expect(container.querySelectorAll('.stream .ln').length).toBe(3);
+  });
+
+  // Issue #103: the persisted/replayed ANSWER row renders on its own affordance,
+  // next to the thinking row of the same run — the REST replay path uses the very
+  // same kind table as the live WS fold.
+  it('drawer_replaysAnAnswerRow_distinctlyFromThinking', async () => {
+    const replay: RunProgressEntry[] = [
+      { id: 'pa-1', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'THINKING', seq: 1, content: 'outlining the essay', toolName: null, createdAt: '2026-09-06T06:00:01Z' },
+      { id: 'pa-2', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'ANSWER', seq: 2, content: 'Consensus needs a majority.', toolName: null, createdAt: '2026-09-06T06:00:02Z' },
+    ];
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(replay);
+    const { container } = ui();
+
+    expect(await screen.findByText('outlining the essay')).toBeInTheDocument();
+    expect(screen.getByText('Consensus needs a majority.')).toBeInTheDocument();
+    expect(screen.getByText('THINK')).toBeInTheDocument();
+    expect(screen.getByText('ANSWER')).toBeInTheDocument();
+    expect(screen.getByText('Agent Progress · answer')).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .tag.answer')).toHaveLength(1);
+    expect(container.querySelectorAll('.stream .tag.think')).toHaveLength(1);
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(2);
   });
 
   it('drawer_failedRun_isNotActiveRun', async () => {

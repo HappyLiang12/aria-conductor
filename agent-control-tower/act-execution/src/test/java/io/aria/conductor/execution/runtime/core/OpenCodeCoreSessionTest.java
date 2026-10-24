@@ -127,6 +127,63 @@ class OpenCodeCoreSessionTest {
         assertThat(message.payloadJson()).isEqualTo(raw);
     }
 
+    /**
+     * #103 judged the way the live HOST QA judges it, one layer above the pump: the
+     * native message list of a run-owned session holds the operator's user message
+     * and the assistant's turn (marker parts included), and the
+     * {@code opencode.progress} envelopes the run then persists must carry the
+     * assistant's reasoning and answer content only — never the prompt echo of
+     * seq 1, never the {@code step-start} STATUS of seq 2, and never an empty
+     * fragment. The payload shape the coordinator consumes stays
+     * {@code (kind, content, toolName, seq, iteration)}.
+     */
+    @Test
+    void progressEventsCarryTheAssistantContentAndNeverTheOperatorPrompt() throws Exception {
+        String operatorPrompt = "Write a detailed 900-word essay about distributed consensus algorithms.";
+        AtomicInteger listCalls = new AtomicInteger();
+        when(client.listMessages(SESSION)).thenAnswer(invocation -> {
+            if (listCalls.incrementAndGet() == 1) {
+                return new OpenCodeHttpClient.MessageListResult(List.of(), false); // pre-prompt baseline
+            }
+            return new OpenCodeHttpClient.MessageListResult(List.of(
+                    message("u1", "user", part("up", "text", operatorPrompt, null, null, null)),
+                    message("a1", "assistant",
+                            part("as", "step-start", null, null, null, null),
+                            part("ar", "reasoning", "outlining the essay", null, null, null),
+                            part("ae", "reasoning", "", null, null, null),
+                            part("at", "text", "Consensus needs a majority.", null, null, null))),
+                    false);
+        });
+        when(client.sendPrompt(eq(SESSION), any(), anyList(), any())).thenAnswer(invocation -> {
+            // Both fragments of the batch are recorded before the turn answers, so
+            // the bounded pump halt can neither drop nor reorder them.
+            assertThat(secondProgress.await(5, TimeUnit.SECONDS)).isTrue();
+            return new OpenCodeHttpClient.MessageResult(
+                    "{\"info\":{\"id\":\"a1\"},\"parts\":[]}", "a1", "Consensus needs a majority.",
+                    1L, 1L, "efficient", null);
+        });
+
+        session.prompt(task(operatorPrompt), this::record).toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        List<CoreEvent> progress = events.stream()
+                .filter(event -> "opencode.progress".equals(event.type()))
+                .toList();
+        assertThat(progress).hasSize(2);
+        JsonNode thinking = JSON.readTree(progress.get(0).payloadJson());
+        assertThat(thinking.path("kind").asText()).isEqualTo("THINKING");
+        assertThat(thinking.path("content").asText()).isEqualTo("outlining the essay");
+        assertThat(thinking.path("seq").asLong()).isEqualTo(1L);
+        JsonNode answer = JSON.readTree(progress.get(1).payloadJson());
+        assertThat(answer.path("kind").asText()).isEqualTo("ANSWER");
+        assertThat(answer.path("content").asText()).isEqualTo("Consensus needs a majority.");
+        assertThat(answer.path("toolName").isNull()).isTrue();
+        assertThat(answer.path("seq").asLong()).isEqualTo(2L);
+        assertThat(answer.path("iteration").asInt()).isZero();
+        assertThat(progress).extracting(CoreEvent::payloadJson)
+                .as("no progress row echoes the operator's own prompt")
+                .allSatisfy(payload -> assertThat(payload).doesNotContain(operatorPrompt));
+    }
+
     @Test
     void sendPromptFailureCompletesTheFutureExceptionallyAndStopsPolling() throws Exception {
         AtomicInteger polls = new AtomicInteger();
@@ -497,7 +554,13 @@ class OpenCodeCoreSessionTest {
 
     private static OpenCodeHttpClient.MessageSnapshot message(String id,
             OpenCodeHttpClient.PartSnapshot... parts) {
-        return new OpenCodeHttpClient.MessageSnapshot(id, List.of(parts));
+        // The recorded wire shape carries info.role; only assistant activity streams.
+        return message(id, "assistant", parts);
+    }
+
+    private static OpenCodeHttpClient.MessageSnapshot message(String id, String role,
+            OpenCodeHttpClient.PartSnapshot... parts) {
+        return new OpenCodeHttpClient.MessageSnapshot(id, role, List.of(parts));
     }
 
     private static OpenCodeHttpClient.PartSnapshot part(String id, String type, String text,

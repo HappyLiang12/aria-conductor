@@ -133,6 +133,36 @@ class EventBroadcastListenerTest {
         verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
     }
 
+    /**
+     * Issue #103: the answer kind takes the same persist-then-broadcast path as
+     * every other kind, with its name carried verbatim into both the persisted row
+     * and the WS payload (the dedupe payload shape is unchanged).
+     */
+    @Test
+    void onRunProgress_persistsAndBroadcastsAnAnswerFragment() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.ANSWER, "Consensus needs a majority.", null, 8));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        RunProgressEventEntity saved = captor.getValue();
+        assertThat(saved.getKind()).isEqualTo("ANSWER");
+        assertThat(saved.getContent()).isEqualTo("Consensus needs a majority.");
+        assertThat(saved.getSeq()).isEqualTo(8L);
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.progress");
+        assertThat(event.data())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString())
+                .containsEntry("kind", "ANSWER")
+                .containsEntry("seq", 8L)
+                .containsEntry("content", "Consensus needs a majority.");
+        assertThat(event.data()).doesNotContainKey("toolName");
+    }
+
     @Test
     void onRunProgress_persistFailure_doesNotBreakBroadcast() {
         UUID runId = UUID.randomUUID();

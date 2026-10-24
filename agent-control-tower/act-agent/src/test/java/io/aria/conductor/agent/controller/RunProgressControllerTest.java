@@ -34,7 +34,7 @@ class RunProgressControllerTest extends WebMvcTestBase {
                         .seq(1L).content("thinking").toolName(null)
                         .createdAt(Instant.parse("2026-09-06T00:00:00Z")).build(),
                 RunProgressEventEntity.builder().id(UUID.randomUUID()).runId(RUN_ID)
-                        .agentId(UUID.randomUUID()).iteration(1).kind("THINKING")
+                        .agentId(UUID.randomUUID()).iteration(1).kind("ANSWER")
                         .seq(2L).content("more").toolName(null)
                         .createdAt(Instant.parse("2026-09-06T00:00:01Z")).build()));
         when(progressRepository.findByRunIdAndSeqAfterOrderBySeqAsc(RUN_ID, 0L)).thenReturn(List.of(
@@ -43,12 +43,12 @@ class RunProgressControllerTest extends WebMvcTestBase {
                         .seq(1L).content("thinking").toolName(null)
                         .createdAt(Instant.parse("2026-09-06T00:00:00Z")).build(),
                 RunProgressEventEntity.builder().id(UUID.randomUUID()).runId(RUN_ID)
-                        .agentId(UUID.randomUUID()).iteration(1).kind("THINKING")
+                        .agentId(UUID.randomUUID()).iteration(1).kind("ANSWER")
                         .seq(2L).content("more").toolName(null)
                         .createdAt(Instant.parse("2026-09-06T00:00:01Z")).build()));
         when(progressRepository.findByRunIdAndSeqAfterOrderBySeqAsc(RUN_ID, 1L)).thenReturn(List.of(
                 RunProgressEventEntity.builder().id(UUID.randomUUID()).runId(RUN_ID)
-                        .agentId(UUID.randomUUID()).iteration(1).kind("THINKING")
+                        .agentId(UUID.randomUUID()).iteration(1).kind("ANSWER")
                         .seq(2L).content("more").toolName(null)
                         .createdAt(Instant.parse("2026-09-06T00:00:01Z")).build()));
     }
@@ -59,6 +59,9 @@ class RunProgressControllerTest extends WebMvcTestBase {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].kind").value("THINKING"))
                 .andExpect(jsonPath("$[0].seq").value(1))
+                // Issue #103: the assistant's answer reaches the replay as its own
+                // kind, so the drawer can render it apart from the thinking.
+                .andExpect(jsonPath("$[1].kind").value("ANSWER"))
                 .andExpect(jsonPath("$[1].seq").value(2));
     }
 
@@ -67,6 +70,7 @@ class RunProgressControllerTest extends WebMvcTestBase {
         mvc.perform(get("/api/v1/runs/" + RUN_ID + "/progress").param("afterSeq", "1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].kind").value("ANSWER"))
                 .andExpect(jsonPath("$[0].seq").value(2));
     }
 }

@@ -88,8 +88,19 @@ class CoreProgressPumpTest {
         pump.start();
     }
 
+    /**
+     * One assistant message of parts: {@code info.role} is on the real wire for
+     * every message (the committed fixture peer answers it too), so the shared
+     * fixture carries it and the pump's role rule is exercised by every test.
+     */
     private static String body(String partsJson) {
-        return "[ { \"info\": { \"id\": \"m1\" }, \"parts\": [ " + partsJson + " ] } ]";
+        return "[ " + messageWithRole("assistant", partsJson) + " ]";
+    }
+
+    /** One {@code {info, parts}} entry of the recorded message-list shape. */
+    private static String messageWithRole(String role, String partsJson) {
+        return "{ \"info\": { \"id\": \"m\", \"role\": \"" + role + "\" }, \"parts\": [ "
+                + partsJson + " ] }";
     }
 
     private static int requestsToThePumpPath() {
@@ -343,6 +354,157 @@ class CoreProgressPumpTest {
         }
     }
 
+    /**
+     * #103 defect 1 (live HOST evidence, run a25f48f5 seq 1): the operator's own
+     * prompt came back labelled THINKING, because {@code listMessages} never read
+     * {@code info.role} and opencode lists the user message too. Only assistant
+     * activity is progress: a user-role text part never produces a fragment,
+     * while the same session's assistant parts do. The first served poll sees
+     * only the user message (the turn's assistant message is not listed yet) --
+     * exactly the live shape that echoed the prompt.
+     */
+    @Test
+    void aUserMessageIsNeverStreamedWhileTheAssistantMessageOfTheSameSessionIs() {
+        String operatorPrompt = "Write a detailed 900-word essay about distributed consensus algorithms.";
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("role")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(
+                        "[ " + messageWithRole("user",
+                                "{ \"id\": \"up\", \"type\": \"text\", \"text\": \"" + operatorPrompt + "\" }")
+                                + " ]"))
+                .willSetStateTo("assistant"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("role")
+                .whenScenarioStateIs("assistant")
+                .willReturn(aResponse().withStatus(200).withBody(
+                        "[ " + messageWithRole("user",
+                                "{ \"id\": \"up\", \"type\": \"text\", \"text\": \"" + operatorPrompt + "\" }")
+                                + ", " + messageWithRole("assistant",
+                                "{ \"id\": \"ar\", \"type\": \"reasoning\", \"text\": \"outlining the essay\" }")
+                                + " ]")));
+
+        startPump();
+        // Poll 3 is only issued after poll 2's batch has been diffed and emitted,
+        // so seeing it proves both responses went through the diff.
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 3);
+        pump.stop();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).kind()).isEqualTo(RunProgressEvent.Kind.THINKING);
+        assertThat(events.get(0).content()).isEqualTo("outlining the essay");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::content)
+                .as("the operator's own prompt is not the assistant's thinking")
+                .doesNotContain(operatorPrompt);
+    }
+
+    /**
+     * #103 defect 2 (live evidence seq 3): an empty reasoning part was emitted as
+     * an empty THINKING row. A fragment with no content says nothing to the
+     * operator, so it is never streamed.
+     */
+    @Test
+    void anEmptyReasoningPartIsNeverStreamedAsAProgressFragment() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"a\", \"type\": \"reasoning\", \"text\": \"\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 2);
+        pump.stop();
+
+        assertThat(events)
+                .as("a blank reasoning fragment carries nothing an operator can read")
+                .isEmpty();
+    }
+
+    /**
+     * #103 defect 2, other half (live evidence seq 2): the {@code step-start}
+     * part-type marker was streamed as a STATUS row whose content was the marker
+     * itself. A turn boundary is bookkeeping, not activity: the step markers are
+     * skipped and never become a fragment (an unknown part type still surfaces as
+     * STATUS, so a core that grows a new part type is not silently invisible).
+     */
+    @Test
+    void stepMarkersAreSkippedInsteadOfStreamedAsStatusRowsOfTheirOwnName() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"s1\", \"type\": \"step-start\" },"
+                                + "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"outlining the essay\" },"
+                                + "{ \"id\": \"s2\", \"type\": \"step-finish\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 2);
+        pump.stop();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).kind()).isEqualTo(RunProgressEvent.Kind.THINKING);
+        assertThat(events.get(0).content()).isEqualTo("outlining the essay");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::content)
+                .doesNotContain("step-start", "step-finish");
+        // A dropped part burns no seq: the surviving fragment is still the first.
+        assertThat(events.get(0).seq()).isEqualTo(1);
+    }
+
+    /**
+     * #103 defect 3: {@code case "reasoning", "text" -> THINKING} merged the
+     * model's answer into its thinking, so the drawer showed the reply under the
+     * think affordance. The assistant's text part is its own kind of activity.
+     */
+    @Test
+    void anAssistantTextPartIsStreamedAsItsOwnKindAndNotAsThinking() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"Consensus needs a majority.\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> !events.isEmpty());
+        pump.stop();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).content()).isEqualTo("Consensus needs a majority.");
+        assertThat(events.get(0).kind())
+                .as("the model's answer is its own kind, not THINKING")
+                .isEqualTo(RunProgressEvent.Kind.ANSWER);
+        assertThat(events.get(0).seq()).isEqualTo(1);
+        assertThat(events.get(0).toolName()).isNull();
+    }
+
+    /**
+     * The #103 mapping table, pinned in one poll: reasoning is THINKING, text is
+     * ANSWER, a tool is TOOL_CALL/TOOL_RESULT, the turn markers are skipped and an
+     * unknown part type still surfaces as STATUS. Consecutive THINKING still
+     * coalesces; consecutive ANSWER never does, so no answer text is lost.
+     */
+    @Test
+    void mapsEachAssistantPartTypeToItsOwnKindAndSkipsTheTurnMarkers() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"s1\", \"type\": \"step-start\" },"
+                                + "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"thinking one\" },"
+                                + "{ \"id\": \"r2\", \"type\": \"reasoning\", \"text\": \"thinking two\" },"
+                                + "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"answer one\" },"
+                                + "{ \"id\": \"t2\", \"type\": \"text\", \"text\": \"answer two\" },"
+                                + "{ \"id\": \"x1\", \"type\": \"patch\" },"
+                                + "{ \"id\": \"s2\", \"type\": \"step-finish\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> events.size() >= 4);
+        pump.stop();
+
+        assertThat(events).hasSize(4);
+        assertThat(events.get(0).kind()).isEqualTo(RunProgressEvent.Kind.THINKING);
+        assertThat(events.get(0).content()).isEqualTo("thinking two");
+        assertThat(events.get(1).kind()).isEqualTo(RunProgressEvent.Kind.ANSWER);
+        assertThat(events.get(1).content()).isEqualTo("answer one");
+        assertThat(events.get(2).kind()).isEqualTo(RunProgressEvent.Kind.ANSWER);
+        assertThat(events.get(2).content()).isEqualTo("answer two");
+        assertThat(events.get(3).kind()).isEqualTo(RunProgressEvent.Kind.STATUS);
+        assertThat(events.get(3).content()).isEqualTo("patch");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
+                .containsExactly(1L, 2L, 3L, 4L);
+    }
+
     @Test
     void diffsOnlyNewPartsAcrossPolls() {
         stubFor(get(urlEqualTo(PATH))
@@ -372,7 +534,8 @@ class CoreProgressPumpTest {
         assertThat(events.get(0).toolName()).isNull();
         assertThat(events.get(1).kind()).isEqualTo(RunProgressEvent.Kind.TOOL_CALL);
         assertThat(events.get(1).toolName()).isEqualTo("bash");
-        assertThat(events.get(2).kind()).isEqualTo(RunProgressEvent.Kind.THINKING);
+        // p3 is the model's text part: its answer, not more thinking (#103 defect 3).
+        assertThat(events.get(2).kind()).isEqualTo(RunProgressEvent.Kind.ANSWER);
         assertThat(events.get(2).content()).isEqualTo("scheduler found");
         // Monotonic seq for client dedupe, starting at one.
         assertThat(events.get(0).seq()).isEqualTo(1);
@@ -653,7 +816,7 @@ class CoreProgressPumpTest {
             parts.add(new OpenCodeHttpClient.PartSnapshot(id + "-p" + i, "error",
                     id + "-p" + i, null, null, null));
         }
-        return new OpenCodeHttpClient.MessageSnapshot(id, parts);
+        return new OpenCodeHttpClient.MessageSnapshot(id, "assistant", parts);
     }
 
     @Test

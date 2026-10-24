@@ -32,8 +32,19 @@ import java.util.function.Consumer;
  *       nor replays parts;</li>
  *   <li>a real snapshot shrink replays at most the latest 10 parts;</li>
  *   <li>sink exceptions are swallowed — the pump survives;</li>
+ *   <li>only assistant activity is streamed: a message whose {@code info.role}
+ *       is not {@code assistant} (the operator's own user turn included) produces
+ *       no fragment, while its parts still advance the watermark so it is never
+ *       reconsidered;</li>
+ *   <li>a part that carries nothing an operator can read is never emitted: a
+ *       blank reasoning/text part is dropped, and the {@code step-start} /
+ *       {@code step-finish} turn markers are skipped rather than shown as a
+ *       STATUS row of their own name; a dropped part burns no seq;</li>
+ *   <li>a reasoning part is THINKING and an assistant text part is ANSWER —
+ *       the model's reply is never labelled its thinking;</li>
  *   <li>consecutive THINKING parts within one poll batch are coalesced into a
- *       single fragment (last wins); TOOL_* fragments are never coalesced;</li>
+ *       single fragment (last wins); ANSWER, TOOL_* and STATUS fragments are
+ *       never coalesced;</li>
  *   <li>the part watermark and seq live in a session-scoped
  *       {@link ProgressCursor} and are read-modified under one monitor, so
  *       consecutive prompts of one native session neither replay an earlier
@@ -66,6 +77,12 @@ public class CoreProgressPump {
 
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
     private static final int RESET_REPLAY_LIMIT = 10;
+
+    /**
+     * Part types that are turn bookkeeping, not activity: the {@code step-start} /
+     * {@code step-finish} markers of the live HOST rows (issue #103, seq 2).
+     */
+    private static final List<String> TURN_BOUNDARY_MARKERS = List.of("step-start", "step-finish");
 
     /**
      * Consecutive degraded polls that make a stall operator-visible. Three is the
@@ -367,7 +384,8 @@ public class CoreProgressPump {
 
     /**
      * Diffs the snapshot against a per-message part watermark; returns fragments
-     * for newly-seen parts only, with consecutive THINKING coalesced. Exposed
+     * for the newly-seen parts of assistant messages only (blank text and turn
+     * markers skipped), with consecutive THINKING coalesced. Exposed
      * package-private so the reset/replay cap is testable without timing.
      */
     List<ProgressFragment> diff(List<OpenCodeHttpClient.MessageSnapshot> snaps, List<Integer> watermark) {
@@ -380,11 +398,25 @@ public class CoreProgressPump {
         }
         List<ProgressFragment> candidates = new ArrayList<>();
         for (int mi = 0; mi < snaps.size(); mi++) {
-            List<OpenCodeHttpClient.PartSnapshot> parts = snaps.get(mi).parts();
+            OpenCodeHttpClient.MessageSnapshot message = snaps.get(mi);
+            List<OpenCodeHttpClient.PartSnapshot> parts = message.parts();
             int seen = mi < watermark.size() ? watermark.get(mi) : 0;
-            for (int pi = seen; pi < parts.size(); pi++) {
-                candidates.add(toFragment(parts.get(pi)));
+            boolean assistant = isAssistantActivity(message);
+            if (parts.size() > seen && !assistant) {
+                log.debug("OpenCode progress pump of run {} skips message {} of role '{}':"
+                        + " only assistant activity is progress", runId, message.id(), message.role());
             }
+            if (assistant) {
+                for (int pi = seen; pi < parts.size(); pi++) {
+                    ProgressFragment fragment = toFragment(parts.get(pi));
+                    if (fragment != null) {
+                        candidates.add(fragment);
+                    }
+                }
+            }
+            // The watermark tracks every message's parts, a skipped one included,
+            // so a non-assistant message is judged once and never reconsidered on
+            // a later poll.
             while (watermark.size() <= mi) {
                 watermark.add(0);
             }
@@ -397,6 +429,22 @@ public class CoreProgressPump {
         return coalesce(candidates);
     }
 
+    /**
+     * Whether one listed message is the assistant's own activity (issue #103).
+     *
+     * <p>opencode's message list carries the operator's user message next to the
+     * assistant's, and a pump that reads no role streams the operator's own prompt
+     * back as the assistant's thinking -- the live HOST row this fix is judged on.
+     * Only {@code assistant} streams: any other role, and a message whose core
+     * left the member out, is not provably the assistant's activity, so it is not
+     * presented as such. Fail-closed is the deliberate choice: the truthful
+     * failure mode of an unreadable role is a quiet stream the degraded-poll story
+     * already surfaces, not a wrong answer about who spoke.
+     */
+    private static boolean isAssistantActivity(OpenCodeHttpClient.MessageSnapshot message) {
+        return "assistant".equalsIgnoreCase(message.role());
+    }
+
     private List<ProgressFragment> coalesce(List<ProgressFragment> batch) {
         List<ProgressFragment> out = new ArrayList<>();
         ProgressFragment pendingThinking = null;
@@ -404,6 +452,8 @@ public class CoreProgressPump {
             if (fragment.kind() == RunProgressEvent.Kind.THINKING) {
                 pendingThinking = fragment; // last-write-wins within a run of thinking
             } else {
+                // ANSWER is never coalesced: dropping an answer fragment because a
+                // later one arrived would lose what the model actually said.
                 if (pendingThinking != null) {
                     out.add(assignSeq(pendingThinking));
                     pendingThinking = null;
@@ -422,11 +472,31 @@ public class CoreProgressPump {
                 cursor.seq.incrementAndGet(), fragment.iteration());
     }
 
+    /**
+     * Maps one part onto a fragment, or {@code null} when the part carries nothing
+     * an operator can read and is skipped. A skipped part still advances the
+     * watermark (it is never reconsidered) and burns no seq.
+     *
+     * <p>Skipped by design:
+     * <ul>
+     *   <li>a blank reasoning/text part — an empty row is not progress;</li>
+     *   <li>the {@code step-start}/{@code step-finish} markers — a part-type
+     *   sentinel whose only content is its own name ("step-start" on the
+     *   operator's screen, the live seq 2) says nothing a turn boundary is not
+     *   already told by {@code run.iteration} and {@code run.completed}, so the
+     *   marker is skipped rather than rewritten as a readable STATUS.</li>
+     * </ul>
+     * An unknown part type still becomes STATUS: a core that grows a new part is
+     * then visible instead of silently invisible, which is the opposite of the
+     * above (a known marker with no content has nothing to show).
+     */
     private ProgressFragment toFragment(OpenCodeHttpClient.PartSnapshot p) {
         String type = p.type() != null ? p.type() : "";
         return switch (type) {
-            case "reasoning", "text" -> new ProgressFragment(RunProgressEvent.Kind.THINKING,
-                    p.text(), null, 0, 0);
+            case "reasoning" -> blank(p.text()) ? null
+                    : new ProgressFragment(RunProgressEvent.Kind.THINKING, p.text(), null, 0, 0);
+            case "text" -> blank(p.text()) ? null
+                    : new ProgressFragment(RunProgressEvent.Kind.ANSWER, p.text(), null, 0, 0);
             case "tool" -> {
                 boolean completed = "completed".equals(p.state());
                 String content = "";
@@ -435,13 +505,20 @@ public class CoreProgressPump {
                     // state.output; a top-level text member is only a fallback.
                     content = p.output() != null ? p.output() : (p.text() != null ? p.text() : "");
                 }
+                // A tool part is never blank-dropped: its toolName is the content
+                // the operator reads ("bash is running", "bash returned nothing").
                 yield new ProgressFragment(
                         completed ? RunProgressEvent.Kind.TOOL_RESULT : RunProgressEvent.Kind.TOOL_CALL,
                         content, p.toolName(), 0, 0);
             }
             case "error" -> new ProgressFragment(RunProgressEvent.Kind.ERROR, p.text(), null, 0, 0);
-            default -> new ProgressFragment(RunProgressEvent.Kind.STATUS, type, null, 0, 0);
+            default -> TURN_BOUNDARY_MARKERS.contains(type) ? null
+                    : new ProgressFragment(RunProgressEvent.Kind.STATUS, type, null, 0, 0);
         };
+    }
+
+    private static boolean blank(String text) {
+        return text == null || text.isBlank();
     }
 
     /**

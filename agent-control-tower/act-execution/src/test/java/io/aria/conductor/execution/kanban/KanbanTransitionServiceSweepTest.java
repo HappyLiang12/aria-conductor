@@ -34,7 +34,9 @@ class KanbanTransitionServiceSweepTest {
                 Mockito.mock(RunService.class), Mockito.mock(RunRepository.class),
                 Mockito.mock(AgentRepository.class), Mockito.mock(AgentPickerService.class),
                 Mockito.mock(AgentPickupEligibility.class), approvalRepository,
-                Mockito.mock(ApplicationEventPublisher.class));
+                Mockito.mock(ApplicationEventPublisher.class),
+                new DeferredRunStop(Mockito.mock(RunService.class), Mockito.mock(RunRepository.class),
+                        Runnable::run));
     }
 
     @Test

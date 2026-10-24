@@ -164,6 +164,12 @@ public class CoreRuntimeConfiguration {
      * (including {@code ObjectProvider#getIfAvailable()} at run time, once both
      * singletons exist) deterministically returns the coordinator instead of
      * raising {@code NoUniqueBeanDefinitionException}.
+     *
+     * <p>The run store's committed status is wired as the coordinator's
+     * {@link RunStatusReader}: an in-flight launch re-reads it before opening its
+     * core session and before prompting, so a cancel that was recorded while the
+     * run was still unregistered stops the core the launch started instead of
+     * leaving it running behind a CANCELLED row (#111 fix round 2).
      */
     @Bean
     @Primary
@@ -175,10 +181,19 @@ public class CoreRuntimeConfiguration {
             org.springframework.context.ApplicationEventPublisher eventPublisher,
             TaskDeadlineProperties taskDeadlines,
             io.aria.conductor.agent.repository.AgentRepository agentRepository,
-            SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters) {
+            SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters,
+            io.aria.conductor.agent.repository.RunRepository runs) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
                 permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
-                eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters);
+                eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters,
+                committedStatusReader(runs));
+    }
+
+    /** The run row's committed status, read straight from the database (never a cached entity). */
+    static RunStatusReader committedStatusReader(io.aria.conductor.agent.repository.RunRepository runs) {
+        return runId -> runs.findStateById(runId)
+                .map(io.aria.conductor.agent.repository.RunRepository.RunStateView::getStatus)
+                .orElse(null);
     }
 
     /**

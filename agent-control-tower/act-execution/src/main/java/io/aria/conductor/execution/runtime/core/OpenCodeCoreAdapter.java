@@ -10,11 +10,13 @@ import io.aria.conductor.execution.runtime.CoreCapabilities;
 import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
+import io.aria.conductor.execution.runtime.LaunchRefusal;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.sandbox.SandboxBind;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.URI;
@@ -64,6 +66,7 @@ import java.util.Optional;
  * on the endpoint the launch produced, and never a container or a user
  * workspace.
  */
+@Slf4j
 public final class OpenCodeCoreAdapter implements CoreAdapter {
 
     public static final String CORE_ID = "opencode";
@@ -102,8 +105,9 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * matters for a platform-MCP-wired run; unwired runs have no such tools.
      *
      * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
-     * the remaining slots carry the provider id, the model, the provider id
-     * again, the base URL and the model again.
+     * the remaining slots carry the governed provider key of the resolved provider
+     * (see {@link #GOVERNED_PROVIDER_KEY_PREFIX}), the model, that same key again,
+     * the base URL and the model again.
      */
     private static final String GOVERNED_CONFIGURATION_TEMPLATE = """
             {
@@ -143,6 +147,35 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
 
     private static final CoreCapabilities UNVERIFIED =
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
+
+    /**
+     * The prefix of the provider document key of every governed launch: a governed
+     * configuration never uses a provider id that opencode bundles as its key.
+     *
+     * <p>opencode serves a provider whose document key equals one of its own
+     * bundled provider ids from <em>its</em> model catalog and ignores the
+     * {@code "models"} entry this document declares, so the run's first prompt
+     * dies. Observed against the pinned opencode 1.18.15, launched the way
+     * {@code OwnedProcessController} + this adapter launch it, against a local
+     * OpenAI-compatible stub (no real credential involved): the document keyed
+     * {@code deepseek} with the model {@code deepseek-v4-flash} failed with
+     * {@code ProviderModelNotFoundError: Model not found: deepseek/deepseek-v4-flash.}
+     * {@code Did you mean: deepseek-flash, deepseek-v4-pro?} -- the HTTP caller only
+     * sees {@code 500 {"name":"UnknownError","ref":"err_..."}} -- while the same
+     * document under the non-colliding key {@code aria-deepseek} completed that turn
+     * with {@code providerID=aria-deepseek}. The collision is not exotic input: the
+     * key comes from the operator's provider <em>name</em>, and a stock install
+     * auto-creates and activates {@code DeepSeek}, {@code OpenAI} and
+     * {@code Anthropic} (see {@code AriaDefaultAgentInitializer#inferProviderName}),
+     * all of which sanitize to bundled ids.
+     *
+     * <p>Always-prefix rather than collide-against-a-list: this block always declares
+     * {@code "npm": "@ai-sdk/openai-compatible"} with the operator's own
+     * {@code baseURL} and {@code {env:LLM_API_KEY}}, so the bundled definition is
+     * never what the run should serve with, and a hand-maintained list of bundled
+     * ids drifts with every opencode release.
+     */
+    private static final String GOVERNED_PROVIDER_KEY_PREFIX = "aria-";
 
     /** Budget for polling the launched server's health before a session opens. */
     static final Duration SERVE_READY_BUDGET = Duration.ofSeconds(90);
@@ -203,9 +236,10 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * JSON document, so each is validated here and a value that could break the
      * document refuses the launch instead of being written.
      *
-     * @param providerId the provider key of the document (e.g. {@code deepseek})
+     * @param providerId the operator's provider id, which the document renders under
+     *                   the prefixed key of {@link #GOVERNED_PROVIDER_KEY_PREFIX}
      * @param model      the served model id, never carrying a {@code /} (the
-     *                   document's {@code model} member is {@code id/model})
+     *                   document's {@code model} member is {@code key/model})
      * @param baseUrl    the openai-compatible endpoint
      */
     public record ModelProvider(String providerId, String model, String baseUrl) {
@@ -231,7 +265,9 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         /**
          * The documented fallback: what the platform has always generated when no
          * provider row is active. The served model may not exist on that endpoint;
-         * an active operator provider is the supported configuration.
+         * an active operator provider is the supported configuration. Only its
+         * governed document key differs from the historic one: it renders as
+         * {@code aria-deepseek} for the same reason every other provider does.
          */
         public static ModelProvider deepseekFallback() {
             return new ModelProvider("deepseek", "deepseek-chat", "https://api.deepseek.com/v1");
@@ -399,9 +435,22 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      */
     @Override
     public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials) {
+        return open(handle, spec, credentials, LaunchRefusal.NONE);
+    }
+
+    /**
+     * The same open on a placement whose launcher may already have refused: the
+     * readiness wait below consults {@code launchRefusal} on the polls it already
+     * performs, so a launch the image provably refused before spawning ends the
+     * wait with the image's own sentence instead of with this adapter's timeout.
+     */
+    @Override
+    public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials,
+            LaunchRefusal launchRefusal) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(spec, "spec");
         Objects.requireNonNull(credentials, "credentials");
+        Objects.requireNonNull(launchRefusal, "launchRefusal");
         requireCore(spec);
         if (!spec.runId().equals(handle.runId())) {
             throw new IllegalArgumentException("The runtime handle belongs to run " + handle.runId()
@@ -415,7 +464,7 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
             // spawned process takes a moment to bind. openSession never retries a
             // non-2xx (a retried creation could leave a second native session
             // behind), so the open is gated on the health endpoint instead.
-            awaitServeReady(client, spec);
+            awaitServeReady(client, spec, launchRefusal);
             String sessionId = client.openSession(spec.runId().toString());
             return new OpenCodeCoreSession(spec, client, sessionId, profile.model());
         } catch (RuntimeException e) {
@@ -431,8 +480,15 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * provider's {@code waitForHealth}). The wait is also bounded by the run's
      * frozen deadline, so a launch that starts near expiry cannot sit out the
      * full budget past the point the run must end.
+     *
+     * <p>A health probe answers 502 for two very different cores: one that is still
+     * starting and one that will never answer because the image refused its launch
+     * before spawning it. The launcher already said which of the two it is, so the
+     * wait asks {@code launchRefusal} on every poll it makes and stops on a proven
+     * refusal with the launcher's own reason. A refusal that is not proven changes
+     * nothing: the wait runs its budget and today's timeout stands.
      */
-    private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec) {
+    private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec, LaunchRefusal refusal) {
         long budgetNanos = serveReadyBudget.toNanos();
         if (spec.deadline() != null) {
             long runBudgetNanos = Math.max(0L,
@@ -440,10 +496,15 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
             budgetNanos = Math.min(budgetNanos, runBudgetNanos);
         }
         long budgetMillis = budgetNanos / 1_000_000;
-        long deadlineNanos = System.nanoTime() + budgetNanos;
+        long waitStartedNanos = System.nanoTime();
+        long deadlineNanos = waitStartedNanos + budgetNanos;
         while (System.nanoTime() < deadlineNanos) {
             if (client.isHealthy()) {
                 return;
+            }
+            String refused = refusal.reason();
+            if (refused != null) {
+                throw refusedBeforeSpawning(spec, waitStartedNanos, refused);
             }
             long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000;
             if (remainingMillis <= 0) {
@@ -456,9 +517,34 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 break;
             }
         }
+        // The budget ran out, or the wait was interrupted. One last look at the verdict:
+        // a refusal that landed during the final sleep still explains this run far better
+        // than its timeout does, and an unproven verdict costs this path nothing at all.
+        String refusedAtDeadline = refusal.reason();
+        if (refusedAtDeadline != null) {
+            throw refusedBeforeSpawning(spec, waitStartedNanos, refusedAtDeadline);
+        }
         throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                 "opencode serve did not become ready within " + budgetMillis
                         + "ms for run " + spec.runId());
+    }
+
+    /**
+     * The end of a readiness wait the image had already decided: this core is not slow,
+     * it was never started, and the launcher said why in its own sentence. The reason is
+     * carried verbatim because the run's persisted error is what an operator acts on —
+     * a timeout describes a symptom, the launcher's fault describes a fixable cause.
+     *
+     * <p>The elapsed time is logged at INFO: without it, nobody reading the log can tell
+     * a verdict the transport delivered late from a verdict nobody looked at again.
+     */
+    private TaskExecutionException refusedBeforeSpawning(ExecutionSpec spec, long waitStartedNanos, String reason) {
+        long waitedMillis = Math.max(0L, (System.nanoTime() - waitStartedNanos) / 1_000_000);
+        log.info("Readiness wait for run {} ended after {} ms on the launcher's pre-spawn refusal: {}",
+                spec.runId(), waitedMillis, reason);
+        return new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "The image launcher refused the launch of run " + spec.runId()
+                        + " before it spawned anything, so opencode serve can never become ready: " + reason);
     }
 
     /** The governed configuration file of one run. */
@@ -481,9 +567,22 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     }
 
     private static String governedConfiguration(ModelProvider provider, String mcpBlock) {
+        String providerKey = governedProviderKey(provider.providerId());
         return GOVERNED_CONFIGURATION_TEMPLATE.formatted(mcpBlock,
-                provider.providerId(), provider.model(),
-                provider.providerId(), provider.baseUrl(), provider.model());
+                providerKey, provider.model(),
+                providerKey, provider.baseUrl(), provider.model());
+    }
+
+    /**
+     * The document key of a resolved provider: its id prefixed with
+     * {@link #GOVERNED_PROVIDER_KEY_PREFIX}, which is never applied twice. This is
+     * the single place the governed document is rendered, so no document can carry a
+     * key opencode bundles.
+     */
+    private static String governedProviderKey(String providerId) {
+        return providerId.startsWith(GOVERNED_PROVIDER_KEY_PREFIX)
+                ? providerId
+                : GOVERNED_PROVIDER_KEY_PREFIX + providerId;
     }
 
     private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp) {

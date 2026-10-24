@@ -46,6 +46,7 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
         private volatile RuntimeHandle handle;
         private volatile CoreSession session;
         private volatile boolean writersVerifiedStopped;
+        private volatile boolean launchCancelRequested;
         private volatile ControlRequest pendingControl;
         private volatile String controlState = ControlState.RUNNING.name();
         private volatile boolean finalized;
@@ -102,6 +103,15 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
             return writersVerifiedStopped;
         }
 
+        /**
+         * True when a cancel reached this run while its launch was still in flight. The
+         * in-flight attempt consults it before opening a session and before prompting, so a
+         * stop request is never overtaken by the launch it is supposed to prevent.
+         */
+        public boolean launchCancelRequested() {
+            return launchCancelRequested;
+        }
+
         /** The control state as last verified by the runtime (never an unverified request). */
         public String controlState() {
             return controlState;
@@ -136,6 +146,24 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
         void launch(RuntimeHandle handle, CoreSession session) {
             this.handle = handle;
             this.session = session;
+        }
+
+        /**
+         * Attaches the handle the moment the backend's launch returned. From here a real core
+         * process exists, so the run is controllable even while its session is still opening;
+         * nothing ever detaches a handle or a session again.
+         */
+        void handleAttached(RuntimeHandle handle) {
+            this.handle = handle;
+        }
+
+        /**
+         * Records the cancel of a run whose launch is still in flight, so the attempt stops what
+         * it launched instead of prompting it. Kept separate from the verified-stop facts: this is
+         * a request the in-flight attempt acts on, not a stop the backend confirmed.
+         */
+        void requestLaunchCancel() {
+            this.launchCancelRequested = true;
         }
 
         void recordVerifiedControl(String state) {

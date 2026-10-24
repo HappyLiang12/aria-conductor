@@ -17,10 +17,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -52,6 +53,12 @@ public class KanbanTransitionService {
     private final AgentPickupEligibility eligibility;
     private final ApprovalRepository approvalRepository;
     private final ApplicationEventPublisher eventPublisher;
+    /**
+     * The bounded off-thread stop worker the deferred run cancels go through, so neither a 30 s
+     * verified stop nor a refusal can pin the request's connections or answer 409 for a card move
+     * that already committed (#111 fix round 2, rulings 5 and 6).
+     */
+    private final DeferredRunStop deferredRunStop;
 
     public KanbanTransitionService(KanbanRepository kanbanRepository,
                                    KanbanService kanbanService,
@@ -61,7 +68,8 @@ public class KanbanTransitionService {
                                    AgentPickerService agentPicker,
                                    AgentPickupEligibility eligibility,
                                    ApprovalRepository approvalRepository,
-                                   ApplicationEventPublisher eventPublisher) {
+                                   ApplicationEventPublisher eventPublisher,
+                                   DeferredRunStop deferredRunStop) {
         this.kanbanRepository = kanbanRepository;
         this.kanbanService = kanbanService;
         this.runService = runService;
@@ -71,6 +79,7 @@ public class KanbanTransitionService {
         this.eligibility = eligibility;
         this.approvalRepository = approvalRepository;
         this.eventPublisher = eventPublisher;
+        this.deferredRunStop = deferredRunStop;
     }
 
     /**
@@ -278,13 +287,59 @@ public class KanbanTransitionService {
      * publishes {@code RunCompletedEvent(CANCELLED)}, the signal that expires the run's
      * pending ACP asks (R23) and frees the provider's single-run slot for that agent. A
      * missing or corrupt link is history, not a run to operate on.
+     *
+     * <p>The run UUID is captured at this point — before any later card move or pickup can
+     * rewrite the link (request-changes captures it before the card transition and the
+     * re-dispatch) — and the cancel itself is deferred to the card transaction's commit: a
+     * {@code cancelRun} commits the CANCELLED row and publishes {@code RunCompletedEvent} in
+     * its own transaction, so running it inline would outlive a later rollback and drag the
+     * card to CANCELLED for a re-dispatch that never happened.
      */
     private void cancelLiveLinkedRun(KanbanItem item) {
-        findRun(item).ifPresent(run -> {
-            if (run.getStatus() == RunStatus.PENDING || run.getStatus() == RunStatus.INITIALIZING
-                    || run.getStatus() == RunStatus.RUNNING || run.getStatus() == RunStatus.PAUSED
-                    || run.getStatus() == RunStatus.WAITING_INPUT) {
-                runService.cancelRun(UUID.fromString(item.getLinkedRunId()));
+        UUID runId = parseLinkOrNull(item);
+        if (runId == null) {
+            return;
+        }
+        Run run = runRepository.findById(runId).orElse(null);
+        if (run != null && isLiveForCancel(run.getStatus())) {
+            cancelAfterCommit(runId);
+        }
+    }
+
+    /** The statuses in which a linked run can still be doing work and has something to stop. */
+    private static boolean isLiveForCancel(RunStatus status) {
+        return status == RunStatus.PENDING || status == RunStatus.INITIALIZING
+                || status == RunStatus.RUNNING || status == RunStatus.PAUSED
+                || status == RunStatus.WAITING_INPUT;
+    }
+
+    /**
+     * Runs the linked run's cancel only once the enclosing card transaction has committed.
+     *
+     * <p>Registering the callback rather than cancelling inline is what keeps the card and
+     * its run atomic for the operator: on rollback the callback never runs, so the run is
+     * not cancelled for a transition that did not happen.
+     *
+     * <p>Once the card committed, the stop goes to {@link DeferredRunStop} (#111 fix round 2,
+     * rulings 5 and 6): off the request thread -- a verified stop blocks up to 30 s and
+     * {@code RunService.cancelRun} suspends the caller's transaction, which together pinned two
+     * pooled connections per deferred cancel -- and never back into the caller's response: the
+     * card is already CANCELLED and the board will not re-run a move the card already reached, so
+     * the 409 a refusal used to raise there was a dead end with a live core behind it. A refusal
+     * is recorded as a durable pending stop on the run, logged at WARN with the run id and the
+     * exact reason (never swallowed), and retried by the stop sweep. A caller with no active
+     * transaction synchronization (unit callers, non-transactional entry points) has no committed
+     * card move to protect and keeps seeing the refusal directly.
+     */
+    private void cancelAfterCommit(UUID runId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            deferredRunStop.runNow(runId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                deferredRunStop.submit(runId);
             }
         });
     }
@@ -312,9 +367,11 @@ public class KanbanTransitionService {
             // A run parked on a clarification question (Plan B) is a live run
             // whose loop waits on the operator's answer: cancelling it publishes
             // RunCompletedEvent(CANCELLED), which wakes the parked loop through
-            // the input coordinator's sticky termination intent.
-            case WAITING_INPUT -> runService.cancelRun(runId);
-            case PENDING, INITIALIZING -> runService.cancelRun(runId);
+            // the input coordinator's sticky termination intent. The cancel is
+            // deferred to commit like every other stop: a rolled-back detach must
+            // not end a run the card still owns.
+            case WAITING_INPUT -> cancelAfterCommit(runId);
+            case PENDING, INITIALIZING -> cancelAfterCommit(runId);
             default -> { }
         }
     }
@@ -363,11 +420,6 @@ public class KanbanTransitionService {
             log.warn("Clearing corrupt linkedRunId {} on kanban item {}", link, item.getId());
             return null;
         }
-    }
-
-    private Optional<Run> findRun(KanbanItem item) {
-        UUID runId = parseLinkOrNull(item);
-        return runId == null ? Optional.empty() : runRepository.findById(runId);
     }
 
     private String buildPromptSeed(KanbanItem item, String feedback) {

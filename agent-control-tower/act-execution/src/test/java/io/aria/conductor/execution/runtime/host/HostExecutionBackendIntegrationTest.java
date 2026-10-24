@@ -70,10 +70,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>Every run is a real Task 7 mock core process launched through
  * {@link HostExecutionBackend} (fix round 2b: inside a bridge-shaped endpoint
- * shim that serves the run's authenticated bridge contract, so the launch has
- * to pass the backend's per-run endpoint authentication exactly as a production
- * bridge launch must), and every assertion about a writer is a real process
- * liveness or real file-byte observation -- no mocked boolean replaces a
+ * shim that serves the run's authenticated bridge contract, and with a declared
+ * run-owned control-secret file -- the production bridge profile shape -- so the
+ * launch has to pass the backend's per-run endpoint authentication exactly as a
+ * production bridge launch must), and every assertion about a writer is a real
+ * process liveness or real file-byte observation -- no mocked boolean replaces a
  * process state. The background-writer scenario deliberately leaves a
  * descendant writer alive after the prompt-completion event (Task 7 fixture
  * contract), so the stop proof can only be satisfied by terminating the owned
@@ -181,7 +182,9 @@ class HostExecutionBackendIntegrationTest {
      * loopback listener serving the bridge's route contract with a response that
      * is not this run's proof: the executable name the launch profile named
      * (node) is exactly what the OS reports, so only the authenticated call can
-     * tell the difference.
+     * tell the difference. The profile declares a run-owned control-secret file,
+     * as a production bridge launch does, so the launch is a bridge launch and
+     * therefore gated on that authenticated call.
      */
     @Test
     void aListenerWithoutTheRunSecretIsRefused() throws Exception {
@@ -240,9 +243,13 @@ class HostExecutionBackendIntegrationTest {
         HostExecutionBackend backend = new HostExecutionBackend(OwnedProcessController.forCurrentPlatform(),
                 () -> endpoint);
         PreparedEnvironment environment = backend.prepare(spec, lease);
+        // Bridge launch: the declared run-owned file keeps the authenticated
+        // endpoint gate in force against this impostor.
+        Path controlSecretFile = Path.of(environment.configurationDirectory())
+                .resolve("bridge-control.secret");
         LaunchProfile profile = new LaunchProfile(
                 List.of(nodeExecutable(), runtimeScript.toString(), pidFile.toString(), childPidFile.toString()),
-                Map.of(), workspace.toString());
+                Map.of(), workspace.toString(), controlSecretFile.toString());
         cleanups.add(() -> ProcessHandle.of(readPidQuietly(pidFile)).ifPresent(ProcessHandle::destroyForcibly));
         cleanups.add(() -> ProcessHandle.of(readPidQuietly(childPidFile)).ifPresent(ProcessHandle::destroyForcibly));
 
@@ -1084,7 +1091,13 @@ class HostExecutionBackendIntegrationTest {
             // run's authenticated bridge contract from the secret the backend
             // delivers into its environment, and pipes the mock core's stdio, so
             // the launch passes the backend's per-run endpoint authentication
-            // exactly as a production bridge launch must.
+            // exactly as a production bridge launch must. The fixture therefore
+            // declares a control-secret file inside the run-owned configuration
+            // directory, as the production Qoder bridge profile does: the backend
+            // writes the minted secret there, delivers it to the shim's
+            // environment, and keeps the authenticated launch gate covered.
+            Path controlSecretFile = Path.of(environment.configurationDirectory())
+                    .resolve("bridge-control.secret");
             LaunchProfile profile = new LaunchProfile(
                     List.of(nodeExecutable(), endpointShim().toString(),
                             "--port", String.valueOf(environment.endpoint().getPort()),
@@ -1094,7 +1107,8 @@ class HostExecutionBackendIntegrationTest {
                             peerScript().toString(),
                             "--scenario", scenario, "--workspace", workspace.toString()),
                     Map.of("ARIA_PEER_CONTROL_TOKEN", PEER_CONTROL_TOKEN),
-                    workspace.toString());
+                    workspace.toString(),
+                    controlSecretFile.toString());
             handle = backend.launch(environment, profile);
             owned = backend.ownedProcess(handle)
                     .orElseThrow(() -> new IllegalStateException("the backend returned no owned process"));

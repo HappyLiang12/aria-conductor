@@ -14,6 +14,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,6 +31,7 @@ import java.util.concurrent.Executors;
  *   <li>{@code POST /session} — create a session, returns {@code {id, ...}}</li>
  *   <li>{@code POST /session/:id/message} — send a message and wait for the response, returns {@code {info, parts}}</li>
  *   <li>{@code POST /session/:id/abort} — abort a running session, returns {@code boolean}</li>
+ *   <li>{@code GET /session/:id/message} — list session messages {@code [{info, parts}]} (progress pump)</li>
  *   <li>{@code GET /global/health} — returns {@code {healthy, version}}</li>
  * </ul>
  *
@@ -279,6 +281,115 @@ public class OpenCodeHttpClient implements AutoCloseable {
             log.debug("OpenCode health probe failed: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * One session message as the progress pump reads it: {@code info.id},
+     * {@code info.role} and its parts.
+     *
+     * <p>The role is part of the snapshot on purpose (issue #103): {@code GET
+     * /session/:id/message} answers the user message next to the assistant one,
+     * and a pump that could not tell them apart streamed the operator's own prompt
+     * as the assistant's thinking. A core that omits the member leaves it null —
+     * the snapshot stays faithful to the wire and the consumer decides what to
+     * stream.
+     */
+    public record MessageSnapshot(String id, String role, List<PartSnapshot> parts) {
+    }
+
+    /**
+     * Fault-tolerant snapshot of one message part; fields the core omits stay
+     * null. {@code output} is the completed tool part's native {@code state.output}
+     * (the real wire shape); it is null while the tool has not completed.
+     */
+    public record PartSnapshot(String id, String type, String text, String toolName, String state,
+            String output) {
+    }
+
+    /**
+     * One poll of {@link #listMessages}: the observed messages plus whether the
+     * poll degraded (non-2xx, I/O failure or malformed body). A successful empty
+     * list is NOT degraded: it is the ordinary "no message yet" shape, so the
+     * pump can distinguish it from a failed poll when applying backoff.
+     *
+     * @param cause why the poll degraded (status, body shape, or the request
+     *              failure); {@code null} for a successful poll. The progress
+     *              pump puts it in its stall WARN, so a permanently dead stream
+     *              is diagnosable without debug logging.
+     */
+    public record MessageListResult(List<MessageSnapshot> messages, boolean degraded, String cause) {
+
+        /** A result without a recorded cause: the shape older callers used. */
+        public MessageListResult(List<MessageSnapshot> messages, boolean degraded) {
+            this(messages, degraded, null);
+        }
+    }
+
+    /**
+     * Pump polling timeout -- deliberately short; the five-minute task timeout
+     * must never be reused for a progress poll.
+     */
+    public static final Duration LIST_MESSAGES_TIMEOUT = Duration.ofSeconds(10);
+
+    /**
+     * List the session messages for the progress pump ({@code GET
+     * /session/:id/message}).
+     *
+     * <p>Degradation contract: any non-2xx, I/O failure or malformed body
+     * yields a result with an EMPTY message list, {@code degraded = true} and a
+     * short {@code cause} (logged at debug; the cause is what the progress pump
+     * puts in its operator-visible stall WARN). A readable empty array is a
+     * successful result with {@code degraded = false}. The pump must never blow
+     * up the prompt path; it treats both an empty successful list and a degraded
+     * one as "no data" and only applies backoff to the degraded flag.
+     */
+    public MessageListResult listMessages(String sessionId) {
+        String path = "/session/" + sessionId + "/message";
+        try {
+            HttpResponse<String> resp = sendNoRetry("GET", path, null, LIST_MESSAGES_TIMEOUT);
+            if (resp.statusCode() / 100 != 2) {
+                String cause = "HTTP " + resp.statusCode() + " from GET " + path;
+                log.debug("OpenCode listMessages degraded: {}", cause);
+                return degradedList(cause);
+            }
+            JsonNode root = objectMapper.readTree(resp.body());
+            if (!root.isArray()) {
+                String cause = "non-array body from GET " + path;
+                log.debug("OpenCode listMessages degraded: {}", cause);
+                return degradedList(cause);
+            }
+            List<MessageSnapshot> out = new ArrayList<>();
+            for (JsonNode msg : root) {
+                String id = msg.path("info").path("id").asText(null);
+                String role = msg.path("info").path("role").asText(null);
+                List<PartSnapshot> parts = new ArrayList<>();
+                JsonNode partsNode = msg.path("parts");
+                if (partsNode.isArray()) {
+                    for (JsonNode p : partsNode) {
+                        parts.add(new PartSnapshot(
+                                p.path("id").asText(null),
+                                p.path("type").asText(null),
+                                p.has("text") ? p.path("text").asText(null) : null,
+                                p.has("tool") ? p.path("tool").asText(null) : p.path("name").asText(null),
+                                p.path("state").path("status").asText(null),
+                                p.path("state").path("output").asText(null)));
+                    }
+                }
+                out.add(new MessageSnapshot(id, role, parts));
+            }
+            return new MessageListResult(out, false);
+        } catch (TaskExecutionException e) {
+            log.debug("OpenCode listMessages degraded: {}", e.getMessage());
+            return degradedList(e.getMessage());
+        } catch (Exception e) {
+            String cause = "parse failure of GET " + path + ": " + e.getMessage();
+            log.debug("OpenCode listMessages degraded: {}", cause);
+            return degradedList(cause);
+        }
+    }
+
+    private static MessageListResult degradedList(String cause) {
+        return new MessageListResult(List.of(), true, cause);
     }
 
     // ---- internal helpers ----

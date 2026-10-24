@@ -4,9 +4,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.event.RunInputReceivedEvent;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunExecutionBinding;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -26,6 +28,8 @@ import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
+import io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackend;
+import io.aria.conductor.execution.runtime.sandbox.SandboxLaunchRejectedException;
 import io.aria.conductor.execution.security.ActorTokenService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -102,6 +106,15 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     static final String STATE_FAILED = "FAILED";
     static final String STATE_CANCELLED = "CANCELLED";
 
+    /**
+     * The run-store statuses that leave a launch nothing live to start into: a committed row in
+     * one of them means the run ended (a recorded cancel, another completion) while this attempt
+     * was still preparing or launching, so the attempt must stop what it launched instead of
+     * prompting it (#111 fix round 2).
+     */
+    private static final Set<RunStatus> TERMINAL_RUN_STATUSES = Set.of(
+            RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
+
     /** The deadline failure's stable identity: every deadline path records this pair. */
     static final String DEADLINE_FAILURE_CODE = "RUN_DEADLINE_REACHED";
     static final String DEADLINE_FAILURE_SURFACE = "SYSTEM_CONFIG";
@@ -136,6 +149,13 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     private final SessionTrajectoryRepository trajectories;
     /** The core registry the migrated attempt resolves the NEW core's adapter from. */
     private final CoreAdapters adapters;
+    /**
+     * The run store's committed status, read before a launch opens its session and before it
+     * prompts (#111 fix round 2). Null in the test conveniences that wire no run store: those
+     * attempts still observe a cancel taken through this coordinator, which marks the run's own
+     * registry record.
+     */
+    private final RunStatusReader runStatusReader;
 
     /**
      * One monitor per run around the binding row's read-modify-write of the
@@ -222,7 +242,25 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             SessionTrajectoryRepository trajectories, CoreAdapters adapters) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
                 Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines,
-                agents, trajectories, adapters);
+                agents, trajectories, adapters, null);
+    }
+
+    /**
+     * The production constructor with the run store's committed status reader (the
+     * run's own control timestamps, cleanup window and deadline scheduler keep
+     * their documented defaults).
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters,
+            RunStatusReader runStatusReader) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines,
+                agents, trajectories, adapters, runStatusReader);
     }
 
     /**
@@ -272,6 +310,30 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
             TaskDeadlineProperties taskDeadlines, AgentRepository agents,
             SessionTrajectoryRepository trajectories, CoreAdapters adapters) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                clock, cleanupWindow, deadlines, inputs, eventPublisher, taskDeadlines, agents,
+                trajectories, adapters, null);
+    }
+
+    /**
+     * The production constructor with the run store's committed status wired
+     * (#111 fix round 2): {@code runStatusReader} is what lets an in-flight
+     * launch observe a terminal row written by a cancel that never reached this
+     * coordinator's runtime record.
+     *
+     * @param runStatusReader the run store's committed status reader, or null in a
+     *                        wiring without the run store (the launch then still
+     *                        observes a cancel taken through this coordinator)
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters,
+            RunStatusReader runStatusReader) {
         this.backends = Objects.requireNonNull(backends, "Backend registry is required");
         this.workspaces = Objects.requireNonNull(workspaces, "Workspace service is required");
         this.finalizer = Objects.requireNonNull(finalizer, "Run finalizer is required");
@@ -289,6 +351,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         this.agents = agents;
         this.trajectories = trajectories;
         this.adapters = adapters;
+        this.runStatusReader = runStatusReader;
     }
 
     // ------------------------------------------------------------------ execute
@@ -562,9 +625,22 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * Resolves the frozen binding, acquires the workspace lease, prepares the
      * environment, launches the runtime, opens one core session and records the
      * observed runtime identity plus the chosen control strategy with the run.
-     * A failure at any step before the session exists leaves nothing running: a
-     * verified stop destroys and releases, an unverifiable one leaves the
-     * environment and the lease held instead of destroying after a refused stop.
+     *
+     * <p>The launched handle is attached the moment the process exists, so a control
+     * request arriving during the (bounded) serve-readiness wait has a live run-owned
+     * runtime to stop, and a failure at any step after the launch aborts it: a verified
+     * stop destroys and releases, an unverifiable one leaves the environment and the
+     * lease held instead of destroying after a refused stop. Nothing is orphaned.
+     *
+     * <p>Before opening the session and before returning it, the attempt re-reads the
+     * run's committed state (#111 fix round 2): a cancel that landed while the run was
+     * still unregistered was recorded by the run store without a stop request, and the
+     * launch must stop what it already launched instead of prompting it to completion.
+     *
+     * <p>The session open is handed the refusal source of the placement that launched the
+     * core ({@link #launchRefusalOf}), because the serve-readiness wait inside it is the
+     * half of the launch window that a refused launch used to burn in full: the image had
+     * already said why its core would never answer, and the wait never looked again.
      */
     RunRuntimeRegistry.RunRuntime openRuntime(ExecutionSpec spec, CoreAdapter adapter) {
         RunExecutionBinding binding = bindings.findById(spec.runId())
@@ -592,13 +668,28 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                     : credentials.resolve(spec.credentialRef());
             LaunchProfile profile = adapter.launchProfile(spec, environment, secret);
             RuntimeHandle handle = backend.launch(environment, profile);
-            // The placement that minted the run's control secret delivers it to the
-            // session opener as well: a bridge session cannot authenticate without it,
-            // and the credential bundle the adapter received never carried it.
-            CoreSession session = adapter.open(handle, spec, withSessionSecret(secret, backend.sessionSecret(handle)));
+            // The process exists the moment the launch returned, so the run becomes controllable
+            // HERE rather than when its session opens: a cancel arriving during the serve-readiness
+            // wait below then has a live run-owned runtime to stop, and a launch that fails after
+            // this point aborts a handle instead of orphaning one (#111 fix round 2, C1/C2).
+            runtime.handleAttached(handle);
+            requireLaunchNotTerminated(runtime, lease);
+            // The placement that minted the run's control secret delivers it to the session opener
+            // as well: a bridge session cannot authenticate without it, and the credential bundle
+            // the adapter received never carried it.
+            CoreSession session = adapter.open(handle, spec, withSessionSecret(secret, backend.sessionSecret(handle)),
+                    launchRefusalOf(backend, spec.runId()));
             runtime.launch(handle, session);
+            // The serve-readiness wait is the long half of the launch window: a cancel that landed
+            // during it stopped the handle it found, so this attempt must not hand a prompt to a
+            // core that was already stopped.
+            requireLaunchNotTerminated(runtime, lease);
+        } catch (RunTerminatedDuringLaunchException terminated) {
+            // The launched core is already stopped and released -- by the cancel that found the run
+            // terminal or by the check above. No second abort, and never a prompt.
+            throw terminated;
         } catch (RuntimeException e) {
-            abortLaunch(runtime, lease);
+            abortLaunch(runtime, lease, e);
             throw e;
         }
         // The observed runtime identity is recorded with the run by persistState,
@@ -606,6 +697,20 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         // is the run's frozen snapshot and is never written back itself.
         persistState(runtime, ControlState.RUNNING.name());
         return runtime;
+    }
+
+    /**
+     * The refusal source of the placement that actually started this run's core. Only a
+     * sandbox owns an image launcher whose verdict can prove that nothing was ever
+     * spawned, so the sandbox backend — the holder of the run's
+     * {@link io.aria.conductor.execution.runtime.sandbox.LaunchObservation} — answers, and
+     * every other placement (HOST) answers {@link LaunchRefusal#NONE}, which leaves the
+     * core's readiness wait exactly as it behaved before this seam existed.
+     */
+    private static LaunchRefusal launchRefusalOf(ExecutionBackend backend, UUID runId) {
+        return backend instanceof SandboxExecutionBackend sandbox
+                ? sandbox.launchRefusal(runId)
+                : LaunchRefusal.NONE;
     }
 
     /**
@@ -623,6 +728,44 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                 credential.environment());
         environment.putAll(sessionSecret.environment());
         return new SecretBundle(credential.reference(), environment);
+    }
+
+    /**
+     * The launch-window terminal check (#111 fix round 2): true when a cancel reached this
+     * coordinator's own record of the run, or when the run store's committed row left the live
+     * set while the attempt was preparing or launching.
+     *
+     * <p>Both reads are of volatile/committed state written by another thread, and the cancel
+     * side stores its request before it reads the handle while this side stores the handle before
+     * it reads the request, so at least one of the two observes the other: a launch can neither
+     * slip past a cancel nor be cancelled after it already handed the prompt to the core.
+     */
+    private boolean launchWasTerminated(RunRuntimeRegistry.RunRuntime runtime) {
+        if (runtime.launchCancelRequested()) {
+            return true;
+        }
+        RunStatus committed = committedRunStatus(runtime.spec().runId());
+        return committed != null && TERMINAL_RUN_STATUSES.contains(committed);
+    }
+
+    /** The run's committed status, or null when this wiring serves no run store. */
+    private RunStatus committedRunStatus(UUID runId) {
+        return runStatusReader == null ? null : runStatusReader.committedStatus(runId);
+    }
+
+    /**
+     * Refuses a launch whose run already ended: the handle attached so far is stopped through the
+     * verified abort path, destroyed and released, and the attempt never reaches a prompt. A stop
+     * that cannot be verified keeps the fail-closed pending control {@link #abortLaunch} records.
+     */
+    private void requireLaunchNotTerminated(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease) {
+        if (!launchWasTerminated(runtime)) {
+            return;
+        }
+        if (!runtime.writersVerifiedStopped()) {
+            abortLaunch(runtime, lease);
+        }
+        throw new RunTerminatedDuringLaunchException(runtime.spec().runId());
     }
 
     private void requireFrozenMatch(RunExecutionBinding binding, ExecutionSpec spec, CoreAdapter adapter) {
@@ -750,14 +893,41 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * <p>The window is hoisted once at the entry of this method -- exactly as
      * {@link RunFinalizer}'s own retry bound is -- and every stop attempt is
      * bounded by that one deadline, so no retry is granted a fresh window.
-     * Package-private: the abort path with a live handle has no public caller
-     * today (a session-open failure aborts before the handle is attached), and
-     * this is the seam its retry bound is pinned through, mirroring
-     * {@link #openRuntime} for the pre-prompt half.
+     *
+     * <p>The handle is attached as soon as {@code backend.launch} returns
+     * ({@link RunRuntimeRegistry.RunRuntime#handleAttached}), so the only abort
+     * that legitimately takes the no-handle branch is a failure <em>before</em>
+     * the launch (binding/preparation/credentials/launch profile): nothing was
+     * started, so there is no process to stop and only the registry record is
+     * dropped — with the one exception this method's third argument carries, a
+     * sandbox launch the image provably refused before it spawned anything, which
+     * releases the lease because no writer can exist to hold it ({@link
+     * #cleanupProvablyNeverSpawnedLaunch}). A session-open failure after the
+     * launch always finds a handle here and performs the verified stop, the
+     * destroy and the lease release -- the launched core is never orphaned
+     * (#111 fix round 2, C2).
+     * Package-private: this is the seam the abort's retry bound is pinned
+     * through, mirroring {@link #openRuntime} for the pre-prompt half, and the
+     * cancel of a run whose session never opened stops its launched core
+     * through it.
      */
     void abortLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease) {
+        abortLaunch(runtime, lease, null);
+    }
+
+    /**
+     * The same abort, told which failure it is cleaning up. The failure matters
+     * for exactly one case: an image that refused a launch <em>before it spawned
+     * anything</em> proves that no writer of this run can exist, so there is no
+     * stop to verify and nothing to leak — the environment is destroyed and the
+     * lease released against that proof instead of the run recording a refusal
+     * that nothing would ever re-drive. Every other failure, and every failure
+     * of a launch that reported a spawn, takes exactly the path it took before.
+     */
+    void abortLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease, RuntimeException launchFailure) {
         RuntimeHandle handle = runtime.handle();
         if (handle == null) {
+            cleanupProvablyNeverSpawnedLaunch(runtime, lease, launchFailure);
             runtimes.remove(runtime.spec().runId());
             return;
         }
@@ -798,6 +968,42 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         runtimes.remove(runtime.spec().runId());
     }
 
+    /**
+     * The cleanup of a launch the image provably refused before it spawned a child:
+     * destroy the environment (idempotent — the sandbox launch path normally destroyed
+     * it while raising the refusal) and release the lease against the refusal's own
+     * proof. Any other failure leaves this method doing nothing at all, which is the
+     * state in which a lease stays held rather than being released unverified.
+     */
+    private void cleanupProvablyNeverSpawnedLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease,
+            RuntimeException launchFailure) {
+        if (!(launchFailure instanceof SandboxLaunchRejectedException refused)) {
+            return;
+        }
+        Optional<StopProof> proof = refused.neverSpawnedStopProof();
+        if (proof.isEmpty()) {
+            // The launcher's fault did not prove the absence of a writer: hold the lease
+            // exactly as an unreadable launch outcome always has.
+            return;
+        }
+        UUID runId = runtime.spec().runId();
+        try {
+            if (runtime.backend() instanceof SandboxExecutionBackend sandbox) {
+                sandbox.destroyUnlaunched(runId);
+            }
+        } catch (RuntimeException e) {
+            log.error("Run {}: destroying the never-spawned launch failed: {}", runId, e.getMessage());
+        }
+        try {
+            workspaces.release(lease, proof.orElseThrow());
+        } catch (RuntimeException e) {
+            log.error("Run {}: releasing the never-spawned launch's lease failed: {}", runId, e.getMessage());
+        }
+        runtime.recordVerifiedStop(STATE_CANCELLED);
+        log.info("Run {}: the image refused the launch before spawning, so no writer ever existed; the"
+                + " environment is destroyed and the lease released", runId);
+    }
+
     /** Stops, captures, destroys and releases through the one finalization owner. */
     private void finalizeRuntime(RunRuntimeRegistry.RunRuntime runtime) {
         ArtifactBundle bundle = finalizer.finish(runtime.backend(), runtime.handle(), runtime.lease(),
@@ -819,10 +1025,15 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * Verifies a manual pause. The pause is persisted and permission delivery is
      * held only for a verified PAUSED acknowledgement; anything else leaves the
      * run RUNNING with a pending control request and the exact failure reason.
+     *
+     * <p>Pause needs a live core session: a run whose launch is still in flight is
+     * coordinator-owned but has nothing to suspend, so it is refused with that exact
+     * reason rather than recorded as PAUSED.
      */
     public CompletionStage<ControlAck> pause(UUID runId) {
         RunRuntimeRegistry.RunRuntime runtime = requireRuntime(runId, "pause");
-        return runtime.session().pause(cleanupDeadline()).thenApply(ack -> {
+        CoreSession session = requireOpenSession(runtime, "pause");
+        return session.pause(cleanupDeadline()).thenApply(ack -> {
             if (verified(ack, ControlState.PAUSED)) {
                 permissions.manualPause(runId);
                 persistState(runtime, ControlState.PAUSED.name());
@@ -841,7 +1052,8 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      */
     public CompletionStage<ControlAck> resume(UUID runId) {
         RunRuntimeRegistry.RunRuntime runtime = requireRuntime(runId, "resume");
-        return runtime.session().resume(cleanupDeadline()).thenApply(ack -> {
+        CoreSession session = requireOpenSession(runtime, "resume");
+        return session.resume(cleanupDeadline()).thenApply(ack -> {
             if (verified(ack, ControlState.RUNNING)) {
                 permissions.manualResume(runId);
                 deliverHeldDecisions(runtime);
@@ -870,9 +1082,19 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * failure. Recording only after verification keeps a refused stop from
      * attaching a failure the run never reached (the prompt may then finish
      * normally).
+     *
+     * <p>A run whose core session has not opened yet is still cancellable
+     * (#111 fix round 2, ruling 3): the cancel tells the in-flight launch attempt to
+     * stop and then stops, destroys and releases the handle the launch already
+     * created through the same verified abort path. A run whose launch had not
+     * reached the launch yet is refused with that exact reason -- no writer existed,
+     * so no stop could be proven -- and is never answered as a cancellation.
      */
     public CompletionStage<ControlAck> cancel(UUID runId, String reason, String code, String surface) {
         RunRuntimeRegistry.RunRuntime runtime = requireRuntime(runId, "cancel");
+        if (runtime.session() == null) {
+            return cancelUnattachedLaunch(runtime, reason, code, surface);
+        }
         try {
             runtime.session().cancel(cleanupDeadline()).toCompletableFuture().join();
         } catch (RuntimeException e) {
@@ -903,14 +1125,70 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         return CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true));
     }
 
+    /**
+     * The cancel of a run the coordinator owns while its launch is still in flight.
+     *
+     * <p>The request is recorded on the runtime first and the handle read afterwards, while
+     * {@link #openRuntime} attaches its handle before reading the request: both fields are
+     * volatile and each side stores before it loads, so at least one of the two observes the
+     * other -- a launch is never cancelled too late to be seen and never stopped before it
+     * started.
+     *
+     * @return a verified {@code STOPPED} acknowledgement only when the abort's stop was verified
+     */
+    private CompletionStage<ControlAck> cancelUnattachedLaunch(RunRuntimeRegistry.RunRuntime runtime,
+            String reason, String code, String surface) {
+        UUID runId = runtime.spec().runId();
+        runtime.requestLaunchCancel();
+        if (runtime.handle() == null) {
+            recordPendingControl(runtime, ControlState.STOPPED, "Stop refused for run " + runId
+                    + ": its run-owned core had not launched yet, so no writer stop can be proven;"
+                    + " the in-flight launch attempt was told to stop and will not prompt");
+            return CompletableFuture.completedFuture(refusedCancelAck(runtime));
+        }
+        // The same verified teardown a failed launch gets: stop the writers, then destroy the
+        // environment and release the lease. A refused stop leaves both held and records the
+        // pending control with the backend's exact reason (destroy after a refused stop is terminal).
+        abortLaunch(runtime, runtime.lease());
+        if (!runtime.writersVerifiedStopped()) {
+            return CompletableFuture.completedFuture(refusedCancelAck(runtime));
+        }
+        persistState(runtime, STATE_CANCELLED);
+        actorTokens.revokeRun(runId);
+        inputs.recordTerminationIntent(runId, reason, code, surface);
+        return CompletableFuture.completedFuture(new ControlAck(ControlState.STOPPED, true));
+    }
+
+    /**
+     * The run's live runtime record in this process. Registry presence is the whole test: a
+     * launch that has registered its runtime is controllable even before its session exists,
+     * because a cancel of it stops the process the launch created.
+     */
     private RunRuntimeRegistry.RunRuntime requireRuntime(UUID runId, String action) {
         Objects.requireNonNull(runId, "Run id is required");
         RunRuntimeRegistry.RunRuntime runtime = runtimes.find(runId).orElse(null);
-        if (runtime == null || runtime.session() == null || runtime.handle() == null) {
+        if (runtime == null) {
             throw new IllegalStateException("Run " + runId
                     + " has no run-owned runtime in this process; there is nothing to " + action);
         }
         return runtime;
+    }
+
+    /**
+     * The session a pause or resume suspends and releases. A run this process owns while its
+     * launch is still in flight has no session to hold: the request is refused with that exact
+     * reason and never recorded as a state the core did not confirm, while a cancel of the same
+     * run stops the core its launch already started.
+     */
+    private static CoreSession requireOpenSession(RunRuntimeRegistry.RunRuntime runtime, String action) {
+        CoreSession session = runtime.session();
+        if (session == null || runtime.handle() == null) {
+            throw new IllegalStateException("Run " + runtime.spec().runId()
+                    + " is owned by its run coordinator but its run-owned core session is not open"
+                    + " yet; there is nothing to " + action + " -- cancel the run instead, which"
+                    + " stops the core the launch already started");
+        }
+        return session;
     }
 
     private static boolean verified(ControlAck ack, ControlState expected) {
@@ -1057,9 +1335,106 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
 
     private void handleEvent(RunRuntimeRegistry.RunRuntime runtime, CoreEvent event) {
         runtimes.forward(runtime.spec().runId(), event);
-        if ("permission.request".equals(event.type())) {
+        if ("opencode.progress".equals(event.type())) {
+            publishProgress(runtime, event);
+        } else if ("permission.request".equals(event.type())) {
             registerAsk(runtime, event);
         }
+    }
+
+    /**
+     * Maps one {@code opencode.progress} core event onto the domain
+     * {@link RunProgressEvent} the persistence/broadcast listener consumes. A
+     * malformed payload, an unknown kind or a non-positive seq is logged and
+     * dropped: progress is observability, and it never breaks or fails the run.
+     * seq is the dashboard's dedupe fallback and the REST replay order, so seq 0 (a
+     * missing member) is not a usable identity.
+     *
+     * <p>The payload's {@code partId} is carried through untouched: a row is an
+     * observation of one part, and several observations of one growing part share that
+     * id while their seq increases, so the id must survive the mapping for the consumer
+     * to merge them instead of appending duplicates. A core that reported no id yields
+     * a null partId, never an invented one.
+     *
+     * <p>A fragment that reaches this producer after the run's state settled ({@link
+     * #isRunSettled}) is dropped here: progress describes a live run, and persisting or
+     * broadcasting a fragment of a settled run hands the dashboard a step of a run that already
+     * ended. The pump bounds its own halt so a run's terminal result is never blocked behind
+     * progress persistence, which leaves this producer as the last place the settled run is still
+     * known. The one fragment already handed to the sink before the settlement was recorded is a
+     * conditional-write decision of the persistence layer, not a claim of this guard.
+     */
+    private void publishProgress(RunRuntimeRegistry.RunRuntime runtime, CoreEvent event) {
+        UUID runId = runtime.spec().runId();
+        if (isRunSettled(runtime)) {
+            // DEBUG at most per dropped fragment: the run's own stop/abort WARNs already carry
+            // the story, and a settled run can still be handed a whole in-flight poll batch.
+            log.debug("Run {}: a progress fragment raised after the run settled is dropped,"
+                    + " it is not published as live progress", runId);
+            return;
+        }
+        RunProgressEvent.Kind kind;
+        JsonNode payload;
+        try {
+            payload = mapper.readTree(event.payloadJson() == null ? "{}" : event.payloadJson());
+            String kindName = payload.path("kind").asText(null);
+            if (kindName == null) {
+                log.warn("Run {}: an opencode.progress payload without a kind is dropped", runId);
+                return;
+            }
+            try {
+                kind = RunProgressEvent.Kind.valueOf(kindName);
+            } catch (IllegalArgumentException e) {
+                log.warn("Run {}: unknown progress kind '{}' is dropped", runId, kindName);
+                return;
+            }
+        } catch (JsonProcessingException e) {
+            log.warn("Run {}: an unreadable opencode.progress payload is dropped: {}", runId, e.getMessage());
+            return;
+        }
+        long seq = payload.path("seq").asLong(0);
+        if (seq <= 0) {
+            log.warn("Run {}: progress seq {} is not positive; the payload is dropped", runId, seq);
+            return;
+        }
+        eventPublisher.publishEvent(new RunProgressEvent(this, runId, runtime.spec().agentId(),
+                payload.path("iteration").asInt(0), kind,
+                payload.hasNonNull("content") ? payload.path("content").asText() : "",
+                payload.hasNonNull("toolName") ? payload.path("toolName").asText() : null,
+                seq,
+                // Which part this observation is of; null when the core reported none,
+                // in which case seq stays the only identity the consumer has.
+                payload.hasNonNull("partId") ? payload.path("partId").asText() : null));
+    }
+
+    /**
+     * Whether the run's state is already settled, so anything its core still reports about it is
+     * history rather than live progress. Each clause is a fact that is recorded by the settling
+     * path itself, never a new flag maintained alongside it:
+     *
+     * <ul>
+     *   <li>{@link RunRuntimeRegistry.RunRuntime#writersVerifiedStopped()} -- set only on a stop
+     *   proof the backend verified (a verified cancel, a launch abort, the terminal path of
+     *   {@link #execute}), which is the same predicate the coordinator's ownership answer uses;</li>
+     *   <li>{@link RunRuntimeRegistry.RunRuntime#finalized()} -- set only once {@link RunFinalizer}
+     *   returned for this run (stop, capture, destroy and release all completed);</li>
+     *   <li>the run's committed status outside the live set -- the settlement a writer outside this
+     *   coordinator performed (a recorded cancel, a sweep), read through the run store's projection
+     *   exactly as the launch-window re-read does.</li>
+     * </ul>
+     *
+     * <p>Deliberately absent: {@code launchCancelRequested()}. That is a stop <em>request</em> the
+     * in-flight attempt acts on, not a stop anyone verified, and a run carrying it can still be
+     * live -- dropping its progress would hide steps of a run that is really still running. The
+     * committed status is never read through {@code findById}: the persistence-context instance it
+     * serves is stale under open-session-in-view, which is why the reader is a projection.
+     */
+    private boolean isRunSettled(RunRuntimeRegistry.RunRuntime runtime) {
+        if (runtime.writersVerifiedStopped() || runtime.finalized()) {
+            return true;
+        }
+        RunStatus committed = committedRunStatus(runtime.spec().runId());
+        return committed != null && TERMINAL_RUN_STATUSES.contains(committed);
     }
 
     /**
@@ -1092,6 +1467,27 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     @Override
     public Set<UUID> activeRuns(UUID agentId) {
         return runtimes.activeRuns(agentId);
+    }
+
+    /**
+     * THE one ownership predicate (#111 fix round 2, ruling 4): this process's coordinator owns
+     * the run while its run-owned runtime record is live in the registry -- the run was admitted
+     * here and its writers were not verified stopped yet. A registered runtime whose handle or
+     * session is still opening counts as owned, because a cancel of it has something real to stop
+     * ({@link #cancel(UUID, String, String, String)}); a pause or resume of it is refused, because
+     * suspension needs the session the launch has not opened yet.
+     *
+     * <p>The run store ({@code RunService}) and the engine both ask this one method, so no two
+     * definitions of "owned" can disagree about the same run at the same instant.
+     */
+    public boolean ownsRun(UUID agentId, UUID runId) {
+        if (runId == null) {
+            return false;
+        }
+        return runtimes.find(runId)
+                .map(runtime -> Objects.equals(runtime.spec().agentId(), agentId)
+                        && !runtime.writersVerifiedStopped())
+                .orElse(false);
     }
 
     // ------------------------------------------------------------------ deadline

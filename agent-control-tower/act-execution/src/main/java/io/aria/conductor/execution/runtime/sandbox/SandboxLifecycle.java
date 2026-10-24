@@ -3,6 +3,7 @@ package io.aria.conductor.execution.runtime.sandbox;
 import com.alibaba.opensandbox.sandbox.Sandbox;
 import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
+import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionHandlers;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionLogs;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionResult;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMessage;
@@ -48,6 +49,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
@@ -72,6 +74,18 @@ import java.util.function.LongSupplier;
  * image launcher ({@code /opt/aria/launch.mjs}) reads and spawns with
  * {@code shell: false}. The lifecycle only ever issues constant command shapes
  * (launcher path, control-script path, run directory).
+ *
+ * <p>The launcher's own verdict is part of the run's state, not a discarded
+ * return value: every launch owns a {@link LaunchObservation} that the SDK
+ * feeds from the command's output, so a refusal is reported as the image's
+ * reason (and fails the launch instead of burning the readiness window), while
+ * a launch that provably never spawned answers {@code stopWriters} truthfully
+ * without asking the in-image script — and nothing else does. A refusal that
+ * lands <em>after</em> the launch's own verdict window is still the reason the
+ * core will never answer, so {@link #launchRefusalReason(UUID)} hands it to the
+ * readiness wait through the placement, and the moment it landed is logged once
+ * per launch attempt: without that line, a late transport and a consumer that
+ * stopped looking are indistinguishable in the log.
  */
 @Slf4j
 public class SandboxLifecycle implements AutoCloseable {
@@ -88,6 +102,13 @@ public class SandboxLifecycle implements AutoCloseable {
     static final String MANIFEST_FILE = "launch-manifest.json";
     /** Upper bound on one bounded control command (stop/suspend/resume). */
     private static final Duration DEFAULT_COMMAND_TIMEOUT = Duration.ofMinutes(2);
+    /**
+     * How long a launch waits for the image launcher's <em>first</em> verdict before it
+     * assumes the launch is simply running. A refusal is prompt, a success is not, so the
+     * window bounds only the silence; it is nowhere near the readiness window it replaces,
+     * and it never waits for the child.
+     */
+    private static final Duration DEFAULT_LAUNCH_VERDICT_WINDOW = Duration.ofSeconds(5);
 
     /**
      * The sandbox SDK operations the lifecycle owns, addressed by sandbox id.
@@ -106,7 +127,12 @@ public class SandboxLifecycle implements AutoCloseable {
         /** Read-only endpoint lookup (not a state-changing operation). */
         String endpoint(String sandboxId, int port);
 
-        void launch(String sandboxId, String runDirectory, Duration timeout);
+        /**
+         * Starts the fixed image launcher for the run's uploaded manifest and feeds
+         * {@code observation} with everything the launcher reports about itself: the
+         * implementation owns the command's output, the lifecycle owns the verdict.
+         */
+        void launch(String sandboxId, String runDirectory, Duration timeout, LaunchObservation observation);
 
         String pauseWriters(String sandboxId, String runDirectory, Duration timeout);
 
@@ -130,6 +156,12 @@ public class SandboxLifecycle implements AutoCloseable {
         volatile ScheduledFuture<?> renewal;
         /** Set by a verified stop; cleared by launch and resume so a stale proof can never unlock an export. */
         volatile boolean verifiedStop;
+        /** What the image launcher of the current launch attempt has reported about itself. */
+        volatile LaunchObservation launchObservation;
+        /** When the current launch attempt started its launcher command; the zero point of the verdict's timing. */
+        volatile Instant launchStartedAt;
+        /** Latches the one arrival log a launch may produce, and is cleared by the next launch. */
+        final AtomicBoolean refusalLogged = new AtomicBoolean();
 
         Run(UUID runId, String sandboxId, String runDirectory) {
             this.runId = runId;
@@ -146,6 +178,7 @@ public class SandboxLifecycle implements AutoCloseable {
     private final ScheduledExecutorService renewals = Executors.newSingleThreadScheduledExecutor(daemonFactory());
     private volatile Duration renewalInterval = Duration.ofMinutes(10);
     private volatile Duration renewalExtension = Duration.ofMinutes(30);
+    private volatile Duration launchVerdictWindow = DEFAULT_LAUNCH_VERDICT_WINDOW;
 
     public SandboxLifecycle(SandboxSdk sdk) {
         this(sdk, DEFAULT_CONTROL_ROOT, DEFAULT_WORKSPACE_ROOT, DEFAULT_COMMAND_TIMEOUT);
@@ -167,6 +200,14 @@ public class SandboxLifecycle implements AutoCloseable {
     public void setRenewalPlan(Duration interval, Duration extension) {
         this.renewalInterval = Objects.requireNonNull(interval, "interval");
         this.renewalExtension = Objects.requireNonNull(extension, "extension");
+    }
+
+    /**
+     * How long a launch waits for the launcher's first verdict (production default 5s);
+     * the seam the launch-refusal tests bound instead of sleeping through it.
+     */
+    void setLaunchVerdictWindow(Duration window) {
+        this.launchVerdictWindow = Objects.requireNonNull(window, "window");
     }
 
     /** Whether this lifecycle currently owns an environment for the run. */
@@ -271,8 +312,75 @@ public class SandboxLifecycle implements AutoCloseable {
         Run run = require(runId);
         // A launch starts the writer tree: any earlier verified stop is no longer current.
         run.verifiedStop = false;
-        sdk.launch(run.sandboxId, run.runDirectory, commandTimeout);
+        LaunchObservation observation = new LaunchObservation();
+        run.launchObservation = observation;
+        run.launchStartedAt = Instant.now();
+        run.refusalLogged.set(false);
+        sdk.launch(run.sandboxId, run.runDirectory, commandTimeout, observation);
+        // The launcher's own verdict is prompt when it refuses (it exits as soon as it
+        // does) and absent when it succeeds (it then supervises its child until that
+        // exits), so this waits on the first verdict within a bounded window and never on
+        // the child. A refusal that proves no child was ever spawned fails the launch
+        // here, with the image's own reason, instead of the readiness window's timeout 90
+        // seconds later. A fault that does not prove it — including one on a launcher that
+        // had already reported a spawn — is NOT a refusal to destroy on: the child may be
+        // alive, so the launch keeps today's shape and the verified-stop rules apply.
+        observation.awaitVerdict(launchVerdictWindow);
+        String refusal = reportRefusalArrival(run);
+        if (refusal != null) {
+            throw new SandboxLaunchRejectedException(runId, observation,
+                    "The image launcher refused the launch of run " + runId + " in sandbox " + run.sandboxId
+                            + " before it spawned anything: " + refusal);
+        }
         startRenewal(runId, renewalInterval, renewalExtension);
+    }
+
+    /**
+     * The launcher's proven pre-spawn refusal for the run's current launch attempt, or
+     * {@code null} while nothing is proven. This is the seam the core's readiness wait
+     * consumes: the launch path consulted the verdict once inside its own window, and a
+     * refusal that arrives after that window is still the reason the core will never
+     * answer, so a waiter may stop on it instead of burning its budget.
+     *
+     * <p>Nothing here polls or asks the sandbox: the answer comes from the in-memory
+     * {@link LaunchObservation} the SDK already feeds.
+     */
+    public String launchRefusalReason(UUID runId) {
+        Run run = runId == null ? null : runs.get(runId);
+        return run == null ? null : reportRefusalArrival(run);
+    }
+
+    /**
+     * The reason of a proven pre-spawn refusal, and the one INFO line recording the moment
+     * that proof landed against the launch's own start — exactly once per launch attempt,
+     * because the arrival is a fact about the transport, not about how many consumers read
+     * it. Returns {@code null} while the observation proves nothing, which is the state a
+     * silent, unreadable, truncated, aborted or post-spawn outcome leaves it in.
+     */
+    private String reportRefusalArrival(Run run) {
+        LaunchObservation observation = run.launchObservation;
+        if (observation == null) {
+            return null;
+        }
+        String reason = observation.refusalReason();
+        if (reason == null) {
+            return null;
+        }
+        if (run.refusalLogged.compareAndSet(false, true)) {
+            Instant landed = observation.refusalProvenAt();
+            Instant started = run.launchStartedAt;
+            long elapsedMillis = landed != null && started != null
+                    ? Math.max(0L, Duration.between(started, landed).toMillis())
+                    : -1L;
+            if (elapsedMillis < 0L) {
+                log.info("Launcher refusal for run {} landed after its launch started (sandbox {}): {}",
+                        run.runId, run.sandboxId, reason);
+            } else {
+                log.info("Launcher refusal for run {} landed {} ms after its launch started (sandbox {}): {}",
+                        run.runId, elapsedMillis, run.sandboxId, reason);
+            }
+        }
+        return reason;
     }
 
     // ------------------------------------------------------------------ control
@@ -330,9 +438,23 @@ public class SandboxLifecycle implements AutoCloseable {
      * Stops every writer the run owns and returns the proof export/capture
      * require. An unparseable or negative report is never reported as stopped
      * and never arms the export gate; only a report that verifies the stop does.
+     *
+     * <p>The one report the script is not asked for is a launch the image provably
+     * refused <em>before spawning</em> ({@link LaunchObservation#neverSpawnedProven()}):
+     * no writer of this run can exist, so "all writers are stopped" is the truthful
+     * answer rather than a guess, and asking {@code stop-writers} would only have
+     * produced its {@code launch record is unreadable} refusal — the refusal that left
+     * the environment and the lease in place forever. The export gate stays shut: this
+     * proof arms nothing, because a launch that never spawned has no tree to capture.
      */
     public StopProof stopWriters(UUID runId, Instant deadline) {
         Run run = require(runId);
+        LaunchObservation observation = run.launchObservation;
+        if (observation != null && observation.neverSpawnedProven()) {
+            log.info("Run {} has no writers to stop: the image launcher refused before spawning ({})",
+                    runId, observation.launcherVerdict());
+            return new StopProof(runId, true);
+        }
         Duration timeout = boundedTimeout(deadline);
         String output = sdk.stopWriters(run.sandboxId, run.runDirectory, timeout);
         boolean stopped = booleanField(output, "writersStopped");
@@ -852,23 +974,68 @@ public class SandboxLifecycle implements AutoCloseable {
         }
 
         @Override
-        public void launch(String sandboxId, String runDirectory, Duration timeout) {
+        public void launch(String sandboxId, String runDirectory, Duration timeout, LaunchObservation observation) {
             Sandbox sandbox = requireSandbox(sandboxId);
             String command = "node " + LAUNCHER
                     + " --manifest " + runDirectory + "/" + MANIFEST_FILE;
             log.info("Launching the run-owned core in sandbox {} via the fixed image launcher", sandboxId);
+            Objects.requireNonNull(observation, "observation");
             // The launcher supervises a long-running child, so it runs on a background
             // virtual thread (verified SDK behaviour: commands().run blocks until exit).
+            // The child's lifetime is not what this thread is for: the launcher's own
+            // output IS its verdict, and the SDK delivers it as the command writes it
+            // (CommandsAdapter.executeStreamingRequest dispatches every execd stdout and
+            // stderr event to the request's ExecutionHandlers while the command still
+            // runs, and Execution.getLogs() carries the same messages once it ends). The
+            // verdict is therefore captured live instead of being discarded, and a launch
+            // that never reached its child stops being indistinguishable from one that did.
             Thread.ofVirtual().start(() -> {
                 try {
-                    sandbox.commands().run(RunCommandRequest.builder()
+                    Execution exec = sandbox.commands().run(RunCommandRequest.builder()
                             .command(command)
                             .timeout(timeout)
+                            .handlers(ExecutionHandlers.builder()
+                                    .onStdout(message -> observation.recordStdout(textOf(message)))
+                                    .onStderr(message -> observation.recordStderr(textOf(message)))
+                                    .build())
                             .build());
+                    // The same messages the live handlers saw are accumulated on the
+                    // returned execution; feeding them again is idempotent (the record is
+                    // monotone) and keeps the verdict if this SDK build delivers the stream
+                    // only on completion.
+                    feedAccumulated(observation, exec);
+                    observation.commandCompleted(exec == null ? null : exec.getExitCode());
                 } catch (Exception e) {
-                    log.warn("The image launcher exited in sandbox {}: {}", sandboxId, e.getMessage());
+                    // The launcher's outcome is unknown here: that is reported as unknown,
+                    // never as an absence of writers.
+                    log.warn("The image launcher exited in sandbox {} without a readable outcome: {}",
+                            sandboxId, e.getMessage());
+                    observation.commandAborted();
                 }
             });
+        }
+
+        /** One execd output event's text; a null message or null text is simply nothing. */
+        private static String textOf(OutputMessage message) {
+            return message == null ? null : message.getText();
+        }
+
+        /** The accumulated stdout and stderr of a finished launcher command, line by line. */
+        private static void feedAccumulated(LaunchObservation observation, Execution exec) {
+            ExecutionLogs logs = exec == null ? null : exec.getLogs();
+            if (logs == null) {
+                return;
+            }
+            if (logs.getStdout() != null) {
+                for (OutputMessage message : logs.getStdout()) {
+                    observation.recordStdout(textOf(message));
+                }
+            }
+            if (logs.getStderr() != null) {
+                for (OutputMessage message : logs.getStderr()) {
+                    observation.recordStderr(textOf(message));
+                }
+            }
         }
 
         @Override

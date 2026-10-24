@@ -191,6 +191,15 @@ public class EventBroadcastListener {
         ));
     }
 
+    /**
+     * Persists and broadcasts one progress observation. A row is an observation of a
+     * part, so the part's stable identity travels with it: the live WS frame and the
+     * REST replay both carry {@code partId}, which is the key the drawer merges on when
+     * the same part is observed again with more content. The member is omitted when the
+     * event has none (a core that reports no part id, or a pre-V74 row), leaving seq --
+     * which the pump still guarantees monotonic -- as the consumer's fallback identity,
+     * exactly as it omits a null toolName.
+     */
     @EventListener
     public void onRunProgress(RunProgressEvent event) {
         // Persist first (history replay source), broadcast best-effort (live view).
@@ -204,6 +213,7 @@ public class EventBroadcastListener {
                     .seq(event.getSeq())
                     .content(truncate(event.getContent()))
                     .toolName(event.getToolName())
+                    .partId(event.getPartId())
                     .createdAt(Instant.now())
                     .build());
         } catch (Exception e) {
@@ -217,6 +227,9 @@ public class EventBroadcastListener {
         payload.put("seq", event.getSeq());
         if (event.getToolName() != null) {
             payload.put("toolName", event.getToolName());
+        }
+        if (event.getPartId() != null) {
+            payload.put("partId", event.getPartId());
         }
         payload.put("content", truncate(event.getContent()));
         broadcast("run.progress", payload);

@@ -4,7 +4,6 @@ import io.aria.conductor.common.port.RunRuntimeControlPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
@@ -13,16 +12,19 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * The run store's runtime-control port ({@link RunRuntimeControlPort}), served
- * by the run coordinator (Task 19, fix round 7): a coordinated run's pause and
- * resume are the coordinator's verified control operations on the run-owned core
- * session, and the run store may persist PAUSED/RUNNING only after this port
- * returned -- the same truthfulness contract the engine's own pause/resume paths
- * carry (a refusal surfaces the exact pending-control reason and claims no
- * state).
+ * by the run coordinator (Task 19, fix round 7; cancel added for #111 fix
+ * round 1): a coordinated run's pause, resume and cancel are the coordinator's
+ * verified control operations on the run-owned core, and the run store may
+ * persist PAUSED/RUNNING/CANCELLED only after this port returned -- the same
+ * truthfulness contract the engine's own pause/resume/cancel paths carry (a
+ * refusal surfaces the exact pending-control reason and claims no state).
  *
- * <p>{@link #owns} is the by-run view of the coordinator's active registry: a
- * run the coordinator owns is verified here; any other run (a legacy or
- * already-finalized run) is not, and its recorded transition stays the caller's.
+ * <p>{@link #owns} is the coordinator's ownership answer for one run
+ * ({@link CoreExecutionService#ownsRun(UUID, UUID)}): the run's runtime record is
+ * live in this process's registry. It deliberately does NOT require an opened
+ * session -- a run whose launch is still in flight is owned and its cancel stops
+ * the core that launch started (#111 fix round 2). Pause and resume do require
+ * the session and refuse without it; the port never persists anything itself.
  */
 @Slf4j
 public class CoordinatedRunRuntimeControl implements RunRuntimeControlPort {
@@ -42,11 +44,7 @@ public class CoordinatedRunRuntimeControl implements RunRuntimeControlPort {
             return false;
         }
         CoreExecutionService control = coordinator.getIfAvailable();
-        if (control == null) {
-            return false;
-        }
-        Set<UUID> active = control.activeRuns(agentId);
-        return active != null && active.contains(runId);
+        return control != null && control.ownsRun(agentId, runId);
     }
 
     @Override
@@ -56,6 +54,16 @@ public class CoordinatedRunRuntimeControl implements RunRuntimeControlPort {
         if (ack.state() != ControlState.PAUSED || !ack.verified()) {
             throw new IllegalStateException("Run " + runId + " was not paused: " + refusalReason(control, runId,
                     "the run-owned core did not verify the pause"));
+        }
+    }
+
+    @Override
+    public void cancel(UUID runId) {
+        CoreExecutionService control = requireCoordinator(runId, "cancel");
+        ControlAck ack = await(control.cancel(runId), runId, "cancel");
+        if (ack.state() != ControlState.STOPPED || !ack.verified()) {
+            throw new IllegalStateException("Run " + runId + " was not stopped: " + refusalReason(control, runId,
+                    "the run-owned core did not verify the stop"));
         }
     }
 

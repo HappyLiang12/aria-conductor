@@ -1138,6 +1138,18 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         return runtimes.activeRuns(agentId);
     }
 
+    /**
+     * True when this process still holds a usable run-owned session and handle
+     * for the run. A registry entry can briefly outlive its session/handle while
+     * a run finalizes; such a run has no live core left to control, so a cancel
+     * must fall through to the recorded transition instead of demanding a stop.
+     */
+    public boolean canControl(UUID runId) {
+        return runtimes.find(runId)
+                .map(runtime -> runtime.session() != null && runtime.handle() != null)
+                .orElse(false);
+    }
+
     // ------------------------------------------------------------------ deadline
 
     /**

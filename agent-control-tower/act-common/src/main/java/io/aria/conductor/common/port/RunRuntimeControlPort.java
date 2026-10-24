@@ -18,9 +18,11 @@ import java.util.UUID;
 public interface RunRuntimeControlPort {
 
     /**
-     * True when the run's runtime is owned by the implementing component, so a
-     * pause/resume/cancel of it must be verified through this port rather than
-     * merely recorded.
+     * True when the run's runtime is owned by the implementing component and
+     * still has a usable session/handle, so a pause/resume/cancel of it must be
+     * verified through this port rather than merely recorded. A registry entry
+     * that outlives its session/handle is not controllable: its caller records
+     * the transition instead of demanding a stop the runtime cannot perform.
      */
     boolean owns(UUID agentId, UUID runId);
 

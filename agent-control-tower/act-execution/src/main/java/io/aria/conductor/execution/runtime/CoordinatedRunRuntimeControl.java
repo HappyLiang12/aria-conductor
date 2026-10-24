@@ -46,7 +46,7 @@ public class CoordinatedRunRuntimeControl implements RunRuntimeControlPort {
             return false;
         }
         Set<UUID> active = control.activeRuns(agentId);
-        return active != null && active.contains(runId);
+        return active != null && active.contains(runId) && control.canControl(runId);
     }
 
     @Override

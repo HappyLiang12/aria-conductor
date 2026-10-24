@@ -38,10 +38,21 @@ class CoordinatedRunRuntimeControlTest {
         CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
         when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
         when(coordinator.activeRuns(agentId)).thenReturn(Set.of(runId), Set.of());
+        when(coordinator.canControl(runId)).thenReturn(true);
 
         assertThat(control.owns(agentId, runId)).isTrue();
         assertThat(control.owns(agentId, runId)).isFalse();
         assertThat(control.owns(null, runId)).isFalse();
+    }
+
+    @Test
+    void owns_isFalseWhenTheCoordinatorsRuntimeHasNoUsableSessionOrHandle() {
+        CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
+        when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
+        when(coordinator.activeRuns(agentId)).thenReturn(Set.of(runId));
+        when(coordinator.canControl(runId)).thenReturn(false);
+
+        assertThat(control.owns(agentId, runId)).isFalse();
     }
 
     @Test

@@ -1,5 +1,9 @@
 package io.aria.conductor.execution.runtime.sandbox;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.alibaba.opensandbox.sandbox.Sandbox;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.Execution;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.ExecutionHandlers;
@@ -7,13 +11,16 @@ import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.OutputMess
 import com.alibaba.opensandbox.sandbox.domain.models.execd.executions.RunCommandRequest;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.services.Commands;
+import io.aria.conductor.common.model.RunErrorText;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
+import io.aria.conductor.execution.runtime.LaunchRefusal;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
@@ -24,6 +31,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -42,6 +50,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -359,6 +368,145 @@ class SandboxLaunchFaultTest {
         assertThat(observation.neverSpawnedProven()).isFalse();
     }
 
+    // ------------------------------------------- S-1's other half: the readiness wait
+
+    /**
+     * The run the Lead reproduced on a real container: the launcher refused before spawning
+     * and said why, but only <em>after</em> the launch's own verdict window had already
+     * closed over a silent stream — so the launch returned a handle and the readiness wait
+     * took over. The wait is where the verdict has to be consulted, and on the code the Lead
+     * measured it never was: the run waited its whole window and failed as
+     * <em>"opencode serve did not become ready within 90000ms"</em> while the image's own
+     * sentence was already in the observation.
+     *
+     * <p>The message thrown here is also what the run persists: the engine records the
+     * failure's text bounded by {@link RunErrorText#bound(String)}, so an operator reading
+     * {@code runs.error_message} reads the reason they can act on.
+     */
+    @Test
+    void theReadinessWaitStopsOnARefusalThatLandsAfterTheLaunchVerdictWindow() throws IOException {
+        ScriptedSdk sdk = new ScriptedSdk(Script.LATE_PRE_SPAWN_REFUSAL);
+        try (NeverReadyCore core = new NeverReadyCore()) {
+            core.wire(sdk);
+            Fixture fixture = new Fixture(sdk, core);
+            RuntimeHandle handle = fixture.launchOnly();
+            assertThat(fixture.placementRefusal().reason())
+                    .as("while the launcher is silent nothing is proven, and the wait keeps waiting")
+                    .isNull();
+
+            sdk.refuseLate();
+
+            Instant started = Instant.now();
+            TaskExecutionException failure = catchThrowableOfType(
+                    () -> fixture.openWithPlacementRefusal(handle), TaskExecutionException.class);
+
+            assertThat(failure).as("the open fails on the launcher's verdict, not on its own timeout")
+                    .isNotNull();
+            assertThat(failure.getMessage())
+                    .contains("Entrypoint name is not allowlisted by this image: "
+                            + "C:\\Users\\operator\\opencode.exe")
+                    .contains("supervisor.fault")
+                    .contains("LaunchFault")
+                    .doesNotContain("did not become ready");
+            assertThat(Duration.between(started, Instant.now()))
+                    .as("the readiness window must not be burned on a launch the image already refused")
+                    .isLessThan(Duration.ofSeconds(3));
+            assertThat(RunErrorText.bound(failure.getMessage()))
+                    .as("the persisted run error carries the image's own sentence")
+                    .contains("Entrypoint name is not allowlisted by this image");
+        }
+    }
+
+    /**
+     * The measurement the next person needs and the parent change could not give them: one
+     * INFO line for the moment the refusal first lands in the observation, naming the run and
+     * the time since the launch started. It is written once per <em>launch attempt</em> — the
+     * arrival is a fact about the transport, not about how many consumers read it — and a
+     * second attempt of the same run gets its own.
+     */
+    @Test
+    void theArrivalOfAProvenRefusalIsLoggedOncePerLaunchAttempt() throws IOException {
+        ListAppender<ILoggingEvent> logs = captureLifecycleLogs();
+        ScriptedSdk sdk = new ScriptedSdk(Script.LATE_PRE_SPAWN_REFUSAL);
+        try (NeverReadyCore core = new NeverReadyCore()) {
+            core.wire(sdk);
+            Fixture fixture = new Fixture(sdk, core);
+            fixture.launchOnly();
+
+            sdk.refuseLate();
+            String first = fixture.lifecycle.launchRefusalReason(RUN_ID);
+            String second = fixture.lifecycle.launchRefusalReason(RUN_ID);
+            String third = fixture.placementRefusal().reason();
+
+            assertThat(first).as("the refusal is the launcher's own verdict").isEqualTo(second).isEqualTo(third);
+            assertThat(arrivalLines(logs))
+                    .as("one arrival line per launch attempt, however many consumers read the verdict")
+                    .hasSize(1);
+            assertThat(arrivalLines(logs).get(0))
+                    .contains("Launcher refusal for run " + RUN_ID)
+                    .contains("ms after its launch started")
+                    .contains("Entrypoint name is not allowlisted by this image");
+
+            fixture.lifecycle.launch(RUN_ID);
+            assertThat(fixture.lifecycle.launchRefusalReason(RUN_ID))
+                    .as("the fresh attempt has its own observation, and it has said nothing yet")
+                    .isNull();
+            sdk.refuseLate();
+            assertThat(fixture.lifecycle.launchRefusalReason(RUN_ID))
+                    .as("the new attempt's own verdict, read again")
+                    .isNotNull();
+            assertThat(arrivalLines(logs))
+                    .as("the second launch attempt gets its own arrival line")
+                    .hasSize(2);
+        } finally {
+            ((Logger) LoggerFactory.getLogger(SandboxLifecycle.class)).detachAppender(logs);
+        }
+    }
+
+    /**
+     * The fail-closed rule of the parent change, restated at the seam the readiness wait
+     * consumes: a launcher that said nothing, a capture that broke, and a launcher that
+     * reported its spawn and only then faulted all answer {@code null} — nothing proven — so
+     * the wait runs its budget, today's error stands and the verified-stop rules decide the
+     * cleanup exactly as they did before. A slow-but-live core keeps its chance to come up.
+     */
+    @Test
+    void anUnprovenVerdictIsNeverARefusalTheWaitMayStopOn() throws IOException {
+        for (Script script : List.of(Script.SILENT, Script.BROKEN_CAPTURE, Script.POST_SPAWN_REFUSAL)) {
+            ScriptedSdk sdk = new ScriptedSdk(script);
+            try (NeverReadyCore core = new NeverReadyCore()) {
+                core.wire(sdk);
+                Fixture fixture = new Fixture(sdk, core);
+                fixture.launchOnly();
+
+                assertThat(fixture.lifecycle.launchRefusalReason(RUN_ID))
+                        .as("%s proves nothing about whether a writer exists", script)
+                        .isNull();
+            }
+        }
+    }
+
+    /**
+     * The boundary the fix must never cross: a spawn report that arrives late, followed by
+     * the fault on the record write (launch.mjs:301), describes a live child. Nothing may be
+     * concluded from it, so the refusal source stays silent and the readiness wait runs.
+     */
+    @Test
+    void aLateSpawnReportFollowedByAFaultIsNotARefusal() throws IOException {
+        ScriptedSdk sdk = new ScriptedSdk(Script.LATE_PRE_SPAWN_REFUSAL);
+        try (NeverReadyCore core = new NeverReadyCore()) {
+            core.wire(sdk);
+            Fixture fixture = new Fixture(sdk, core);
+            fixture.launchOnly();
+
+            sdk.spawnThenRefuseLate();
+
+            assertThat(fixture.lifecycle.launchRefusalReason(RUN_ID))
+                    .as("a launcher that reported its spawn never refuses a launch that never spawned")
+                    .isNull();
+        }
+    }
+
     // ------------------------------------------------------------------ fixture
 
     /** The lifecycle and backend under test, over a scripted SDK and a never-ready endpoint. */
@@ -394,6 +542,16 @@ class SandboxLaunchFaultTest {
             RuntimeHandle handle = backend.launch(environment,
                     new LaunchProfile(SERVE_ARGV, Map.of(), "/workspace"));
             adapter.open(handle, spec(), new SecretBundle(null, Map.of()));
+        }
+
+        /** The session open as the coordinator performs it: with the placement's refusal source. */
+        void openWithPlacementRefusal(RuntimeHandle handle) {
+            adapter.open(handle, spec(), new SecretBundle(null, Map.of()), backend.launchRefusal(RUN_ID));
+        }
+
+        /** The refusal source the placement hands the core's readiness wait. */
+        LaunchRefusal placementRefusal() {
+            return backend.launchRefusal(RUN_ID);
         }
 
         private OpenCodeCoreAdapter adapter(NeverReadyCore core) {
@@ -509,6 +667,15 @@ class SandboxLaunchFaultTest {
             assertThat(observation).as("the lifecycle handed the SDK an observation").isNotNull();
             observation.recordStderr(PRE_SPAWN_REFUSAL);
             observation.commandCompleted(78);
+        }
+
+        /** The late pair that must never read as a refusal: the spawn report, then its fault. */
+        void spawnThenRefuseLate() {
+            LaunchObservation observation = lastObservation;
+            assertThat(observation).as("the lifecycle handed the SDK an observation").isNotNull();
+            observation.recordStdout(POST_SPAWN_SPAWN_LINE);
+            observation.recordStderr(POST_SPAWN_REFUSAL);
+            observation.commandCompleted(70);
         }
 
         @Override
@@ -659,5 +826,22 @@ class SandboxLaunchFaultTest {
             }
         }
         return condition.getAsBoolean();
+    }
+
+    /** Captures what {@link SandboxLifecycle} logs for the duration of one test. */
+    private static ListAppender<ILoggingEvent> captureLifecycleLogs() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(SandboxLifecycle.class)).addAppender(appender);
+        return appender;
+    }
+
+    /** The INFO lines reporting that a launcher's proven refusal landed in an observation. */
+    private static List<String> arrivalLines(ListAppender<ILoggingEvent> logs) {
+        return logs.list.stream()
+                .filter(event -> event.getLevel() == Level.INFO)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(text -> text.startsWith("Launcher refusal for run "))
+                .toList();
     }
 }

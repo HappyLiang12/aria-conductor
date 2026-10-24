@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.Set;
 
@@ -44,6 +45,13 @@ import java.util.Set;
  *       a post-spawn fault, an unparseable stream, a command whose outcome never arrived
  *       — is {@link FaultClass#AFTER_SPAWN} or {@link FaultClass#UNREADABLE}, and neither
  *       may be treated as "no writer could ever have started".</li>
+ *   <li><b>the refusal a waiting launch path may act on</b> — {@link #refusalReason()}
+ *       answers with the launcher's own sentence only when a fault was reported <em>and</em>
+ *       it is {@link FaultClass#NEVER_SPAWNED}; every other state, including the unreadable
+ *       ones above, answers {@code null} so a waiter keeps today's behaviour.
+ *       {@link #refusalProvenAt()} stamps the instant that proof landed, which is the only
+ *       measurement that separates "the transport delivered late" from "nobody looked
+ *       again".</li>
  * </ul>
  *
  * <p>Failing to read the stream is never a conclusion about the writers: an absent,
@@ -102,6 +110,9 @@ public final class LaunchObservation {
     private final StringBuilder stderrBuffer = new StringBuilder();
     private int trackedBytes;
 
+    /** The instant the launcher's pre-spawn refusal first became proven, or null while it is not. */
+    private Instant refusalProvenAt;
+
     private boolean spawnReported;
     private boolean unreadableLineSeen;
     private boolean faultReported;
@@ -139,6 +150,7 @@ public final class LaunchObservation {
             flushRemainder(false);
         }
         outcomeKnown = true;
+        markRefusalProven();
         notifyAll();
     }
 
@@ -212,6 +224,34 @@ public final class LaunchObservation {
      */
     public synchronized boolean neverSpawnedProven() {
         return faultClass() == FaultClass.NEVER_SPAWNED;
+    }
+
+    /**
+     * The refusal this record <em>proves</em>, in the launcher's own words, or {@code null}
+     * while it proves nothing. Proving it takes both halves of Lane F's rule — a readable
+     * {@code supervisor.fault} <b>and</b> the {@link FaultClass#NEVER_SPAWNED} class that
+     * only a fault strictly before the spawn can have — so a silent, unreadable, truncated,
+     * aborted or post-spawn outcome answers {@code null} here and keeps today's behaviour
+     * everywhere it is consulted.
+     */
+    public synchronized String refusalReason() {
+        return faultReported() && neverSpawnedProven() ? launcherVerdict() : null;
+    }
+
+    /**
+     * The instant {@link #refusalReason()} first became provable, or {@code null} while it
+     * is not. Recorded where the proof is completed, never where it is read, so a consumer
+     * can tell "the transport delivered late" from "nobody looked again".
+     */
+    public synchronized Instant refusalProvenAt() {
+        return refusalProvenAt;
+    }
+
+    /** Stamps the first moment this record proves the launcher refused before spawning. */
+    private void markRefusalProven() {
+        if (refusalProvenAt == null && faultReported() && neverSpawnedProven()) {
+            refusalProvenAt = Instant.now();
+        }
     }
 
     /** Whether the launcher's own outcome (its exit, or a broken capture) was observed. */
@@ -376,6 +416,7 @@ public final class LaunchObservation {
                 faultName = text(event, "name");
                 faultMessage = text(event, "message");
                 faultNameMatched = PRE_SPAWN_FAULT_NAME.equals(faultName);
+                markRefusalProven();
                 notifyAll();
                 return;
             }

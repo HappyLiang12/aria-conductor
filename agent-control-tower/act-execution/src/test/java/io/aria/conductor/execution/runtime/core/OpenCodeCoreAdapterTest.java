@@ -2,6 +2,10 @@ package io.aria.conductor.execution.runtime.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.sun.net.httpserver.HttpServer;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -9,12 +13,14 @@ import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
+import io.aria.conductor.execution.runtime.LaunchRefusal;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -35,6 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -108,6 +115,154 @@ class OpenCodeCoreAdapterTest {
             assertThat(Duration.between(started, Instant.now()))
                     .as("the wait must end with the run deadline, not the 30s serve budget")
                     .isLessThan(Duration.ofSeconds(10));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ---- the launch refusal, consulted by the readiness wait -----------------------
+
+    /** The refusal the Lead reproduced by hand inside the container its run leaked. */
+    private static final String LAUNCHER_REFUSAL =
+            "supervisor.fault (LaunchFault): Entrypoint name is not allowlisted by this image: "
+                    + "C:\\Users\\operator\\opencode.exe [exit 78]";
+
+    /**
+     * The production shape the Lead measured on a real container: the launcher refuses
+     * before it spawns anything, and it says so only <em>after</em> the launch's own verdict
+     * window had already closed over a silent stream. What runs next is this wait, and the
+     * defect is that it never looks at the verdict again: the run burns its whole budget and
+     * fails with a timeout that describes a symptom, while the image's sentence — the only
+     * part an operator can act on — was already known.
+     */
+    @Test
+    void open_stopsTheServeWaitOnAPreSpawnRefusalThatLandsAfterTheVerdictWindow() throws IOException {
+        AtomicInteger healthHits = new AtomicInteger();
+        HttpServer server = serveHealthyAfter(Integer.MAX_VALUE, healthHits);
+        try {
+            OpenCodeCoreAdapter adapter = adapter(server, Duration.ofSeconds(30), Duration.ofMillis(25));
+            ScriptedRefusal refusal = new ScriptedRefusal(2, LAUNCHER_REFUSAL);
+
+            TaskExecutionException failure = catchThrowableOfType(
+                    () -> adapter.open(handle(server), spec(Instant.now().plusSeconds(60)),
+                            new SecretBundle(null, Map.of()), refusal),
+                    TaskExecutionException.class);
+
+            assertThat(failure).as("the wait must end on the verdict the launcher did report").isNotNull();
+            assertThat(failure.cause()).isEqualTo(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE);
+            assertThat(failure.getMessage())
+                    .contains("Entrypoint name is not allowlisted by this image: "
+                            + "C:\\Users\\operator\\opencode.exe")
+                    .contains("supervisor.fault")
+                    .doesNotContain("did not become ready");
+            assertThat(refusal.lookCount())
+                    .as("the verdict is consulted on the polls the wait already performs")
+                    .isEqualTo(3);
+            assertThat(healthHits.get())
+                    .as("the wait ended on the third probe, not on the 30 s budget")
+                    .isLessThanOrEqualTo(5);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    /**
+     * The one line the Lead needs to be able to measure: when a wait ends on the verdict
+     * rather than on its budget, the log says so once, with what it ended on.
+     */
+    @Test
+    void open_logsOnceThatTheReadinessWaitEndedOnTheRefusal() throws IOException {
+        ListAppender<ILoggingEvent> logs = captureAdapterLogs();
+        AtomicInteger healthHits = new AtomicInteger();
+        HttpServer server = serveHealthyAfter(Integer.MAX_VALUE, healthHits);
+        try {
+            OpenCodeCoreAdapter adapter = adapter(server, Duration.ofSeconds(30), Duration.ofMillis(25));
+
+            assertThatThrownBy(() -> adapter.open(handle(server), spec(Instant.now().plusSeconds(60)),
+                    new SecretBundle(null, Map.of()), new ScriptedRefusal(0, LAUNCHER_REFUSAL)))
+                    .isInstanceOf(TaskExecutionException.class);
+
+            assertThat(logs.list)
+                    .filteredOn(event -> event.getLevel() == Level.INFO)
+                    .filteredOn(event -> event.getFormattedMessage()
+                            .contains("ended after") && event.getFormattedMessage()
+                            .contains("pre-spawn refusal"))
+                    .as("the readiness wait reports that it stopped on the verdict")
+                    .hasSize(1);
+        } finally {
+            server.stop(0);
+            ((Logger) LoggerFactory.getLogger(OpenCodeCoreAdapter.class)).detachAppender(logs);
+        }
+    }
+
+    /**
+     * Lane F's latency guarantee, restated at the readiness loop: a core that answers
+     * healthy is opened on the probe that found it healthy and the refusal source is never
+     * consulted on that path, and a core that needs a few more probes pays exactly the
+     * probes its script says — no window, no tax, nothing beyond what it paid before.
+     */
+    @Test
+    void open_healthyCorePaysNothingForTheRefusalSource() throws IOException {
+        AtomicInteger immediateHits = new AtomicInteger();
+        HttpServer healthy = serveHealthyAfter(0, immediateHits);
+        ScriptedRefusal refusal = new ScriptedRefusal(Integer.MAX_VALUE, LAUNCHER_REFUSAL);
+        long started;
+        try {
+            OpenCodeCoreAdapter adapter = adapter(healthy, Duration.ofSeconds(2), Duration.ofMillis(25));
+
+            started = System.nanoTime();
+            var session = adapter.open(handle(healthy), spec(), new SecretBundle(null, Map.of()), refusal);
+
+            assertThat(session.sessionId()).isEqualTo("s1");
+            assertThat(refusal.lookCount())
+                    .as("a core that is healthy on the first probe is never asked whether it refused")
+                    .isZero();
+            assertThat(immediateHits.get()).isEqualTo(1);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(1));
+        } finally {
+            healthy.stop(0);
+        }
+        AtomicInteger slowHits = new AtomicInteger();
+        HttpServer slowToListen = serveHealthyAfter(2, slowHits);
+        try {
+            OpenCodeCoreAdapter adapter = adapter(slowToListen, Duration.ofSeconds(2), Duration.ofMillis(25));
+
+            var session = adapter.open(handle(slowToListen), spec(), new SecretBundle(null, Map.of()), refusal);
+
+            assertThat(session.sessionId()).isEqualTo("s1");
+            assertThat(slowHits.get())
+                    .as("two 502s and the healthy probe that followed, which is the script itself")
+                    .isEqualTo(3);
+        } finally {
+            slowToListen.stop(0);
+        }
+    }
+
+    /**
+     * Fail-closed, restated at the readiness loop: while nothing is <em>proven</em> — a
+     * silent launcher, an unreadable stream, a launcher that reported its spawn and only
+     * then faulted — the wait runs its budget and today's error stands. A slow but live core
+     * must still be allowed to come up, which is exactly what an unproven verdict keeps
+     * possible here.
+     */
+    @Test
+    void open_unprovenRefusalRunsTheWholeBudgetAndKeepsTodaysError() throws IOException {
+        AtomicInteger healthHits = new AtomicInteger();
+        HttpServer server = serveHealthyAfter(Integer.MAX_VALUE, healthHits);
+        ScriptedRefusal refusal = new ScriptedRefusal(Integer.MAX_VALUE, LAUNCHER_REFUSAL);
+        try {
+            OpenCodeCoreAdapter adapter = adapter(server, Duration.ofMillis(300), Duration.ofMillis(20));
+
+            assertThatThrownBy(() -> adapter.open(handle(server), spec(Instant.now().plusSeconds(30)),
+                    new SecretBundle(null, Map.of()), refusal))
+                    .isInstanceOf(TaskExecutionException.class)
+                    .hasMessageContaining("did not become ready within");
+
+            assertThat(refusal.lookCount())
+                    .as("the wait did ask the verdict, and an unproven answer changed nothing: the run "
+                            + "of a slow-but-live core keeps its whole budget")
+                    .isGreaterThanOrEqualTo(1);
+            assertThat(healthHits.get()).isGreaterThanOrEqualTo(1);
         } finally {
             server.stop(0);
         }
@@ -273,6 +428,41 @@ class OpenCodeCoreAdapterTest {
     }
 
     // ---- helpers ------------------------------------------------------------------
+
+    /**
+     * A launch refusal source with the shape of the real one: it answers {@code null} —
+     * nothing proven — for its first {@code looksBeforeLanding} consultations and the
+     * launcher's sentence from then on, counting every consultation so a test can see
+     * exactly how often the wait looked.
+     */
+    private static final class ScriptedRefusal implements LaunchRefusal {
+
+        private final int looksBeforeLanding;
+        private final String reason;
+        private final AtomicInteger looks = new AtomicInteger();
+
+        ScriptedRefusal(int looksBeforeLanding, String reason) {
+            this.looksBeforeLanding = looksBeforeLanding;
+            this.reason = reason;
+        }
+
+        @Override
+        public String reason() {
+            return looks.incrementAndGet() > looksBeforeLanding ? reason : null;
+        }
+
+        int lookCount() {
+            return looks.get();
+        }
+    }
+
+    /** Captures what {@link OpenCodeCoreAdapter} logs for the duration of one test. */
+    private static ListAppender<ILoggingEvent> captureAdapterLogs() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(OpenCodeCoreAdapter.class)).addAppender(appender);
+        return appender;
+    }
 
     private static OpenCodeCoreAdapter adapter(HttpServer server, Duration budget, Duration poll) {
         RunMcpWiring runMcp = mock(RunMcpWiring.class);

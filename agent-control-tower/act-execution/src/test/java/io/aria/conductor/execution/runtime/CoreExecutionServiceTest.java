@@ -302,6 +302,9 @@ class CoreExecutionServiceTest {
     }
 
     private class RecordingAdapter implements CoreAdapter {
+        /** The refusal source the coordinator handed this session open, captured by the seam test. */
+        LaunchRefusal lastRefusal;
+
         @Override
         public String coreId() {
             return "qoder";
@@ -323,6 +326,16 @@ class CoreExecutionServiceTest {
         public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle creds) {
             recordedSteps.add("open-session");
             return session;
+        }
+
+        @Override
+        public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle creds,
+                LaunchRefusal launchRefusal) {
+            this.lastRefusal = launchRefusal;
+            // The interface default forwards to the three-argument open above: an adapter
+            // that has no readiness wait of its own is opened exactly as it was before the
+            // overload existed, and this recording captures only what the coordinator passed.
+            return CoreAdapter.super.open(handle, spec, creds, launchRefusal);
         }
     }
 
@@ -574,6 +587,23 @@ class CoreExecutionServiceTest {
     }
 
     // ------------------------------------------------------------------ frozen workspace/settings match
+
+    /**
+     * The seam is additive where there is no launcher to consult: an in-process HOST run has
+     * no image launcher that could ever prove a pre-spawn refusal, so its session open is
+     * handed {@link LaunchRefusal#NONE}, and an adapter that implements only the
+     * three-argument open — every core but OpenCode, and this recording one — is still
+     * opened through the defaulted overload, which forwards to it unchanged.
+     */
+    @Test
+    void aHostPlacementOpensItsSessionWithNoRefusalSourceAndTheUnchangedAdapterCall() {
+        runOwnedInProcess();
+
+        assertThat(adapter.lastRefusal)
+                .as("a HOST launch has no launcher verdict to consult")
+                .isSameAs(LaunchRefusal.NONE);
+        assertThat(recordedSteps).contains("open-session");
+    }
 
     @Test
     void aMatchingFrozenWorkspaceAndSettingsSnapshotAreAccepted() {

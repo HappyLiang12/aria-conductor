@@ -10,11 +10,13 @@ import io.aria.conductor.execution.runtime.CoreCapabilities;
 import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
+import io.aria.conductor.execution.runtime.LaunchRefusal;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.sandbox.SandboxBind;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.URI;
@@ -64,6 +66,7 @@ import java.util.Optional;
  * on the endpoint the launch produced, and never a container or a user
  * workspace.
  */
+@Slf4j
 public final class OpenCodeCoreAdapter implements CoreAdapter {
 
     public static final String CORE_ID = "opencode";
@@ -432,9 +435,22 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      */
     @Override
     public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials) {
+        return open(handle, spec, credentials, LaunchRefusal.NONE);
+    }
+
+    /**
+     * The same open on a placement whose launcher may already have refused: the
+     * readiness wait below consults {@code launchRefusal} on the polls it already
+     * performs, so a launch the image provably refused before spawning ends the
+     * wait with the image's own sentence instead of with this adapter's timeout.
+     */
+    @Override
+    public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials,
+            LaunchRefusal launchRefusal) {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(spec, "spec");
         Objects.requireNonNull(credentials, "credentials");
+        Objects.requireNonNull(launchRefusal, "launchRefusal");
         requireCore(spec);
         if (!spec.runId().equals(handle.runId())) {
             throw new IllegalArgumentException("The runtime handle belongs to run " + handle.runId()
@@ -448,7 +464,7 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
             // spawned process takes a moment to bind. openSession never retries a
             // non-2xx (a retried creation could leave a second native session
             // behind), so the open is gated on the health endpoint instead.
-            awaitServeReady(client, spec);
+            awaitServeReady(client, spec, launchRefusal);
             String sessionId = client.openSession(spec.runId().toString());
             return new OpenCodeCoreSession(spec, client, sessionId, profile.model());
         } catch (RuntimeException e) {
@@ -464,8 +480,15 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * provider's {@code waitForHealth}). The wait is also bounded by the run's
      * frozen deadline, so a launch that starts near expiry cannot sit out the
      * full budget past the point the run must end.
+     *
+     * <p>A health probe answers 502 for two very different cores: one that is still
+     * starting and one that will never answer because the image refused its launch
+     * before spawning it. The launcher already said which of the two it is, so the
+     * wait asks {@code launchRefusal} on every poll it makes and stops on a proven
+     * refusal with the launcher's own reason. A refusal that is not proven changes
+     * nothing: the wait runs its budget and today's timeout stands.
      */
-    private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec) {
+    private void awaitServeReady(OpenCodeHttpClient client, ExecutionSpec spec, LaunchRefusal refusal) {
         long budgetNanos = serveReadyBudget.toNanos();
         if (spec.deadline() != null) {
             long runBudgetNanos = Math.max(0L,
@@ -473,10 +496,15 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
             budgetNanos = Math.min(budgetNanos, runBudgetNanos);
         }
         long budgetMillis = budgetNanos / 1_000_000;
-        long deadlineNanos = System.nanoTime() + budgetNanos;
+        long waitStartedNanos = System.nanoTime();
+        long deadlineNanos = waitStartedNanos + budgetNanos;
         while (System.nanoTime() < deadlineNanos) {
             if (client.isHealthy()) {
                 return;
+            }
+            String refused = refusal.reason();
+            if (refused != null) {
+                throw refusedBeforeSpawning(spec, waitStartedNanos, refused);
             }
             long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000;
             if (remainingMillis <= 0) {
@@ -489,9 +517,34 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 break;
             }
         }
+        // The budget ran out, or the wait was interrupted. One last look at the verdict:
+        // a refusal that landed during the final sleep still explains this run far better
+        // than its timeout does, and an unproven verdict costs this path nothing at all.
+        String refusedAtDeadline = refusal.reason();
+        if (refusedAtDeadline != null) {
+            throw refusedBeforeSpawning(spec, waitStartedNanos, refusedAtDeadline);
+        }
         throw new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
                 "opencode serve did not become ready within " + budgetMillis
                         + "ms for run " + spec.runId());
+    }
+
+    /**
+     * The end of a readiness wait the image had already decided: this core is not slow,
+     * it was never started, and the launcher said why in its own sentence. The reason is
+     * carried verbatim because the run's persisted error is what an operator acts on —
+     * a timeout describes a symptom, the launcher's fault describes a fixable cause.
+     *
+     * <p>The elapsed time is logged at INFO: without it, nobody reading the log can tell
+     * a verdict the transport delivered late from a verdict nobody looked at again.
+     */
+    private TaskExecutionException refusedBeforeSpawning(ExecutionSpec spec, long waitStartedNanos, String reason) {
+        long waitedMillis = Math.max(0L, (System.nanoTime() - waitStartedNanos) / 1_000_000);
+        log.info("Readiness wait for run {} ended after {} ms on the launcher's pre-spawn refusal: {}",
+                spec.runId(), waitedMillis, reason);
+        return new TaskExecutionException(TaskExecutionException.Cause.SANDBOX_UNAVAILABLE,
+                "The image launcher refused the launch of run " + spec.runId()
+                        + " before it spawned anything, so opencode serve can never become ready: " + reason);
     }
 
     /** The governed configuration file of one run. */

@@ -3,6 +3,7 @@ package io.aria.conductor.execution.runtime.sandbox;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,6 +37,75 @@ class LaunchObservationTest {
     }
 
     // ------------------------------------------------------- the destroy-permitting class
+
+    // ------------------------------------------------- the refusal a waiter may act on
+
+    /**
+     * The refusal source the readiness wait consumes answers with the launcher's own sentence
+     * only on the proof — a reported fault <b>and</b> {@code NEVER_SPAWNED} — and with
+     * {@code null} on every state the plane cannot prove, which is the state in which the
+     * wait must go on waiting rather than invent a failure.
+     */
+    @Test
+    void theRefusalIsReportedOnlyOnTheProofAndNeverOnAnUnreadableOutcome() {
+        LaunchObservation proven = new LaunchObservation();
+        proven.recordStderr(ALLOWLIST_REFUSAL);
+        proven.commandCompleted(78);
+        assertThat(proven.refusalReason()).isEqualTo(proven.launcherVerdict())
+                .contains("Entrypoint name is not allowlisted by this image");
+
+        LaunchObservation silent = new LaunchObservation();
+        assertThat(silent.refusalReason()).isNull();
+
+        LaunchObservation afterSpawn = new LaunchObservation();
+        afterSpawn.recordStdout(spawnLine());
+        afterSpawn.recordStderr(ALLOWLIST_REFUSAL);
+        afterSpawn.commandCompleted(78);
+        assertThat(afterSpawn.refusalReason())
+                .as("a launcher that reached its child never refused a launch that never spawned")
+                .isNull();
+
+        LaunchObservation broken = new LaunchObservation();
+        broken.recordStderr(ALLOWLIST_REFUSAL);
+        broken.commandAborted();
+        assertThat(broken.refusalReason())
+                .as("a capture that broke says nothing about the spawn it failed to observe")
+                .isNull();
+
+        LaunchObservation unreadable = new LaunchObservation();
+        unreadable.recordStdout("the child wrote a line that is not an event\n");
+        unreadable.recordStderr(ALLOWLIST_REFUSAL);
+        unreadable.commandCompleted(78);
+        assertThat(unreadable.refusalReason())
+                .as("a line this record cannot read is spawn evidence, not a refusal")
+                .isNull();
+    }
+
+    /**
+     * The stamp that makes the Lead's measurement possible is taken where the proof
+     * <em>completes</em> (the fault line, or the command outcome that classifies it), not
+     * where a consumer happens to read it: otherwise "the transport delivered late" and
+     * "nobody looked again" are indistinguishable in the log.
+     */
+    @Test
+    void theRefusalArrivalIsStampedWhereTheProofCompletesAndNeverMoves() {
+        LaunchObservation observation = new LaunchObservation();
+        observation.recordStderr(ALLOWLIST_REFUSAL);
+
+        assertThat(observation.refusalReason())
+                .as("the fault alone does not yet prove the command's outcome")
+                .isNull();
+        assertThat(observation.refusalProvenAt()).isNull();
+
+        Instant before = Instant.now();
+        observation.commandCompleted(78);
+
+        assertThat(observation.refusalProvenAt()).isNotNull().isAfterOrEqualTo(before.minusMillis(1));
+        Instant landed = observation.refusalProvenAt();
+        assertThat(observation.refusalProvenAt()).isEqualTo(landed);
+        assertThat(observation.refusalReason()).isNotNull();
+        assertThat(observation.refusalProvenAt()).isEqualTo(landed);
+    }
 
     @Test
     void aLaunchFaultWithNoSpawnEvidenceProvesNoWriterOfThisRunEverExisted() {

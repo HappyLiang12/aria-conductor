@@ -8,6 +8,7 @@ import io.aria.conductor.execution.runtime.ControlAck;
 import io.aria.conductor.execution.runtime.ExecutionBackend;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
+import io.aria.conductor.execution.runtime.LaunchRefusal;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.StopProof;
@@ -319,6 +320,22 @@ public class SandboxExecutionBackend implements ExecutionBackend {
     public java.util.Optional<String> sandboxId(RuntimeHandle handle) {
         Objects.requireNonNull(handle, "handle");
         return lifecycle.sandboxId(handle.runId());
+    }
+
+    /**
+     * The refusal source of this backend's placement for the run: the image launcher's
+     * verdict, as far as it proves that the launch was refused before it spawned anything.
+     * This backend owns the {@link LaunchObservation} the launcher is fed into, so it is
+     * the only place that can answer, and the answer is what lets the core's readiness
+     * wait end on the image's own reason instead of on its timeout.
+     *
+     * <p>{@code null} — the unproven answer — is what a silent, unreadable, truncated,
+     * aborted or post-spawn outcome produces, and a wait that gets it keeps today's
+     * behaviour: finish its budget, then follow the verified-stop rules.
+     */
+    public LaunchRefusal launchRefusal(UUID runId) {
+        Objects.requireNonNull(runId, "runId");
+        return () -> lifecycle.launchRefusalReason(runId);
     }
 
     private void requireOwned(RuntimeHandle handle) {

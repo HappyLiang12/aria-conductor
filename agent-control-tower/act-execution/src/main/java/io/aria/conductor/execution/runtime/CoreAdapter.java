@@ -30,4 +30,20 @@ public interface CoreAdapter {
             SecretBundle credentials);
 
     CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials);
+
+    /**
+     * The same open, told where to learn that the launch it is waiting on was
+     * <em>provably refused before it spawned anything</em> ({@link LaunchRefusal}).
+     * A core whose session open waits for the launched core to become reachable can
+     * end that wait on the launcher's own reason rather than on its own timeout, and
+     * report the image's sentence to the operator.
+     *
+     * <p>Defaulted, and the default ignores the refusal: a core that opens no such
+     * wait, and a placement that owns no image launcher, must behave exactly as they
+     * did before this overload existed. Only a core with a readiness wait consumes it.
+     */
+    default CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials,
+            LaunchRefusal launchRefusal) {
+        return open(handle, spec, credentials);
+    }
 }

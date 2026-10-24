@@ -151,6 +151,41 @@ class CoreExecutionServiceSandboxLaunchAbortTest {
         assertThat(runtimes.find(RUN)).isEmpty();
     }
 
+    /**
+     * Where the verdict has to reach the wait (S-1's other half): the coordinator hands the
+     * session open the refusal source <em>of the placement that launched this core</em> — the
+     * sandbox backend's own, reading the observation its launcher is fed into — because no
+     * other object in the launch knows what the image said. The source is live, not a
+     * snapshot: it answers {@code null} while the launcher has proved nothing, and the
+     * launcher's sentence from the moment the verdict lands, which is what lets a wait stop
+     * on it without any core having to poll the sandbox for a second time.
+     */
+    @Test
+    void theCoordinatorHandsThePlacementOwnRefusalSourceToTheSessionOpen() {
+        given(Script.LATE_PRE_SPAWN_REFUSAL);
+        StubAdapter adapter = new StubAdapter(true);
+        java.util.concurrent.atomic.AtomicReference<String> beforeLanding =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> afterLanding =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        adapter.beforeOpen = () -> {
+            beforeLanding.set(adapter.recordedRefusal.reason());
+            sdk.refuseLate();
+            afterLanding.set(adapter.recordedRefusal.reason());
+        };
+
+        assertThatThrownBy(() -> service.openRuntime(spec(), adapter))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(adapter.recordedRefusal)
+                .as("the session open was handed a refusal source, not a null")
+                .isNotNull().isNotSameAs(LaunchRefusal.NONE);
+        assertThat(beforeLanding.get()).as("a silent launcher proves nothing").isNull();
+        assertThat(afterLanding.get())
+                .contains("Entrypoint name is not allowlisted by this image")
+                .contains("supervisor.fault");
+    }
+
     // ------------------------------------------------- the boundary must not move
 
     /**
@@ -237,6 +272,8 @@ class CoreExecutionServiceSandboxLaunchAbortTest {
 
         private final boolean failOpen;
         Runnable beforeOpen;
+        /** The refusal source the coordinator handed this session open, captured by the wiring test. */
+        LaunchRefusal recordedRefusal;
 
         StubAdapter(boolean failOpen) {
             this.failOpen = failOpen;
@@ -256,6 +293,16 @@ class CoreExecutionServiceSandboxLaunchAbortTest {
         public LaunchProfile launchProfile(ExecutionSpec spec, PreparedEnvironment environment,
                 SecretBundle credentials) {
             return new LaunchProfile(List.of("opencode", "serve", "--port", "4096"), Map.of(), "/workspace");
+        }
+
+        @Override
+        public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials,
+                LaunchRefusal launchRefusal) {
+            this.recordedRefusal = launchRefusal;
+            // The default of the interface forwards to the three-argument open, which is what
+            // a core without a readiness wait of its own keeps doing; this test's adapter is
+            // recording what the coordinator passed, not changing that behaviour.
+            return CoreAdapter.super.open(handle, spec, credentials, launchRefusal);
         }
 
         @Override

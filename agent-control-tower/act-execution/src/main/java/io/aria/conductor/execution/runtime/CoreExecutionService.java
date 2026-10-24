@@ -636,6 +636,11 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * run's committed state (#111 fix round 2): a cancel that landed while the run was
      * still unregistered was recorded by the run store without a stop request, and the
      * launch must stop what it already launched instead of prompting it to completion.
+     *
+     * <p>The session open is handed the refusal source of the placement that launched the
+     * core ({@link #launchRefusalOf}), because the serve-readiness wait inside it is the
+     * half of the launch window that a refused launch used to burn in full: the image had
+     * already said why its core would never answer, and the wait never looked again.
      */
     RunRuntimeRegistry.RunRuntime openRuntime(ExecutionSpec spec, CoreAdapter adapter) {
         RunExecutionBinding binding = bindings.findById(spec.runId())
@@ -672,7 +677,8 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             // The placement that minted the run's control secret delivers it to the session opener
             // as well: a bridge session cannot authenticate without it, and the credential bundle
             // the adapter received never carried it.
-            CoreSession session = adapter.open(handle, spec, withSessionSecret(secret, backend.sessionSecret(handle)));
+            CoreSession session = adapter.open(handle, spec, withSessionSecret(secret, backend.sessionSecret(handle)),
+                    launchRefusalOf(backend, spec.runId()));
             runtime.launch(handle, session);
             // The serve-readiness wait is the long half of the launch window: a cancel that landed
             // during it stopped the handle it found, so this attempt must not hand a prompt to a
@@ -691,6 +697,20 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         // is the run's frozen snapshot and is never written back itself.
         persistState(runtime, ControlState.RUNNING.name());
         return runtime;
+    }
+
+    /**
+     * The refusal source of the placement that actually started this run's core. Only a
+     * sandbox owns an image launcher whose verdict can prove that nothing was ever
+     * spawned, so the sandbox backend — the holder of the run's
+     * {@link io.aria.conductor.execution.runtime.sandbox.LaunchObservation} — answers, and
+     * every other placement (HOST) answers {@link LaunchRefusal#NONE}, which leaves the
+     * core's readiness wait exactly as it behaved before this seam existed.
+     */
+    private static LaunchRefusal launchRefusalOf(ExecutionBackend backend, UUID runId) {
+        return backend instanceof SandboxExecutionBackend sandbox
+                ? sandbox.launchRefusal(runId)
+                : LaunchRefusal.NONE;
     }
 
     /**

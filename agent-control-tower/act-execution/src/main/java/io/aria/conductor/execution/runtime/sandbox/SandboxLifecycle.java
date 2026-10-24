@@ -49,6 +49,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 
@@ -79,7 +80,12 @@ import java.util.function.LongSupplier;
  * feeds from the command's output, so a refusal is reported as the image's
  * reason (and fails the launch instead of burning the readiness window), while
  * a launch that provably never spawned answers {@code stopWriters} truthfully
- * without asking the in-image script — and nothing else does.
+ * without asking the in-image script — and nothing else does. A refusal that
+ * lands <em>after</em> the launch's own verdict window is still the reason the
+ * core will never answer, so {@link #launchRefusalReason(UUID)} hands it to the
+ * readiness wait through the placement, and the moment it landed is logged once
+ * per launch attempt: without that line, a late transport and a consumer that
+ * stopped looking are indistinguishable in the log.
  */
 @Slf4j
 public class SandboxLifecycle implements AutoCloseable {
@@ -152,6 +158,10 @@ public class SandboxLifecycle implements AutoCloseable {
         volatile boolean verifiedStop;
         /** What the image launcher of the current launch attempt has reported about itself. */
         volatile LaunchObservation launchObservation;
+        /** When the current launch attempt started its launcher command; the zero point of the verdict's timing. */
+        volatile Instant launchStartedAt;
+        /** Latches the one arrival log a launch may produce, and is cleared by the next launch. */
+        final AtomicBoolean refusalLogged = new AtomicBoolean();
 
         Run(UUID runId, String sandboxId, String runDirectory) {
             this.runId = runId;
@@ -304,6 +314,8 @@ public class SandboxLifecycle implements AutoCloseable {
         run.verifiedStop = false;
         LaunchObservation observation = new LaunchObservation();
         run.launchObservation = observation;
+        run.launchStartedAt = Instant.now();
+        run.refusalLogged.set(false);
         sdk.launch(run.sandboxId, run.runDirectory, commandTimeout, observation);
         // The launcher's own verdict is prompt when it refuses (it exits as soon as it
         // does) and absent when it succeeds (it then supervises its child until that
@@ -314,12 +326,61 @@ public class SandboxLifecycle implements AutoCloseable {
         // had already reported a spawn — is NOT a refusal to destroy on: the child may be
         // alive, so the launch keeps today's shape and the verified-stop rules apply.
         observation.awaitVerdict(launchVerdictWindow);
-        if (observation.faultReported() && observation.neverSpawnedProven()) {
+        String refusal = reportRefusalArrival(run);
+        if (refusal != null) {
             throw new SandboxLaunchRejectedException(runId, observation,
                     "The image launcher refused the launch of run " + runId + " in sandbox " + run.sandboxId
-                            + " before it spawned anything: " + observation.launcherVerdict());
+                            + " before it spawned anything: " + refusal);
         }
         startRenewal(runId, renewalInterval, renewalExtension);
+    }
+
+    /**
+     * The launcher's proven pre-spawn refusal for the run's current launch attempt, or
+     * {@code null} while nothing is proven. This is the seam the core's readiness wait
+     * consumes: the launch path consulted the verdict once inside its own window, and a
+     * refusal that arrives after that window is still the reason the core will never
+     * answer, so a waiter may stop on it instead of burning its budget.
+     *
+     * <p>Nothing here polls or asks the sandbox: the answer comes from the in-memory
+     * {@link LaunchObservation} the SDK already feeds.
+     */
+    public String launchRefusalReason(UUID runId) {
+        Run run = runId == null ? null : runs.get(runId);
+        return run == null ? null : reportRefusalArrival(run);
+    }
+
+    /**
+     * The reason of a proven pre-spawn refusal, and the one INFO line recording the moment
+     * that proof landed against the launch's own start — exactly once per launch attempt,
+     * because the arrival is a fact about the transport, not about how many consumers read
+     * it. Returns {@code null} while the observation proves nothing, which is the state a
+     * silent, unreadable, truncated, aborted or post-spawn outcome leaves it in.
+     */
+    private String reportRefusalArrival(Run run) {
+        LaunchObservation observation = run.launchObservation;
+        if (observation == null) {
+            return null;
+        }
+        String reason = observation.refusalReason();
+        if (reason == null) {
+            return null;
+        }
+        if (run.refusalLogged.compareAndSet(false, true)) {
+            Instant landed = observation.refusalProvenAt();
+            Instant started = run.launchStartedAt;
+            long elapsedMillis = landed != null && started != null
+                    ? Math.max(0L, Duration.between(started, landed).toMillis())
+                    : -1L;
+            if (elapsedMillis < 0L) {
+                log.info("Launcher refusal for run {} landed after its launch started (sandbox {}): {}",
+                        run.runId, run.sandboxId, reason);
+            } else {
+                log.info("Launcher refusal for run {} landed {} ms after its launch started (sandbox {}): {}",
+                        run.runId, elapsedMillis, run.sandboxId, reason);
+            }
+        }
+        return reason;
     }
 
     // ------------------------------------------------------------------ control

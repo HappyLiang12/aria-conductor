@@ -342,16 +342,21 @@ async function startDecisionFlow(body) {
           contents: 'beta-should-not-exist',
         })),
       });
-    case 'permission-expiry':
-      return assistantMessage({
-        text: decisionText(await offerDecision({
-          kind: 'edit',
-          toolName: 'Write',
-          target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-expiry.txt')),
-          contents: 'epsilon-expired',
-          expiryMs: 300,
-        })),
+    case 'permission-expiry': {
+      const decision = await offerDecision({
+        kind: 'edit',
+        toolName: 'Write',
+        target: assertInsideWorkspace(WORKSPACE, join(WORKSPACE, 'probe-expiry.txt')),
+        contents: 'epsilon-expired',
+        expiryMs: 300,
       });
+      // Keep the run alive past the ask's own 300 ms window. Otherwise the run
+      // can end first and the run-end sweep records "run ended" instead of the
+      // ask's own timeout ("Auto-rejected: approval expired"), which is the
+      // contract this scenario exists to pin.
+      await sleep(1200);
+      return assistantMessage({ text: decisionText(decision) });
+    }
     case 'cancel-pending':
       return assistantMessage({
         text: decisionText(await offerDecision({

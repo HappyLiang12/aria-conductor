@@ -232,11 +232,12 @@ public final class CoreE2eProcessBackend implements ExecutionBackend {
      * left is a verified stopped writer tree here.
      *
      * <p>The fallback is therefore narrow on purpose: it applies only when the
-     * owned peer root is already gone ({@code ProcessHandle.of(rootPid).isEmpty()})
-     * and the controller no longer owns the record ({@code !controller.owns(owned)}).
-     * A live root, or one the controller still owns, keeps the controller's
-     * refusal unchanged — this must never mask a live peer or descendant. The
-     * production verified-stop contract is untouched.
+     * owned peer root is no longer alive (absent, or a not-yet-reaped zombie:
+     * {@code ProcessHandle.of(rootPid) == null || !isAlive()}) and the controller
+     * no longer owns the record ({@code !controller.owns(owned)}). A live root,
+     * or one the controller still owns, keeps the controller's refusal unchanged
+     * — this must never mask a live peer or descendant. The production
+     * verified-stop contract is untouched.
      */
     @Override
     public StopProof stopWriters(RuntimeHandle handle, Instant deadline) {
@@ -245,7 +246,8 @@ public final class CoreE2eProcessBackend implements ExecutionBackend {
         if (proof != null && proof.allWritersStopped()) {
             return proof;
         }
-        if (ProcessHandle.of(owned.rootPid()).isEmpty() && !state.controller.owns(owned)) {
+        ProcessHandle root = ProcessHandle.of(owned.rootPid()).orElse(null);
+        if ((root == null || !root.isAlive()) && !state.controller.owns(owned)) {
             return new StopProof(handle.runId(), true);
         }
         return proof;

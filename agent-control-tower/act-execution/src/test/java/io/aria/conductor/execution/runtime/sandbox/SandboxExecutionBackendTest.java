@@ -781,8 +781,14 @@ class SandboxExecutionBackendTest {
         }
 
         @Override
-        public void launch(String sandboxId, String runDirectory, Duration timeout) {
+        public void launch(String sandboxId, String runDirectory, Duration timeout,
+                LaunchObservation observation) {
             operations.add("launch");
+            // The launcher of a healthy image spawns its child and reports it
+            // (launch.mjs:289 then :302): that is the outcome an ordinary test
+            // launch models, and it is why the ordering pins below stay ordinary.
+            observation.recordStdout("{\"event\":\"supervisor.started\",\"runId\":\""
+                    + RUN_ID + "\",\"childPid\":41,\"recordPath\":\"/home/aria/run/launch-record.json\"}\n");
         }
 
         @Override

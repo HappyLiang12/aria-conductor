@@ -294,8 +294,8 @@ public final class SandboxLifecycleHarness {
         }
 
         @Override
-        public void launch(String sandboxId, String runDirectory, Duration timeout) {
-            delegate.launch(sandboxId, runDirectory, timeout);
+        public void launch(String sandboxId, String runDirectory, Duration timeout, LaunchObservation observation) {
+            delegate.launch(sandboxId, runDirectory, timeout, observation);
         }
 
         @Override

@@ -28,6 +28,8 @@ import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
+import io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackend;
+import io.aria.conductor.execution.runtime.sandbox.SandboxLaunchRejectedException;
 import io.aria.conductor.execution.security.ActorTokenService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -681,7 +683,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             // terminal or by the check above. No second abort, and never a prompt.
             throw terminated;
         } catch (RuntimeException e) {
-            abortLaunch(runtime, lease);
+            abortLaunch(runtime, lease, e);
             throw e;
         }
         // The observed runtime identity is recorded with the run by persistState,
@@ -877,17 +879,35 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * that legitimately takes the no-handle branch is a failure <em>before</em>
      * the launch (binding/preparation/credentials/launch profile): nothing was
      * started, so there is no process to stop and only the registry record is
-     * dropped. A session-open failure after the launch always finds a handle
-     * here and performs the verified stop, the destroy and the lease release --
-     * the launched core is never orphaned (#111 fix round 2, C2).
+     * dropped — with the one exception this method's third argument carries, a
+     * sandbox launch the image provably refused before it spawned anything, which
+     * releases the lease because no writer can exist to hold it ({@link
+     * #cleanupProvablyNeverSpawnedLaunch}). A session-open failure after the
+     * launch always finds a handle here and performs the verified stop, the
+     * destroy and the lease release -- the launched core is never orphaned
+     * (#111 fix round 2, C2).
      * Package-private: this is the seam the abort's retry bound is pinned
      * through, mirroring {@link #openRuntime} for the pre-prompt half, and the
      * cancel of a run whose session never opened stops its launched core
      * through it.
      */
     void abortLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease) {
+        abortLaunch(runtime, lease, null);
+    }
+
+    /**
+     * The same abort, told which failure it is cleaning up. The failure matters
+     * for exactly one case: an image that refused a launch <em>before it spawned
+     * anything</em> proves that no writer of this run can exist, so there is no
+     * stop to verify and nothing to leak — the environment is destroyed and the
+     * lease released against that proof instead of the run recording a refusal
+     * that nothing would ever re-drive. Every other failure, and every failure
+     * of a launch that reported a spawn, takes exactly the path it took before.
+     */
+    void abortLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease, RuntimeException launchFailure) {
         RuntimeHandle handle = runtime.handle();
         if (handle == null) {
+            cleanupProvablyNeverSpawnedLaunch(runtime, lease, launchFailure);
             runtimes.remove(runtime.spec().runId());
             return;
         }
@@ -926,6 +946,42 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         }
         runtime.recordVerifiedStop(STATE_CANCELLED);
         runtimes.remove(runtime.spec().runId());
+    }
+
+    /**
+     * The cleanup of a launch the image provably refused before it spawned a child:
+     * destroy the environment (idempotent — the sandbox launch path normally destroyed
+     * it while raising the refusal) and release the lease against the refusal's own
+     * proof. Any other failure leaves this method doing nothing at all, which is the
+     * state in which a lease stays held rather than being released unverified.
+     */
+    private void cleanupProvablyNeverSpawnedLaunch(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease,
+            RuntimeException launchFailure) {
+        if (!(launchFailure instanceof SandboxLaunchRejectedException refused)) {
+            return;
+        }
+        Optional<StopProof> proof = refused.neverSpawnedStopProof();
+        if (proof.isEmpty()) {
+            // The launcher's fault did not prove the absence of a writer: hold the lease
+            // exactly as an unreadable launch outcome always has.
+            return;
+        }
+        UUID runId = runtime.spec().runId();
+        try {
+            if (runtime.backend() instanceof SandboxExecutionBackend sandbox) {
+                sandbox.destroyUnlaunched(runId);
+            }
+        } catch (RuntimeException e) {
+            log.error("Run {}: destroying the never-spawned launch failed: {}", runId, e.getMessage());
+        }
+        try {
+            workspaces.release(lease, proof.orElseThrow());
+        } catch (RuntimeException e) {
+            log.error("Run {}: releasing the never-spawned launch's lease failed: {}", runId, e.getMessage());
+        }
+        runtime.recordVerifiedStop(STATE_CANCELLED);
+        log.info("Run {}: the image refused the launch before spawning, so no writer ever existed; the"
+                + " environment is destroyed and the lease released", runId);
     }
 
     /** Stops, captures, destroys and releases through the one finalization owner. */

@@ -39,9 +39,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>{@code stopWriters} produces the {@link StopProof} and records the verified
  * stop that export requires (a later launch or resume invalidates it); it
  * deliberately leaves the sandbox filesystem and export facility alive.
- * {@link #destroy} is the only operation that kills the sandbox, and an export
- * that cannot complete is reported as an incomplete artifact result (a refusal),
- * never as a stable final diff.
+ * {@link #destroy} — or its run-keyed form {@link #destroyUnlaunched}, for a launch
+ * that failed before it could hand back a handle — is the only operation that kills
+ * the sandbox, and an export that cannot complete is reported as an incomplete
+ * artifact result (a refusal), never as a stable final diff.
  */
 @Slf4j
 public class SandboxExecutionBackend implements ExecutionBackend {
@@ -284,8 +285,19 @@ public class SandboxExecutionBackend implements ExecutionBackend {
     @Override
     public void destroy(RuntimeHandle handle) {
         Objects.requireNonNull(handle, "handle");
-        lifecycle.destroy(handle.runId());
-        Prepared prepared = environments.remove(handle.runId());
+        destroyUnlaunched(handle.runId());
+    }
+
+    /**
+     * The run-keyed form of {@link #destroy}, for the cleanup of a launch that failed
+     * before it could hand back a handle (an image-refused launch): the environment
+     * exists in exactly the state a handle would name, and destroying it is idempotent,
+     * so a launch path that already destroyed it reports the same nothing.
+     */
+    public void destroyUnlaunched(UUID runId) {
+        Objects.requireNonNull(runId, "runId");
+        lifecycle.destroy(runId);
+        Prepared prepared = environments.remove(runId);
         if (prepared == null) {
             return;
         }

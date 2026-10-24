@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.runtime.core;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -24,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,6 +49,7 @@ class OpenCodeCoreAdapterTest {
 
     private static final UUID RUN_ID = UUID.randomUUID();
     private static final UUID AGENT_ID = UUID.randomUUID();
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @TempDir
     Path hostConfig;
@@ -130,11 +134,13 @@ class OpenCodeCoreAdapterTest {
         // The served model comes from the operator's provider block, never from
         // opencode's own default (whose free tier refuses this consumer); the
         // credential stays an env reference, so no secret is written into the file.
+        // The block is keyed under the governed prefix, never under the operator's
+        // bare id, because opencode bundles provider ids and serves those itself.
         String document = Files.readString(OpenCodeCoreAdapter.governedConfigurationFile(environment));
         assertThat(document).isEqualTo(OpenCodeCoreAdapter.governedConfigurationJson(provider));
         assertThat(document)
-                .contains("\"model\": \"acme-gateway/acme-flash\"")
-                .contains("\"acme-gateway\": {")
+                .contains("\"model\": \"aria-acme-gateway/acme-flash\"")
+                .contains("\"aria-acme-gateway\": {")
                 .contains("\"npm\": \"@ai-sdk/openai-compatible\"")
                 .contains("\"apiKey\": \"{env:LLM_API_KEY}\"")
                 .contains("\"baseURL\": \"https://gw.example.com/v1\"")
@@ -161,6 +167,78 @@ class OpenCodeCoreAdapterTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("quotes");
         assertThat(OpenCodeCoreAdapter.ModelProvider.deepseekFallback().providerId()).isEqualTo("deepseek");
+    }
+
+    // ---- governed provider document key: never a bundled opencode id -------------------
+
+    /**
+     * The governed document's provider key is never a provider id opencode bundles.
+     * Observed against the pinned opencode 1.18.15 HOST launch: a document keyed
+     * {@code deepseek} made the first prompt die with
+     * {@code ProviderModelNotFoundError: Model not found: deepseek/deepseek-v4-flash.
+     * Did you mean: deepseek-flash, deepseek-v4-pro?} (the HTTP caller only sees
+     * {@code 500 {"name":"UnknownError"}}), because the server answers a bundled id
+     * from its own catalog and ignores the model this document declares. Every name
+     * a stock install auto-creates and activates ({@code DeepSeek}, {@code OpenAI},
+     * {@code Anthropic}) sanitizes to such an id, so the rule is checked for all of
+     * them: the key is the {@code aria-} prefixed id, the {@code model} member names
+     * that same key, and the operator's own model id stays exactly as declared.
+     */
+    @Test
+    void governedDocumentNeverUsesAProviderKeyOpencodeBundles() throws IOException {
+        for (String providerId : List.of("deepseek", "openai", "anthropic")) {
+            OpenCodeCoreAdapter.ModelProvider colliding = new OpenCodeCoreAdapter.ModelProvider(
+                    providerId, "deepseek-v4-flash", "https://api.deepseek.com/v1");
+
+            JsonNode document = JSON.readTree(OpenCodeCoreAdapter.governedConfigurationJson(colliding));
+
+            assertThat(memberNames(document.path("provider"))).containsExactly("aria-" + providerId);
+            assertThat(document.path("model").asText()).isEqualTo("aria-" + providerId + "/deepseek-v4-flash");
+            JsonNode provider = document.path("provider").path("aria-" + providerId);
+            assertThat(provider.path("npm").asText()).isEqualTo("@ai-sdk/openai-compatible");
+            assertThat(provider.path("options").path("apiKey").asText()).isEqualTo("{env:LLM_API_KEY}");
+            assertThat(provider.path("options").path("baseURL").asText()).isEqualTo("https://api.deepseek.com/v1");
+            assertThat(memberNames(provider.path("models"))).containsExactly("deepseek-v4-flash");
+            // The permission policy is not part of the key rule and must not drift.
+            assertThat(memberNames(document.path("permission"))).isEqualTo(List.of("*", "read", "list",
+                    "glob", "grep", "webfetch", "websearch", "edit", "write", "patch", "bash", "task",
+                    "question", "external_directory", "aria-conductor*"));
+            assertThat(document.path("permission").path("*").asText()).isEqualTo("deny");
+        }
+    }
+
+    /**
+     * The documented fallback provider stays reachable and keeps serving the same
+     * model: only its document key gains the prefix.
+     */
+    @Test
+    void governedDocumentOfTheFallbackProviderKeepsItsModelAndPrefixesOnlyItsKey() throws IOException {
+        JsonNode document = JSON.readTree(OpenCodeCoreAdapter.governedConfigurationJson());
+
+        assertThat(memberNames(document.path("provider"))).containsExactly("aria-deepseek");
+        assertThat(document.path("model").asText()).isEqualTo("aria-deepseek/deepseek-chat");
+        JsonNode provider = document.path("provider").path("aria-deepseek");
+        assertThat(provider.path("options").path("baseURL").asText()).isEqualTo("https://api.deepseek.com/v1");
+        assertThat(memberNames(provider.path("models"))).containsExactly("deepseek-chat");
+    }
+
+    /** An operator id that already carries the prefix is not prefixed twice. */
+    @Test
+    void governedProviderKeyIsNeverDoublePrefixed() throws IOException {
+        OpenCodeCoreAdapter.ModelProvider prefixed = new OpenCodeCoreAdapter.ModelProvider(
+                "aria-deepseek", "deepseek-v4-flash", "https://api.deepseek.com/v1");
+
+        JsonNode document = JSON.readTree(OpenCodeCoreAdapter.governedConfigurationJson(prefixed));
+
+        assertThat(memberNames(document.path("provider"))).containsExactly("aria-deepseek");
+        assertThat(document.path("model").asText()).isEqualTo("aria-deepseek/deepseek-v4-flash");
+    }
+
+    /** The member names of an object node, in document order. */
+    private static List<String> memberNames(JsonNode object) {
+        List<String> names = new ArrayList<>();
+        object.fieldNames().forEachRemaining(names::add);
+        return names;
     }
 
     @Test

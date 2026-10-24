@@ -102,8 +102,9 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * matters for a platform-MCP-wired run; unwired runs have no such tools.
      *
      * <p>The first {@code %s} slot carries the platform-MCP block of a wired run;
-     * the remaining slots carry the provider id, the model, the provider id
-     * again, the base URL and the model again.
+     * the remaining slots carry the governed provider key of the resolved provider
+     * (see {@link #GOVERNED_PROVIDER_KEY_PREFIX}), the model, that same key again,
+     * the base URL and the model again.
      */
     private static final String GOVERNED_CONFIGURATION_TEMPLATE = """
             {
@@ -143,6 +144,35 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
 
     private static final CoreCapabilities UNVERIFIED =
             new CoreCapabilities(ControlStrategy.UNVERIFIED, false, false, false);
+
+    /**
+     * The prefix of the provider document key of every governed launch: a governed
+     * configuration never uses a provider id that opencode bundles as its key.
+     *
+     * <p>opencode serves a provider whose document key equals one of its own
+     * bundled provider ids from <em>its</em> model catalog and ignores the
+     * {@code "models"} entry this document declares, so the run's first prompt
+     * dies. Observed against the pinned opencode 1.18.15, launched the way
+     * {@code OwnedProcessController} + this adapter launch it, against a local
+     * OpenAI-compatible stub (no real credential involved): the document keyed
+     * {@code deepseek} with the model {@code deepseek-v4-flash} failed with
+     * {@code ProviderModelNotFoundError: Model not found: deepseek/deepseek-v4-flash.}
+     * {@code Did you mean: deepseek-flash, deepseek-v4-pro?} -- the HTTP caller only
+     * sees {@code 500 {"name":"UnknownError","ref":"err_..."}} -- while the same
+     * document under the non-colliding key {@code aria-deepseek} completed that turn
+     * with {@code providerID=aria-deepseek}. The collision is not exotic input: the
+     * key comes from the operator's provider <em>name</em>, and a stock install
+     * auto-creates and activates {@code DeepSeek}, {@code OpenAI} and
+     * {@code Anthropic} (see {@code AriaDefaultAgentInitializer#inferProviderName}),
+     * all of which sanitize to bundled ids.
+     *
+     * <p>Always-prefix rather than collide-against-a-list: this block always declares
+     * {@code "npm": "@ai-sdk/openai-compatible"} with the operator's own
+     * {@code baseURL} and {@code {env:LLM_API_KEY}}, so the bundled definition is
+     * never what the run should serve with, and a hand-maintained list of bundled
+     * ids drifts with every opencode release.
+     */
+    private static final String GOVERNED_PROVIDER_KEY_PREFIX = "aria-";
 
     /** Budget for polling the launched server's health before a session opens. */
     static final Duration SERVE_READY_BUDGET = Duration.ofSeconds(90);
@@ -203,9 +233,10 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
      * JSON document, so each is validated here and a value that could break the
      * document refuses the launch instead of being written.
      *
-     * @param providerId the provider key of the document (e.g. {@code deepseek})
+     * @param providerId the operator's provider id, which the document renders under
+     *                   the prefixed key of {@link #GOVERNED_PROVIDER_KEY_PREFIX}
      * @param model      the served model id, never carrying a {@code /} (the
-     *                   document's {@code model} member is {@code id/model})
+     *                   document's {@code model} member is {@code key/model})
      * @param baseUrl    the openai-compatible endpoint
      */
     public record ModelProvider(String providerId, String model, String baseUrl) {
@@ -231,7 +262,9 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         /**
          * The documented fallback: what the platform has always generated when no
          * provider row is active. The served model may not exist on that endpoint;
-         * an active operator provider is the supported configuration.
+         * an active operator provider is the supported configuration. Only its
+         * governed document key differs from the historic one: it renders as
+         * {@code aria-deepseek} for the same reason every other provider does.
          */
         public static ModelProvider deepseekFallback() {
             return new ModelProvider("deepseek", "deepseek-chat", "https://api.deepseek.com/v1");
@@ -481,9 +514,22 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
     }
 
     private static String governedConfiguration(ModelProvider provider, String mcpBlock) {
+        String providerKey = governedProviderKey(provider.providerId());
         return GOVERNED_CONFIGURATION_TEMPLATE.formatted(mcpBlock,
-                provider.providerId(), provider.model(),
-                provider.providerId(), provider.baseUrl(), provider.model());
+                providerKey, provider.model(),
+                providerKey, provider.baseUrl(), provider.model());
+    }
+
+    /**
+     * The document key of a resolved provider: its id prefixed with
+     * {@link #GOVERNED_PROVIDER_KEY_PREFIX}, which is never applied twice. This is
+     * the single place the governed document is rendered, so no document can carry a
+     * key opencode bundles.
+     */
+    private static String governedProviderKey(String providerId) {
+        return providerId.startsWith(GOVERNED_PROVIDER_KEY_PREFIX)
+                ? providerId
+                : GOVERNED_PROVIDER_KEY_PREFIX + providerId;
     }
 
     private void writeGovernedConfiguration(Path configurationRoot, Optional<RunMcpWiring.Endpoint> workerMcp) {

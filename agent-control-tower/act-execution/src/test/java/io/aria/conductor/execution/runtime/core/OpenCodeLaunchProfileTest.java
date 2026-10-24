@@ -59,9 +59,9 @@ class OpenCodeLaunchProfileTest {
                 "external_directory": "deny",
                 "aria-conductor*": "allow"
               },
-              "model": "deepseek/deepseek-chat",
+              "model": "aria-deepseek/deepseek-chat",
               "provider": {
-                "deepseek": {
+                "aria-deepseek": {
                   "npm": "@ai-sdk/openai-compatible",
                   "options": {
                     "apiKey": "{env:LLM_API_KEY}",

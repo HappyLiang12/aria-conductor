@@ -122,6 +122,58 @@ public interface RunRepository extends JpaRepository<Run, UUID> {
                                        @Param("maxIterations") int maxIterations,
                                        @Param("startable") List<RunStatus> startable);
 
+    /**
+     * The one non-terminal state write for a run the operator paused or resumed
+     * (#111 fix round 2, M4). Exactly the shape of {@link #cancelIfCancelable}: the
+     * allowed predecessor set is evaluated by the database against the row's
+     * committed status, so a run that finalized (COMPLETED/FAILED/CANCELLED) -- or
+     * moved elsewhere -- while the runtime's verified pause/resume was in flight can
+     * never be overwritten by a stale entity save. {@code promptSeed} is written only
+     * when supplied (a resume with a new instruction), matching the old entity
+     * mutation's COALESCE semantics.
+     *
+     * @return 1 when this caller won the transition, 0 when the committed row is not
+     *         one of {@code allowedFrom} (nothing was written)
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE Run r SET r.status = :status, "
+            + "r.promptSeed = COALESCE(:promptSeed, r.promptSeed), r.updatedAt = :updatedAt "
+            + "WHERE r.id = :id AND r.status IN :allowedFrom")
+    int updateStatusIfCurrentIn(@Param("id") UUID id,
+                                @Param("status") RunStatus status,
+                                @Param("promptSeed") String promptSeed,
+                                @Param("updatedAt") Instant updatedAt,
+                                @Param("allowedFrom") List<RunStatus> allowedFrom);
+
+    /**
+     * Records the durable pending-stop intent of a run whose verified core stop was
+     * refused (#111 fix round 2, ruling 5). The status is left untouched -- the run is
+     * still live -- and the run's failure identity carries the intent, which the board
+     * and the run views already surface and the retry sweep reads back. The write is
+     * conditional on a cancelable status, so a run that finalized meanwhile keeps its
+     * terminal row and its own failure identity.
+     *
+     * @return 1 when the intent is now recorded on a live run, 0 when the run is
+     *         terminal or missing
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE Run r SET r.errorMessage = :message, r.errorCode = :code, "
+            + "r.errorSurface = :surface, r.updatedAt = :updatedAt "
+            + "WHERE r.id = :id AND r.status IN :cancelable")
+    int recordPendingStopIfCancelable(@Param("id") UUID id,
+                                      @Param("message") String message,
+                                      @Param("code") String code,
+                                      @Param("surface") String surface,
+                                      @Param("updatedAt") Instant updatedAt,
+                                      @Param("cancelable") List<RunStatus> cancelable);
+
+    /** The ids of the runs still carrying a pending-stop intent, restricted to live statuses. */
+    @Query("SELECT r.id FROM Run r WHERE r.errorCode = :code AND r.status IN :cancelable")
+    List<UUID> findIdsPendingStop(@Param("code") String code,
+                                  @Param("cancelable") List<RunStatus> cancelable);
+
     /** Housekeeping S1: single-statement bulk delete of terminal runs (children purged first). */
     @Modifying
     @Query("DELETE FROM Run r WHERE r.id IN :ids")

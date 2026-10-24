@@ -13,9 +13,13 @@ import io.aria.conductor.execution.runtime.ExecutionSpec;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -50,6 +54,12 @@ class OpenCodeCoreSessionTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final UUID RUN = UUID.randomUUID();
     private static final UUID AGENT = UUID.randomUUID();
+    /**
+     * The fake clock's origin: wall-clock now, so a session built on it has a
+     * deadline that is genuinely in the future for both the real clock and the
+     * test clock.
+     */
+    private static final Instant T0 = Instant.now();
 
     private final List<CoreEvent> events = new CopyOnWriteArrayList<>();
     private final CountDownLatch firstProgress = new CountDownLatch(1);
@@ -366,6 +376,102 @@ class OpenCodeCoreSessionTest {
         assertThat(events).isEmpty();
         await().during(Duration.ofMillis(2300)).atMost(Duration.ofSeconds(4))
                 .untilAsserted(() -> assertThat(listCalls.get()).isEqualTo(1));
+    }
+
+    /**
+     * M7: the pre-prompt progress baseline is a real HTTP read that can burn the
+     * whole 10s poll timeout, and it happens before the prompt is sent. The turn
+     * budget must be what is LEFT of the deadline when the prompt goes out, not
+     * what was left before the baseline started.
+     */
+    @Test
+    void thePrePromptProgressBaselineIsDeductedFromThePromptBudget() throws Exception {
+        MutableClock clock = new MutableClock(T0);
+        OpenCodeCoreSession timed = sessionWith(T0.plusSeconds(60), clock);
+        AtomicInteger listCalls = new AtomicInteger();
+        when(client.listMessages(SESSION)).thenAnswer(invocation -> {
+            if (listCalls.incrementAndGet() == 1) {
+                // The baseline read ran to its poll timeout.
+                clock.advance(Duration.ofSeconds(9));
+            }
+            return new OpenCodeHttpClient.MessageListResult(List.of(), false);
+        });
+        when(client.sendPrompt(eq(SESSION), any(), anyList(), any())).thenReturn(
+                new OpenCodeHttpClient.MessageResult(
+                        "{\"info\":{\"id\":\"m1\"},\"parts\":[]}", "m1", "done", 1L, 1L, "efficient", null));
+
+        timed.prompt(task("prompt"), this::record).toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        ArgumentCaptor<Duration> budget = ArgumentCaptor.forClass(Duration.class);
+        verify(client).sendPrompt(eq(SESSION), any(), anyList(), budget.capture());
+        assertThat(budget.getValue())
+                .as("the 60s deadline minus the 9s the baseline consumed")
+                .isEqualTo(Duration.ofSeconds(51));
+    }
+
+    /**
+     * M7's edge: when the baseline consumes the whole remaining deadline, the
+     * turn has no budget left and the prompt is refused with TIMEOUT instead of
+     * being sent with a zero (or negative) timeout.
+     */
+    @Test
+    void aBaselineThatAteTheWholeDeadlineRefusesThePromptInsteadOfSendingIt() {
+        MutableClock clock = new MutableClock(T0);
+        OpenCodeCoreSession timed = sessionWith(T0.plusSeconds(4), clock);
+        AtomicInteger listCalls = new AtomicInteger();
+        when(client.listMessages(SESSION)).thenAnswer(invocation -> {
+            if (listCalls.incrementAndGet() == 1) {
+                clock.advance(Duration.ofSeconds(5));
+            }
+            return new OpenCodeHttpClient.MessageListResult(List.of(), false);
+        });
+
+        assertThatThrownBy(() -> timed.prompt(task("prompt"), this::record)
+                .toCompletableFuture().get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .satisfies(error -> {
+                    assertThat(error.getCause()).isInstanceOf(TaskExecutionException.class);
+                    assertThat(((TaskExecutionException) error.getCause()).cause())
+                            .isEqualTo(TaskExecutionException.Cause.TIMEOUT);
+                });
+
+        verify(client, never()).sendPrompt(any(), any(), anyList(), any());
+        assertThat(events).isEmpty();
+    }
+
+    /** A session on the test clock; the previous one is closed so no pump outlives the swap. */
+    private OpenCodeCoreSession sessionWith(Instant deadline, Clock clock) {
+        session.close();
+        session = new OpenCodeCoreSession(spec(deadline), client, SESSION, "efficient", clock);
+        return session;
+    }
+
+    /** A test clock the assertions advance themselves: budget arithmetic stays exact. */
+    private static final class MutableClock extends Clock {
+        private volatile Instant instant;
+
+        MutableClock(Instant start) {
+            this.instant = start;
+        }
+
+        void advance(Duration duration) {
+            this.instant = this.instant.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant;
+        }
     }
 
     private void record(CoreEvent event) {

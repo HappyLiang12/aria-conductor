@@ -77,7 +77,7 @@ class KanbanListenerTransactionTest {
                                                        ApplicationEventPublisher eventPublisher) {
             return new KanbanTransitionService(kanbanRepository, kanbanService, runService, runRepository,
                     agentRepository, agentPickerService, agentPickupEligibility, approvalRepository,
-                    eventPublisher);
+                    eventPublisher, new DeferredRunStop(runService, runRepository, Runnable::run));
         }
 
         @Bean

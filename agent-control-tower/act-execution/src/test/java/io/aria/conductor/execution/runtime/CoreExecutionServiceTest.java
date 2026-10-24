@@ -7,6 +7,7 @@ import io.aria.conductor.common.event.RunWaitingForInputEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
 import io.aria.conductor.common.model.RunExecutionBinding;
+import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
@@ -220,6 +221,13 @@ class CoreExecutionServiceTest {
         final Deque<ControlAck> resumeAcks = new ArrayDeque<>();
         RuntimeException promptFailure;
         Runnable duringPrompt;
+        /**
+         * The event consumer of the prompt, captured so a test can hand the coordinator one core
+         * event after the prompt is over -- the exact shape of the progress pump's bounded halt
+         * (Lane B), where the fragment already in flight reaches the producer after the run
+         * settled. Nothing else reaches the producer's mapping seam.
+         */
+        Consumer<CoreEvent> promptConsumer;
 
         @Override
         public String sessionId() {
@@ -229,6 +237,7 @@ class CoreExecutionServiceTest {
         @Override
         public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> consumer) {
             recordedSteps.add("prompt");
+            promptConsumer = consumer;
             if (prompted == null) {
                 prompted = task;
             } else if (secondPrompt == null) {
@@ -244,6 +253,15 @@ class CoreExecutionServiceTest {
                 return CompletableFuture.failedFuture(promptFailure);
             }
             return CompletableFuture.completedFuture(nextResult());
+        }
+
+        /** Hands one core event to the prompt's consumer, as the run's progress worker thread does. */
+        void deliver(CoreEvent event) {
+            Consumer<CoreEvent> consumer = promptConsumer;
+            if (consumer == null) {
+                throw new IllegalStateException("no prompt consumer was captured; the run never prompted");
+            }
+            consumer.accept(event);
         }
 
         /** The next scripted turn result, or the default completion when nothing (more) is scripted. */
@@ -1012,6 +1030,217 @@ class CoreExecutionServiceTest {
                         + " and the workspace lease are left in place (destroy after a refused stop is terminal)"));
     }
 
+    // ------------------------------------------------- the launch window (#111 fix round 2)
+
+    /**
+     * C1: a real core process exists from the moment {@code backend.launch} returned, and the
+     * registry record is coordinator-owned for the whole launch window -- including the
+     * serve-readiness wait inside {@code adapter.open}, where no session exists yet. A cancel
+     * arriving there must stop that process, never be answered as a recorded CANCELLED.
+     */
+    @Test
+    void aLaunchedRuntimeIsCoordinatorOwnedBeforeItsSessionOpens() {
+        CoordinatedRunRuntimeControl runtimeControl = runtimeControl(service);
+        boolean[] ownedInsideTheLaunchWindow = new boolean[1];
+        boolean[] handleAttachedInsideTheLaunchWindow = new boolean[1];
+        adapter = new RecordingAdapter() {
+            @Override
+            public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle creds) {
+                recordedSteps.add("open-session");
+                // The serve-readiness wait happens here: the process is live, the session is not.
+                handleAttachedInsideTheLaunchWindow[0] = runtimes.find(RUN).orElseThrow().handle() != null;
+                ownedInsideTheLaunchWindow[0] = runtimeControl.owns(AGENT, RUN);
+                return session;
+            }
+        };
+
+        service.openRuntime(spec(), adapter);
+
+        assertThat(handleAttachedInsideTheLaunchWindow[0])
+                .as("the launched handle is attached the moment the process exists")
+                .isTrue();
+        assertThat(ownedInsideTheLaunchWindow[0])
+                .as("the coordinator owns a run whose core process is live but whose session has not opened")
+                .isTrue();
+    }
+
+    /**
+     * C1: the cancel taken inside the launch window stops the launched core through the verified
+     * path (stop -> destroy -> release), records CANCELLED with the coordinator, and the in-flight
+     * launch never opens a prompt on the core it was told to stop.
+     */
+    @Test
+    void aCancelTakenInsideTheLaunchWindowStopsTheLaunchedCoreAndNeverPrompts() {
+        CoordinatedRunRuntimeControl runtimeControl = runtimeControl(service);
+        adapter = new RecordingAdapter() {
+            @Override
+            public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle creds) {
+                recordedSteps.add("open-session");
+                runtimeControl.cancel(RUN); // the operator's cancel lands in the launch window
+                return session;             // ... while the serve-ready wait is still returning
+            }
+        };
+
+        assertThatThrownBy(() -> service.openRuntime(spec(), adapter))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(session.prompted).as("a cancelled launch never prompts its core").isNull();
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "stop-writers", "destroy", "release");
+        assertThat(backend.destroyed).isTrue();
+        assertThat(workspaces.releasedProof).isEqualTo(new StopProof(RUN, true));
+        assertThat(runtimes.find(RUN)).isEmpty();
+        assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+        verify(actorTokens).revokeRun(RUN);
+    }
+
+    /**
+     * C2: the session-open failure after {@code backend.launch} leaves no orphan -- the launched
+     * handle is stopped, destroyed and its lease released, asserted through the recorded calls on
+     * the coordinator's own doubles.
+     */
+    @Test
+    void aSessionOpenFailureAfterLaunchStopsDestroysAndReleasesTheLaunchedCore() {
+        adapter = new RecordingAdapter() {
+            @Override
+            public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle creds) {
+                recordedSteps.add("open-session");
+                throw new IllegalStateException("the serve never became ready");
+            }
+        };
+
+        assertThatThrownBy(() -> service.openRuntime(spec(), adapter))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("the serve never became ready");
+
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "stop-writers", "destroy", "release");
+        assertThat(backend.stopProofs).containsExactly(new StopProof(RUN, true));
+        assertThat(backend.destroyed).isTrue();
+        assertThat(workspaces.releasedProof).isEqualTo(new StopProof(RUN, true));
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /**
+     * Ruling 3: a cancel of a run whose launch is still in flight before anything was launched is
+     * an honest refusal -- no handle exists, so no writer stop can be proven -- and the pending
+     * control carries that exact reason.
+     */
+    @Test
+    void aCancelBeforeTheHandleExistsRefusesInsteadOfClaimingAnUnprovenStop() {
+        RunRuntimeRegistry.RunRuntime runtime = runtimes.register(spec(), backend, adapter,
+                workspaces.acquire(spec()));
+        runtime.attach(binding, adapter.capabilities(ExecutionMode.HOST));
+
+        ControlAck ack = service.cancel(RUN).toCompletableFuture().join();
+
+        assertThat(ack.verified()).isFalse();
+        assertThat(service.pendingControl(RUN)).get()
+                .extracting(RunRuntimeRegistry.ControlRequest::failureReason)
+                .asString().contains("had not launched yet");
+        assertThat(backend.stopProofs).isEmpty();
+        assertThat(backend.destroyed).isFalse();
+        assertThat(binding.getRuntimeState()).isNull();
+    }
+
+    /** The run store's control port over one real coordinator instance. */
+    private CoordinatedRunRuntimeControl runtimeControl(CoreExecutionService coordinator) {
+        org.springframework.beans.factory.ObjectProvider<CoreExecutionService> provider =
+                new org.springframework.beans.factory.ObjectProvider<>() {
+                    @Override
+                    public CoreExecutionService getObject() {
+                        return coordinator;
+                    }
+
+                    @Override
+                    public CoreExecutionService getIfAvailable() {
+                        return coordinator;
+                    }
+                };
+        return new CoordinatedRunRuntimeControl(provider);
+    }
+
+    /** I4: the coordinator answers ownership from its live registry record, for one agent's run. */
+    @Test
+    void ownsRunIsTheCoordinatorsRegistryPresence() {
+        runOwnedInProcess();
+
+        assertThat(service.ownsRun(AGENT, RUN)).isTrue();
+        assertThat(service.ownsRun(UUID.randomUUID(), RUN)).isFalse();
+        assertThat(service.ownsRun(AGENT, UUID.randomUUID())).isFalse();
+        assertThat(service.ownsRun(AGENT, null)).isFalse();
+
+        assertThat(service.cancel(RUN).toCompletableFuture().join())
+                .isEqualTo(new ControlAck(ControlState.STOPPED, true));
+        assertThat(service.ownsRun(AGENT, RUN))
+                .as("a run whose writers were verified stopped is no longer a live owned run")
+                .isFalse();
+    }
+
+    /**
+     * Ruling 3: a cancel the run store recorded while the runtime was still unregistered leaves no
+     * live core behind -- the attempt re-reads the committed row before opening its session, stops
+     * and releases what its launch created, and never prompts.
+     */
+    @Test
+    void anInFlightLaunchObservesATerminalCommittedRowAndNeverPrompts() {
+        CoreExecutionService runStoreAware = serviceWithCommittedStatus(RunStatus.CANCELLED);
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(session.prompted).as("a terminal committed row is never prompted past").isNull();
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "stop-writers", "destroy", "release");
+        assertThat(recordedSteps).as("the session of a stopped core is never opened").doesNotContain("open-session");
+        assertThat(backend.destroyed).isTrue();
+        assertThat(workspaces.releasedProof).isEqualTo(new StopProof(RUN, true));
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /**
+     * Ruling 3, the second half: the row turning terminal while the session opens (the serve-ready
+     * wait) is caught before the first prompt, and the stop-and-release runs once.
+     */
+    @Test
+    void aCommittedTerminalRowAppearingWhileTheSessionOpensStopsTheLaunchBeforeAnyPrompt() {
+        java.util.concurrent.atomic.AtomicBoolean terminated = new java.util.concurrent.atomic.AtomicBoolean();
+        CoreExecutionService runStoreAware = new CoreExecutionService(
+                new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), new ManualDeadlineScheduler(), coordinator, eventPublisher,
+                taskDeadlines, null, null, null,
+                ignored -> terminated.get() ? RunStatus.CANCELLED : RunStatus.RUNNING);
+        adapter = new RecordingAdapter() {
+            @Override
+            public CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle creds) {
+                recordedSteps.add("open-session");
+                terminated.set(true); // the operator's cancel commits while the serve is becoming ready
+                return session;
+            }
+        };
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(session.prompted).isNull();
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "open-session", "stop-writers", "destroy", "release");
+        assertThat(backend.stopProofs).containsExactly(new StopProof(RUN, true));
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /** The coordinator with a run store that reports one committed status for every read. */
+    private CoreExecutionService serviceWithCommittedStatus(RunStatus committed) {
+        return new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), new ManualDeadlineScheduler(), coordinator, eventPublisher,
+                taskDeadlines, null, null, null, ignored -> committed);
+    }
+
     // ------------------------------------------------------------------ events
 
     @Test
@@ -1114,6 +1343,105 @@ class CoreExecutionServiceTest {
         assertThat(progress.get(0).getKind()).isEqualTo(RunProgressEvent.Kind.THINKING);
         assertThat(progress.get(0).getContent()).isEqualTo("considering");
         assertThat(progress.get(0).getSeq()).isEqualTo(3);
+    }
+
+    // ------------------------------------------------------------------ progress for a settled run
+
+    /** One {@code opencode.progress} core event in exactly the wire shape the run's pump emits. */
+    private static CoreEvent progressEvent(long seq) {
+        return new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"THINKING\",\"content\":\"fragment-" + seq + "\",\"toolName\":null,"
+                        + "\"seq\":" + seq + ",\"iteration\":0}");
+    }
+
+    /** The seq of every {@link RunProgressEvent} published so far, in publication order. */
+    private List<Long> publishedProgressSeqs() {
+        return publishedEvents.stream()
+                .filter(RunProgressEvent.class::isInstance)
+                .map(RunProgressEvent.class::cast)
+                .map(RunProgressEvent::getSeq)
+                .toList();
+    }
+
+    /**
+     * Review follow-up A1, closed at the producer: the pump's halt is bounded (Lane B deliberately
+     * trades that for a terminal result never blocked behind progress persistence), so the
+     * fragment already in flight can reach the producer after the run settled. A cancel whose stop
+     * the backend verified is a fact this coordinator holds truthfully at that instant, so the
+     * settled run's fragment is never persisted or broadcast -- while the same run's live mid-run
+     * progress publishes exactly as before.
+     */
+    @Test
+    void progressRaisedAfterAVerifiedStopOfTheRunIsNotPublished() {
+        session.events.add(progressEvent(5)); // ordinary mid-run progress, before the cancel
+        session.duringPrompt = () -> {
+            assertThat(service.cancel(RUN).toCompletableFuture().join())
+                    .as("the operator cancel is answered by the verified stop, as production does")
+                    .isEqualTo(new ControlAck(ControlState.STOPPED, true));
+            assertThat(runtimes.find(RUN).orElseThrow().writersVerifiedStopped())
+                    .as("the verified stop is the settlement fact the producer guard rests on")
+                    .isTrue();
+            session.deliver(progressEvent(6)); // the fragment in flight when the bounded halt returned
+        };
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.cancelled()).isTrue();
+        assertThat(publishedProgressSeqs())
+                .as("live progress publishes; a fragment of a run whose writers were verified stopped does not")
+                .containsExactly(5L);
+    }
+
+    /**
+     * The same window on the finalize side: once {@link RunFinalizer} returned, the run's writers
+     * are verified stopped and the run is finalized, so a late fragment of its pump is dropped at
+     * the producer instead of landing after the terminal row.
+     */
+    @Test
+    void progressRaisedAfterTheRunWasFinalizedIsNotPublished() {
+        session.events.add(progressEvent(5));
+
+        CoreResult result = service.execute(spec(), adapter, task());
+
+        assertThat(result.finalOutput()).isEqualTo("final output");
+        RunRuntimeRegistry.RunRuntime settled = runtimes.find(RUN).orElseThrow();
+        assertThat(settled.finalized()).as("the one terminal path finalized this run").isTrue();
+        assertThat(settled.writersVerifiedStopped()).as("and verified its writers stopped").isTrue();
+
+        session.deliver(progressEvent(6));
+
+        assertThat(publishedProgressSeqs()).containsExactly(5L);
+    }
+
+    /**
+     * A terminal row written by a writer this coordinator never saw -- the run store's recorded
+     * cancel, a housekeeping sweep, another settling path -- settles the run just the same, so the
+     * producer guard consults the committed status through the projection read (never a cached
+     * entity) and drops the fragment even though no stop was verified here.
+     */
+    @Test
+    void progressRaisedForATerminalCommittedRowIsNotPublishedWithoutAVerifiedStopHere() {
+        java.util.concurrent.atomic.AtomicReference<RunStatus> committed =
+                new java.util.concurrent.atomic.AtomicReference<>(RunStatus.RUNNING);
+        CoreExecutionService runStoreAware = new CoreExecutionService(
+                new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), new ManualDeadlineScheduler(), coordinator, eventPublisher,
+                taskDeadlines, null, null, null, ignored -> committed.get());
+        session.events.add(progressEvent(5));
+        session.duringPrompt = () -> {
+            committed.set(RunStatus.CANCELLED); // the row turned terminal somewhere else
+            RunRuntimeRegistry.RunRuntime live = runtimes.find(RUN).orElseThrow();
+            assertThat(live.writersVerifiedStopped())
+                    .as("this coordinator verified no stop, so the drop must come from the committed row")
+                    .isFalse();
+            assertThat(live.finalized()).isFalse();
+            session.deliver(progressEvent(6));
+        };
+
+        runStoreAware.execute(spec(), adapter, task());
+
+        assertThat(publishedProgressSeqs()).containsExactly(5L);
     }
 
     // ------------------------------------------------------------------ clarification waiting loop

@@ -326,8 +326,15 @@ class KanbanTransitionIntegrityIntegrationTest {
                 .feedback("address the review notes")
                 .build());
 
-        // The deferral must not drop the stop: once the card transaction commits,
-        // the previous attempt is cancelled...
+        // The deferral must not drop the stop: once the card transaction commits, the previous
+        // attempt is cancelled. It is cancelled on the bounded stop worker (#111 fix round 2,
+        // ruling 6 — the 30 s verified stop must never run on the request thread), so this read
+        // waits for that worker exactly the way this class waits for RUNNING. The expected state is
+        // unchanged and the final assert keeps the wait non-vacuous: a stop that never lands, or
+        // lands as anything but CANCELLED, still fails inside the bound.
+        await().atMost(Duration.ofSeconds(30)).until(() -> runRepository.findById(previousRunId)
+                .map(run -> run.getStatus() == RunStatus.CANCELLED)
+                .orElse(false));
         assertThat(runRepository.findById(previousRunId).orElseThrow().getStatus())
                 .isEqualTo(RunStatus.CANCELLED);
         // ...and the same gesture re-dispatches the card on a fresh run.

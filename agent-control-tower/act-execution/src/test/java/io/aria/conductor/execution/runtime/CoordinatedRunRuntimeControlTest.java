@@ -8,7 +8,6 @@ import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.Instant;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -34,25 +33,31 @@ class CoordinatedRunRuntimeControlTest {
     private final UUID runId = UUID.randomUUID();
 
     @Test
-    void owns_isTheCoordinatorsByRunView() {
+    void owns_isTheCoordinatorsOwnershipAnswer() {
         CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
         when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
-        when(coordinator.activeRuns(agentId)).thenReturn(Set.of(runId), Set.of());
-        when(coordinator.canControl(runId)).thenReturn(true);
+        when(coordinator.ownsRun(agentId, runId)).thenReturn(true, false);
 
         assertThat(control.owns(agentId, runId)).isTrue();
         assertThat(control.owns(agentId, runId)).isFalse();
         assertThat(control.owns(null, runId)).isFalse();
     }
 
+    /**
+     * #111 fix round 2 contract change: an owned run whose core session has not opened yet IS
+     * still owned, so a cancel there goes to the coordinator and stops the launched core instead
+     * of being recorded without a stop. The behavior is proven end to end by
+     * {@code CoreExecutionServiceTest.aLaunchedRuntimeIsCoordinatorOwnedBeforeItsSessionOpens};
+     * the old {@code owns_isFalseWhenTheCoordinatorsRuntimeHasNoUsableSessionOrHandle} case asked
+     * the deleted {@code canControl} conjunct, which reopened #111.
+     */
     @Test
-    void owns_isFalseWhenTheCoordinatorsRuntimeHasNoUsableSessionOrHandle() {
+    void owns_isTrueWhileTheLaunchIsStillInFlightSoTheCancelIsActionable() {
         CoordinatedRunRuntimeControl control = new CoordinatedRunRuntimeControl(coordinatorProvider);
         when(coordinatorProvider.getIfAvailable()).thenReturn(coordinator);
-        when(coordinator.activeRuns(agentId)).thenReturn(Set.of(runId));
-        when(coordinator.canControl(runId)).thenReturn(false);
+        when(coordinator.ownsRun(agentId, runId)).thenReturn(true);
 
-        assertThat(control.owns(agentId, runId)).isFalse();
+        assertThat(control.owns(agentId, runId)).isTrue();
     }
 
     @Test

@@ -301,8 +301,18 @@ public class OpenCodeHttpClient implements AutoCloseable {
      * poll degraded (non-2xx, I/O failure or malformed body). A successful empty
      * list is NOT degraded: it is the ordinary "no message yet" shape, so the
      * pump can distinguish it from a failed poll when applying backoff.
+     *
+     * @param cause why the poll degraded (status, body shape, or the request
+     *              failure); {@code null} for a successful poll. The progress
+     *              pump puts it in its stall WARN, so a permanently dead stream
+     *              is diagnosable without debug logging.
      */
-    public record MessageListResult(List<MessageSnapshot> messages, boolean degraded) {
+    public record MessageListResult(List<MessageSnapshot> messages, boolean degraded, String cause) {
+
+        /** A result without a recorded cause: the shape older callers used. */
+        public MessageListResult(List<MessageSnapshot> messages, boolean degraded) {
+            this(messages, degraded, null);
+        }
     }
 
     /**
@@ -316,24 +326,27 @@ public class OpenCodeHttpClient implements AutoCloseable {
      * /session/:id/message}).
      *
      * <p>Degradation contract: any non-2xx, I/O failure or malformed body
-     * yields a result with an EMPTY message list and {@code degraded = true}
-     * (logged at debug). A readable empty array is a successful result with
-     * {@code degraded = false}. The pump must never blow up the prompt path; it
-     * treats both an empty successful list and a degraded one as "no data" and
-     * only applies backoff to the degraded flag.
+     * yields a result with an EMPTY message list, {@code degraded = true} and a
+     * short {@code cause} (logged at debug; the cause is what the progress pump
+     * puts in its operator-visible stall WARN). A readable empty array is a
+     * successful result with {@code degraded = false}. The pump must never blow
+     * up the prompt path; it treats both an empty successful list and a degraded
+     * one as "no data" and only applies backoff to the degraded flag.
      */
     public MessageListResult listMessages(String sessionId) {
+        String path = "/session/" + sessionId + "/message";
         try {
-            HttpResponse<String> resp = sendNoRetry("GET", "/session/" + sessionId + "/message",
-                    null, LIST_MESSAGES_TIMEOUT);
+            HttpResponse<String> resp = sendNoRetry("GET", path, null, LIST_MESSAGES_TIMEOUT);
             if (resp.statusCode() / 100 != 2) {
-                log.debug("OpenCode listMessages {} returned status {}", sessionId, resp.statusCode());
-                return degradedList();
+                String cause = "HTTP " + resp.statusCode() + " from GET " + path;
+                log.debug("OpenCode listMessages degraded: {}", cause);
+                return degradedList(cause);
             }
             JsonNode root = objectMapper.readTree(resp.body());
             if (!root.isArray()) {
-                log.debug("OpenCode listMessages {} returned a non-array body", sessionId);
-                return degradedList();
+                String cause = "non-array body from GET " + path;
+                log.debug("OpenCode listMessages degraded: {}", cause);
+                return degradedList(cause);
             }
             List<MessageSnapshot> out = new ArrayList<>();
             for (JsonNode msg : root) {
@@ -355,16 +368,17 @@ public class OpenCodeHttpClient implements AutoCloseable {
             }
             return new MessageListResult(out, false);
         } catch (TaskExecutionException e) {
-            log.debug("OpenCode listMessages failed for {}: {}", sessionId, e.getMessage());
-            return degradedList();
+            log.debug("OpenCode listMessages degraded: {}", e.getMessage());
+            return degradedList(e.getMessage());
         } catch (Exception e) {
-            log.debug("OpenCode listMessages parse failed for {}: {}", sessionId, e.getMessage());
-            return degradedList();
+            String cause = "parse failure of GET " + path + ": " + e.getMessage();
+            log.debug("OpenCode listMessages degraded: {}", cause);
+            return degradedList(cause);
         }
     }
 
-    private static MessageListResult degradedList() {
-        return new MessageListResult(List.of(), true);
+    private static MessageListResult degradedList(String cause) {
+        return new MessageListResult(List.of(), true, cause);
     }
 
     // ---- internal helpers ----

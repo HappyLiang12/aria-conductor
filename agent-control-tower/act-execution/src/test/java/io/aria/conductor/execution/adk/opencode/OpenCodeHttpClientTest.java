@@ -294,6 +294,45 @@ class OpenCodeHttpClientTest {
         assertThat(result.degraded()).isTrue();
     }
 
+    /**
+     * I7: degradation is only operator-visible if the reason survives the call.
+     * Every degraded result carries a short cause string (status, body shape or
+     * failure) the progress pump can put into its WARN; a successful poll carries
+     * none.
+     */
+    @Test
+    void everyDegradedListMessagesResultCarriesTheReasonForTheOperator() {
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(502)));
+        assertThat(client.listMessages("sess-abc").cause())
+                .as("a non-2xx poll names the status")
+                .contains("502");
+
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"not\":\"an array\"}")));
+        assertThat(client.listMessages("sess-abc").cause())
+                .as("a non-array body names the shape problem")
+                .containsIgnoringCase("non-array");
+
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("{not json")));
+        assertThat(client.listMessages("sess-abc").cause())
+                .as("an unreadable body names the parse failure")
+                .containsIgnoringCase("parse failure");
+
+        stubFor(get(urlEqualTo("/session/sess-io/message"))
+                .willReturn(aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
+        assertThat(client.listMessages("sess-io").cause())
+                .as("an I/O failure names the request that failed")
+                .containsIgnoringCase("opencode request failed");
+
+        stubFor(get(urlEqualTo("/session/sess-abc/message"))
+                .willReturn(aResponse().withStatus(200).withBody("[]")));
+        assertThat(client.listMessages("sess-abc").cause())
+                .as("a successful poll has no cause to report")
+                .isNull();
+    }
+
     @Test
     void listMessages_toleratesMissingPartFields() {
         stubFor(get(urlEqualTo("/session/sess-abc/message"))

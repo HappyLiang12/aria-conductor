@@ -16,6 +16,7 @@ import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.runtime.progress.CoreProgressPump;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -51,7 +52,10 @@ import java.util.function.Consumer;
  *       message-list route and forwards new parts as {@code opencode.progress}
  *       CoreEvents; the cursor is seeded from the pre-prompt message list and
  *       the pump is stopped on every completion path (success, failure,
- *       cancellation) and on {@link #close()}.</li>
+ *       cancellation) and on {@link #close()}. The stop joins the poll worker
+ *       within a bounded budget, so the run's terminal result never waits longer
+ *       than that budget on progress observability, and the turn's HTTP timeout
+ *       is measured after the baseline seed, not before it.</li>
  *   <li>Cancel uses the recorded abort route. Its boolean answer is an
  *       acknowledgement, not proof of a stopped core (the committed
  *       non-cooperative fixture answers {@code true} while ignoring the abort),
@@ -86,16 +90,24 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
     private final CoreProgressPump.ProgressCursor progressCursor = new CoreProgressPump.ProgressCursor();
     /** Guards the closed flag and the pump assignment made by the prompt thread. */
     private final Object lifecycleLock = new Object();
+    /** The turn-budget clock: the prompt timeout is what the deadline still allows. */
+    private final Clock clock;
     /** Set by close(); a prompt (or its pump) never starts after it is observed. */
     private volatile boolean closed;
     /** The pump of the in-flight prompt, so close() can halt it. */
     private volatile CoreProgressPump progressPump;
 
     OpenCodeCoreSession(ExecutionSpec spec, OpenCodeHttpClient client, String sessionId, String model) {
+        this(spec, client, sessionId, model, Clock.systemUTC());
+    }
+
+    OpenCodeCoreSession(ExecutionSpec spec, OpenCodeHttpClient client, String sessionId, String model,
+            Clock clock) {
         this.spec = Objects.requireNonNull(spec, "spec");
         this.client = Objects.requireNonNull(client, "client");
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
         this.model = Objects.requireNonNull(model, "model");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     @Override
@@ -118,6 +130,11 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
      * caller's thread must not be held for a whole core turn. The exact native
      * envelope is forwarded before the stage completes, so a consumer that saw
      * the result cannot miss the event that carried it.
+     *
+     * <p>The turn's HTTP timeout is the deadline as it stands right before the
+     * send, i.e. after the pre-prompt progress baseline: time the baseline spent
+     * is time the run no longer has, and a deadline that runs out during it is a
+     * TIMEOUT refusal rather than a prompt sent with no budget left.
      */
     @Override
     public CompletionStage<CoreResult> prompt(CoreTask task, Consumer<CoreEvent> events) {
@@ -131,8 +148,8 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
         if (deadline == null) {
             return CompletableFuture.failedFuture(noDeadlineRefusal());
         }
-        Duration timeout = remaining(deadline);
-        if (timeout.isZero()) {
+        Duration budgetAtCall = remaining(deadline);
+        if (budgetAtCall.isZero()) {
             return CompletableFuture.failedFuture(new TaskExecutionException(
                     TaskExecutionException.Cause.TIMEOUT,
                     "The run deadline of run " + spec.runId() + " elapsed before the prompt was sent"));
@@ -161,6 +178,17 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
             RuntimeException failure = null;
             try {
                 seedProgressBaseline();
+                // The turn budget is measured AFTER the progress baseline: the
+                // pre-prompt message-list read is a real HTTP call (up to
+                // LIST_MESSAGES_TIMEOUT) and its time belongs to the turn, not to
+                // the pump. The caller's pre-check above only refuses an already
+                // expired deadline cheaply; this is the budget the send gets.
+                Duration turnTimeout = remaining(deadline);
+                if (turnTimeout.isZero()) {
+                    throw new TaskExecutionException(TaskExecutionException.Cause.TIMEOUT,
+                            "The run deadline of run " + spec.runId()
+                                    + " elapsed during the pre-prompt progress baseline");
+                }
                 synchronized (lifecycleLock) {
                     if (closed) {
                         future.completeExceptionally(closedRefusal());
@@ -170,7 +198,7 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
                     pump.start();
                 }
                 OpenCodeHttpClient.MessageResult message =
-                        client.sendPrompt(sessionId, systemPrompt, parts, timeout);
+                        client.sendPrompt(sessionId, systemPrompt, parts, turnTimeout);
                 events.accept(new CoreEvent("opencode.message", spec.runId(), sessionId, null,
                         message.rawJson()));
                 result = new CoreResult(sessionId, message.finalOutput(),
@@ -298,9 +326,12 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
                 + " is closed; no prompt or progress pump may start");
     }
 
-    /** The remaining budget of the turn's deadline; zero means no prompt may start. */
-    private static Duration remaining(Instant deadline) {
-        Duration remaining = Duration.between(Instant.now(), deadline);
+    /**
+     * The remaining budget of the turn's deadline; zero means no prompt may start
+     * (or, after the progress baseline, that none is left for the send).
+     */
+    private Duration remaining(Instant deadline) {
+        Duration remaining = Duration.between(clock.instant(), deadline);
         return remaining.isNegative() ? Duration.ZERO : remaining;
     }
 

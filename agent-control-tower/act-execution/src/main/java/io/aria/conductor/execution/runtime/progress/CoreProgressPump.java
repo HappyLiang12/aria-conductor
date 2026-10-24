@@ -24,6 +24,10 @@ import java.util.function.Consumer;
  *       {@code degraded} flag) backs off exponentially, cap 30s, and never
  *       throws; a successful empty list is ordinary "no data yet" and resets
  *       the backoff;</li>
+ *   <li>a streak of {@value #DEGRADED_STALL_THRESHOLD} consecutive degraded
+ *       polls is a stalled progress stream and raises exactly one WARN (runId,
+ *       session, last cause, current backoff) plus a countable signal; a
+ *       successful poll re-arms it, so a later stall warns again;</li>
  *   <li>an empty snapshot is never a shrink: it neither resets the watermark
  *       nor replays parts;</li>
  *   <li>a real snapshot shrink replays at most the latest 10 parts;</li>
@@ -31,11 +35,14 @@ import java.util.function.Consumer;
  *   <li>consecutive THINKING parts within one poll batch are coalesced into a
  *       single fragment (last wins); TOOL_* fragments are never coalesced;</li>
  *   <li>the part watermark and seq live in a session-scoped
- *       {@link ProgressCursor}, so consecutive prompts of one native session
- *       never replay an earlier turn and never restart seq at 1;</li>
+ *       {@link ProgressCursor} and are read-modified under one monitor, so
+ *       consecutive prompts of one native session neither replay an earlier
+ *       turn, restart seq at 1, nor interleave a baseline seed into a diff;</li>
  *   <li>seq is monotonic across batches;</li>
- *   <li>{@link #stop()} is idempotent and no fragment is emitted after it
- *       returns.</li>
+ *   <li>{@link #stop()} is idempotent, halts emission, and joins the worker
+ *       within a bounded budget so the cursor is settled when it returns; the
+ *       sink is never called under the emission lock, so a slow persistence
+ *       write costs the halt at most that budget.</li>
  * </ul>
  *
  * <p>The pump publishes fragments, not domain events: the owning session turns
@@ -47,8 +54,28 @@ public class CoreProgressPump {
 
     public static final Duration DEFAULT_POLL_INTERVAL = Duration.ofSeconds(2);
     public static final Duration DEFAULT_COALESCE_WINDOW = Duration.ofMillis(400);
+
+    /**
+     * How long {@link #stop()} waits for the poll worker to exit. The worker only
+     * blocks in a 10s-capped progress poll, the diff section and the sink call, so
+     * two seconds bounds the delay a slow persistence write can add to prompt
+     * completion; past the budget {@code stop()} returns and says so rather than
+     * holding the run's terminal result hostage.
+     */
+    public static final Duration DEFAULT_STOP_JOIN_TIMEOUT = Duration.ofSeconds(2);
+
     private static final Duration MAX_BACKOFF = Duration.ofSeconds(30);
     private static final int RESET_REPLAY_LIMIT = 10;
+
+    /**
+     * Consecutive degraded polls that make a stall operator-visible. Three is the
+     * smallest number a single transient blip cannot reach: one poll can time out
+     * after {@code LIST_MESSAGES_TIMEOUT} (10s) or be answered 5xx by the proxy,
+     * and the two fast retries that follow absorb a short hiccup. At the default
+     * 2s interval with the 2s-&gt;4s-&gt;8s backoff the WARN lands about 12s into a
+     * stall -- far inside a 45-minute run, and never for a single failed poll.
+     */
+    static final int DEGRADED_STALL_THRESHOLD = 3;
 
     /** One streamed progress fragment; {@code iteration} is 0 while the core reports none. */
     public record ProgressFragment(RunProgressEvent.Kind kind, String content, String toolName,
@@ -61,6 +88,11 @@ public class CoreProgressPump {
      * an earlier turn from being re-emitted, and the seq keeps increasing so the
      * dashboard's (runId, seq) dedupe key never collides. A pump never clears
      * it; a new session starts with a fresh cursor.
+     *
+     * <p>The watermark is a plain list guarded by this instance's monitor: every
+     * writer (a pump's diff, a later prompt's baseline seed) holds it for the
+     * whole read-modify-write, so the two can never interleave into a hybrid
+     * watermark.
      */
     public static final class ProgressCursor {
         private final List<Integer> watermark = new ArrayList<>();
@@ -75,7 +107,7 @@ public class CoreProgressPump {
          * watermark: an empty list before a prompt does not prove the native
          * session forgot its earlier messages.
          */
-        public void seedFrom(List<OpenCodeHttpClient.MessageSnapshot> baseline) {
+        public synchronized void seedFrom(List<OpenCodeHttpClient.MessageSnapshot> baseline) {
             if (baseline.isEmpty() && !watermark.isEmpty()) {
                 return;
             }
@@ -83,6 +115,16 @@ public class CoreProgressPump {
             for (OpenCodeHttpClient.MessageSnapshot message : baseline) {
                 watermark.add(message.parts().size());
             }
+        }
+
+        /** Read-only: the seq this cursor has handed out so far. */
+        synchronized long sequenceValue() {
+            return seq.get();
+        }
+
+        /** Read-only: how many messages the watermark currently tracks. */
+        synchronized int watermarkSize() {
+            return watermark.size();
         }
     }
 
@@ -95,11 +137,20 @@ public class CoreProgressPump {
     /** Kept for configuration symmetry: coalescing is per poll batch, not wall-clock driven. */
     private final Duration coalesceWindow;
     private final ProgressCursor cursor;
-    /** Guards the running flag so no sink call can begin after {@link #stop()} returns. */
+    /** Upper bound on how long {@link #stop()} waits for the poll worker. */
+    private final Duration stopJoinTimeout;
+    /**
+     * Guards the running flag only. A fragment is claimed under it and then
+     * handed to the sink outside it, so a slow sink cannot delay {@link #stop()}.
+     */
     private final Object emissionLock = new Object();
 
     private volatile boolean running;
     private Thread worker;
+    private volatile long degradedPolls;
+    private volatile int consecutiveDegradedPolls;
+    private volatile int degradedStallSignals;
+    private volatile String lastDegradedCause;
 
     public CoreProgressPump(OpenCodeHttpClient client, String sessionId, UUID runId, UUID agentId,
             Consumer<ProgressFragment> sink) {
@@ -116,6 +167,13 @@ public class CoreProgressPump {
     public CoreProgressPump(OpenCodeHttpClient client, String sessionId, UUID runId, UUID agentId,
             Consumer<ProgressFragment> sink, Duration pollInterval, Duration coalesceWindow,
             ProgressCursor cursor) {
+        this(client, sessionId, runId, agentId, sink, pollInterval, coalesceWindow, cursor,
+                DEFAULT_STOP_JOIN_TIMEOUT);
+    }
+
+    public CoreProgressPump(OpenCodeHttpClient client, String sessionId, UUID runId, UUID agentId,
+            Consumer<ProgressFragment> sink, Duration pollInterval, Duration coalesceWindow,
+            ProgressCursor cursor, Duration stopJoinTimeout) {
         this.client = Objects.requireNonNull(client, "client");
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");
         this.runId = Objects.requireNonNull(runId, "runId");
@@ -124,6 +182,33 @@ public class CoreProgressPump {
         this.pollInterval = Objects.requireNonNull(pollInterval, "pollInterval");
         this.coalesceWindow = Objects.requireNonNull(coalesceWindow, "coalesceWindow");
         this.cursor = Objects.requireNonNull(cursor, "cursor");
+        this.stopJoinTimeout = Objects.requireNonNull(stopJoinTimeout, "stopJoinTimeout");
+    }
+
+    /**
+     * Cumulative count of degraded polls since the pump was created. Never
+     * resets: this is the countable "progress has been unreliable" signal.
+     */
+    public long degradedPollCount() {
+        return degradedPolls;
+    }
+
+    /** Consecutive degraded polls right now; zero as soon as one poll succeeds. */
+    public int consecutiveDegradedPolls() {
+        return consecutiveDegradedPolls;
+    }
+
+    /**
+     * Number of operator-visible stall signals this pump has raised: one per
+     * degraded streak of {@value #DEGRADED_STALL_THRESHOLD}+ consecutive polls.
+     */
+    public int degradedStallSignals() {
+        return degradedStallSignals;
+    }
+
+    /** The cause of the most recent degraded poll, or {@code null} while healthy. */
+    public String lastDegradedCause() {
+        return lastDegradedCause;
     }
 
     /** Starts the poll loop; idempotent. */
@@ -131,26 +216,59 @@ public class CoreProgressPump {
         if (running) {
             return;
         }
+        Thread stale = worker;
+        if (stale != null && stale.isAlive()) {
+            // The previous pump outlived its stop budget and still owns the session
+            // cursor; a second loop would poll and diff against it concurrently.
+            log.warn("OpenCode progress pump of run {} is not restarted: the previous"
+                    + " poll worker is still running", runId);
+            return;
+        }
         running = true;
         worker = Thread.ofVirtual().name("oc-progress-pump-" + runId + "-" + agentId).start(this::loop);
     }
 
     /**
-     * Stops the poll loop; idempotent. When this returns, no further fragment is
-     * handed to the sink. The worker's interrupt only shortens its sleep -- the
-     * emission guard is what makes the halt prompt-safe.
+     * Stops the poll loop; idempotent. When this returns the worker has exited --
+     * within {@link #stopJoinTimeout} -- so no further fragment is handed to the
+     * sink and the session cursor is settled: a later prompt's baseline seed
+     * cannot interleave with a diff of this pump.
+     *
+     * <p>The interrupt only shortens the poll interval; the join is what makes the
+     * halt observable. If the worker does not exit within the budget (a sink that
+     * is stuck in a slow insert), {@code stop()} logs a WARN and returns: the run's
+     * terminal result is never blocked on progress observability. The remaining
+     * fragments of that batch are still dropped, because every emission re-checks
+     * the running flag, and an abandoned poll no longer advances the cursor.
      */
     public void stop() {
-        synchronized (emissionLock) {
-            running = false;
-        }
         Thread current;
         synchronized (this) {
             current = worker;
-            worker = null;
         }
-        if (current != null) {
-            current.interrupt();
+        synchronized (emissionLock) {
+            running = false;
+        }
+        if (current == null || current == Thread.currentThread()) {
+            // Stopping from inside the sink must not wait for itself.
+            return;
+        }
+        current.interrupt();
+        try {
+            current.join(stopJoinTimeout.toMillis());
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+        if (current.isAlive()) {
+            log.warn("OpenCode progress poll worker of run {} did not exit within {}ms;"
+                    + " a progress fragment may still be delivered after stop() returned",
+                    runId, stopJoinTimeout.toMillis());
+            return;
+        }
+        synchronized (this) {
+            if (worker == current) {
+                worker = null;
+            }
         }
     }
 
@@ -159,12 +277,18 @@ public class CoreProgressPump {
         while (running) {
             try {
                 OpenCodeHttpClient.MessageListResult result = client.listMessages(sessionId);
+                if (!running) {
+                    // The halt is authoritative: a poll that answered after stop()
+                    // neither emits nor consumes the shared cursor, so its parts
+                    // stay streamable for the next prompt of the session.
+                    return;
+                }
                 if (result.degraded()) {
                     backoff = nextBackoff(backoff);
-                    log.debug("OpenCode progress poll degraded for run {}; backing off to {}ms",
-                            runId, backoff.toMillis());
+                    degrade(result.cause(), backoff);
                 } else {
                     backoff = pollInterval;
+                    recover();
                     for (ProgressFragment fragment : diff(result.messages())) {
                         emit(fragment);
                     }
@@ -176,6 +300,7 @@ public class CoreProgressPump {
                 log.warn("OpenCode progress pump poll failed for run {} (degrading): {}",
                         runId, e.getMessage());
                 backoff = nextBackoff(backoff);
+                degrade(e.getClass().getSimpleName() + ": " + e.getMessage(), backoff);
             }
             if (!running) {
                 break;
@@ -189,14 +314,55 @@ public class CoreProgressPump {
         }
     }
 
+    /**
+     * Records one degraded poll. The per-poll detail stays at debug (a 5xx proxy
+     * answers every 2s), but a streak of {@value #DEGRADED_STALL_THRESHOLD}
+     * consecutive degraded polls is a stalled progress stream and issue #103's
+     * whole point, so it raises exactly one WARN per streak plus a countable
+     * signal.
+     */
+    private void degrade(String cause, Duration backoff) {
+        degradedPolls++;
+        consecutiveDegradedPolls++;
+        lastDegradedCause = cause == null ? "unspecified" : cause;
+        log.debug("OpenCode progress poll degraded for run {}; backing off to {}ms",
+                runId, backoff.toMillis());
+        if (consecutiveDegradedPolls == DEGRADED_STALL_THRESHOLD) {
+            degradedStallSignals++;
+            log.warn("OpenCode progress stream is stalled for run {} session {}: {} consecutive"
+                            + " degraded polls (last cause: {}; backing off to {}ms). The run keeps"
+                            + " running; only its live progress is paused until a poll succeeds.",
+                    runId, sessionId, consecutiveDegradedPolls, lastDegradedCause, backoff.toMillis());
+        }
+    }
+
+    /**
+     * A successful poll ends the stall: the consecutive counter resets so a later
+     * streak warns again. The cumulative counters never reset.
+     */
+    private void recover() {
+        if (consecutiveDegradedPolls >= DEGRADED_STALL_THRESHOLD) {
+            log.info("OpenCode progress stream recovered for run {} session {} after {} degraded polls"
+                            + " (last cause: {})", runId, sessionId, consecutiveDegradedPolls,
+                    lastDegradedCause);
+        }
+        consecutiveDegradedPolls = 0;
+    }
+
     private static Duration nextBackoff(Duration current) {
         Duration doubled = current.multipliedBy(2);
         return doubled.compareTo(MAX_BACKOFF) > 0 ? MAX_BACKOFF : doubled;
     }
 
-    /** Diffs against the session cursor's watermark. */
+    /**
+     * Diffs against the session cursor's watermark. The whole read-modify-write
+     * (watermark and seq) runs under the cursor monitor, so it cannot interleave
+     * with another writer of the same session cursor.
+     */
     List<ProgressFragment> diff(List<OpenCodeHttpClient.MessageSnapshot> snaps) {
-        return diff(snaps, cursor.watermark);
+        synchronized (cursor) {
+            return diff(snaps, cursor.watermark);
+        }
     }
 
     /**
@@ -278,17 +444,28 @@ public class CoreProgressPump {
         };
     }
 
+    /**
+     * Hands one fragment to the sink. The lock guards only the halt check, never
+     * the sink call: the sink is a synchronous persistence write, and holding the
+     * emission lock across it would make {@link #stop()} -- and with it the
+     * prompt's terminal completion -- wait on the insert.
+     *
+     * <p>Ordering does not depend on the lock. This pump's own worker thread is
+     * the only caller, so fragments leave in cursor order (single-threaded
+     * emitter); a fragment that starts here is finished before the next one is
+     * claimed.
+     */
     private void emit(ProgressFragment fragment) {
         synchronized (emissionLock) {
             if (!running) {
                 return;
             }
-            try {
-                sink.accept(fragment);
-            } catch (Exception e) {
-                log.warn("OpenCode progress sink failed for run {} (pump continues): {}",
-                        runId, e.getMessage());
-            }
+        }
+        try {
+            sink.accept(fragment);
+        } catch (Exception e) {
+            log.warn("OpenCode progress sink failed for run {} (pump continues): {}",
+                    runId, e.getMessage());
         }
     }
 }

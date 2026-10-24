@@ -44,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -94,6 +95,28 @@ class RunServiceTest {
                     }
                     current.setStatus(RunStatus.CANCELLED);
                     current.setCompletedAt(completedAt);
+                    current.setUpdatedAt(updatedAt);
+                    return 1;
+                });
+    }
+
+    /** Mirrors the repository's atomic conditional status write (M4) onto the in-memory run double. */
+    private void stubConditionalStatusUpdate() {
+        when(runRepository.updateStatusIfCurrentIn(any(UUID.class), any(RunStatus.class), any(),
+                any(Instant.class), any())).thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    RunStatus to = invocation.getArgument(1);
+                    String promptSeed = invocation.getArgument(2);
+                    Instant updatedAt = invocation.getArgument(3);
+                    java.util.List<RunStatus> allowedFrom = invocation.getArgument(4);
+                    Run current = runRepository.findById(id).orElse(null);
+                    if (current == null || !allowedFrom.contains(current.getStatus())) {
+                        return 0;
+                    }
+                    current.setStatus(to);
+                    if (promptSeed != null) {
+                        current.setPromptSeed(promptSeed);
+                    }
                     current.setUpdatedAt(updatedAt);
                     return 1;
                 });
@@ -419,11 +442,47 @@ class RunServiceTest {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(
                 TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
 
         RunResponse response = service.pauseRun(id);
 
         assertThat(response.getStatus()).isEqualTo(RunStatus.PAUSED);
+    }
+
+    /**
+     * M4 (#111 fix round 2): the PAUSED record is a single conditional write guarded by the
+     * committed row, never a read-then-save of the entity (which could resurrect a CANCELLED
+     * that committed while the verified pause was in flight).
+     */
+    @Test
+    void pauseRun_writesPausedConditionallyOnTheCommittedRowAndNeverResavesTheEntity() {
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
+        stubConditionalStatusUpdate();
+
+        service.pauseRun(id);
+
+        verify(runRepository).updateStatusIfCurrentIn(eq(id), eq(RunStatus.PAUSED), isNull(),
+                any(Instant.class), eq(java.util.List.of(RunStatus.RUNNING)));
+        verify(runRepository, never()).save(any(Run.class));
+    }
+
+    @Test
+    void pauseRun_whenTheCommittedRowTurnedTerminalDuringTheVerifiedPause_refusesAndOverwritesNothing() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        // The core verified the pause, but the run finalized CANCELLED while it was in flight.
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.CANCELLED)));
+
+        assertThatThrownBy(() -> service.pauseRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class);
+        verify(runtimeControl).pause(id);
+        verify(runRepository, never()).save(any(Run.class));
     }
 
     @Test
@@ -435,6 +494,7 @@ class RunServiceTest {
         assertThatThrownBy(() -> service.pauseRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class);
         verify(runRepository, never()).save(any());
+        verify(runRepository, never()).updateStatusIfCurrentIn(any(), any(), any(), any(), any());
     }
 
     // ── fix round 7: a coordinator-owned run is paused only on a verified ack ──
@@ -445,7 +505,7 @@ class RunServiceTest {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
                 .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
         when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
         when(runtimeControl.owns(agentId, id)).thenReturn(true);
 
@@ -453,7 +513,8 @@ class RunServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(RunStatus.PAUSED);
         verify(runtimeControl).pause(id);
-        verify(runRepository).save(any(Run.class));
+        verify(runRepository).updateStatusIfCurrentIn(eq(id), eq(RunStatus.PAUSED), isNull(),
+                any(Instant.class), eq(java.util.List.of(RunStatus.RUNNING)));
     }
 
     @Test
@@ -472,6 +533,7 @@ class RunServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("did not verify the pause");
         verify(runRepository, never()).save(any());
+        verify(runRepository, never()).updateStatusIfCurrentIn(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -480,7 +542,7 @@ class RunServiceTest {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
                 .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
         when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
         when(runtimeControl.owns(agentId, id)).thenReturn(false);
 
@@ -496,7 +558,7 @@ class RunServiceTest {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
                 .withId(id).withAgentId(agentId).withStatus(RunStatus.PAUSED).build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
         when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
         when(runtimeControl.owns(agentId, id)).thenReturn(true);
 
@@ -504,7 +566,29 @@ class RunServiceTest {
 
         assertThat(response.getStatus()).isEqualTo(RunStatus.RUNNING);
         verify(runtimeControl).resume(id);
-        verify(runRepository).save(any(Run.class));
+        verify(runRepository).updateStatusIfCurrentIn(eq(id), eq(RunStatus.RUNNING), isNull(),
+                any(Instant.class),
+                eq(java.util.List.of(RunStatus.INITIALIZING, RunStatus.PAUSED, RunStatus.WAITING_INPUT)));
+    }
+
+    /**
+     * M4 (#111 fix round 2): a resume whose committed row turned terminal is refused, and the
+     * stale entity is never saved over it.
+     */
+    @Test
+    void resumeRun_whenTheCommittedRowTurnedTerminalDuringTheVerifiedResume_refusesAndOverwritesNothing() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.PAUSED).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.COMPLETED)));
+
+        assertThatThrownBy(() -> service.resumeRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class);
+        verify(runtimeControl).resume(id);
+        verify(runRepository, never()).save(any(Run.class));
     }
 
     @Test
@@ -523,6 +607,7 @@ class RunServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("did not verify the resume");
         verify(runRepository, never()).save(any());
+        verify(runRepository, never()).updateStatusIfCurrentIn(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -530,7 +615,7 @@ class RunServiceTest {
         UUID id = UUID.randomUUID();
         when(runRepository.findById(id)).thenReturn(Optional.of(
                 TestDataBuilder.aRun().withId(id).withStatus(RunStatus.PAUSED).build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
 
         RunResponse response = service.resumeRun(id);
 
@@ -543,12 +628,13 @@ class RunServiceTest {
         when(runRepository.findById(id)).thenReturn(Optional.of(
                 TestDataBuilder.aRun().withId(id).withStatus(RunStatus.PAUSED)
                         .withPromptSeed("original").build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
 
         RunResponse response = service.resumeRun(id, "revised instruction");
 
         assertThat(response.getStatus()).isEqualTo(RunStatus.RUNNING);
         assertThat(response.getPromptSeed()).isEqualTo("revised instruction");
+        verify(runRepository, never()).save(any(Run.class));
     }
 
     @Test
@@ -557,7 +643,7 @@ class RunServiceTest {
         when(runRepository.findById(id)).thenReturn(Optional.of(
                 TestDataBuilder.aRun().withId(id).withStatus(RunStatus.PAUSED)
                         .withPromptSeed("original").build()));
-        stubSaveReturnsArgument();
+        stubConditionalStatusUpdate();
 
         RunResponse response = service.resumeRun(id, "   ");
 
@@ -852,53 +938,13 @@ class RunServiceTest {
     }
 
     // ---------------------------------------------------------------------
-    // updateRunStatus
+    // The recorded state machine (#111 fix round 2, M3): RunService.updateRunStatus was a
+    // caller-less read-then-save terminal writer that bypassed this branch's own one-conditional-
+    // writer invariant, so it is deleted. The table it guarded is asserted here at the surviving
+    // authority; the terminal writes themselves live in RunCancellationWriter.cancel (CANCELLED,
+    // covered by cancelRun_* above and RunCancellationWriterTest) and the engine's
+    // completeIfNotTerminal (COMPLETED/FAILED, covered by the AgentLoopEngine suites).
     // ---------------------------------------------------------------------
-
-    @Test
-    void updateRunStatus_toRunning_isNonTerminalAndPublishesNoCompletion() {
-        UUID id = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.INITIALIZING).build()));
-        stubSaveReturnsArgument();
-
-        RunResponse response = service.updateRunStatus(id, RunStatus.RUNNING);
-
-        assertThat(response.getStatus()).isEqualTo(RunStatus.RUNNING);
-        assertThat(response.getCompletedAt()).isNull();
-        verify(eventPublisher, never()).publishEvent(any());
-    }
-
-    @Test
-    void updateRunStatus_toCompleted_setsCompletedAtAndPublishesEvent() {
-        UUID id = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
-        stubSaveReturnsArgument();
-
-        RunResponse response = service.updateRunStatus(id, RunStatus.COMPLETED);
-
-        assertThat(response.getStatus()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(response.getCompletedAt()).isNotNull();
-
-        ArgumentCaptor<RunCompletedEvent> event = ArgumentCaptor.forClass(RunCompletedEvent.class);
-        verify(eventPublisher).publishEvent(event.capture());
-        assertThat(event.getValue().getStatus()).isEqualTo(RunStatus.COMPLETED);
-    }
-
-    @Test
-    void updateRunStatus_toFailed_setsCompletedAtAndPublishesEvent() {
-        UUID id = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.RUNNING).build()));
-        stubSaveReturnsArgument();
-
-        RunResponse response = service.updateRunStatus(id, RunStatus.FAILED);
-
-        assertThat(response.getStatus()).isEqualTo(RunStatus.FAILED);
-        assertThat(response.getCompletedAt()).isNotNull();
-        verify(eventPublisher).publishEvent(any(RunCompletedEvent.class));
-    }
 
     @ParameterizedTest
     @CsvSource({
@@ -916,14 +962,8 @@ class RunServiceTest {
             "WAITING_INPUT,PENDING",
             "PAUSED,WAITING_INPUT"
     })
-    void updateRunStatus_invalidTransitions_areRejected(RunStatus from, RunStatus to) {
-        UUID id = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withStatus(from).build()));
-
-        assertThatThrownBy(() -> service.updateRunStatus(id, to))
-                .isInstanceOf(InvalidStateTransitionException.class);
-        verify(runRepository, never()).save(any());
+    void recordedStateMachine_invalidTransitions_areRejected(RunStatus from, RunStatus to) {
+        assertThat(RunService.allowsTransition(from, to)).isFalse();
     }
 
     @ParameterizedTest
@@ -941,15 +981,18 @@ class RunServiceTest {
             "WAITING_INPUT,FAILED",
             "WAITING_INPUT,CANCELLED"
     })
-    void updateRunStatus_validTransitions_areAccepted(RunStatus from, RunStatus to) {
-        UUID id = UUID.randomUUID();
-        when(runRepository.findById(id)).thenReturn(Optional.of(
-                TestDataBuilder.aRun().withId(id).withStatus(from).build()));
-        stubSaveReturnsArgument();
+    void recordedStateMachine_validTransitions_areAccepted(RunStatus from, RunStatus to) {
+        assertThat(RunService.allowsTransition(from, to)).isTrue();
+    }
 
-        RunResponse response = service.updateRunStatus(id, to);
-
-        assertThat(response.getStatus()).isEqualTo(to);
+    /** M4: the conditional write's WHERE set comes from the same table, so it cannot drift from it. */
+    @Test
+    void transitionSources_areExactlyTheStatusesThatMayMoveToTheTarget() {
+        assertThat(RunService.transitionSources(RunStatus.PAUSED)).containsExactly(RunStatus.RUNNING);
+        assertThat(RunService.transitionSources(RunStatus.RUNNING)).containsExactlyInAnyOrder(
+                RunStatus.INITIALIZING, RunStatus.PAUSED, RunStatus.WAITING_INPUT);
+        assertThat(RunService.transitionSources(RunStatus.CANCELLED))
+                .containsExactlyInAnyOrderElementsOf(RunService.cancelableStatuses());
     }
 
     // ---------------------------------------------------------------------

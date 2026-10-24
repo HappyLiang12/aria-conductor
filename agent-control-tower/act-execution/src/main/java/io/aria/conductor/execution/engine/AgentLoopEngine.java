@@ -25,6 +25,7 @@ import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
+import io.aria.conductor.execution.runtime.RunTerminatedDuringLaunchException;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
@@ -300,7 +301,7 @@ public class AgentLoopEngine {
             return;
         }
         CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(runId)) {
+        if (coordinator != null && coordinator.ownsRun(ctx.getAgentId(), runId)) {
             ControlAck ack = awaitControl(coordinator.pause(runId), runId, "pause");
             if (ack.state() != ControlState.PAUSED || !ack.verified()) {
                 throw new IllegalStateException("Run " + runId + " was not paused: "
@@ -334,7 +335,7 @@ public class AgentLoopEngine {
                     "Run " + runId + " is waiting for human approval; decide the approval instead of resuming.");
         }
         CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(runId)) {
+        if (coordinator != null && coordinator.ownsRun(ctx.getAgentId(), runId)) {
             ControlAck ack = awaitControl(coordinator.resume(runId), runId, "resume");
             if (ack.state() != ControlState.RUNNING || !ack.verified()) {
                 throw new IllegalStateException("Run " + runId + " was not resumed: "
@@ -406,6 +407,18 @@ public class AgentLoopEngine {
             }
             tryEmit(emitter, "done", donePayload(ctx, null));
             completeRun(ctx, result.cancelled() ? RunStatus.CANCELLED : RunStatus.COMPLETED);
+        } catch (RunTerminatedDuringLaunchException terminated) {
+            // The coordinator found the run already terminal while its core was still launching,
+            // stopped the launched core through the verified abort path and released it. The
+            // committed row owns the terminal transition, so this attempt records nothing, publishes
+            // no second completion and never relabels a CANCELLED as FAILED (#111 fix round 2).
+            RunStatus committed = committedStatus(ctx.getRunId(),
+                    runRepository.findById(ctx.getRunId())
+                            .orElseThrow(() -> new ResourceNotFoundException("Run", ctx.getRunId())));
+            log.info("Run {} was terminated during its core launch: the launched core was stopped and"
+                    + " released and the run keeps its committed {} state", ctx.getRunId(), committed);
+            tryEmit(emitter, "done", donePayload(ctx, null));
+            abandonContext(ctx, committed);
         } catch (Exception e) {
             log.error("Coordinated core run failed: runId={}", ctx.getRunId(), e);
             ctx.addError(e);
@@ -940,9 +953,11 @@ public class AgentLoopEngine {
 
         // Runtime-coordination branch: a run whose runtime is owned by the run coordinator
         // is driven by its run-owned core session (prompt, events, permissions, finalization).
-        // No second execution is started for that run.
+        // No second execution is started for that run. The engine asks the coordinator's one
+        // ownership predicate, the same answer the run store's control port gives (#111 fix
+        // round 2, ruling 4).
         CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
+        if (coordinator != null && coordinator.ownsRun(ctx.getAgentId(), ctx.getRunId())) {
             log.info("Run {} is owned by its run-owned core session; no provider-level execution is started",
                     ctx.getRunId());
             return;

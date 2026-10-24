@@ -23,16 +23,23 @@ import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
@@ -66,6 +73,7 @@ class KanbanTransitionServiceTest {
     private AgentPickupEligibility eligibility;
     private ApprovalRepository approvalRepository;
     private ApplicationEventPublisher eventPublisher;
+    private DeferredRunStop deferredRunStop;
     private KanbanTransitionService service;
 
     private KanbanItem card;
@@ -81,8 +89,13 @@ class KanbanTransitionServiceTest {
         eligibility = new AgentPickupEligibility();
         approvalRepository = mock(ApprovalRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
+        // The same-thread stop worker keeps these orchestration tests deterministic; the deferred
+        // dispatch itself is pinned by deferredCancel_dispatchesTheStopToTheStopWorker, and the
+        // worker's own refusal handling by DeferredRunStopTest.
+        deferredRunStop = new DeferredRunStop(runService, runRepository, Runnable::run);
         service = new KanbanTransitionService(kanbanRepository, kanbanService, runService,
-                runRepository, agentRepository, agentPicker, eligibility, approvalRepository, eventPublisher);
+                runRepository, agentRepository, agentPicker, eligibility, approvalRepository, eventPublisher,
+                deferredRunStop);
 
         card = KanbanItem.builder().id("c1").title("add CSV export")
                 .status(KanbanStatus.TODO).priority(KanbanPriority.MEDIUM).build();
@@ -872,5 +885,132 @@ class KanbanTransitionServiceTest {
         assertThat(seed).doesNotContain("T".repeat(201));
         assertThat(seed).doesNotContain("D".repeat(4001));
         assertThat(seed).doesNotContain("F".repeat(2001));
+    }
+
+    // ---- behavior 9: the deferred stop of the linked run (#111 fix round 2, rulings 5 and 6) ----
+
+    /** The same orchestrator with a different stop worker, for the transaction-boundary cases. */
+    private KanbanTransitionService serviceWith(DeferredRunStop stop) {
+        return new KanbanTransitionService(kanbanRepository, kanbanService, runService, runRepository,
+                agentRepository, agentPicker, eligibility, approvalRepository, eventPublisher, stop);
+    }
+
+    /** The shared card in IN_PROGRESS, linked to a live RUNNING run the cancel has to stop. */
+    private UUID liveLinkedRun() {
+        UUID runId = UUID.fromString("00000000-0000-0000-0000-0000000000d1");
+        inProgressCard(runId.toString());
+        when(runRepository.findById(runId)).thenReturn(Optional.of(Run.builder()
+                .id(runId).status(RunStatus.RUNNING).build()));
+        return runId;
+    }
+
+    @Test
+    void deferredCancel_dispatchesTheStopToTheStopWorker() {
+        // A recording worker: the stop must be HANDED to it, and it is the worker -- never the
+        // request thread -- that runs it. Runnable::run would hide exactly that.
+        List<Runnable> stopQueue = new ArrayList<>();
+        Executor recordingWorker = task -> stopQueue.add(task);
+        KanbanTransitionService txService = serviceWith(
+                new DeferredRunStop(runService, runRepository, recordingWorker));
+        UUID runId = liveLinkedRun();
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            KanbanItem moved = txService.transition("c1", TransitionRequest.builder()
+                    .status(KanbanStatus.CANCELLED).build());
+
+            // The card move happened inside the transaction; the stop waits for its commit, so a
+            // rollback can never end a run for a transition that did not happen.
+            assertThat(moved.getStatus()).isEqualTo(KanbanStatus.CANCELLED);
+            assertThat(stopQueue).isEmpty();
+            verify(runService, never()).cancelRun(any());
+
+            List<TransactionSynchronization> synchronizations =
+                    TransactionSynchronizationManager.getSynchronizations();
+            assertThat(synchronizations).hasSize(1);
+
+            synchronizations.forEach(TransactionSynchronization::afterCommit);
+
+            assertThat(stopQueue).hasSize(1);
+            verify(runService, never()).cancelRun(any());
+            stopQueue.forEach(Runnable::run);
+            verify(runService).cancelRun(runId);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void deferredCancel_neverReachesTheStopWorkerWhenTheCardTransactionRollsBack() {
+        List<Runnable> stopQueue = new ArrayList<>();
+        KanbanTransitionService txService = serviceWith(
+                new DeferredRunStop(runService, runRepository, task -> stopQueue.add(task)));
+        liveLinkedRun();
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            txService.transition("c1", TransitionRequest.builder().status(KanbanStatus.CANCELLED).build());
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            assertThat(stopQueue).isEmpty();
+            verify(runService, never()).cancelRun(any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void committedCardMove_answersSuccessAndRecordsThePendingStopWhenTheDeferredStopIsRefused() {
+        UUID runId = liveLinkedRun();
+        IllegalStateException refusal = new IllegalStateException("Run " + runId
+                + ": the run-owned core refused the stop (writers unverified)");
+        when(runService.cancelRun(runId)).thenThrow(refusal);
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            KanbanItem moved = service.transition("c1", TransitionRequest.builder()
+                    .status(KanbanStatus.CANCELLED).build());
+            assertThat(moved.getStatus()).isEqualTo(KanbanStatus.CANCELLED);
+
+            // The dead end #111 filed: the refusal used to leave afterCommit as a 409 over a card
+            // that was already CANCELLED, and the board never re-runs a reached move, so the live
+            // core had no remaining path to an end. The commit answers with the card, never 409.
+            assertThatCode(() -> TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit)).doesNotThrowAnyException();
+
+            verify(runService).cancelRun(runId);
+            verify(runRepository).recordPendingStopIfCancelable(eq(runId),
+                    argThat(message -> message != null && message.contains(refusal.getMessage())),
+                    eq(DeferredRunStop.PENDING_STOP_CODE), eq(DeferredRunStop.PENDING_STOP_SURFACE),
+                    any(Instant.class), eq(RunService.cancelableStatuses()));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    /**
+     * The other half of the same ruling: the non-transactional caller (a unit caller, or an entry
+     * point that runs with no transaction synchronization) has no committed card move to protect,
+     * so {@code RunService.cancelRun}'s exact refusal is its answer -- the #111 guarantee that a
+     * live core which did not confirm its stop is never reported as cancelled.
+     */
+    @Test
+    void cancelWithNoTransactionInFlight_propagatesTheStopsExactRefusal() {
+        UUID runId = liveLinkedRun();
+        IllegalStateException refusal = new IllegalStateException("Run " + runId
+                + ": the run-owned core refused the stop (writers unverified)");
+        when(runService.cancelRun(runId)).thenThrow(refusal);
+
+        assertThatThrownBy(() -> service.transition("c1", TransitionRequest.builder()
+                .status(KanbanStatus.CANCELLED).build()))
+                .isSameAs(refusal);
+
+        verify(runService).cancelRun(runId);
+        // The refusal is still recorded for the retry sweep, never silently dropped.
+        verify(runRepository).recordPendingStopIfCancelable(eq(runId), any(),
+                eq(DeferredRunStop.PENDING_STOP_CODE), eq(DeferredRunStop.PENDING_STOP_SURFACE),
+                any(Instant.class), eq(RunService.cancelableStatuses()));
     }
 }

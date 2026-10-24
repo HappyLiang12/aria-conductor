@@ -53,6 +53,12 @@ public class KanbanTransitionService {
     private final AgentPickupEligibility eligibility;
     private final ApprovalRepository approvalRepository;
     private final ApplicationEventPublisher eventPublisher;
+    /**
+     * The bounded off-thread stop worker the deferred run cancels go through, so neither a 30 s
+     * verified stop nor a refusal can pin the request's connections or answer 409 for a card move
+     * that already committed (#111 fix round 2, rulings 5 and 6).
+     */
+    private final DeferredRunStop deferredRunStop;
 
     public KanbanTransitionService(KanbanRepository kanbanRepository,
                                    KanbanService kanbanService,
@@ -62,7 +68,8 @@ public class KanbanTransitionService {
                                    AgentPickerService agentPicker,
                                    AgentPickupEligibility eligibility,
                                    ApprovalRepository approvalRepository,
-                                   ApplicationEventPublisher eventPublisher) {
+                                   ApplicationEventPublisher eventPublisher,
+                                   DeferredRunStop deferredRunStop) {
         this.kanbanRepository = kanbanRepository;
         this.kanbanService = kanbanService;
         this.runService = runService;
@@ -72,6 +79,7 @@ public class KanbanTransitionService {
         this.eligibility = eligibility;
         this.approvalRepository = approvalRepository;
         this.eventPublisher = eventPublisher;
+        this.deferredRunStop = deferredRunStop;
     }
 
     /**
@@ -310,21 +318,28 @@ public class KanbanTransitionService {
      *
      * <p>Registering the callback rather than cancelling inline is what keeps the card and
      * its run atomic for the operator: on rollback the callback never runs, so the run is
-     * not cancelled for a transition that did not happen. The cancel is deliberately not
-     * wrapped: when it refuses, {@link RunService#cancelRun}'s exact reason surfaces to the
-     * caller after the card transaction is already durable — an explicit stop refusal, never
-     * a silently swallowed one. A caller with no active transaction synchronization (unit
-     * callers, non-transactional entry points) keeps the immediate behavior.
+     * not cancelled for a transition that did not happen.
+     *
+     * <p>Once the card committed, the stop goes to {@link DeferredRunStop} (#111 fix round 2,
+     * rulings 5 and 6): off the request thread -- a verified stop blocks up to 30 s and
+     * {@code RunService.cancelRun} suspends the caller's transaction, which together pinned two
+     * pooled connections per deferred cancel -- and never back into the caller's response: the
+     * card is already CANCELLED and the board will not re-run a move the card already reached, so
+     * the 409 a refusal used to raise there was a dead end with a live core behind it. A refusal
+     * is recorded as a durable pending stop on the run, logged at WARN with the run id and the
+     * exact reason (never swallowed), and retried by the stop sweep. A caller with no active
+     * transaction synchronization (unit callers, non-transactional entry points) has no committed
+     * card move to protect and keeps seeing the refusal directly.
      */
     private void cancelAfterCommit(UUID runId) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            runService.cancelRun(runId);
+            deferredRunStop.runNow(runId);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                runService.cancelRun(runId);
+                deferredRunStop.submit(runId);
             }
         });
     }

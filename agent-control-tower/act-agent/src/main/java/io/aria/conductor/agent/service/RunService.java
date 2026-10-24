@@ -3,7 +3,6 @@ package io.aria.conductor.agent.service;
 import io.aria.conductor.agent.dto.CreateRunRequest;
 import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.repository.RunRepository;
-import io.aria.conductor.common.event.RunCompletedEvent;
 import io.aria.conductor.common.event.RunStartedEvent;
 import io.aria.conductor.common.exception.ActionableIllegalArgumentException;
 import io.aria.conductor.common.exception.ErrorSurface;
@@ -62,9 +61,31 @@ public class RunService {
                 .toList();
     }
 
-    /** The statuses an atomic cancel may overwrite; see {@link #CANCELABLE_STATUSES}. */
-    static List<RunStatus> cancelableStatuses() {
+    /**
+     * The statuses an atomic cancel may overwrite; see {@link #CANCELABLE_STATUSES}.
+     * Public because the deferred-stop worker (act-execution) guards its conditional
+     * pending-stop write and its retry sweep with the same single authority: one
+     * derived list, never a second copy that can drift.
+     */
+    public static List<RunStatus> cancelableStatuses() {
         return CANCELABLE_STATUSES;
+    }
+
+    /** The recorded state machine's answer for one transition (the single authority the writes guard). */
+    static boolean allowsTransition(RunStatus from, RunStatus to) {
+        return VALID_TRANSITIONS.getOrDefault(from, EnumSet.noneOf(RunStatus.class)).contains(to);
+    }
+
+    /**
+     * Every status whose recorded transition allows {@code to}, derived from
+     * {@link #VALID_TRANSITIONS} so the conditional writes' WHERE clause can never drift from
+     * the state machine (the same derivation {@link #CANCELABLE_STATUSES} uses for CANCELLED).
+     */
+    static List<RunStatus> transitionSources(RunStatus to) {
+        return VALID_TRANSITIONS.entrySet().stream()
+                .filter(entry -> entry.getValue().contains(to))
+                .map(Map.Entry::getKey)
+                .toList();
     }
 
     private final RunRepository runRepository;
@@ -186,10 +207,13 @@ public class RunService {
     /**
      * Pauses a run. When the run's runtime is owned by the execution coordinator,
      * the pause is verified on the run-owned core session first (the runtime
-     * suspends its writer tree) and the PAUSED state is persisted only after that
+     * suspends its writer tree) and the PAUSED state is written only after that
      * verified acknowledgement; a refused pause throws with the exact reason and
-     * leaves the run RUNNING. A run no runtime owns keeps the plain recorded
-     * transition.
+     * leaves the run RUNNING. A run no runtime owns keeps the recorded transition.
+     *
+     * <p>The PAUSED record is a single conditional write guarded by the committed row
+     * (#111 fix round 2, M4): a run that finalized while the verified pause was in
+     * flight is refused rather than resurrected by a stale entity save.
      */
     @Transactional
     public RunResponse pauseRun(UUID id) {
@@ -200,13 +224,8 @@ public class RunService {
                 ? null : runtimeControlProvider.getIfAvailable();
         if (control != null && control.owns(run.getAgentId(), id)) {
             control.pause(id);
-            // The runtime may have finalized while the verified pause was in flight:
-            // the transition is re-checked against the state that actually stands.
-            run = findRunOrThrow(id);
-            validateTransition(run.getStatus(), RunStatus.PAUSED);
         }
-        run.setStatus(RunStatus.PAUSED);
-        return toResponse(runRepository.save(run));
+        return toResponse(writeStateConditionally(id, RunStatus.PAUSED, null));
     }
 
     @Transactional
@@ -217,9 +236,11 @@ public class RunService {
     /**
      * Resumes a run. A run whose runtime is owned by the execution coordinator is
      * resumed on the same run-owned session first (the verified suspension is
-     * matched and released) and RUNNING is persisted only after that verified
+     * matched and released) and RUNNING is written only after that verified
      * acknowledgement; a refused resume throws with the exact reason and leaves
-     * the run PAUSED.
+     * the run PAUSED. Like {@link #pauseRun}, the record itself is a conditional
+     * write, so a run that terminated during the verified resume is never moved
+     * back to RUNNING by a stale save.
      */
     @Transactional
     public RunResponse resumeRun(UUID id, String newInstruction) {
@@ -229,17 +250,37 @@ public class RunService {
                 ? null : runtimeControlProvider.getIfAvailable();
         if (control != null && control.owns(run.getAgentId(), id)) {
             control.resume(id);
-            // The runtime may have finalized while the verified resume was in flight.
-            run = findRunOrThrow(id);
-            validateTransition(run.getStatus(), RunStatus.RUNNING);
         }
-        if (newInstruction != null && !newInstruction.isBlank()) {
+        String promptSeed = newInstruction != null && !newInstruction.isBlank() ? newInstruction : null;
+        if (promptSeed != null) {
             log.info("Updating run instruction on resume: id={}", id);
-            run.setPromptSeed(newInstruction);
         }
         log.info("Resuming run: id={}", id);
-        run.setStatus(RunStatus.RUNNING);
-        return toResponse(runRepository.save(run));
+        return toResponse(writeStateConditionally(id, RunStatus.RUNNING, promptSeed));
+    }
+
+    /**
+     * The one conditional writer of a run's non-terminal operator transition: the
+     * database evaluates the committed row against the statuses this transition may
+     * start from ({@link #transitionSources}), so a terminal state that arrived in the
+     * meantime is refused with the state that actually stands and never overwritten.
+     *
+     * @throws ResourceNotFoundException         when the run row does not exist
+     * @throws InvalidStateTransitionException   when the committed state no longer allows it
+     */
+    private Run writeStateConditionally(UUID id, RunStatus to, String promptSeed) {
+        Instant now = Instant.now();
+        int updated = runRepository.updateStatusIfCurrentIn(id, to, promptSeed, now, transitionSources(to));
+        if (updated == 0) {
+            RunStatus committed = runRepository.findStateById(id)
+                    .map(RunRepository.RunStateView::getStatus)
+                    .orElse(null);
+            if (committed == null) {
+                throw new ResourceNotFoundException("Run", id);
+            }
+            throw new InvalidStateTransitionException("Run", committed.name(), to.name());
+        }
+        return findRunOrThrow(id);
     }
 
     /**
@@ -254,6 +295,11 @@ public class RunService {
      * recorded transition is written instead. A run no runtime owns keeps the
      * plain recorded transition, with the same atomic write guarding the
      * run-finalizes-first race.
+     *
+     * <p>Ownership is the coordinator's registry presence, so a run whose launch is
+     * still in flight (its core process exists, its session is opening) is owned
+     * here: the cancel goes to the coordinator, which stops that core, and a
+     * CANCELLED is never recorded over a live owned core (#111 fix round 2, C1).
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RunResponse cancelRun(UUID id) {
@@ -292,22 +338,6 @@ public class RunService {
         Run cancelled = cancellationWriter.cancel(id);
         log.info("Run cancelled: id={}, status={}", cancelled.getId(), cancelled.getStatus());
         return toResponse(cancelled);
-    }
-
-    @Transactional
-    public RunResponse updateRunStatus(UUID id, RunStatus newStatus) {
-        Run run = findRunOrThrow(id);
-        validateTransition(run.getStatus(), newStatus);
-        log.info("Updating run status: id={}, {} -> {}", id, run.getStatus(), newStatus);
-
-        run.setStatus(newStatus);
-
-        if (newStatus == RunStatus.COMPLETED || newStatus == RunStatus.FAILED || newStatus == RunStatus.CANCELLED) {
-            run.setCompletedAt(Instant.now());
-            eventPublisher.publishEvent(new RunCompletedEvent(this, run.getId(), run.getAgentId(), newStatus));
-        }
-
-        return toResponse(runRepository.save(run));
     }
 
     @Transactional(readOnly = true)

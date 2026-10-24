@@ -1,5 +1,9 @@
 package io.aria.conductor.execution.runtime.progress;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo;
 import com.github.tomakehurst.wiremock.junit5.WireMockTest;
 import io.aria.conductor.common.event.RunProgressEvent;
@@ -7,12 +11,22 @@ import io.aria.conductor.execution.adk.opencode.OpenCodeHttpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.findAll;
@@ -22,12 +36,19 @@ import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * The progress pump polls {@code GET /session/:id/message}, diffs new parts,
  * coalesces consecutive thinking, degrades on failures and never kills the
  * prompt path.
+ *
+ * <p>The degradation tests additionally assert the operator-visible stall
+ * signal: a sustained degraded streak logs exactly one WARN and increments a
+ * countable signal, and a successful poll re-arms it.
  */
 @WireMockTest
 class CoreProgressPumpTest {
@@ -38,6 +59,7 @@ class CoreProgressPumpTest {
 
     private OpenCodeHttpClient client;
     private CoreProgressPump pump;
+    private ListAppender<ILoggingEvent> pumpLogs;
     private final List<CoreProgressPump.ProgressFragment> events = new CopyOnWriteArrayList<>();
     private final UUID runId = UUID.randomUUID();
     private final UUID agentId = UUID.randomUUID();
@@ -54,6 +76,11 @@ class CoreProgressPumpTest {
             pump.stop();
         }
         client.close();
+        if (pumpLogs != null) {
+            pumpLogger().detachAppender(pumpLogs);
+            pumpLogs.stop();
+            pumpLogs = null;
+        }
     }
 
     private void startPump() {
@@ -67,6 +94,253 @@ class CoreProgressPumpTest {
 
     private static int requestsToThePumpPath() {
         return findAll(getRequestedFor(urlEqualTo(PATH))).size();
+    }
+
+    // ---- M6: the emission lock must not span the sink ----
+
+    /**
+     * M6: the sink is a synchronous persistence write on the pump thread. It must
+     * not serialize the halt: with the emission guard narrowed to the flag check,
+     * a stuck insert costs at most the stop join budget instead of holding the
+     * prompt's terminal completion behind it.
+     */
+    @Test
+    void aSlowSinkDoesNotDelayStopBeyondTheJoinBudget() throws Exception {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"a\", \"type\": \"tool\", \"tool\": \"read\" },"
+                                + "{ \"id\": \"b\", \"type\": \"tool\", \"tool\": \"bash\" }"))));
+        CountDownLatch sinkEntered = new CountDownLatch(1);
+        CountDownLatch releaseSink = new CountDownLatch(1);
+        AtomicBoolean sinkReturned = new AtomicBoolean();
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, fragment -> {
+            events.add(fragment);
+            sinkEntered.countDown();
+            awaitUninterruptibly(releaseSink, Duration.ofSeconds(20));
+            sinkReturned.set(true);
+        }, POLL, COALESCE, new CoreProgressPump.ProgressCursor(), Duration.ofMillis(150));
+        pump.start();
+        assertThat(sinkEntered.await(5, TimeUnit.SECONDS))
+                .as("the pump is inside the persistence call")
+                .isTrue();
+
+        ExecutorService stopper = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> stopping = stopper.submit(pump::stop);
+            stopping.get(3, TimeUnit.SECONDS);
+            assertThat(sinkReturned)
+                    .as("stop() returned while the persistence call was still in flight")
+                    .isFalse();
+
+            releaseSink.countDown();
+            // The rest of that batch is still dropped: the halt re-checks the flag
+            // before every fragment.
+            await().during(Duration.ofMillis(400)).atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(events).hasSize(1));
+        } finally {
+            releaseSink.countDown();
+            stopper.shutdownNow();
+        }
+    }
+
+    /**
+     * M6's ordering premise, pinned: one single-threaded emitter (the pump worker)
+     * hands fragments out in cursor order, so narrowing the lock cannot reorder a
+     * run's progress.
+     */
+    @Test
+    void everyFragmentIsEmittedByOneThreadInStrictSeqOrder() {
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("order")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"a\", \"type\": \"tool\", \"tool\": \"read\" },"
+                                + "{ \"id\": \"b\", \"type\": \"tool\", \"tool\": \"bash\" }")))
+                .willSetStateTo("second"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("order")
+                .whenScenarioStateIs("second")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"a\", \"type\": \"tool\", \"tool\": \"read\" },"
+                                + "{ \"id\": \"b\", \"type\": \"tool\", \"tool\": \"bash\" },"
+                                + "{ \"id\": \"c\", \"type\": \"tool\", \"tool\": \"grep\" }"))));
+
+        List<String> emitterThreads = new CopyOnWriteArrayList<>();
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, fragment -> {
+            events.add(fragment);
+            emitterThreads.add(Thread.currentThread().getName());
+        }, POLL, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> events.size() >= 3);
+        pump.stop();
+
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
+                .containsExactly(1L, 2L, 3L);
+        assertThat(emitterThreads).containsOnly("oc-progress-pump-" + runId + "-" + agentId);
+    }
+
+    /**
+     * A latch wait that survives an interrupt: it models the section where the
+     * interrupt cannot undo work already in flight -- a message-list response
+     * that already arrived, or a watermark diff that is already running.
+     */
+    private static void awaitUninterruptibly(CountDownLatch latch, Duration budget) {
+        Instant deadline = Instant.now().plus(budget);
+        boolean interrupted = false;
+        while (Instant.now().isBefore(deadline)) {
+            try {
+                if (latch.await(50, TimeUnit.MILLISECONDS)) {
+                    break;
+                }
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static OpenCodeHttpClient.MessageListResult oneNewPart() {
+        return new OpenCodeHttpClient.MessageListResult(List.of(message("m1", 1)), false);
+    }
+
+    /** The pump worker is inside the client call, and the response is held there. */
+    private OpenCodeHttpClient blockedPollClient(CountDownLatch pollEntered, CountDownLatch releasePoll)
+            throws Exception {
+        OpenCodeHttpClient blocked = mock(OpenCodeHttpClient.class);
+        when(blocked.listMessages("sess-1")).thenAnswer(invocation -> {
+            pollEntered.countDown();
+            awaitUninterruptibly(releasePoll, Duration.ofSeconds(20));
+            return oneNewPart();
+        });
+        return blocked;
+    }
+
+    /**
+     * M5: {@code stop()} is the halt the prompt path waits on, so it must not
+     * return while the poll worker is still inside a section that mutates the
+     * session cursor. A slow sink can no longer hold the emission lock (M6), so
+     * the join is what keeps "no cursor mutation after stop() returns" true.
+     */
+    @Test
+    void stopWaitsForThePollWorkerToExitBeforeReturning() throws Exception {
+        CountDownLatch pollEntered = new CountDownLatch(1);
+        CountDownLatch releasePoll = new CountDownLatch(1);
+        pump = new CoreProgressPump(blockedPollClient(pollEntered, releasePoll), "sess-1", runId, agentId,
+                events::add, POLL, COALESCE, new CoreProgressPump.ProgressCursor(),
+                Duration.ofSeconds(30));
+        pump.start();
+        assertThat(pollEntered.await(3, TimeUnit.SECONDS)).isTrue();
+
+        ExecutorService stopper = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> stopping = stopper.submit(pump::stop);
+            assertThatThrownBy(() -> stopping.get(300, TimeUnit.MILLISECONDS))
+                    .as("stop() must not return while the poll worker is still running")
+                    .isInstanceOf(TimeoutException.class);
+
+            releasePoll.countDown();
+            stopping.get(10, TimeUnit.SECONDS);
+            assertThat(events).isEmpty();
+        } finally {
+            releasePoll.countDown();
+            stopper.shutdownNow();
+        }
+    }
+
+    /**
+     * M5's bounded side: when the worker does not exit within the stop budget,
+     * the abandoned poll still may not consume the session cursor. Otherwise the
+     * parts it read but never emitted would be marked seen and silently lost for
+     * every later prompt of the session.
+     */
+    @Test
+    void aPollThatOutlivesTheStopBudgetNeitherEmitsNorAdvancesTheCursor() throws Exception {
+        CountDownLatch pollEntered = new CountDownLatch(1);
+        CountDownLatch releasePoll = new CountDownLatch(1);
+        CoreProgressPump.ProgressCursor cursor = new CoreProgressPump.ProgressCursor();
+        pump = new CoreProgressPump(blockedPollClient(pollEntered, releasePoll), "sess-1", runId, agentId,
+                events::add, POLL, COALESCE, cursor, Duration.ofMillis(150));
+        pump.start();
+        assertThat(pollEntered.await(3, TimeUnit.SECONDS)).isTrue();
+
+        // The budget expires with the worker still inside the client call.
+        pump.stop();
+        releasePoll.countDown();
+
+        await().during(Duration.ofMillis(400)).atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(events).isEmpty());
+        assertThat(cursor.sequenceValue())
+                .as("an abandoned poll must not consume seq")
+                .isZero();
+        assertThat(cursor.watermarkSize())
+                .as("an abandoned poll must not mark parts as already streamed")
+                .isZero();
+        assertThat(pump.diff(List.of(message("m1", 1))))
+                .as("the part the abandoned poll read is still streamable")
+                .hasSize(1);
+    }
+
+    /**
+     * M5: the watermark is shared session state. A second prompt's pre-prompt
+     * seed must not interleave with a diff that is still running: the two writers
+     * share the cursor monitor, so the seed either lands fully before or fully
+     * after the diff.
+     */
+    @Test
+    void theBaselineSeedCannotInterleaveWithAnInFlightDiff() throws Exception {
+        CoreProgressPump.ProgressCursor cursor = new CoreProgressPump.ProgressCursor();
+        cursor.seedFrom(List.of(message("m1", 2)));
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add, POLL, COALESCE, cursor);
+
+        GatedSnapshots inFlight = new GatedSnapshots(message("m1", 3));
+        AtomicReference<List<CoreProgressPump.ProgressFragment>> diffed = new AtomicReference<>();
+        Thread differ = Thread.ofVirtual().start(() -> diffed.set(pump.diff(inFlight)));
+        assertThat(inFlight.entered.await(3, TimeUnit.SECONDS))
+                .as("the diff is inside the cursor section")
+                .isTrue();
+
+        AtomicBoolean seeded = new AtomicBoolean();
+        Thread seeder = Thread.ofVirtual()
+                .start(() -> {
+                    cursor.seedFrom(List.of(message("m1", 1)));
+                    seeded.set(true);
+                });
+        try {
+            await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(2))
+                    .untilAsserted(() -> assertThat(seeded).isFalse());
+        } finally {
+            inFlight.release.countDown();
+            differ.join(5000);
+            seeder.join(5000);
+        }
+
+        // The diff ran against the watermark it started with ([2]) and the seed
+        // applied atomically afterwards: exactly the one part newer than [2] was
+        // emitted, and the watermark is the single-message seed, not a hybrid.
+        assertThat(diffed.get()).hasSize(1);
+        assertThat(diffed.get().get(0).seq()).isEqualTo(1L);
+        assertThat(cursor.watermarkSize()).isEqualTo(1);
+    }
+
+    /** A snapshot list whose first read blocks, so a diff can be held mid-section. */
+    private static final class GatedSnapshots extends ArrayList<OpenCodeHttpClient.MessageSnapshot> {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        GatedSnapshots(OpenCodeHttpClient.MessageSnapshot snapshot) {
+            super.add(snapshot);
+        }
+
+        @Override
+        public OpenCodeHttpClient.MessageSnapshot get(int index) {
+            if (index == 0) {
+                entered.countDown();
+                awaitUninterruptibly(release, Duration.ofSeconds(20));
+            }
+            return super.get(index);
+        }
     }
 
     @Test
@@ -208,6 +482,94 @@ class CoreProgressPumpTest {
         pump.stop();
 
         assertThat(events).isEmpty();
+    }
+
+    /**
+     * I7: a sandbox proxy that answers 502 forever yields zero progress. The
+     * stall must become operator-visible: after three consecutive degraded
+     * polls exactly one WARN is logged (carrying runId, session and the last
+     * cause), and the countable signal stays at one while the stall continues.
+     */
+    @Test
+    void aSustainedDegradedStallWarnsExactlyOnceAndCountsItself() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(502).withBody("bad gateway from the sandbox proxy")));
+        ListAppender<ILoggingEvent> logs = capturePumpLogs();
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> pump.degradedPollCount() >= 4);
+        assertThat(pump.degradedStallSignals()).isEqualTo(1);
+        assertThat(pump.consecutiveDegradedPolls()).isGreaterThanOrEqualTo(4);
+
+        // The stall keeps polling and keeps counting, but it does not warn again.
+        await().during(Duration.ofMillis(300)).atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(pump.degradedStallSignals()).isEqualTo(1));
+        pump.stop();
+        long warns = warnCount(logs);
+
+        assertThat(pump.degradedPollCount()).isGreaterThanOrEqualTo(4);
+        assertThat(pump.lastDegradedCause())
+                .as("the pump keeps the last cause for the signal surface")
+                .contains("502");
+        assertThat(warns).isEqualTo(1);
+        String warning = firstWarn(logs);
+        assertThat(warning)
+                .contains(runId.toString())
+                .contains("sess-1")
+                .contains("502");
+    }
+
+    /**
+     * I7 recovery half: a successful poll resets the stall state, so a later
+     * stall -- after a healthy stretch -- warns again instead of staying silent.
+     */
+    @Test
+    void recoveryReArmsTheStallSignalSoALaterStallWarnsAgain() throws Exception {
+        OpenCodeHttpClient flaky = mock(OpenCodeHttpClient.class);
+        AtomicBoolean healthy = new AtomicBoolean();
+        when(flaky.listMessages("sess-1")).thenAnswer(invocation -> healthy.get()
+                ? new OpenCodeHttpClient.MessageListResult(List.of(), false)
+                : new OpenCodeHttpClient.MessageListResult(List.of(), true, "HTTP 502"));
+
+        pump = new CoreProgressPump(flaky, "sess-1", runId, agentId, events::add, POLL, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> pump.degradedStallSignals() == 1);
+        assertThat(pump.consecutiveDegradedPolls()).isGreaterThanOrEqualTo(3);
+
+        healthy.set(true);
+        await().atMost(Duration.ofSeconds(3)).until(() -> pump.consecutiveDegradedPolls() == 0);
+        assertThat(pump.degradedStallSignals()).isEqualTo(1);
+
+        healthy.set(false);
+        await().atMost(Duration.ofSeconds(3)).until(() -> pump.degradedStallSignals() == 2);
+        pump.stop();
+
+        // The cumulative degraded-poll counter never resets: it is the countable
+        // signal a caller can poll to see that progress has been unreliable.
+        assertThat(pump.degradedStallSignals()).isEqualTo(2);
+        assertThat(pump.degradedPollCount()).isGreaterThanOrEqualTo(6);
+        assertThat(events).isEmpty();
+    }
+
+    private ListAppender<ILoggingEvent> capturePumpLogs() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        pumpLogs = appender;
+        pumpLogger().addAppender(appender);
+        return appender;
+    }
+
+    private static Logger pumpLogger() {
+        return (Logger) LoggerFactory.getLogger(CoreProgressPump.class);
+    }
+
+    private static long warnCount(ListAppender<ILoggingEvent> logs) {
+        return logs.list.stream().filter(event -> event.getLevel() == Level.WARN).count();
+    }
+
+    private static String firstWarn(ListAppender<ILoggingEvent> logs) {
+        return logs.list.stream().filter(event -> event.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage).findFirst().orElse("");
     }
 
     @Test

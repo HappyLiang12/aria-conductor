@@ -100,7 +100,7 @@ class EventBroadcastListenerTest {
         UUID runId = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
         listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
-                RunProgressEvent.Kind.THINKING, "x".repeat(600), "bash", 7));
+                RunProgressEvent.Kind.THINKING, "x".repeat(600), "bash", 7, "prt_think"));
 
         WsBroadcastEvent event = captureBroadcast();
         assertThat(event.type()).isEqualTo("run.progress");
@@ -109,6 +109,7 @@ class EventBroadcastListenerTest {
                 .containsEntry("agentId", agentId.toString())
                 .containsEntry("kind", "THINKING")
                 .containsEntry("toolName", "bash")
+                .containsEntry("partId", "prt_think")
                 .containsEntry("seq", 7L);
         // 500-char truncation convention (matches onRunIteration)
         assertThat((String) event.data().get("content")).hasSize(503);
@@ -119,7 +120,7 @@ class EventBroadcastListenerTest {
         UUID runId = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
         RunProgressEvent event = new RunProgressEvent(this, runId, agentId, 2,
-                RunProgressEvent.Kind.THINKING, "thinking fragment", null, 7);
+                RunProgressEvent.Kind.THINKING, "thinking fragment", null, 7, "prt_1");
 
         listener.onRunProgress(event);
 
@@ -130,20 +131,22 @@ class EventBroadcastListenerTest {
         assertThat(saved.getSeq()).isEqualTo(7L);
         assertThat(saved.getKind()).isEqualTo("THINKING");
         assertThat(saved.getContent()).isEqualTo("thinking fragment");
+        assertThat(saved.getPartId()).isEqualTo("prt_1");
         verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
     }
 
     /**
-     * Issue #103: the answer kind takes the same persist-then-broadcast path as
-     * every other kind, with its name carried verbatim into both the persisted row
-     * and the WS payload (the dedupe payload shape is unchanged).
+     * Issue #103: both halves of the surface must name the observed part, or the live
+     * frame and the replayed row cannot be merged into one stream line. Persisting the
+     * id (the replay source) and broadcasting it (the live view) are the same write of
+     * the same field, so they are asserted together.
      */
     @Test
     void onRunProgress_persistsAndBroadcastsAnAnswerFragment() {
         UUID runId = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
         listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
-                RunProgressEvent.Kind.ANSWER, "Consensus needs a majority.", null, 8));
+                RunProgressEvent.Kind.ANSWER, "Consensus needs a majority.", null, 8, "prt_answer"));
 
         ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
         verify(progressRepository).save(captor.capture());
@@ -151,6 +154,7 @@ class EventBroadcastListenerTest {
         assertThat(saved.getKind()).isEqualTo("ANSWER");
         assertThat(saved.getContent()).isEqualTo("Consensus needs a majority.");
         assertThat(saved.getSeq()).isEqualTo(8L);
+        assertThat(saved.getPartId()).isEqualTo("prt_answer");
 
         WsBroadcastEvent event = captureBroadcast();
         assertThat(event.type()).isEqualTo("run.progress");
@@ -159,15 +163,34 @@ class EventBroadcastListenerTest {
                 .containsEntry("agentId", agentId.toString())
                 .containsEntry("kind", "ANSWER")
                 .containsEntry("seq", 8L)
+                .containsEntry("partId", "prt_answer")
                 .containsEntry("content", "Consensus needs a majority.");
         assertThat(event.data()).doesNotContainKey("toolName");
+    }
+
+    /**
+     * A core that reports no part id must not become a frame carrying an invented one:
+     * the member is simply absent, which is the drawer's documented signal to fall back
+     * to seq. Same for the persisted row, which keeps part_id NULL.
+     */
+    @Test
+    void onRunProgress_withNoPartIdOmitsTheMemberAndPersistsNull() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
+                RunProgressEvent.Kind.ANSWER, "no id from the core", null, 4, null));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        assertThat(captor.getValue().getPartId()).isNull();
+
+        assertThat(captureBroadcast().data()).doesNotContainKey("partId");
     }
 
     @Test
     void onRunProgress_persistFailure_doesNotBreakBroadcast() {
         UUID runId = UUID.randomUUID();
         RunProgressEvent event = new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
-                RunProgressEvent.Kind.THINKING, "frag", null, 3);
+                RunProgressEvent.Kind.THINKING, "frag", null, 3, "prt_1");
         when(progressRepository.save(any())).thenThrow(new RuntimeException("db down"));
 
         listener.onRunProgress(event);

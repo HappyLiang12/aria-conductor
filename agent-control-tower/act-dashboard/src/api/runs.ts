@@ -33,6 +33,19 @@ export async function getRunTrajectory(runId: string): Promise<SessionTrajectory
   return data;
 }
 
+/**
+ * One persisted progress OBSERVATION, as `GET /api/v1/runs/{id}/progress` replays it.
+ *
+ * A row is an observation of one message part: the endpoint returns the ordered log,
+ * so a part that grew between two polls appears twice with the SAME `partId` and an
+ * increasing `seq`. The client is the single place that collapses those observations
+ * into one stream line (see AgentDrawer's part merge), which is what makes a reopened
+ * drawer show exactly what the live stream showed.
+ *
+ * `partId` is optional and nullable: rows persisted before the `part_id` column (V74)
+ * and rows from a core that reports no part id carry none, and `seq` is then the only
+ * identity the line has.
+ */
 export interface RunProgressEntry {
   id: string;
   runId: string;
@@ -42,6 +55,7 @@ export interface RunProgressEntry {
   seq: number;
   content: string;
   toolName: string | null;
+  partId?: string | null;
   createdAt: string;
 }
 

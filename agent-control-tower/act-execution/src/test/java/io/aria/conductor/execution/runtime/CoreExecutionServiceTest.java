@@ -1263,7 +1263,7 @@ class CoreExecutionServiceTest {
     void anOpencodeProgressCoreEventIsMappedToExactlyOneRunProgressEvent() {
         session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
                 "{\"kind\":\"TOOL_CALL\",\"content\":\"listing files\",\"toolName\":\"bash\","
-                        + "\"seq\":7,\"iteration\":0}"));
+                        + "\"seq\":7,\"iteration\":0,\"partId\":\"prt_tool_1\"}"));
 
         CoreResult result = service.execute(spec(), adapter, task());
 
@@ -1282,6 +1282,31 @@ class CoreExecutionServiceTest {
         assertThat(event.getContent()).isEqualTo("listing files");
         assertThat(event.getToolName()).isEqualTo("bash");
         assertThat(event.getSeq()).isEqualTo(7);
+        // Issue #103: the part identity is the consumer's merge key, so it must survive
+        // the core-event -> domain-event mapping untouched.
+        assertThat(event.getPartId()).isEqualTo("prt_tool_1");
+    }
+
+    /**
+     * A payload that carries no part id is a legitimate observation, not a malformed
+     * one: the row is stored with part_id NULL and the consumer falls back to seq. The
+     * producer must not drop it and must not invent an id for it.
+     */
+    @Test
+    void aProgressPayloadWithoutAPartIdIsPublishedWithNullPartId() {
+        session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
+                "{\"kind\":\"ANSWER\",\"content\":\"no id on the wire\",\"toolName\":null,"
+                        + "\"seq\":4,\"iteration\":0}"));
+
+        service.execute(spec(), adapter, task());
+
+        List<RunProgressEvent> progress = publishedEvents.stream()
+                .filter(RunProgressEvent.class::isInstance)
+                .map(RunProgressEvent.class::cast)
+                .toList();
+        assertThat(progress).hasSize(1);
+        assertThat(progress.get(0).getPartId()).isNull();
+        assertThat(progress.get(0).getSeq()).isEqualTo(4);
     }
 
     /**
@@ -1295,7 +1320,7 @@ class CoreExecutionServiceTest {
     void everyKnownProgressKindIsPublishedAsItselfWithItsPayloadFields(RunProgressEvent.Kind kind) {
         session.events.add(new CoreEvent("opencode.progress", RUN, "session-1", null,
                 "{\"kind\":\"" + kind.name() + "\",\"content\":\"fragment\",\"toolName\":null,"
-                        + "\"seq\":9,\"iteration\":0}"));
+                        + "\"seq\":9,\"iteration\":0,\"partId\":\"prt_9\"}"));
 
         CoreResult result = service.execute(spec(), adapter, task());
 
@@ -1310,6 +1335,7 @@ class CoreExecutionServiceTest {
         assertThat(progress.get(0).getToolName()).isNull();
         assertThat(progress.get(0).getSeq()).isEqualTo(9);
         assertThat(progress.get(0).getIteration()).isZero();
+        assertThat(progress.get(0).getPartId()).isEqualTo("prt_9");
     }
 
     @Test

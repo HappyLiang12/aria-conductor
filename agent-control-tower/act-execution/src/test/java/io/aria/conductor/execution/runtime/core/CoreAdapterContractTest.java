@@ -699,6 +699,13 @@ class CoreAdapterContractTest {
                 assertThat(payload.path("content").isTextual())
                         .as("progress content is always a JSON string")
                         .isTrue();
+                // Issue #103: a progress row is an OBSERVATION of a part, so the peer's
+                // own part id has to reach the payload. The fixture names every listed
+                // part, so a blank or missing member means the identity was lost on the
+                // way out of the session -- the case that made a growing answer freeze.
+                assertThat(payload.path("partId").asText(null))
+                        .as("every emitted progress observation names the part it observed")
+                        .isNotBlank();
             }
         }
     }

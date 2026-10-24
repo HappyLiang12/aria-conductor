@@ -18,10 +18,14 @@ class RunProgressEventRepositoryTest {
     RunProgressEventRepository repository;
 
     private RunProgressEventEntity entry(UUID runId, long seq, String kind) {
+        return entry(runId, seq, kind, null);
+    }
+
+    private RunProgressEventEntity entry(UUID runId, long seq, String kind, String partId) {
         return RunProgressEventEntity.builder()
                 .id(UUID.randomUUID()).runId(runId).agentId(UUID.randomUUID())
                 .iteration(1).kind(kind).seq(seq).content("fragment " + seq)
-                .toolName(null).createdAt(Instant.now())
+                .toolName(null).partId(partId).createdAt(Instant.now())
                 .build();
     }
 
@@ -35,6 +39,54 @@ class RunProgressEventRepositoryTest {
 
         assertThat(all).extracting(RunProgressEventEntity::getSeq).containsExactly(1L, 2L, 3L);
         assertThat(after).extracting(RunProgressEventEntity::getSeq).containsExactly(2L, 3L);
+    }
+
+    /**
+     * Issue #103: a row is an observation of a part, so two observations of ONE
+     * growing part must both be stored, both carry the same part_id, and both come
+     * back in seq order — the REST replay hands the client the whole growth and the
+     * client collapses it. A repository that overwrote the earlier row would make the
+     * persisted backlog disagree with what the live stream showed.
+     */
+    @Test
+    void successiveObservationsOfOnePartRoundTripWithTheirIdentityAndOrder() {
+        UUID runId = UUID.randomUUID();
+        repository.saveAll(List.of(
+                RunProgressEventEntity.builder().id(UUID.randomUUID()).runId(runId)
+                        .agentId(UUID.randomUUID()).iteration(1).kind("ANSWER").seq(1L)
+                        .content("Consensus needs").partId("prt_1").createdAt(Instant.now()).build(),
+                RunProgressEventEntity.builder().id(UUID.randomUUID()).runId(runId)
+                        .agentId(UUID.randomUUID()).iteration(1).kind("ANSWER").seq(2L)
+                        .content("Consensus needs a majority.").partId("prt_1")
+                        .createdAt(Instant.now()).build(),
+                entry(runId, 3, "TOOL_RESULT", "prt_2")));
+
+        List<RunProgressEventEntity> backlog = repository.findByRunIdOrderBySeqAsc(runId);
+
+        assertThat(backlog).extracting(RunProgressEventEntity::getPartId)
+                .containsExactly("prt_1", "prt_1", "prt_2");
+        assertThat(backlog).extracting(RunProgressEventEntity::getSeq)
+                .containsExactly(1L, 2L, 3L);
+        assertThat(backlog.get(1).getContent()).isEqualTo("Consensus needs a majority.");
+        assertThat(repository.findByRunIdAndSeqAfterOrderBySeqAsc(runId, 1L))
+                .extracting(RunProgressEventEntity::getPartId)
+                .as("an incremental replay from a watermark still names the part")
+                .containsExactly("prt_1", "prt_2");
+    }
+
+    /**
+     * part_id is nullable by contract (V74): a row written before the column existed
+     * and a row from a core that reports no part id both read back as NULL, so
+     * historical runs replay with seq as their only identity.
+     */
+    @Test
+    void aRowWithNoPartIdPersistsAndReadsBackNull() {
+        UUID runId = UUID.randomUUID();
+        repository.save(entry(runId, 1, "THINKING"));
+
+        assertThat(repository.findByRunIdOrderBySeqAsc(runId))
+                .extracting(RunProgressEventEntity::getPartId)
+                .containsOnlyNulls();
     }
 
     /**

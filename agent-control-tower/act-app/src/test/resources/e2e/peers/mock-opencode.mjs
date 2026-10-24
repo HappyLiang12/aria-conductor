@@ -136,6 +136,22 @@ function assistantMessage({ text = 'pong', error = null, tokens = undefined, mod
   };
 }
 
+/**
+ * The stored message as the LIST route serves it: every part gets a stable id, so a
+ * poller can tell which part it is looking at. The id is derived from the message id
+ * and the part's position, which is what makes it stable across polls -- the progress
+ * pump compares a part's identity between two polls to decide whether the part grew
+ * (issue #103), and an id that changed each poll would read as a brand-new part every
+ * time. A part that already carries an id keeps it.
+ */
+function withPartIds(message) {
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  return {
+    ...message,
+    parts: parts.map((part, index) => (part?.id ? part : { id: `${message.info.id}-part-${index}`, ...part })),
+  };
+}
+
 /** Text parts of a message request, joined the way the native envelope concatenates them. */
 function requestText(body) {
   return (Array.isArray(body?.parts) ? body.parts : [])
@@ -506,7 +522,14 @@ const server = createServer(async (request, response) => {
         return;
       }
       if (request.method === 'GET') {
-        json(response, 200, messages);
+        // The poller's view: a stored message's parts are addressable, so each one
+        // carries the id the progress pump uses as its part identity (issue #103 --
+        // a row is an observation of a part, which is only sayable if the listing
+        // names the part). The POST response below keeps the recorded envelope
+        // shape exactly as the 1.14.31 fixture has it; only the listing gains the
+        // identity, because the recorded turn is the response, while the pump reads
+        // the list.
+        json(response, 200, messages.map(withPartIds));
         return;
       }
       if (request.method !== 'POST') {

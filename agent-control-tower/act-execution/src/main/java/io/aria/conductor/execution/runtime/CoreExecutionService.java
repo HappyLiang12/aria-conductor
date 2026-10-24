@@ -1271,8 +1271,14 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * {@link RunProgressEvent} the persistence/broadcast listener consumes. A
      * malformed payload, an unknown kind or a non-positive seq is logged and
      * dropped: progress is observability, and it never breaks or fails the run.
-     * seq is the dashboard's dedupe key and the REST replay order, so seq 0 (a
+     * seq is the dashboard's dedupe fallback and the REST replay order, so seq 0 (a
      * missing member) is not a usable identity.
+     *
+     * <p>The payload's {@code partId} is carried through untouched: a row is an
+     * observation of one part, and several observations of one growing part share that
+     * id while their seq increases, so the id must survive the mapping for the consumer
+     * to merge them instead of appending duplicates. A core that reported no id yields
+     * a null partId, never an invented one.
      *
      * <p>A fragment that reaches this producer after the run's state settled ({@link
      * #isRunSettled}) is dropped here: progress describes a live run, and persisting or
@@ -1319,7 +1325,10 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                 payload.path("iteration").asInt(0), kind,
                 payload.hasNonNull("content") ? payload.path("content").asText() : "",
                 payload.hasNonNull("toolName") ? payload.path("toolName").asText() : null,
-                seq));
+                seq,
+                // Which part this observation is of; null when the core reported none,
+                // in which case seq stays the only identity the consumer has.
+                payload.hasNonNull("partId") ? payload.path("partId").asText() : null));
     }
 
     /**

@@ -15,8 +15,29 @@ import java.util.function.Consumer;
 /**
  * Progress pump for a run-owned OpenCode session: while the prompt blocks on
  * the synchronous {@code sendPrompt}, this virtual thread polls
- * {@code GET /session/:id/message} and streams NEW parts so the dashboard can
- * watch the run think and act in (near) real time.
+ * {@code GET /session/:id/message} and streams the assistant's parts so the
+ * dashboard can watch the run think and act in (near) real time.
+ *
+ * <p><strong>A row is an observation of a part, and the part is the identity.</strong>
+ * The opencode message list grows a part <em>in place</em>: one text part whose
+ * {@code text} gets longer, one tool part whose {@code state.output} only arrives when
+ * the tool finishes. A watermark of part <em>counts</em> therefore emitted such a part
+ * once — with whatever it held at that poll — and dropped every later growth, so a long
+ * answer stayed half-shown until {@code run.completed} (issue #103). The pump now keeps
+ * one tracked entry per part and re-emits it when it changes.
+ *
+ * <p>Emit policy (what bounds the row volume):
+ * <ul>
+ *   <li>one part produces at most one observation per poll, and only when its
+ *       observed state (type, text, tool name, status, output) differs from the state
+ *       last streamed for it — unchanged content never re-emits, so a run that thinks
+ *       for twenty polls at the 2s default still costs one row;</li>
+ *   <li>a part that reached its final status is streamed once more at that status, so
+ *       the row the operator keeps is the finished one;</li>
+ *   <li>a re-emission carries the SAME {@code partId} with a strictly greater {@code
+ *       seq}: {@code seq} is the order of observations, never a part counter, and the
+ *       consumer merges on {@code partId}.</li>
+ * </ul>
  *
  * <p>Safety contract:
  * <ul>
@@ -28,13 +49,13 @@ import java.util.function.Consumer;
  *       polls is a stalled progress stream and raises exactly one WARN (runId,
  *       session, last cause, current backoff) plus a countable signal; a
  *       successful poll re-arms it, so a later stall warns again;</li>
- *   <li>an empty snapshot is never a shrink: it neither resets the watermark
- *       nor replays parts;</li>
+ *   <li>an empty snapshot is never a shrink: it neither resets the tracked parts
+ *       nor replays them;</li>
  *   <li>a real snapshot shrink replays at most the latest 10 parts;</li>
  *   <li>sink exceptions are swallowed — the pump survives;</li>
  *   <li>only assistant activity is streamed: a message whose {@code info.role}
  *       is not {@code assistant} (the operator's own user turn included) produces
- *       no fragment, while its parts still advance the watermark so it is never
+ *       no fragment, while its parts are still tracked so they are never
  *       reconsidered;</li>
  *   <li>a part that carries nothing an operator can read is never emitted: a
  *       blank reasoning/text part is dropped, and the {@code step-start} /
@@ -44,17 +65,39 @@ import java.util.function.Consumer;
  *       the model's reply is never labelled its thinking;</li>
  *   <li>consecutive THINKING parts within one poll batch are coalesced into a
  *       single fragment (last wins); ANSWER, TOOL_* and STATUS fragments are
- *       never coalesced;</li>
- *   <li>the part watermark and seq live in a session-scoped
- *       {@link ProgressCursor} and are read-modified under one monitor, so
- *       consecutive prompts of one native session neither replay an earlier
- *       turn, restart seq at 1, nor interleave a baseline seed into a diff;</li>
+ *       never coalesced; a coalesced-away part is still tracked, so it does not
+ *       reappear on the next poll;</li>
+ *   <li>the part tracking and seq live in a session-scoped {@link ProgressCursor}
+ *       and are read-modified under one monitor, so consecutive prompts of one
+ *       native session neither replay an earlier turn, restart seq at 1, nor
+ *       interleave a baseline seed into a diff;</li>
  *   <li>seq is monotonic across batches;</li>
  *   <li>{@link #stop()} is idempotent, halts emission, and joins the worker
  *       within a bounded budget so the cursor is settled when it returns; the
  *       sink is never called under the emission lock, so a slow persistence
- *       write costs the halt at most that budget.</li>
+ *       write costs the halt at most that budget;</li>
+ *   <li>{@link #drain()} performs at most {@value #DRAIN_ATTEMPTS} reads, emits
+ *       through this same part-keyed cursor and sink (a part already streamed at
+ *       its final content is not streamed twice), stops as soon as the turn's
+ *       assistant message carries no unfinished text-bearing part, and returns
+ *       instead of becoming a second polling loop;</li>
+ *   <li>{@link #drain()} on a halted (or never started) pump performs no read at
+ *       all and emits nothing: a cancelled turn stays silent, which is a #111
+ *       acceptance rule, not a nice-to-have;</li>
+ *   <li>{@link #drain()} never throws: a degraded attempt is retried inside the
+ *       same bound and does not feed the poll loop's stall counters, because those
+ *       count consecutive LOOP polls.</li>
  * </ul>
+ *
+ * <p><strong>What the reviewed core actually does (opencode 1.18.15, live HOST and
+ * SANDBOX probes).</strong> {@code GET /session/:id/message} is NOT a token stream.
+ * While the synchronous prompt is in flight the assistant message appears first with
+ * zero parts, then as a skeleton whose reasoning part carries an empty {@code text};
+ * that blank stayed blank for seven consecutive polls and then jumped in ONE step to
+ * the finished 5 594-character part. The assistant {@code text} part only becomes
+ * final at/after the {@code POST /message} returns. So the live polls can legitimately
+ * see nothing readable, and {@link #drain()} exists to read once more at that moment —
+ * it is the reason a HOST turn costs a handful of rows rather than one row per token.
  *
  * <p>The pump publishes fragments, not domain events: the owning session turns
  * a fragment into one {@code opencode.progress} CoreEvent, so the run identity
@@ -94,43 +137,63 @@ public class CoreProgressPump {
      */
     static final int DEGRADED_STALL_THRESHOLD = 3;
 
-    /** One streamed progress fragment; {@code iteration} is 0 while the core reports none. */
+    /**
+     * How many {@code listMessages} reads {@link #drain()} may make, at most. Two,
+     * justified by the observed cadence rather than tuned blind: the core writes a part
+     * in ONE step at its completion and the POST has already returned when the drain
+     * runs, so the first read normally lands the terminal content. When it does not, the
+     * single plausible cause is the list route being one write behind the finished turn
+     * (or that read degrading), and one retry covers exactly that lag. A third attempt
+     * would be a second polling loop, which this pump deliberately is not: its own loop
+     * already covers everything a longer wait could learn.
+     */
+    static final int DRAIN_ATTEMPTS = 2;
+
+    /**
+     * One streamed progress fragment. {@code partId} is the native identity of the
+     * part this fragment observed (null when the core reported none, in which case
+     * {@code seq} is the only identity a consumer has); {@code iteration} is 0 while
+     * the core reports none.
+     */
     public record ProgressFragment(RunProgressEvent.Kind kind, String content, String toolName,
-            long seq, int iteration) {
+            long seq, int iteration, String partId) {
     }
 
     /**
-     * Session-scoped progress cursor. One instance is shared by the pumps of
-     * consecutive prompts of the same native session: the part watermark stops
-     * an earlier turn from being re-emitted, and the seq keeps increasing so the
-     * dashboard's (runId, seq) dedupe key never collides. A pump never clears
-     * it; a new session starts with a fresh cursor.
+     * Session-scoped progress cursor: the parts already streamed and the seq handed
+     * out. One instance is shared by the pumps of consecutive prompts of the same
+     * native session, so the tracked parts stop an earlier turn (or an earlier
+     * snapshot of the same part) from being re-emitted and the seq keeps increasing so
+     * the dashboard's (runId, seq) dedupe key never collides. A pump never clears it;
+     * a new session starts with a fresh cursor.
      *
-     * <p>The watermark is a plain list guarded by this instance's monitor: every
-     * writer (a pump's diff, a later prompt's baseline seed) holds it for the
-     * whole read-modify-write, so the two can never interleave into a hybrid
-     * watermark.
+     * <p>State is one {@link PartRecord} per part, in snapshot order, grouped by the
+     * message that carries it: the group list is what makes a real snapshot shrink
+     * detectable, and the per-part signature is what makes growth visible. Every
+     * writer (a pump's diff, a later prompt's baseline seed) holds this instance's
+     * monitor for the whole read-modify-write, so the two can never interleave into a
+     * hybrid view.
      */
     public static final class ProgressCursor {
-        private final List<Integer> watermark = new ArrayList<>();
+        private final List<List<PartRecord>> tracks = new ArrayList<>();
         private final AtomicLong seq = new AtomicLong();
 
         /**
-         * Seeds the watermark from a pre-prompt baseline snapshot. Called before
+         * Seeds the tracked parts from a pre-prompt baseline snapshot. Called before
          * the prompt's pump starts, so a turn the previous pump never observed
          * (a very fast turn, or a first poll that answered before the assistant
          * message was listed) is still known to the next prompt and is never
-         * replayed. A successful empty baseline cannot clear an existing
-         * watermark: an empty list before a prompt does not prove the native
-         * session forgot its earlier messages.
+         * replayed. A successful empty baseline cannot clear what is already tracked:
+         * an empty list before a prompt does not prove the native session forgot its
+         * earlier messages.
          */
         public synchronized void seedFrom(List<OpenCodeHttpClient.MessageSnapshot> baseline) {
-            if (baseline.isEmpty() && !watermark.isEmpty()) {
+            if (baseline.isEmpty() && !tracks.isEmpty()) {
                 return;
             }
-            watermark.clear();
+            tracks.clear();
             for (OpenCodeHttpClient.MessageSnapshot message : baseline) {
-                watermark.add(message.parts().size());
+                tracks.add(trackMessage(message));
             }
         }
 
@@ -139,10 +202,46 @@ public class CoreProgressPump {
             return seq.get();
         }
 
-        /** Read-only: how many messages the watermark currently tracks. */
-        synchronized int watermarkSize() {
-            return watermark.size();
+        /** Read-only: how many messages the cursor currently tracks. */
+        synchronized int trackedMessageCount() {
+            return tracks.size();
         }
+
+        /** Read-only: how many individual parts the cursor currently tracks. */
+        synchronized int trackedPartCount() {
+            return tracks.stream().mapToInt(List::size).sum();
+        }
+
+        /** Replaces one message's tracked parts with the snapshot's current state. */
+        private List<PartRecord> trackMessage(OpenCodeHttpClient.MessageSnapshot message) {
+            List<PartRecord> records = new ArrayList<>(message.parts().size());
+            for (OpenCodeHttpClient.PartSnapshot part : message.parts()) {
+                records.add(new PartRecord(part.id(), signatureOf(part)));
+            }
+            return records;
+        }
+    }
+
+    /**
+     * What the pump last saw of one part: its native id and the projection of every
+     * member the operator can read (type, text, tool name, status, output). Equal
+     * signature means the part says exactly what the pump already streamed, so it is
+     * not streamed again; a different signature — including a status that only changed
+     * because the part finished — is a new observation. The raw members are what a
+     * baseline seed records too, so a part the pump never emitted is still "known".
+     */
+    record PartRecord(String partId, String signature) {
+    }
+
+    /** The observable projection of one part; two parts stream alike iff this matches. */
+    private static String signatureOf(OpenCodeHttpClient.PartSnapshot part) {
+        return String.join("\u0000",
+                nullToEmpty(part.type()), nullToEmpty(part.text()), nullToEmpty(part.toolName()),
+                nullToEmpty(part.state()), nullToEmpty(part.output()));
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private final OpenCodeHttpClient client;
@@ -372,61 +471,83 @@ public class CoreProgressPump {
     }
 
     /**
-     * Diffs against the session cursor's watermark. The whole read-modify-write
-     * (watermark and seq) runs under the cursor monitor, so it cannot interleave
-     * with another writer of the same session cursor.
+     * Diffs against the session cursor's tracked parts. The whole read-modify-write
+     * (parts and seq) runs under the cursor monitor, so it cannot interleave with
+     * another writer of the same session cursor.
      */
     List<ProgressFragment> diff(List<OpenCodeHttpClient.MessageSnapshot> snaps) {
         synchronized (cursor) {
-            return diff(snaps, cursor.watermark);
+            return coalesce(observe(snaps, cursor.tracks));
         }
     }
 
     /**
-     * Diffs the snapshot against a per-message part watermark; returns fragments
-     * for the newly-seen parts of assistant messages only (blank text and turn
-     * markers skipped), with consecutive THINKING coalesced. Exposed
-     * package-private so the reset/replay cap is testable without timing.
+     * Compares the snapshot with the per-message part records and returns the
+     * un-numbered observations that are new: a part whose readable state changed, or
+     * that appeared at all, of an assistant message only (blank text and turn markers
+     * are skipped and burn no seq). Consecutive THINKING coalescing happens later, in
+     * {@link #coalesce}, within this one batch.
+     *
+     * <p>Every part examined is recorded, whether or not it was emitted: a
+     * non-assistant message is judged once and never reconsidered, a skipped part
+     * stays skipped until its own state changes, and a THINKING part that a later
+     * thinking part coalesced away does not reappear on the next poll. That is also
+     * what bounds the row volume — a part can add at most one row per poll, and only
+     * if it actually said something new.
      */
-    List<ProgressFragment> diff(List<OpenCodeHttpClient.MessageSnapshot> snaps, List<Integer> watermark) {
+    private List<ProgressFragment> observe(List<OpenCodeHttpClient.MessageSnapshot> snaps,
+            List<List<PartRecord>> tracks) {
         // An empty snapshot means either "no data yet" or a degraded poll — both
-        // are "no data", never a shrink, so a hiccup does not reset the
-        // watermark and replay already-emitted parts.
-        boolean reset = !snaps.isEmpty() && snaps.size() < watermark.size();
+        // are "no data", never a shrink, so a hiccup does not forget the tracked
+        // parts and replay what was already streamed.
+        boolean reset = !snaps.isEmpty() && snaps.size() < tracks.size();
         if (reset) {
-            watermark.clear();
+            tracks.clear();
         }
         List<ProgressFragment> candidates = new ArrayList<>();
         for (int mi = 0; mi < snaps.size(); mi++) {
             OpenCodeHttpClient.MessageSnapshot message = snaps.get(mi);
             List<OpenCodeHttpClient.PartSnapshot> parts = message.parts();
-            int seen = mi < watermark.size() ? watermark.get(mi) : 0;
+            List<PartRecord> previous = mi < tracks.size() ? tracks.get(mi) : List.of();
             boolean assistant = isAssistantActivity(message);
-            if (parts.size() > seen && !assistant) {
+            if (parts.size() > previous.size() && !assistant) {
                 log.debug("OpenCode progress pump of run {} skips message {} of role '{}':"
                         + " only assistant activity is progress", runId, message.id(), message.role());
             }
-            if (assistant) {
-                for (int pi = seen; pi < parts.size(); pi++) {
-                    ProgressFragment fragment = toFragment(parts.get(pi));
-                    if (fragment != null) {
-                        candidates.add(fragment);
-                    }
+            List<PartRecord> records = new ArrayList<>(previous);
+            for (int pi = 0; pi < parts.size(); pi++) {
+                OpenCodeHttpClient.PartSnapshot part = parts.get(pi);
+                String signature = signatureOf(part);
+                PartRecord known = pi < records.size() ? records.get(pi) : null;
+                boolean changed = known == null
+                        || !signature.equals(known.signature())
+                        || !Objects.equals(part.id(), known.partId());
+                if (pi < records.size()) {
+                    records.set(pi, new PartRecord(part.id(), signature));
+                } else {
+                    records.add(new PartRecord(part.id(), signature));
+                }
+                if (!changed || !assistant) {
+                    // Unchanged content, or a part of a message that is not the
+                    // assistant's: tracked, never streamed.
+                    continue;
+                }
+                ProgressFragment fragment = toFragment(part);
+                if (fragment != null) {
+                    candidates.add(fragment);
                 }
             }
-            // The watermark tracks every message's parts, a skipped one included,
-            // so a non-assistant message is judged once and never reconsidered on
-            // a later poll.
-            while (watermark.size() <= mi) {
-                watermark.add(0);
+            if (mi < tracks.size()) {
+                tracks.set(mi, records);
+            } else {
+                tracks.add(records);
             }
-            watermark.set(mi, parts.size());
         }
         if (reset && candidates.size() > RESET_REPLAY_LIMIT) {
             candidates = new ArrayList<>(
                     candidates.subList(candidates.size() - RESET_REPLAY_LIMIT, candidates.size()));
         }
-        return coalesce(candidates);
+        return candidates;
     }
 
     /**
@@ -469,13 +590,20 @@ public class CoreProgressPump {
 
     private ProgressFragment assignSeq(ProgressFragment fragment) {
         return new ProgressFragment(fragment.kind(), fragment.content(), fragment.toolName(),
-                cursor.seq.incrementAndGet(), fragment.iteration());
+                cursor.seq.incrementAndGet(), fragment.iteration(), fragment.partId());
     }
 
     /**
-     * Maps one part onto a fragment, or {@code null} when the part carries nothing
-     * an operator can read and is skipped. A skipped part still advances the
-     * watermark (it is never reconsidered) and burns no seq.
+     * Maps one part onto a fragment carrying that part's native id, or {@code null}
+     * when the part carries nothing an operator can read and is skipped. A skipped
+     * part is still tracked (it is never reconsidered until its own state changes) and
+     * burns no seq.
+     *
+     * <p>The part id is the consumer's merge key: the same part growing between two
+     * polls yields two fragments with this same id and different seq, and the drawer
+     * updates one line instead of appending a second one. A core that reports no id
+     * yields a null id and the consumer falls back to seq — the pump does not invent an
+     * identity the wire never sent.
      *
      * <p>Skipped by design:
      * <ul>
@@ -494,9 +622,9 @@ public class CoreProgressPump {
         String type = p.type() != null ? p.type() : "";
         return switch (type) {
             case "reasoning" -> blank(p.text()) ? null
-                    : new ProgressFragment(RunProgressEvent.Kind.THINKING, p.text(), null, 0, 0);
+                    : new ProgressFragment(RunProgressEvent.Kind.THINKING, p.text(), null, 0, 0, p.id());
             case "text" -> blank(p.text()) ? null
-                    : new ProgressFragment(RunProgressEvent.Kind.ANSWER, p.text(), null, 0, 0);
+                    : new ProgressFragment(RunProgressEvent.Kind.ANSWER, p.text(), null, 0, 0, p.id());
             case "tool" -> {
                 boolean completed = "completed".equals(p.state());
                 String content = "";
@@ -509,16 +637,105 @@ public class CoreProgressPump {
                 // the operator reads ("bash is running", "bash returned nothing").
                 yield new ProgressFragment(
                         completed ? RunProgressEvent.Kind.TOOL_RESULT : RunProgressEvent.Kind.TOOL_CALL,
-                        content, p.toolName(), 0, 0);
+                        content, p.toolName(), 0, 0, p.id());
             }
-            case "error" -> new ProgressFragment(RunProgressEvent.Kind.ERROR, p.text(), null, 0, 0);
+            case "error" ->
+                    new ProgressFragment(RunProgressEvent.Kind.ERROR, p.text(), null, 0, 0, p.id());
             default -> TURN_BOUNDARY_MARKERS.contains(type) ? null
-                    : new ProgressFragment(RunProgressEvent.Kind.STATUS, type, null, 0, 0);
+                    : new ProgressFragment(RunProgressEvent.Kind.STATUS, type, null, 0, 0, p.id());
         };
     }
 
     private static boolean blank(String text) {
         return text == null || text.isBlank();
+    }
+
+    /**
+     * One final, synchronous poll + diff + emit for the turn that just finished, called
+     * by the owning session after {@code POST /session/:id/message} returned and before
+     * {@link #stop()}.
+     *
+     * <p>Why it must exist: the reviewed core does not stream partials through the
+     * message list. It lists the assistant message as a skeleton (a reasoning part whose
+     * {@code text} is an empty string, seven polls running) and writes the finished part
+     * in one step, and the assistant {@code text} part becomes final only at/after the
+     * POST returns. The poll loop is asleep for part of that and is halted in the same
+     * {@code finally} the POST returns into, so the terminal parts are reliably missed —
+     * the live {@code PROGRESS rows=0} a real HOST turn produced at HEAD 1151df3d.
+     *
+     * <p>The drain is the same reader with the same state, not a second pipeline: it
+     * emits through {@link #diff} and the session cursor, so {@code seq} stays monotonic
+     * and a part already streamed at its final content produces no second row. It stops
+     * at the {@linkplain #DRAIN_ATTEMPTS bound} or as soon as the turn's assistant
+     * message holds nothing unfinished, whichever comes first, and it never throws: this
+     * is on the prompt's critical path, and progress is observability.
+     *
+     * <p>Deliberately a no-op once {@link #stop()} has halted the pump. A cancelled or
+     * failed turn is silent, which is issue #111's acceptance rule ("no progress rows
+     * after the halt"), and the session therefore calls this only on its success path.
+     */
+    public void drain() {
+        synchronized (emissionLock) {
+            if (!running) {
+                return;
+            }
+        }
+        try {
+            for (int attempt = 1; attempt <= DRAIN_ATTEMPTS; attempt++) {
+                OpenCodeHttpClient.MessageListResult result = client.listMessages(sessionId);
+                if (result.degraded()) {
+                    // The retry belongs to this same bounded attempt budget; the loop's
+                    // stall counters stay untouched (they count LOOP polls, and a drain
+                    // that cannot read is reported here rather than as a stalled stream).
+                    log.warn("OpenCode progress drain of run {} session {} could not read the"
+                            + " message list (attempt {}/{} of the terminal drain: {})",
+                            runId, sessionId, attempt, DRAIN_ATTEMPTS,
+                            result.cause() == null ? "unspecified" : result.cause());
+                    continue;
+                }
+                for (ProgressFragment fragment : diff(result.messages())) {
+                    emit(fragment);
+                }
+                if (terminalContentArrived(result.messages())) {
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("OpenCode progress drain of run {} failed (the run is unaffected): {}",
+                    runId, e.getMessage());
+        }
+    }
+
+    /**
+     * Whether the drain may stop early: the assistant message it is waiting for is listed
+     * and carries no unfinished text-bearing part. Unfinished here is the observed
+     * skeleton state — a reasoning or text part whose {@code text} is still blank, which
+     * the core replaces with the whole content in one write — and, before the turn's
+     * message appears at all, the absence of any assistant message.
+     *
+     * <p>A tool part is not part of this predicate on purpose: after a successful POST
+     * every tool of the turn has completed, and if the list is behind on a tool part the
+     * part-keyed cursor still streams its terminal output whenever it arrives, live or
+     * drained.
+     */
+    private static boolean terminalContentArrived(List<OpenCodeHttpClient.MessageSnapshot> snaps) {
+        OpenCodeHttpClient.MessageSnapshot turn = null;
+        for (OpenCodeHttpClient.MessageSnapshot message : snaps) {
+            if (isAssistantActivity(message)) {
+                turn = message;
+            }
+        }
+        if (turn == null) {
+            return false;
+        }
+        for (OpenCodeHttpClient.PartSnapshot part : turn.parts()) {
+            String type = part.type() == null ? "" : part.type();
+            boolean textBearing = "reasoning".equals(type) || "text".equals(type);
+            if (textBearing && blank(part.text())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

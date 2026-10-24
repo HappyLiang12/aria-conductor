@@ -44,9 +44,10 @@ import static org.mockito.Mockito.when;
 /**
  * The session's progress wiring, end to end against a controlled client: the
  * pump starts before the prompt, forwards each fragment as the exact
- * {@code opencode.progress} envelope, is stopped before the terminal result is
- * visible, survives failures, keeps the session-level seq/watermark across
- * prompts and never starts after {@link OpenCodeCoreSession#close()}.
+ * {@code opencode.progress} envelope, is drained on the success path and stopped
+ * before the terminal result is visible, survives failures, keeps the
+ * session-level seq and the tracked parts across prompts and never starts after
+ * {@link OpenCodeCoreSession#close()}.
  */
 class OpenCodeCoreSessionTest {
 
@@ -77,6 +78,105 @@ class OpenCodeCoreSessionTest {
     @AfterEach
     void tearDown() {
         session.close();
+    }
+
+    /**
+     * Lane E2, the live defect one layer above the pump: {@code POST /session/:id/message}
+     * is synchronous, and opencode 1.18.15 finalizes the assistant's text part only
+     * at/after that POST returns (probe: the POST returned at t+12.2s and the very next
+     * list showed text(len=1906,final)). The session stops the pump in the same finally
+     * the POST returns into, so without a terminal drain the turn's rows are
+     * {@code PROGRESS rows=0} — what the live QA scenario recorded at HEAD 1151df3d.
+     * The drain must therefore run after the send returns and before {@code stop()}, and
+     * its rows are ordered ahead of the answer envelope like any other progress.
+     */
+    @Test
+    void aSuccessfulPromptDrainsTheTerminalPartsTheLivePollsCouldNotSee() throws Exception {
+        AtomicInteger listCalls = new AtomicInteger();
+        CountDownLatch skeletonPolled = new CountDownLatch(1);
+        when(client.listMessages(SESSION)).thenAnswer(invocation -> {
+            int call = listCalls.incrementAndGet();
+            if (call == 1) {
+                return new OpenCodeHttpClient.MessageListResult(List.of(), false); // pre-prompt baseline
+            }
+            if (call == 2) {
+                // The observed skeleton: the turn marker and a reasoning part whose text
+                // is still empty. The pump tracks both and streams neither.
+                skeletonPolled.countDown();
+                return new OpenCodeHttpClient.MessageListResult(List.of(message("a1",
+                        part("s1", "step-start", null, null, null, null),
+                        part("r1", "reasoning", "", null, null, null))), false);
+            }
+            // The drain's fetch, after the POST returned: the one write landed.
+            return new OpenCodeHttpClient.MessageListResult(List.of(message("a1",
+                    part("s1", "step-start", null, null, null, null),
+                    part("r1", "reasoning", "outlining the essay", null, null, null),
+                    part("t1", "text", "Consensus needs a majority.", null, null, null))), false);
+        });
+        when(client.sendPrompt(eq(SESSION), any(), anyList(), any())).thenAnswer(invocation -> {
+            assertThat(skeletonPolled.await(5, TimeUnit.SECONDS)).isTrue();
+            return new OpenCodeHttpClient.MessageResult(
+                    "{\"info\":{\"id\":\"a1\"},\"parts\":[]}", "a1", "Consensus needs a majority.",
+                    1L, 1L, "efficient", null);
+        });
+
+        session.prompt(task("prompt"), this::record).toCompletableFuture().get(10, TimeUnit.SECONDS);
+
+        List<CoreEvent> progress = events.stream()
+                .filter(event -> "opencode.progress".equals(event.type()))
+                .toList();
+        assertThat(progress)
+                .as("without the terminal drain this is the live zero rows")
+                .hasSize(2);
+        JsonNode thinking = JSON.readTree(progress.get(0).payloadJson());
+        assertThat(thinking.path("kind").asText()).isEqualTo("THINKING");
+        assertThat(thinking.path("content").asText()).isEqualTo("outlining the essay");
+        assertThat(thinking.path("partId").asText()).isEqualTo("r1");
+        assertThat(thinking.path("seq").asLong()).isEqualTo(1L);
+        JsonNode answer = JSON.readTree(progress.get(1).payloadJson());
+        assertThat(answer.path("kind").asText()).isEqualTo("ANSWER");
+        assertThat(answer.path("content").asText()).isEqualTo("Consensus needs a majority.");
+        assertThat(answer.path("partId").asText()).isEqualTo("t1");
+        assertThat(answer.path("seq").asLong()).isEqualTo(2L);
+        assertThat(events).extracting(CoreEvent::type)
+                .containsExactly("opencode.progress", "opencode.progress", "opencode.message");
+        assertThat(listCalls.get())
+                .as("baseline, one live poll, one settled drain attempt")
+                .isEqualTo(3);
+    }
+
+    /**
+     * The asymmetry is the whole point: only a turn that ANSWERED has terminal content
+     * to recover. A failed or cancelled turn must not drain — that would re-open the
+     * #111 rule that a halted run produces nothing after the halt, and it would spend a
+     * fetch on a message list that has no finished answer in it.
+     */
+    @Test
+    void aFailedPromptDoesNotDrain() throws Exception {
+        AtomicInteger listCalls = new AtomicInteger();
+        CountDownLatch skeletonPolled = new CountDownLatch(1);
+        when(client.listMessages(SESSION)).thenAnswer(invocation -> {
+            if (listCalls.incrementAndGet() == 1) {
+                return new OpenCodeHttpClient.MessageListResult(List.of(), false); // pre-prompt baseline
+            }
+            skeletonPolled.countDown();
+            return new OpenCodeHttpClient.MessageListResult(List.of(message("a1",
+                    part("r1", "reasoning", "", null, null, null))), false);
+        });
+        when(client.sendPrompt(eq(SESSION), any(), anyList(), any())).thenAnswer(invocation -> {
+            assertThat(skeletonPolled.await(5, TimeUnit.SECONDS)).isTrue();
+            throw new TaskExecutionException(
+                    TaskExecutionException.Cause.PROVIDER_ERROR, "the core refused the prompt");
+        });
+
+        CompletionStage<CoreResult> stage = session.prompt(task("prompt"), this::record);
+
+        assertThatThrownBy(() -> stage.toCompletableFuture().get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class);
+        assertThat(events).isEmpty();
+        assertThat(listCalls.get())
+                .as("baseline plus the one live poll: the failure path spends no drain fetch")
+                .isEqualTo(2);
     }
 
     @Test
@@ -289,8 +389,9 @@ class OpenCodeCoreSessionTest {
             if (call == 1) {
                 return new OpenCodeHttpClient.MessageListResult(List.of(), false); // pre-prompt baseline (turn 1)
             }
-            if (call <= 3) {
-                // turn 1's pump poll and turn 2's pre-prompt baseline
+            if (call <= 4) {
+                // turn 1's pump poll, turn 1's terminal drain, turn 2's pre-prompt
+                // baseline: the list still holds only the first turn
                 return new OpenCodeHttpClient.MessageListResult(
                         List.of(message("m1", part("p1", "reasoning", "first", null, null, null))), false);
             }
@@ -328,15 +429,20 @@ class OpenCodeCoreSessionTest {
         assertThat(events).extracting(CoreEvent::type)
                 .containsExactly("opencode.progress", "opencode.message",
                         "opencode.progress", "opencode.message");
-        // Two pre-prompt baselines and one poll per turn; no extra replay poll.
-        assertThat(listCalls.get()).isEqualTo(4);
+        // Two pre-prompt baselines, one poll and one settled drain attempt per turn:
+        // the drain is bounded to a single fetch when the terminal content is already
+        // what the pump streamed, so a turn costs three reads, not four.
+        assertThat(listCalls.get()).isEqualTo(6);
     }
 
     /**
      * The previous turn's pump may stop before it ever observes the assistant
      * message (a very fast turn, or a first poll that raced the server's
-     * message list). The pre-prompt baseline seed must still stop the second
-     * prompt from replaying that turn and restarting seq at 1.
+     * message list) — and with the terminal drain, the whole bounded fetch of that
+     * drain can race it too: the list route is the only source, so a core that has not
+     * published the finished turn is simply not readable yet. The pre-prompt baseline
+     * seed of the NEXT prompt is what then still stops a replay, and seq still does not
+     * restart at 1.
      */
     @Test
     void aSecondPromptSeededFromTheBaselineDoesNotReplayATurnTheFirstPumpNeverSaw() throws Exception {
@@ -344,14 +450,15 @@ class OpenCodeCoreSessionTest {
         CountDownLatch firstPumpPolled = new CountDownLatch(1);
         when(client.listMessages(SESSION)).thenAnswer(invocation -> {
             int call = listCalls.incrementAndGet();
-            if (call == 1 || call == 2) {
-                // turn 1: empty pre-prompt baseline and an empty pump poll
+            if (call <= 4) {
+                // turn 1: empty pre-prompt baseline, empty pump poll and both bounded
+                // drain attempts — the finished turn is not listed yet
                 if (call == 2) {
                     firstPumpPolled.countDown();
                 }
                 return new OpenCodeHttpClient.MessageListResult(List.of(), false);
             }
-            if (call == 3) {
+            if (call == 5) {
                 // turn 2's pre-prompt baseline: turn 1 is now complete
                 return new OpenCodeHttpClient.MessageListResult(
                         List.of(message("m1", part("p1", "reasoning", "first", null, null, null))), false);
@@ -382,7 +489,9 @@ class OpenCodeCoreSessionTest {
         JsonNode payload = JSON.readTree(progress.get(0).payloadJson());
         assertThat(payload.path("content").asText()).isEqualTo("second");
         assertThat(payload.path("seq").asLong()).isEqualTo(1L);
-        assertThat(listCalls.get()).isEqualTo(4);
+        // Turn 1 spent its baseline, one poll and both bounded drain attempts on an
+        // empty list; turn 2 spends a baseline, a poll and one settled drain attempt.
+        assertThat(listCalls.get()).isEqualTo(7);
     }
 
     @Test

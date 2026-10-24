@@ -49,13 +49,22 @@ import java.util.function.Consumer;
  *       one {@link CoreEvent}, so the governance layer keeps the exact wire
  *       shape.</li>
  *   <li>While the prompt runs, a {@link CoreProgressPump} polls the recorded
- *       message-list route and forwards new parts as {@code opencode.progress}
- *       CoreEvents; the cursor is seeded from the pre-prompt message list and
- *       the pump is stopped on every completion path (success, failure,
+ *       message-list route and forwards each part's new observations as
+ *       {@code opencode.progress} CoreEvents (a part that grew since the last poll is
+ *       a new observation of the SAME part, so an answer streaming in place keeps
+ *       reaching the dashboard); the cursor is seeded from the pre-prompt message list
+ *       and the pump is stopped on every completion path (success, failure,
  *       cancellation) and on {@link #close()}. The stop joins the poll worker
  *       within a bounded budget, so the run's terminal result never waits longer
  *       than that budget on progress observability, and the turn's HTTP timeout
  *       is measured after the baseline seed, not before it.</li>
+ *   <li>The SUCCESS path drains that pump once ({@link CoreProgressPump#drain()})
+ *       after {@code sendPrompt} returned and before stopping it. This asymmetry is
+ *       the point: the reviewed core writes a part's whole content in ONE step and
+ *       finalizes the assistant text part only at/after the POST returns, so without
+ *       that final read a real HOST turn persisted {@code PROGRESS rows=0}. Failure,
+ *       cancellation and {@link #close()} do not drain -- a turn that did not answer
+ *       has nothing to recover, and a halted run must stay silent (#111).</li>
  *   <li>Cancel uses the recorded abort route. Its boolean answer is an
  *       acknowledgement, not proof of a stopped core (the committed
  *       non-cooperative fixture answers {@code true} while ignoring the abort),
@@ -83,9 +92,10 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
     private final String sessionId;
     private final String model;
     /**
-     * Session-scoped progress cursor: the watermark and seq survive across
+     * Session-scoped progress cursor: the tracked parts and the seq survive across
      * prompts of this native session, so a continuation neither replays the
-     * previous turn nor restarts seq at 1.
+     * previous turn (nor an earlier snapshot of one still-listed part) nor
+     * restarts seq at 1.
      */
     private final CoreProgressPump.ProgressCursor progressCursor = new CoreProgressPump.ProgressCursor();
     /** Guards the closed flag and the pump assignment made by the prompt thread. */
@@ -199,6 +209,12 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
                 }
                 OpenCodeHttpClient.MessageResult message =
                         client.sendPrompt(sessionId, systemPrompt, parts, turnTimeout);
+                // The success path only, and before the halt: opencode 1.18.15 finalizes
+                // the assistant's text part at/after this POST returns, so the terminal
+                // parts of the turn exist only in a read taken now. A failed or cancelled
+                // turn deliberately does not drain -- it has no finished answer to recover,
+                // and issue #111 requires a halted run to stay silent.
+                pump.drain();
                 events.accept(new CoreEvent("opencode.message", spec.runId(), sessionId, null,
                         message.rawJson()));
                 result = new CoreResult(sessionId, message.finalOutput(),
@@ -235,6 +251,9 @@ public final class OpenCodeCoreSession implements CoreSession, AutoCloseable {
         payload.put("toolName", fragment.toolName());
         payload.put("seq", fragment.seq());
         payload.put("iteration", fragment.iteration());
+        // The part this observation is of: null when the core reported no id, which
+        // the producer keeps as an explicit JSON null rather than a missing member.
+        payload.put("partId", fragment.partId());
         return payload.toString();
     }
 

@@ -21,9 +21,19 @@ interface StreamLine {
   ts: string;
   tag: 'read' | 'edit' | 'run' | 'ok' | 'warn' | 'err' | 'think' | 'answer' | 'tool_call' | 'tool_result';
   msg: string;
-  // run.progress watermark (REST backlog rows and live WS frames alike) used to
-  // dedupe backlog replay against lines already folded into the stream.
+  // run.progress identity (REST backlog rows and live WS frames alike): `seq` used to
+  // dedupe a re-delivered frame against the backlog, and stays the fallback identity
+  // for a row with no part id.
   seq?: number;
+  // The part this line observes. A growing answer arrives as several observations with
+  // one partId and increasing seq, and they all belong to THIS line (issue #103).
+  partId?: string | null;
+  // The run the observation belongs to: two runs of one agent must never merge their
+  // parts into one line, so the part key is always run-scoped.
+  runId?: string;
+  // The merge key of a progress line (see progressKeyOf). Present ONLY on progress
+  // lines, which is what keeps a lifecycle line out of the part merge.
+  progressKey?: string;
   detail?: {
     toolName?: string;
     toolArgs?: string;
@@ -82,17 +92,28 @@ function truncate(text: string): string {
 }
 
 function progressToEntry(
-  p: { kind: string; content: string; toolName?: string | null; createdAt?: string; seq?: number },
+  p: {
+    kind: string; content: string; toolName?: string | null; createdAt?: string;
+    seq?: number; partId?: string | null; runId?: string; id?: string;
+  },
 ): StreamLine {
   const kind = String(p.kind ?? '');
   const content = String(p.content ?? '');
   const tag: StreamLine['tag'] = PROGRESS_TAG[kind] ?? 'warn';
   return {
-    id: `prog-${p.seq ?? 'na'}-${p.createdAt ?? Math.random().toString(36).slice(2, 8)}`,
+    // A later observation of one part keeps THIS element (the merge below reuses the
+    // id of the line it replaces), so the React key never changes mid-answer and the
+    // line cannot flicker to empty or remount.
+    id: p.id ?? (p.partId
+      ? `prog-part-${p.runId ?? ''}-${p.partId}`
+      : `prog-${p.seq ?? 'na'}-${p.createdAt ?? Math.random().toString(36).slice(2, 8)}`),
     ts: fmtTime(p.createdAt || new Date()),
     tag,
     msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
     seq: p.seq,
+    partId: p.partId ?? null,
+    runId: p.runId,
+    progressKey: progressKeyOf(p),
     detail: {
       thinking: kind === 'THINKING' && content ? truncate(content) : undefined,
       answer: kind === 'ANSWER' && content ? truncate(content) : undefined,
@@ -100,6 +121,59 @@ function progressToEntry(
       toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
     },
   };
+}
+
+/**
+ * The identity a progress line is merged on: the part it observed, and — only when the
+ * core reported no part id (a pre-V74 row, or a part the wire never named) — its seq.
+ * Always run-scoped, so two runs of one agent never merge into one line.
+ */
+function progressKeyOf(p: { runId?: string; partId?: string | null; seq?: number }): string {
+  const run = p.runId ?? '';
+  return p.partId ? `part:${run}:${p.partId}` : `seq:${run}:${p.seq ?? 'na'}`;
+}
+
+/**
+ * Merge progress observations into the stream, in place. Issue #103: the pump re-emits
+ * a part when its content changes or it finishes, so one answer arrives as several
+ * observations sharing a `partId` with increasing `seq`. They belong to ONE line: the
+ * newer observation replaces the older content and keeps the position (and the React
+ * key) of the first time that part appeared. An observation that is not newer than the
+ * line already on screen changes nothing, so a re-delivered frame can neither duplicate
+ * nor blank a line.
+ *
+ * Only lines carrying a `progressKey` are ever matched, so a lifecycle line can never
+ * be mistaken for an observation of a part.
+ *
+ * `placement` says where a part that is not on screen yet goes: a live frame appends at
+ * the tail, a replayed backlog row prepends, because it is older history.
+ */
+function mergeProgressLines(
+  prev: StreamLine[],
+  incoming: StreamLine[],
+  placement: 'append' | 'prepend',
+): StreamLine[] {
+  const merged = prev.slice();
+  const added: StreamLine[] = [];
+  const keyOf = (l: StreamLine) => l.progressKey;
+  for (const line of incoming) {
+    const key = keyOf(line);
+    const at = merged.findIndex((l) => key && keyOf(l) === key);
+    if (at < 0) {
+      const dupInBatch = added.findIndex((l) => key && keyOf(l) === key);
+      if (dupInBatch < 0) {
+        added.push(line);
+      } else {
+        // Two observations of one part inside the same batch: newest wins, in place.
+        added[dupInBatch] = { ...line, id: added[dupInBatch].id };
+      }
+      continue;
+    }
+    if ((line.seq ?? 0) > (merged[at].seq ?? 0)) {
+      merged[at] = { ...line, id: merged[at].id };
+    }
+  }
+  return (placement === 'append' ? [...merged, ...added] : [...added, ...merged]).slice(-60);
 }
 
 function pickAgentRuns(runs: Run[] | undefined, agentId: string | null): Run[] {
@@ -211,19 +285,16 @@ export function AgentDrawer() {
       .then((backlog) => {
         if (cancelled) return;
         // Review fix: MERGE, never replace — live frames folded while the fetch
-        // was in flight must survive backlog resolution. Prepend backlog entries
-        // whose seq is not already on screen; backlog order preserved first.
-        // On reopen the same rows are already on screen, so they dedupe out.
-        setStream((prev) => {
-          const have = new Set(
-            prev.map((l) => l.seq).filter((s): s is number => s != null)
-          );
-          const fresh = backlog
-            .map((p) => progressToEntry(p))
-            .filter((b) => b.seq == null || !have.has(b.seq));
-          // Review fix: merged result obeys the same 60-line window as the live fold.
-          return [...fresh, ...prev].slice(-60);
-        });
+        // was in flight must survive backlog resolution. Issue #103: the backlog is
+        // the ordered log of OBSERVATIONS, so several rows can name one part; the
+        // merge collapses them into that part's line and puts a part that is not on
+        // screen yet in front of the live tail (it is older history). On reopen the
+        // same rows are already on screen with the same seq, so they change nothing.
+        setStream((prev) => mergeProgressLines(
+          prev,
+          backlog.map((p) => progressToEntry(p)),
+          'prepend',
+        ));
         // Re-arm the runId+seq watermark so subsequent live frames dedupe
         // against the replayed backlog rows too (existing S11 pattern).
         backlog.forEach((p) => markSeqSeen(rk, p.seq));
@@ -282,9 +353,15 @@ export function AgentDrawer() {
           content: String(payload.content ?? ''),
           toolName: (payload.toolName as string) ?? undefined,
           seq,
+          // The part this frame observed. Without it a grown answer would append a
+          // second line; with it the frame replaces its own line (issue #103).
+          partId: (payload.partId as string | undefined) ?? null,
+          runId: runKey || undefined,
           createdAt: event.timestamp,
         });
-        setStream((prev) => [...prev.slice(-59), pLn]);
+        // Issue #103: a later observation of a part already on screen updates that
+        // line in place, keeping where the part first appeared; a new part appends.
+        setStream((prev) => mergeProgressLines(prev, [pLn], 'append'));
         return;
       }
 

@@ -36,6 +36,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
@@ -105,6 +106,115 @@ class CoreProgressPumpTest {
 
     private static int requestsToThePumpPath() {
         return findAll(getRequestedFor(urlEqualTo(PATH))).size();
+    }
+
+    /**
+     * #103 growth defect (a), the real wire shape: opencode keeps ONE text part on
+     * the assistant message and grows its {@code text} member in place, so the
+     * part's index never moves. A watermark of part counts emits that part once,
+     * with whatever it held at that poll, and every later growth is dropped -- the
+     * operator watches half an answer until {@code run.completed}. A progress row is
+     * an observation of a part, so a grown part is a new observation.
+     */
+    @Test
+    void aTextPartThatGrowsBetweenPollsIsStreamedAgainWithTheGrowthInsteadOfFreezing() {
+        String opening = "Distributed consensus begins with Raft,";
+        String complete = "Distributed consensus begins with Raft, and Raft needs a majority"
+                + " of voters to commit an entry before it is durable.";
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("growth")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"" + opening + "\" }")))
+                .willSetStateTo("grown"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("growth")
+                .whenScenarioStateIs("grown")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"" + complete + "\" }"))));
+
+        startPump();
+        // Poll 3 is only issued after poll 2's batch went through the diff, so
+        // seeing it proves the grown snapshot was compared against the first one.
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 3);
+        pump.stop();
+
+        assertThat(events)
+                .as("the same part's growth is a new observation, not a dropped one")
+                .hasSize(2);
+        assertThat(events.get(0).content()).isEqualTo(opening);
+        assertThat(events.get(1).content())
+                .as("the last observation holds the full text")
+                .isEqualTo(complete);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::partId)
+                .as("one part grown between polls is observed twice under one identity")
+                .containsExactly("t1", "t1");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
+                .containsExactly(1L, 2L);
+        assertThat(events).allSatisfy(e -> assertThat(e.kind()).isEqualTo(RunProgressEvent.Kind.ANSWER));
+    }
+
+    /**
+     * #103 growth defect, negative half (b): a part whose content did not change is
+     * re-listed on every poll and must not re-emit. Emitting on change rather than
+     * on index movement only bounds row volume if this stays true.
+     */
+    @Test
+    void anUnchangedPartIsNotReEmittedOnLaterPolls() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"steady answer\" },"
+                                + "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"steady thought\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 4);
+        pump.stop();
+
+        assertThat(events)
+                .as("many polls of an unchanged snapshot produce one observation per part")
+                .hasSize(2);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::content)
+                .containsExactly("steady answer", "steady thought");
+    }
+
+    /**
+     * #103 growth defect (c): a tool part is listed while running and its
+     * {@code state.output} only arrives when the tool finishes -- the part count does
+     * not move, so the stale "running" row is all the operator ever sees. The
+     * part's terminal status is a new observation of the same part.
+     */
+    @Test
+    void aToolPartWhoseOutputOnlyArrivesOnCompletionIsStreamedAgainAtCompletion() {
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("tool")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"call1\", \"type\": \"tool\", \"tool\": \"bash\","
+                                + " \"state\": { \"status\": \"running\" } }")))
+                .willSetStateTo("completed"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("tool")
+                .whenScenarioStateIs("completed")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"call1\", \"type\": \"tool\", \"tool\": \"bash\","
+                                + " \"state\": { \"status\": \"completed\", \"output\": \"3 tests passed\" } }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 3);
+        pump.stop();
+
+        assertThat(events)
+                .as("the completed output of the same tool part is a new observation")
+                .hasSize(2);
+        assertThat(events.get(0).kind()).isEqualTo(RunProgressEvent.Kind.TOOL_CALL);
+        assertThat(events.get(1).kind()).isEqualTo(RunProgressEvent.Kind.TOOL_RESULT);
+        assertThat(events.get(1).content())
+                .as("the last row holds the output, not the stale in-flight value")
+                .isEqualTo("3 tests passed");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::partId)
+                .as("the call and its result are two observations of one tool part")
+                .containsExactly("call1", "call1");
+        assertThat(events).allSatisfy(e -> assertThat(e.toolName()).isEqualTo("bash"));
     }
 
     // ---- M6: the emission lock must not span the sink ----
@@ -285,7 +395,7 @@ class CoreProgressPumpTest {
         assertThat(cursor.sequenceValue())
                 .as("an abandoned poll must not consume seq")
                 .isZero();
-        assertThat(cursor.watermarkSize())
+        assertThat(cursor.trackedPartCount())
                 .as("an abandoned poll must not mark parts as already streamed")
                 .isZero();
         assertThat(pump.diff(List.of(message("m1", 1))))
@@ -327,12 +437,16 @@ class CoreProgressPumpTest {
             seeder.join(5000);
         }
 
-        // The diff ran against the watermark it started with ([2]) and the seed
-        // applied atomically afterwards: exactly the one part newer than [2] was
-        // emitted, and the watermark is the single-message seed, not a hybrid.
+        // The diff ran against the tracked parts it started with (m1-p0, m1-p1) and
+        // the seed applied atomically afterwards: exactly the one part newer than that
+        // pair was emitted, and the cursor now holds the single-part seed — not the
+        // three-part diff view nor a hybrid of the two.
         assertThat(diffed.get()).hasSize(1);
         assertThat(diffed.get().get(0).seq()).isEqualTo(1L);
-        assertThat(cursor.watermarkSize()).isEqualTo(1);
+        assertThat(cursor.trackedMessageCount()).isEqualTo(1);
+        assertThat(cursor.trackedPartCount())
+                .as("the seed replaced the tracked parts atomically, it did not merge into them")
+                .isEqualTo(1);
     }
 
     /** A snapshot list whose first read blocks, so a diff can be held mid-section. */
@@ -788,14 +902,16 @@ class CoreProgressPumpTest {
 
     @Test
     void resetReplayCapsAtTheLatestTenParts() {
-        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add);
-        // Three messages seen before; the server now reports only two (a real
+        CoreProgressPump.ProgressCursor cursor = new CoreProgressPump.ProgressCursor();
+        // Three messages tracked before; the server now reports only two (a real
         // shrink), so the reset path replays from the start of the new snapshot.
-        List<Integer> watermark = new ArrayList<>(List.of(0, 0, 0));
+        cursor.seedFrom(List.of(message("m0", 0), message("m1", 0), message("m2", 0)));
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                POLL, COALESCE, cursor);
         List<OpenCodeHttpClient.MessageSnapshot> shrunk = List.of(
                 message("m1", 7), message("m2", 7));
 
-        List<CoreProgressPump.ProgressFragment> fragments = pump.diff(shrunk, watermark);
+        List<CoreProgressPump.ProgressFragment> fragments = pump.diff(shrunk);
 
         // 14 new parts (7 + 7) after the shrink; only the latest 10 survive.
         assertThat(fragments).hasSize(10);
@@ -804,8 +920,320 @@ class CoreProgressPumpTest {
                         "m2-p0", "m2-p1", "m2-p2", "m2-p3", "m2-p4", "m2-p5", "m2-p6");
         assertThat(fragments).extracting(CoreProgressPump.ProgressFragment::seq)
                 .containsExactly(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L);
-        // The watermark reflects the whole shrunk snapshot, not just the replayed tail.
-        assertThat(watermark).containsExactly(7, 7);
+        // The cursor reflects the whole shrunk snapshot, not just the replayed tail:
+        // a later poll must not re-send the four capped-away parts.
+        assertThat(cursor.trackedMessageCount()).isEqualTo(2);
+        assertThat(cursor.trackedPartCount())
+                .as("all 14 shrunk-snapshot parts are tracked, the 4 dropped ones included")
+                .isEqualTo(14);
+        assertThat(pump.diff(shrunk))
+                .as("the capped replay does not re-send the dropped parts on the next poll")
+                .isEmpty();
+    }
+
+    /**
+     * The acceptance shape of the #103 growth fix, on the real wire shape: two
+     * {@code GET /session/:id/message} responses in which the same assistant message
+     * keeps ONE text part whose {@code text} grows. The observations share that
+     * part's id, increase in seq, and the last one holds the full text — which is what
+     * lets the drawer update one line and the persisted backlog replay the same growth.
+     */
+    @Test
+    void theGrowthOfOneTextPartIsOnePartIdentityObservedTwiceInAscendingSeqOrder() {
+        String opening = "Consensus needs";
+        String full = "Consensus needs a majority of the voters to commit an entry.";
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("wire-growth")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"prt_1\", \"type\": \"text\", \"text\": \"" + opening + "\" }")))
+                .willSetStateTo("grown"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("wire-growth")
+                .whenScenarioStateIs("grown")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"prt_1\", \"type\": \"text\", \"text\": \"" + full + "\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 3);
+        pump.stop();
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::partId)
+                .as("both observations are of the same part")
+                .containsExactly("prt_1", "prt_1");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
+                .as("the later observation of one part has a strictly greater seq")
+                .containsExactly(1L, 2L);
+        assertThat(events.get(1).content())
+                .as("the last observation is the full text, not the opening snapshot")
+                .isEqualTo(full);
+    }
+
+    /**
+     * A core that reports no part id yields no part identity: the pump keeps the
+     * growth observable (positionally tracked) but never invents an id, so the
+     * consumer's seq fallback stays the documented behaviour rather than a guess.
+     */
+    @Test
+    void aPartWithoutANativeIdIsStillGrowthTrackedButIsEmittedWithNoPartId() {
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("unidentified")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"type\": \"text\", \"text\": \"first half\" }")))
+                .willSetStateTo("grown"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("unidentified")
+                .whenScenarioStateIs("grown")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"type\": \"text\", \"text\": \"first half, then the rest\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 3);
+        pump.stop();
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::partId)
+                .as("no id on the wire is no id on the fragment")
+                .containsOnlyNulls();
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
+                .containsExactly(1L, 2L);
+        assertThat(events.get(1).content()).isEqualTo("first half, then the rest");
+    }
+
+    // ---- Lane E2: the terminal drain (the PROGRESS rows=0 defect) ----
+
+    /**
+     * A poll interval longer than any test runtime: the worker makes exactly ONE poll
+     * before sleeping, so the next request on the wire is the drain's own fetch and the
+     * observed cadence can be scripted attempt by attempt instead of racing a 20ms loop.
+     */
+    private static final Duration LONGER_THAN_THE_TEST = Duration.ofSeconds(30);
+
+    /**
+     * Lane E2 RED, reproducing the OBSERVED cadence of a real opencode 1.18.15 turn
+     * (probe logs aria-live-host/probe-parts.log, runs d94c7d1a / 8fef5962 / 37bc2584):
+     * while the synchronous {@code POST /session/:id/message} is in flight the list
+     * route serves an assistant SKELETON — the message with no parts, then
+     * {@code [step-start, reasoning(text:"")]}, and {@code reasoning(len=0)} for seven
+     * consecutive polls — and the content then arrives in ONE write. The assistant
+     * {@code text} part becomes final only at/after the POST returns. With the 2s poll
+     * interval the pump is therefore halted without ever seeing either part, which is
+     * exactly the live {@code PROGRESS rows=0}. {@code drain()} is the one final fetch
+     * after the prompt returns and before the pump halts.
+     */
+    @Test
+    void theTerminalDrainRecoversTheReasoningAndTheAnswerTheLivePollsOnlySawAsBlankSkeletons() {
+        String reasoning = "The user wants an essay; I will describe Raft's majority rule.";
+        String answer = "Distributed consensus begins with Raft, and Raft needs a majority"
+                + " of voters to commit an entry before it is durable.";
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("terminal")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200)
+                        .withBody(messageWithRole("assistant", "")))
+                .willSetStateTo("skeleton"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("terminal")
+                .whenScenarioStateIs("skeleton")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"s1\", \"type\": \"step-start\" },"
+                                + "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"\" }")))
+                .willSetStateTo("written"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("terminal")
+                .whenScenarioStateIs("written")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"s1\", \"type\": \"step-start\" },"
+                                + "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"" + reasoning + "\" },"
+                                + "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"" + answer + "\" }"))));
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                LONGER_THAN_THE_TEST, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 1);
+
+        pump.drain();
+        pump.stop();
+
+        assertThat(events)
+                .as("the drain's fetch is the only one that saw either part; the live"
+                        + " polls saw a skeleton and the blank reasoning, which burn no row")
+                .hasSize(2);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::kind)
+                .containsExactly(RunProgressEvent.Kind.THINKING, RunProgressEvent.Kind.ANSWER);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::partId)
+                .as("exactly one observation of each terminal part")
+                .containsExactly("r1", "t1");
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::seq)
+                .as("the skeleton burned no seq: the drained rows are 1 and 2")
+                .containsExactly(1L, 2L);
+        assertThat(events.get(0).content()).isEqualTo(reasoning);
+        assertThat(events.get(1).content()).isEqualTo(answer);
+        assertThat(requestsToThePumpPath())
+                .as("one live poll plus the drain's two bounded attempts")
+                .isEqualTo(3);
+    }
+
+    /**
+     * The drain's own bound: the blank skeleton is the OBSERVED steady state of a part
+     * that never gets written, so "not settled yet" must not turn the drain into a
+     * second polling loop. Two attempts per call, then it returns — and a second call
+     * spends two more, never a runaway.
+     */
+    @Test
+    void theDrainIsBoundedToItsAttemptsInsteadOfBecomingASecondPollingLoop() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"s1\", \"type\": \"step-start\" },"
+                                + "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"\" }"))));
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                LONGER_THAN_THE_TEST, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 1);
+
+        pump.drain();
+        assertThat(requestsToThePumpPath())
+                .as("one poll + the two drain attempts, and no more")
+                .isEqualTo(3);
+        assertThat(events).as("a part that was never written produces no row").isEmpty();
+
+        pump.drain();
+        assertThat(requestsToThePumpPath())
+                .as("a repeated drain is bounded the same way: it is not a loop")
+                .isEqualTo(5);
+    }
+
+    /**
+     * #111's acceptance rule, not a nice-to-have: a halted session stays silent. The
+     * cancel path stops the pump and must produce nothing afterwards, so a drain called
+     * on an already-halted pump performs NO poll at all — not "a poll that happens to
+     * emit nothing".
+     */
+    @Test
+    void aDrainAfterStopEmitsNothingAndPerformsNoPoll() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"outlining\" },"
+                                + "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"the answer\" }"))));
+
+        startPump();
+        await().atMost(Duration.ofSeconds(3)).until(() -> !events.isEmpty());
+        pump.stop();
+
+        int requestsAtHalt = requestsToThePumpPath();
+        int eventsAtHalt = events.size();
+
+        pump.drain();
+
+        assertThat(requestsToThePumpPath())
+                .as("a halted pump does not even read the message list")
+                .isEqualTo(requestsAtHalt);
+        assertThat(events).hasSize(eventsAtHalt);
+    }
+
+    /**
+     * The drain reuses the part-keyed cursor, so a part the live polls already streamed
+     * at its final content is not streamed twice: the terminal fetch sees no change and
+     * the assistant message carries nothing unfinished, which also means the drain stops
+     * after ONE attempt instead of spending the bound.
+     */
+    @Test
+    void theDrainDoesNotReEmitAPartAlreadyStreamedAtItsFinalContent() {
+        stubFor(get(urlEqualTo(PATH))
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"outlining the essay\" },"
+                                + "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"Consensus needs a majority.\" }"))));
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                LONGER_THAN_THE_TEST, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 1);
+        int afterTheLivePoll = requestsToThePumpPath();
+        assertThat(events).hasSize(2);
+
+        pump.drain();
+        pump.stop();
+
+        assertThat(events)
+                .as("the terminal fetch saw two parts it had already streamed: no third row")
+                .hasSize(2);
+        assertThat(events).extracting(f -> f.partId() + "=" + f.content())
+                .as("no two rows name the same part with the same content")
+                .doesNotHaveDuplicates();
+        assertThat(requestsToThePumpPath())
+                .as("settled content stops the drain after its first attempt, not after its bound")
+                .isEqualTo(afterTheLivePoll + 1);
+    }
+
+    /**
+     * A degraded drain attempt is retried inside the same bound instead of losing the
+     * terminal content — and the retry is the drain's own business: the poll loop's
+     * stall counters stay untouched, because they count consecutive LOOP polls and a
+     * single failed terminal fetch is not a stalled progress stream.
+     */
+    @Test
+    void aDegradedDrainAttemptIsRetriedWithinTheBoundAndFeedsNoStallCounter() {
+        String answer = "Consensus needs a majority.";
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("degraded-drain")
+                .whenScenarioStateIs(STARTED)
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"\" }")))
+                .willSetStateTo("drain-500"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("degraded-drain")
+                .whenScenarioStateIs("drain-500")
+                .willReturn(aResponse().withStatus(500))
+                .willSetStateTo("drain-final"));
+        stubFor(get(urlEqualTo(PATH))
+                .inScenario("degraded-drain")
+                .whenScenarioStateIs("drain-final")
+                .willReturn(aResponse().withStatus(200).withBody(body(
+                        "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"outlining\" },"
+                                + "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"" + answer + "\" }"))));
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                LONGER_THAN_THE_TEST, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 1);
+
+        pump.drain();
+        pump.stop();
+
+        assertThat(requestsToThePumpPath())
+                .as("one poll, one degraded drain attempt, one retry that got the content")
+                .isEqualTo(3);
+        assertThat(events).extracting(CoreProgressPump.ProgressFragment::kind)
+                .containsExactly(RunProgressEvent.Kind.THINKING, RunProgressEvent.Kind.ANSWER);
+        assertThat(events.get(1).content()).isEqualTo(answer);
+        assertThat(pump.degradedPollCount())
+                .as("the drain's failed fetch is not a loop poll: the stall counters stay clean")
+                .isZero();
+        assertThat(pump.degradedStallSignals()).isZero();
+    }
+
+    /**
+     * Nothing in the drain may reach the run: it is on the prompt's critical path. When
+     * every fetch degrades, the drain spends its bound, logs, and returns normally.
+     */
+    @Test
+    void aDrainThatOnlyMeetsDegradedPollsReturnsWithinItsBoundWithoutThrowing() {
+        stubFor(get(urlEqualTo(PATH)).willReturn(aResponse().withStatus(500)));
+
+        pump = new CoreProgressPump(client, "sess-1", runId, agentId, events::add,
+                LONGER_THAN_THE_TEST, COALESCE);
+        pump.start();
+        await().atMost(Duration.ofSeconds(3)).until(() -> requestsToThePumpPath() >= 1);
+
+        assertThatCode(() -> pump.drain()).doesNotThrowAnyException();
+
+        assertThat(requestsToThePumpPath())
+                .as("the degraded attempts are bounded, not retried forever")
+                .isEqualTo(3);
+        assertThat(events).isEmpty();
     }
 
     private static OpenCodeHttpClient.MessageSnapshot message(String id, int partCount) {

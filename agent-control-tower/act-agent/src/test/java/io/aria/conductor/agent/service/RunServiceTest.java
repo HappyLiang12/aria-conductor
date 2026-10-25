@@ -479,8 +479,12 @@ class RunServiceTest {
         // The core verified the pause, but the run finalized CANCELLED while it was in flight.
         when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.CANCELLED)));
 
+        // Lane H2 finding 1: the pause DID happen, so the refusal may not claim
+        // "nothing was paused" -- it names the committed state and the verified action.
         assertThatThrownBy(() -> service.pauseRun(id))
-                .isInstanceOf(InvalidStateTransitionException.class);
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " reached CANCELLED while the verified pause completed;"
+                        + " the runtime was paused but the run record was not changed.");
         verify(runtimeControl).pause(id);
         verify(runRepository, never()).save(any(Run.class));
     }
@@ -585,8 +589,12 @@ class RunServiceTest {
         when(runtimeControl.owns(agentId, id)).thenReturn(true);
         when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.COMPLETED)));
 
+        // Lane H2 finding 1: the verified resume DID happen; the refusal says so and
+        // names the state the run reached instead of claiming nothing was resumed.
         assertThatThrownBy(() -> service.resumeRun(id))
-                .isInstanceOf(InvalidStateTransitionException.class);
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " reached COMPLETED while the verified resume completed;"
+                        + " the runtime was resumed but the run record was not changed.");
         verify(runtimeControl).resume(id);
         verify(runRepository, never()).save(any(Run.class));
     }
@@ -675,6 +683,66 @@ class RunServiceTest {
         assertThat(event.getValue().getAgentId()).isEqualTo(agentId);
     }
 
+    // Lane H defect 2: 409 stays the right status for "nothing was stopped", but the
+    // message must state what actually stands -- the terminal status, when the run got
+    // there, and that no core was touched -- instead of the state-machine arrow.
+    @Test
+    void cancelRun_onAnAlreadyCancelledRun_namesTheStatusItsCompletionTimeAndThatNothingWasStopped() {
+        UUID id = UUID.randomUUID();
+        Instant completedAt = Instant.parse("2026-10-24T10:15:00Z");
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.CANCELLED)
+                        .withCompletedAt(completedAt).build()));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " is already CANCELLED (completed at 2026-10-24T10:15:00Z);"
+                        + " nothing was stopped.");
+        verify(runRepository, never()).cancelIfCancelable(any(), any(), any(), any(), anyList());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelRun_onAnAlreadyFailedRunWithoutACompletionTime_namesTheStatusOnly() {
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.FAILED).build()));
+
+        assertThatThrownBy(() -> service.cancelRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " is already FAILED; nothing was stopped.");
+    }
+
+    @Test
+    void pauseRun_onATerminalRun_saysItIsAlreadyTerminalAndNothingWasPaused() {
+        UUID id = UUID.randomUUID();
+        Instant completedAt = Instant.parse("2026-10-24T10:20:00Z");
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.COMPLETED)
+                        .withCompletedAt(completedAt).build()));
+
+        assertThatThrownBy(() -> service.pauseRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " is already COMPLETED (completed at 2026-10-24T10:20:00Z);"
+                        + " nothing was paused.");
+        verify(runRepository, never()).updateStatusIfCurrentIn(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resumeRun_onATerminalRun_saysItIsAlreadyTerminalAndNothingWasResumed() {
+        UUID id = UUID.randomUUID();
+        Instant completedAt = Instant.parse("2026-10-24T10:25:00Z");
+        when(runRepository.findById(id)).thenReturn(Optional.of(
+                TestDataBuilder.aRun().withId(id).withStatus(RunStatus.CANCELLED)
+                        .withCompletedAt(completedAt).build()));
+
+        assertThatThrownBy(() -> service.resumeRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " is already CANCELLED (completed at 2026-10-24T10:25:00Z);"
+                        + " nothing was resumed.");
+        verify(runRepository, never()).updateStatusIfCurrentIn(any(), any(), any(), any(), any());
+    }
+
     @Test
     void cancelRun_alreadyCompleted_isRejected() {
         UUID id = UUID.randomUUID();
@@ -683,7 +751,7 @@ class RunServiceTest {
 
         assertThatThrownBy(() -> service.cancelRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class)
-                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+                .hasMessage("Run " + id + " is already COMPLETED; nothing was stopped.");
         verify(runRepository, never()).cancelIfCancelable(any(), any(), any(), any(), anyList());
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
@@ -797,7 +865,7 @@ class RunServiceTest {
 
         assertThatThrownBy(() -> service.cancelRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class)
-                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+                .hasMessage("Run " + id + " is already COMPLETED; nothing was stopped.");
         verify(runRepository, never()).cancelIfCancelable(any(), any(), any(), any(), anyList());
         verify(eventPublisher, never()).publishEvent(any());
     }
@@ -878,7 +946,11 @@ class RunServiceTest {
 
         assertThatThrownBy(() -> service.cancelRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class)
-                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+                // Lane H2 finding 1: this test used to verify that the verified stop ran
+                // and still demand "nothing was stopped". The stop DID happen; the refusal
+                // must say the runtime was stopped and only the record was left alone.
+                .hasMessage("Run " + id + " reached COMPLETED while the verified cancel completed;"
+                        + " the runtime was stopped but the run record was not changed.");
         assertThat(running.getStatus()).isEqualTo(RunStatus.RUNNING);
         verify(runtimeControl).cancel(id);
         verify(runRepository, never()).save(any());
@@ -903,7 +975,7 @@ class RunServiceTest {
 
         assertThatThrownBy(() -> service.cancelRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class)
-                .hasMessage("Invalid state transition for Run: COMPLETED -> CANCELLED");
+                .hasMessage("Run " + id + " is already COMPLETED; nothing was stopped.");
         verify(runtimeControl, never()).cancel(any());
         verify(runRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
@@ -923,7 +995,7 @@ class RunServiceTest {
 
         assertThatThrownBy(() -> service.cancelRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class)
-                .hasMessage("Invalid state transition for Run: CANCELLED -> CANCELLED");
+                .hasMessage("Run " + id + " is already CANCELLED; nothing was stopped.");
         verify(eventPublisher, never()).publishEvent(any());
     }
 

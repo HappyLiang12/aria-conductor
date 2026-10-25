@@ -115,6 +115,52 @@ class EventBroadcastListenerTest {
         assertThat((String) event.data().get("content")).hasSize(503);
     }
 
+    /**
+     * Lane H defect 1: the persisted observation is the record the REST backlog
+     * ({@code GET /runs/{id}/progress}) replays, and its column is TEXT. Cutting it to
+     * 500 chars before the insert bought nothing and destroyed replay: the live WS
+     * frame is a bounded VIEW, the stored observation is the record.
+     */
+    @Test
+    void onRunProgress_persistsTheWholeObservation_whileTheBroadcastStaysBounded() {
+        String content = "a".repeat(3200) + "TAIL-OF-THE-ANSWER";
+        listener.onRunProgress(new RunProgressEvent(this, UUID.randomUUID(), UUID.randomUUID(), 3,
+                RunProgressEvent.Kind.ANSWER, content, null, 12, "prt_full"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        String stored = captor.getValue().getContent();
+        assertThat(stored).hasSize(content.length());
+        assertThat(stored).isEqualTo(content);
+        assertThat(stored).endsWith("TAIL-OF-THE-ANSWER");
+
+        // The live frame stays bounded exactly as before: no socket frame grows.
+        assertThat((String) captureBroadcast().data().get("content")).hasSize(503).endsWith("...");
+    }
+
+    /**
+     * A multi-byte observation must be stored whole, not cut mid-codepoint. The emoji
+     * straddles the 500-char boundary on purpose: a substring cut there would split the
+     * surrogate pair, so an intact round-trip proves the stored row is the whole string.
+     */
+    @Test
+    void onRunProgress_persistsAMultiByteObservationWithoutCuttingIt() {
+        String content = "x".repeat(499) + "\uD83D\uDE00" + "tail-\u4E2D\u6587";
+        listener.onRunProgress(new RunProgressEvent(this, UUID.randomUUID(), UUID.randomUUID(), 4,
+                RunProgressEvent.Kind.THINKING, content, null, 13, "prt_utf8"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        String stored = captor.getValue().getContent();
+        assertThat(stored).isEqualTo(content);
+        assertThat(stored.codePointCount(0, stored.length()))
+                .isEqualTo(content.codePointCount(0, content.length()));
+        assertThat(stored).contains("\uD83D\uDE00");
+        assertThat(stored).endsWith("tail-\u4E2D\u6587");
+        assertThat(stored.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .hasSameSizeAs(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     @Test
     void onRunProgress_persistsFragment_thenBroadcasts() {
         UUID runId = UUID.randomUUID();

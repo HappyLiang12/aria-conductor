@@ -1,0 +1,18 @@
+-- V75: the WHOLE progress observation must fit the column that records it.
+--
+-- V51 declared run_progress_events.content TEXT: 65,535 BYTES on MariaDB, and fewer
+-- characters once utf8mb4 is in play. Since the persisted row became the whole
+-- observation (EventBroadcastListener), a large tool result or answer overflows the
+-- insert, the listener can only WARN, and the row silently disappears from the
+-- GET /runs/{id}/progress backlog -- while the live WS frame stays deliberately
+-- bounded, so the operator sees a fragment once and no history afterwards.
+--
+-- MEDIUMTEXT (16,777,215 bytes) is the target on MariaDB and the closest type both
+-- databases accept: H2 MODE=MySQL maps TEXT and MEDIUMTEXT alike to
+-- CHARACTER VARYING(1000000000), so on H2 this widening never truncates either and
+-- the >64 KiB boundary is proven on MariaDB 11.4 in the lane evidence.
+--
+-- MODIFY COLUMN is re-appliable: widening an already-MEDIUMTEXT column is a no-op on
+-- both databases, so a Flyway repair after a half-run migration cannot block the next
+-- startup (the V74 precedent). It also leaves the column nullable, as V51 declared it.
+ALTER TABLE run_progress_events MODIFY COLUMN content MEDIUMTEXT;

@@ -199,6 +199,12 @@ public class EventBroadcastListener {
      * event has none (a core that reports no part id, or a pre-V74 row), leaving seq --
      * which the pump still guarantees monotonic -- as the consumer's fallback identity,
      * exactly as it omits a null toolName.
+     *
+     * <p>The persisted observation is the WHOLE observation: it is the record
+     * {@code GET /runs/{id}/progress} replays and its column is MEDIUMTEXT (V75, widened
+     * from the TEXT of V51 because a large tool result or answer overflowed 65,535
+     * bytes), so truncating it before the insert bought no storage and destroyed replay.
+     * Only the live WS frame is bounded (below) -- it is a view, not the record.
      */
     @EventListener
     public void onRunProgress(RunProgressEvent event) {
@@ -211,7 +217,7 @@ public class EventBroadcastListener {
                     .iteration(event.getIteration())
                     .kind(event.getKind().name())
                     .seq(event.getSeq())
-                    .content(truncate(event.getContent()))
+                    .content(event.getContent())
                     .toolName(event.getToolName())
                     .partId(event.getPartId())
                     .createdAt(Instant.now())

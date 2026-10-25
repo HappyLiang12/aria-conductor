@@ -1,6 +1,7 @@
 package io.aria.conductor.app;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationState;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -30,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class V74RunProgressPartIdentityMigrationTest {
 
-    private static String headVersion;
+    private static Flyway flyway;
     private static DataSource dataSource;
     private static JdbcTemplate jdbc;
 
@@ -38,21 +39,25 @@ class V74RunProgressPartIdentityMigrationTest {
     static void migrateFreshDatabase() {
         dataSource = new DriverManagerDataSource(
                 "jdbc:h2:mem:v74partidentity;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE", "sa", "");
-        Flyway flyway = Flyway.configure()
+        flyway = Flyway.configure()
                 .dataSource(dataSource)
                 .locations("classpath:db/migration")
                 .load();
         flyway.migrate();
         jdbc = new JdbcTemplate(dataSource);
-        headVersion = flyway.info().current().getVersion().getMajorAsString();
     }
 
     @Test
-    void v74IsTheHeadAppliedByAFreshDatabase() {
-        assertThat(headVersion)
-                .as("the new migration is the highest version number, so an existing"
-                        + " database actually reaches it")
-                .isEqualTo("74");
+    void v74IsAppliedByAFreshDatabaseAndNothingIsPending() {
+        // V74 is no longer the head once a later migration (V75) exists, so this asserts
+        // the durable fact a head check stood for: the migration was applied successfully,
+        // so an existing database actually reaches it, and nothing is left pending.
+        assertThat(flyway.info().applied())
+                .anySatisfy(info -> {
+                    assertThat(info.getVersion().getVersion()).isEqualTo("74");
+                    assertThat(info.getState()).isEqualTo(MigrationState.SUCCESS);
+                });
+        assertThat(flyway.info().pending()).isEmpty();
     }
 
     @Test

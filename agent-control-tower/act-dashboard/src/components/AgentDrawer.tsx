@@ -34,6 +34,11 @@ interface StreamLine {
   // The merge key of a progress line (see progressKeyOf). Present ONLY on progress
   // lines, which is what keeps a lifecycle line out of the part merge.
   progressKey?: string;
+  // The observation's whole content, as received. `detail` may be a display-truncated
+  // view of it for live summaries; a persisted ANSWER/THINKING observation is rendered
+  // whole. The merge compares THIS so a bounded live frame cannot look "fuller" than
+  // the persisted row of the same part.
+  content?: string;
   detail?: {
     toolName?: string;
     toolArgs?: string;
@@ -114,9 +119,13 @@ function progressToEntry(
     partId: p.partId ?? null,
     runId: p.runId,
     progressKey: progressKeyOf(p),
+    content,
     detail: {
-      thinking: kind === 'THINKING' && content ? truncate(content) : undefined,
-      answer: kind === 'ANSWER' && content ? truncate(content) : undefined,
+      // The persisted observation is the whole answer/thinking text, so the detail
+      // block renders it whole (the stream is a fixed-height scroll area). Truncating
+      // here made a multi-KB answer unreadable while the row held all of it.
+      thinking: kind === 'THINKING' && content ? content : undefined,
+      answer: kind === 'ANSWER' && content ? content : undefined,
       toolName: p.toolName ?? undefined,
       toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
     },
@@ -145,6 +154,13 @@ function progressKeyOf(p: { runId?: string; partId?: string | null; seq?: number
  * Only lines carrying a `progressKey` are ever matched, so a lifecycle line can never
  * be mistaken for an observation of a part.
  *
+ * The live WS frame is deliberately bounded (500 chars + '...') while the persisted
+ * backlog row is the whole observation, and the two can arrive in either order. So
+ * "newest" alone is not enough: between two observations of one part the FULLER
+ * content wins, and the line remembers the higher seq. A bounded live frame therefore
+ * never erases the fuller backlog line, and a late (older) backlog row still completes
+ * a line first seen through its bounded live frame.
+ *
  * `placement` says where a part that is not on screen yet goes: a live frame appends at
  * the tail, a replayed backlog row prepends, because it is older history.
  */
@@ -164,16 +180,48 @@ function mergeProgressLines(
       if (dupInBatch < 0) {
         added.push(line);
       } else {
-        // Two observations of one part inside the same batch: newest wins, in place.
-        added[dupInBatch] = { ...line, id: added[dupInBatch].id };
+        // Two observations of one part inside the same batch: same rule, in place.
+        const combined = preferFullerObservation(added[dupInBatch], line);
+        if (combined) added[dupInBatch] = combined;
       }
       continue;
     }
-    if ((line.seq ?? 0) > (merged[at].seq ?? 0)) {
-      merged[at] = { ...line, id: merged[at].id };
-    }
+    const combined = preferFullerObservation(merged[at], line);
+    if (combined) merged[at] = combined;
   }
   return (placement === 'append' ? [...merged, ...added] : [...added, ...merged]).slice(-60);
+}
+
+/** The whole content an observation carries (see StreamLine.content). */
+function contentOf(line: StreamLine): string {
+  return line.content ?? line.detail?.toolResult ?? line.detail?.answer ?? line.detail?.thinking ?? '';
+}
+
+/**
+ * One part's line keeps its identity and position across every observation of that
+ * part. The observation with the fuller content supplies the text; the newer one
+ * supplies the line's metadata (time, kind label); the line remembers the higher seq.
+ * Returns null when the line already holds everything the incoming observation has,
+ * so a re-delivered frame changes nothing.
+ */
+function preferFullerObservation(existing: StreamLine, incoming: StreamLine): StreamLine | null {
+  const existingLen = contentOf(existing).length;
+  const incomingLen = contentOf(incoming).length;
+  const newer = (incoming.seq ?? 0) > (existing.seq ?? 0);
+  if (!newer && incomingLen <= existingLen) return null;
+  // The fuller observation supplies the text; on equal length the newer one wins, so a
+  // re-emitted part still shows its latest observation. A SHORTER newer frame (the
+  // bounded live view) never wins.
+  const useIncomingText = incomingLen > existingLen || (newer && incomingLen === existingLen);
+  const base = newer ? incoming : existing;
+  const text = useIncomingText ? incoming : existing;
+  return {
+    ...base,
+    id: existing.id,
+    seq: newer ? incoming.seq : existing.seq,
+    content: text.content,
+    detail: text.detail,
+  };
 }
 
 function pickAgentRuns(runs: Run[] | undefined, agentId: string | null): Run[] {

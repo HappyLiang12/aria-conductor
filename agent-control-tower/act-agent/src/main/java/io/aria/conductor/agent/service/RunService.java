@@ -41,6 +41,16 @@ public class RunService {
      */
     private static final List<RunStatus> CANCELABLE_STATUSES;
 
+    /**
+     * The states a run never leaves (the engine's own terminal set). Only used to choose the
+     * honest refusal message: a transition refused from one of these is not an illegal move
+     * in the state machine, it is an operator asking to stop/pause/resume a run that already
+     * ended, so the message names the standing state and the completion time instead of an
+     * arrow ({@code COMPLETED -> CANCELLED}).
+     */
+    private static final Set<RunStatus> TERMINAL_STATUSES =
+            EnumSet.of(RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.ABORTED);
+
     static {
         Map<RunStatus, Set<RunStatus>> transitions = new EnumMap<>(RunStatus.class);
         transitions.put(RunStatus.PENDING, EnumSet.of(RunStatus.INITIALIZING, RunStatus.CANCELLED));
@@ -218,14 +228,16 @@ public class RunService {
     @Transactional
     public RunResponse pauseRun(UUID id) {
         Run run = findRunOrThrow(id);
-        validateTransition(run.getStatus(), RunStatus.PAUSED);
+        validateTransition(run, RunStatus.PAUSED, "paused");
         log.info("Pausing run: id={}", id);
         RunRuntimeControlPort control = runtimeControlProvider == null
                 ? null : runtimeControlProvider.getIfAvailable();
-        if (control != null && control.owns(run.getAgentId(), id)) {
+        boolean verified = control != null && control.owns(run.getAgentId(), id);
+        if (verified) {
             control.pause(id);
         }
-        return toResponse(writeStateConditionally(id, RunStatus.PAUSED, null));
+        return toResponse(writeStateConditionally(id, RunStatus.PAUSED, null, "paused",
+                verified ? "pause" : null));
     }
 
     @Transactional
@@ -245,10 +257,11 @@ public class RunService {
     @Transactional
     public RunResponse resumeRun(UUID id, String newInstruction) {
         Run run = findRunOrThrow(id);
-        validateTransition(run.getStatus(), RunStatus.RUNNING);
+        validateTransition(run, RunStatus.RUNNING, "resumed");
         RunRuntimeControlPort control = runtimeControlProvider == null
                 ? null : runtimeControlProvider.getIfAvailable();
-        if (control != null && control.owns(run.getAgentId(), id)) {
+        boolean verified = control != null && control.owns(run.getAgentId(), id);
+        if (verified) {
             control.resume(id);
         }
         String promptSeed = newInstruction != null && !newInstruction.isBlank() ? newInstruction : null;
@@ -256,7 +269,8 @@ public class RunService {
             log.info("Updating run instruction on resume: id={}", id);
         }
         log.info("Resuming run: id={}", id);
-        return toResponse(writeStateConditionally(id, RunStatus.RUNNING, promptSeed));
+        return toResponse(writeStateConditionally(id, RunStatus.RUNNING, promptSeed, "resumed",
+                verified ? "resume" : null));
     }
 
     /**
@@ -265,10 +279,18 @@ public class RunService {
      * start from ({@link #transitionSources}), so a terminal state that arrived in the
      * meantime is refused with the state that actually stands and never overwritten.
      *
+     * <p>The refusal tells the truth about what was attempted: a lost write on a path
+     * that never touched a runtime keeps the pre-action wording ("nothing was
+     * &lt;outcome&gt;"), while a lost write after the runtime acknowledged the action
+     * ({@code verifiedAction}) names the state the run reached and says the runtime was
+     * acted on even though the record was left alone. Same exception type in both
+     * cases, so the operator still sees a 409.
+     *
      * @throws ResourceNotFoundException         when the run row does not exist
      * @throws InvalidStateTransitionException   when the committed state no longer allows it
      */
-    private Run writeStateConditionally(UUID id, RunStatus to, String promptSeed) {
+    private Run writeStateConditionally(UUID id, RunStatus to, String promptSeed, String outcome,
+                                        String verifiedAction) {
         Instant now = Instant.now();
         int updated = runRepository.updateStatusIfCurrentIn(id, to, promptSeed, now, transitionSources(to));
         if (updated == 0) {
@@ -278,7 +300,10 @@ public class RunService {
             if (committed == null) {
                 throw new ResourceNotFoundException("Run", id);
             }
-            throw new InvalidStateTransitionException("Run", committed.name(), to.name());
+            if (verifiedAction != null && TERMINAL_STATUSES.contains(committed)) {
+                throw reachedWhileVerified(id, committed, verifiedAction);
+            }
+            throw refusal(id, committed, to, outcome);
         }
         return findRunOrThrow(id);
     }
@@ -304,13 +329,17 @@ public class RunService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public RunResponse cancelRun(UUID id) {
         Run run = findRunOrThrow(id);
-        validateTransition(run.getStatus(), RunStatus.CANCELLED);
+        validateTransition(run, RunStatus.CANCELLED, "stopped");
         log.info("Requesting verified cancel: id={}", id);
         RunRuntimeControlPort control = runtimeControlProvider == null
                 ? null : runtimeControlProvider.getIfAvailable();
+        boolean verified = false;
         if (control != null && control.owns(run.getAgentId(), id)) {
             try {
                 control.cancel(id);
+                // The runtime ACKNOWLEDGED the stop: from here on a lost record write
+                // must not tell the operator that nothing was stopped.
+                verified = true;
             } catch (IllegalStateException refused) {
                 // A runtime that vanished between owns() and cancel() may simply mean
                 // the run finalized first. Report the committed state instead of the
@@ -319,8 +348,7 @@ public class RunService {
                         .map(RunRepository.RunStateView::getStatus)
                         .orElse(null);
                 if (committed != null && !cancelableStatuses().contains(committed)) {
-                    throw new InvalidStateTransitionException("Run", committed.name(),
-                            RunStatus.CANCELLED.name());
+                    throw refusal(id, committed, RunStatus.CANCELLED, "stopped");
                 }
                 if (control.owns(run.getAgentId(), id)) {
                     // The runtime is still owned by this process and refused the stop:
@@ -335,7 +363,26 @@ public class RunService {
         // The conditional write is the only terminal write and publishes the
         // completion event only when it wins, so a run that finalized while the
         // stop was in flight is never overwritten and never gets a second event.
-        Run cancelled = cancellationWriter.cancel(id);
+        Run cancelled;
+        try {
+            cancelled = cancellationWriter.cancel(id);
+        } catch (InvalidStateTransitionException lost) {
+            // The atomic write lost the race: the run reached a terminal state while the
+            // verified stop was in flight. The writer's own refusal names the arrow; report
+            // the standing state (and its completion time) instead, like every other
+            // already-terminal refusal on this endpoint.
+            RunStatus committed = runRepository.findStateById(id)
+                    .map(RunRepository.RunStateView::getStatus)
+                    .orElse(null);
+            if (committed != null && TERMINAL_STATUSES.contains(committed)) {
+                // A verified stop that lost the write is not "nothing was stopped": the
+                // runtime was stopped and only the recorded state was refused.
+                throw verified
+                        ? reachedWhileVerified(id, committed, "cancel")
+                        : refusal(id, committed, RunStatus.CANCELLED, "stopped");
+            }
+            throw lost;
+        }
         log.info("Run cancelled: id={}, status={}", cancelled.getId(), cancelled.getStatus());
         return toResponse(cancelled);
     }
@@ -354,11 +401,53 @@ public class RunService {
                 .orElseThrow(() -> new ResourceNotFoundException("Run", id));
     }
 
-    private void validateTransition(RunStatus current, RunStatus target) {
-        Set<RunStatus> allowed = VALID_TRANSITIONS.getOrDefault(current, EnumSet.noneOf(RunStatus.class));
+    private void validateTransition(Run run, RunStatus target, String outcome) {
+        Set<RunStatus> allowed = VALID_TRANSITIONS.getOrDefault(run.getStatus(), EnumSet.noneOf(RunStatus.class));
         if (!allowed.contains(target)) {
-            throw new InvalidStateTransitionException("Run", current.name(), target.name());
+            throw refusal(run.getId(), run.getStatus(), target, outcome, run.getCompletedAt());
         }
+    }
+
+    /**
+     * The one refusal of a run transition: from a terminal state it names the state the run
+     * is already in (and when it got there) and that nothing was done; any other refusal keeps
+     * the recorded state machine's plain answer.
+     */
+    private InvalidStateTransitionException refusal(UUID id, RunStatus current, RunStatus target,
+                                                    String outcome) {
+        return refusal(id, current, target, outcome, null);
+    }
+
+    private InvalidStateTransitionException refusal(UUID id, RunStatus current, RunStatus target,
+                                                    String outcome, Instant completedAt) {
+        if (!TERMINAL_STATUSES.contains(current)) {
+            return new InvalidStateTransitionException("Run", current.name(), target.name());
+        }
+        Instant since = completedAt != null
+                ? completedAt
+                : runRepository.findById(id).map(Run::getCompletedAt).orElse(null);
+        return InvalidStateTransitionException.alreadyTerminal(
+                "Run", id.toString(), current.name(), since, outcome);
+    }
+
+    /**
+     * The refusal of a lost write AFTER the runtime acknowledged the operator action: the
+     * action really happened, so {@link #refusal}'s pre-action wording ("nothing was
+     * stopped/paused/resumed") would be a lie. This names the state the run reached, the
+     * verified action, and that only the run record was left alone. It is still an
+     * {@link InvalidStateTransitionException}, so the client keeps its 409.
+     */
+    private InvalidStateTransitionException reachedWhileVerified(UUID id, RunStatus committed,
+                                                                 String verifiedAction) {
+        String done = switch (verifiedAction) {
+            case "pause" -> "paused";
+            case "resume" -> "resumed";
+            default -> "stopped";
+        };
+        return new InvalidStateTransitionException(String.format(
+                "Run %s reached %s while the verified %s completed; the runtime was %s"
+                        + " but the run record was not changed.",
+                id, committed.name(), verifiedAction, done));
     }
 
     private RunResponse toResponse(Run run) {

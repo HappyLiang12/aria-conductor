@@ -6,6 +6,7 @@ import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.execution.runtime.ControlAck;
+import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
@@ -14,6 +15,7 @@ import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -325,6 +327,33 @@ class HostLaunchSecretFileTest {
         assertThat(profile.controlSecretFile()).isNull();
         assertThat(backend.sessionSecret(handle).environment()).isEmpty();
         assertThat(Files.list(config).toList()).isEmpty();
+    }
+
+    /**
+     * The core log's exemption is the launcher's own launch-environment policy, so
+     * the operator's {@code aria.cores.launch-system-variables} reaches the log. The
+     * backend is produced by a {@code @Bean} factory, so the policy is delivered
+     * through the setter: this pins that wiring instead of trusting it, because a
+     * silent fallback to the derived default would redact an allowed name such as
+     * {@code JAVA_HOME} -- the exact evidence damage the allowlist exists to stop.
+     */
+    @Test
+    void theCoreLogTakesItsExemptNamesFromTheLaunchersOwnConfiguration() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(CoreConfigurationService.class,
+                    () -> new CoreConfigurationService(null, null, Map.of(), List.of("JAVA_HOME")));
+            context.registerBean(HostExecutionBackend.class,
+                    () -> backend(URI.create("http://127.0.0.1:1/")));
+            context.refresh();
+
+            assertThat(context.getBean(HostExecutionBackend.class).launchEnvironmentAllowlist())
+                    .as("the log's exemption must be the launcher's configured policy: the"
+                            + " configured value replaces the derived default, and the launcher's"
+                            + " own roots are always evidence")
+                    .contains("JAVA_HOME")
+                    .doesNotContain("PATH")
+                    .contains("HOME", "TEMP", "XDG_CONFIG_HOME");
+        }
     }
 
     private static void deleteTree(Path root) throws IOException {

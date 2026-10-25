@@ -1,5 +1,6 @@
 package io.aria.conductor.execution.runtime.host;
 
+import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.AfterEach;
@@ -18,6 +19,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -119,7 +121,7 @@ class RunCoreLogTest {
     void theChattyOutputLandsInTheRunOwnedLog() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
 
         Process process = OwnedProcessController.launch(chattyProfile(working), coreLog);
         try {
@@ -154,7 +156,7 @@ class RunCoreLogTest {
     void theLiveHandleStillServesTheCoreStreamsWhileTheLogRecordsThem() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
         Process process = OwnedProcessController.launch(oneLineProfile(working, "mirror-line"), coreLog);
         try {
             String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
@@ -179,7 +181,7 @@ class RunCoreLogTest {
     void bothStreamsAreCapturedWithTheirTagsAndInPerStreamOrder() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
         OwnedProcessController controller = OwnedProcessController.forCurrentPlatform();
         OwnedProcess owned = null;
         try {
@@ -211,7 +213,7 @@ class RunCoreLogTest {
     void anOrdinaryLineStreamIsWrittenLineByLine() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
 
         Process process = OwnedProcessController.launch(profile(working, Map.of(), "normal"), coreLog);
         try {
@@ -239,7 +241,7 @@ class RunCoreLogTest {
     void oneHugeLogicalLineIsCutAtTheDocumentedBoundInsteadOfBuffered() throws Exception {
         Path working = workingDirectory();
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("huge.log"), "huge-" + RUN, Map.of(),
-                RunCoreLog.DEFAULT_MAX_BYTES);
+                Set.of(), RunCoreLog.DEFAULT_MAX_BYTES);
 
         Process process = OwnedProcessController.launch(profile(working, Map.of(), "huge-line"), coreLog);
         try {
@@ -274,7 +276,7 @@ class RunCoreLogTest {
     void thePartialLineWrittenBeforeTheCoreExitsReachesTheFile() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
 
         Process process = OwnedProcessController.launch(
                 profile(working, Map.of(), "partial", "the-last-words-before-exit"), coreLog);
@@ -300,57 +302,57 @@ class RunCoreLogTest {
     }
 
     /**
-     * P3-1 of the re-review: the bound used to be applied to raw bytes <em>before</em>
-     * redaction, so a credential sitting on the cut survived as its prefix -- the
-     * reviewer's probe left the first 6 characters of a 30-character key in the
-     * file. Redaction must see the whole value even when the cut lands inside it.
+     * P3-C of the third review: this case used to end below the assembly capacity
+     * (65,530 filler + 30 characters = 65,560 &lt; 65,565), so the drain's truncation
+     * path never ran and the marker the test saw came from the ordinary line's own
+     * bound. The probe shape stays the same -- the value starts 6 bytes before the
+     * documented cut and ends past it -- but the line now continues past the
+     * assembly window, so the truncation path is the one that writes the head and
+     * the rest of the logical line is discarded.
      */
     @Test
     void aCredentialStraddlingTheLineCutLeavesNoPrefixInTheFile() throws Exception {
         Path working = workingDirectory();
-        Path runRoot = workingDirectory();
         String secret = "straddling-secret-" + "a".repeat(12); // 30 characters, as in the probe
         assertThat(secret).hasSize(30);
-        // The probe's offset: 6 characters of the value sit under the bound, 24 past it.
-        int filler = RunCoreLog.MAX_LINE_BYTES - 6;
-        LaunchProfile profile = profile(working, Map.of("LLM_API_KEY", secret),
-                "cut-straddle", String.valueOf(filler), secret);
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env());
+        String tail = "TAIL-past-the-assembly-window-must-not-be-written";
+        RunCoreLog coreLog = RunCoreLog.open(working.resolve("cut-straddle.log"), "cut-" + RUN,
+                Map.of("LLM_API_KEY", secret), Set.of(), RunCoreLog.DEFAULT_MAX_BYTES);
 
-        Process process = OwnedProcessController.launch(profile, coreLog);
+        // The probe's offset: 6 characters of the value sit under the bound, 24 past it.
+        int fillerBytes = RunCoreLog.MAX_LINE_BYTES - 6;
+        int capacity = RunCoreLog.MAX_LINE_BYTES + secret.length() - 1;
+        byte[] line = concat(filler(fillerBytes), utf8(secret), utf8(tail), utf8("\n"),
+                utf8("line-after-the-cut\n"));
         try {
-            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+            // 8 x 8192 reaches the bound; the next read fills the window and crosses it
+            // with no newline in it -- the drain's truncation path, not the newline one.
+            coreLog.startReaderForTest("stdout", new ChunkedStream(line, 8192, 8192, 8192, 8192,
+                    8192, 8192, 8192, 8192, capacity - 8 * 8192 + 1));
         } finally {
-            if (process.isAlive()) {
-                process.destroyForcibly();
-                process.waitFor(10, TimeUnit.SECONDS);
-            }
             coreLog.close();
         }
 
-        String content = Files.readString(coreLog.path());
-        String firstLine = stdoutLines(Files.readAllLines(coreLog.path())).get(0);
+        List<String> stdout = stdoutLines(Files.readAllLines(coreLog.path()));
+        assertThat(stdout)
+                .as("the line after the bound-crossing one must still be written")
+                .contains("line-after-the-cut");
+        String firstLine = stdout.get(0);
         assertThat(firstLine)
-                .as("a line that crosses the bound must be cut and marked")
+                .as("a line that continues past the assembly window must be cut and marked")
                 .contains("[aria] line truncated");
-        String head = headOf(firstLine);
-        String leaked = null;
-        for (int length = 6; length <= secret.length() && leaked == null; length++) {
-            String prefix = secret.substring(0, length);
-            if (content.contains(prefix)) {
-                leaked = prefix;
-            }
-        }
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the rest of a line that crossed the assembly window is discarded")
+                .doesNotContain(tail);
+        String leaked = leakedPrefix(content, secret, secret.length());
         assertThat(leaked)
                 .as("a credential the cut splits must be redacted whole; a surviving prefix of it"
                         + " ([%s] of [%s]) is a written credential", leaked, secret)
                 .isNull();
-        assertThat(head.getBytes(StandardCharsets.UTF_8).length)
+        assertThat(headOf(firstLine).getBytes(StandardCharsets.UTF_8).length)
                 .as("the retained head must still end at the documented bound")
                 .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES);
-        assertThat(content)
-                .as("the drain must survive the cut and keep the rest of the stream")
-                .contains("line-after-the-cut");
     }
 
     /**
@@ -364,7 +366,7 @@ class RunCoreLogTest {
         Path runRoot = workingDirectory();
         // One byte of the 3-byte euro sign is the last retained byte of the head.
         int filler = RunCoreLog.MAX_LINE_BYTES - 1;
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
 
         Process process = OwnedProcessController.launch(
                 profile(working, Map.of(), "cut-multibyte", String.valueOf(filler)), coreLog);
@@ -392,46 +394,44 @@ class RunCoreLogTest {
     }
 
     /**
-     * P3-4 of the re-review: the bound was only enforced for the tail of a chunk
-     * with no newline in it. A 65,537-byte line whose newline arrived in the
-     * crossing chunk was written whole (65,544 bytes with the tag), unmarked,
-     * while the javadoc promises every line over the bound is cut and marked.
+     * P3-4 of the re-review, pinned on the newline branch specifically: the old
+     * fixture let the OS decide whether the crossing byte and its newline arrived in
+     * one read, so when they arrived separately the marker came from the truncation
+     * branch and this test could pass without exercising the branch it names. The
+     * stream here hands out exactly the bound in the first eight reads and the
+     * crossing byte with its newline and the next line in the ninth, so only the
+     * newline branch can produce the marker -- and the stream must continue past it.
      */
     @Test
     void aLineWhoseNewlineArrivesInTheCrossingChunkIsStillCutAndMarked() throws Exception {
         Path working = workingDirectory();
-        Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(working.resolve("newline-at-bound.log"),
+                "newline-" + RUN, Map.of(), Set.of(), RunCoreLog.DEFAULT_MAX_BYTES);
 
-        Process process = OwnedProcessController.launch(
-                profile(working, Map.of(), "newline-at-bound",
-                        String.valueOf(RunCoreLog.MAX_LINE_BYTES)), coreLog);
+        byte[] line = concat(filler(RunCoreLog.MAX_LINE_BYTES), utf8("x\n"),
+                utf8("after-the-long-line\n"));
         try {
-            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+            coreLog.startReaderForTest("stdout", new ChunkedStream(line, 8192, 8192, 8192, 8192,
+                    8192, 8192, 8192, 8192, line.length - 8 * 8192));
         } finally {
-            if (process.isAlive()) {
-                process.destroyForcibly();
-                process.waitFor(10, TimeUnit.SECONDS);
-            }
             coreLog.close();
         }
 
         List<String> stdout = stdoutLines(Files.readAllLines(coreLog.path()));
         assertThat(stdout)
-                .as("the line after the bound-crossing one must still be written")
-                .contains("after-the-long-line");
+                .as("the crossing line is one line, and the stream continues after it")
+                .hasSize(2);
+        assertThat(stdout.get(1)).isEqualTo("after-the-long-line");
         String firstLine = stdout.get(0);
         assertThat(firstLine)
-                .as("a line of %s bytes must be cut at the documented %s and marked, not written whole"
-                        + " (first line bytes: %s)", RunCoreLog.MAX_LINE_BYTES + 1,
-                        RunCoreLog.MAX_LINE_BYTES, firstLine.getBytes(StandardCharsets.UTF_8).length)
+                .as("a line of %s bytes whose newline arrives in the crossing chunk must be cut at"
+                        + " the documented %s and marked, not written whole (first line bytes: %s)",
+                        RunCoreLog.MAX_LINE_BYTES + 1, RunCoreLog.MAX_LINE_BYTES,
+                        firstLine.getBytes(StandardCharsets.UTF_8).length)
                 .contains("[aria] line truncated");
         assertThat(headOf(firstLine).getBytes(StandardCharsets.UTF_8).length)
                 .as("the retained head must end at the documented bound")
                 .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES);
-        assertThat(Files.size(coreLog.path()))
-                .as("the file must hold the bound plus our tag and marker, never the whole line")
-                .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES + 512L);
     }
 
     /**
@@ -443,7 +443,7 @@ class RunCoreLogTest {
     void theDrainedProcessStreamIsClosedWhenItReachesEof() throws Exception {
         Path working = workingDirectory();
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("close.log"), "close-" + RUN,
-                Map.of(), RunCoreLog.DEFAULT_MAX_BYTES);
+                Map.of(), Set.of(), RunCoreLog.DEFAULT_MAX_BYTES);
         CloseRecordingStream pipe = new CloseRecordingStream("the-last-line-before-eof\n");
         try {
             coreLog.startReaderForTest("stdout", pipe);
@@ -478,7 +478,8 @@ class RunCoreLogTest {
         assertThat(first).hasSize(30);
         assertThat(second).hasSize(30);
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("two-secrets.log"), "two-" + RUN,
-                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), RunCoreLog.DEFAULT_MAX_BYTES);
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(),
+                RunCoreLog.DEFAULT_MAX_BYTES);
 
         // MAX-30 filler, the first value ending exactly on the bound, then the whole
         // second value: the window is MAX + 29, so the second value never fits.
@@ -514,6 +515,78 @@ class RunCoreLogTest {
                 .contains("line-after-the-cut");
     }
 
+    /**
+     * P2 of the third review: the partial-value trim lived only on the truncated
+     * path, so a line that ends at EOF after an earlier complete value could still
+     * write the start of a second one. Probe shape: 65,506 filler + a 30-character
+     * first value + the first 20 characters of a second. Redaction shrinks the first
+     * value by 20, so the text lands exactly on the bound and is written whole --
+     * prefix included (the reviewer saw {@code leakedPrefix=[s2-bbb]}).
+     */
+    @Test
+    void aLineEndingAtEofDoesNotWriteTheStartOfASecondSecret() throws Exception {
+        Path working = workingDirectory();
+        String first = "s1-" + "a".repeat(27);
+        String second = "s2-" + "b".repeat(27);
+        RunCoreLog coreLog = RunCoreLog.open(working.resolve("eof-prefix.log"), "eof-" + RUN,
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(),
+                RunCoreLog.DEFAULT_MAX_BYTES);
+
+        byte[] line = concat(filler(RunCoreLog.MAX_LINE_BYTES - 30), utf8(first),
+                utf8(second.substring(0, 20)));
+        try {
+            coreLog.startReaderForTest("stdout", new ChunkedStream(line, 8192, 8192, 8192, 8192,
+                    8192, 8192, 8192, 8192, line.length - 8 * 8192));
+        } finally {
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the earlier complete value must still be redacted; otherwise this proves nothing")
+                .doesNotContain(first);
+        assertThat(leakedPrefix(content, second, 20))
+                .as("a line that ends at EOF after redaction shrank an earlier value must not write"
+                        + " the start of a second one: [%s]", leakedPrefix(content, second, 20))
+                .isNull();
+        assertThat(content)
+                .as("the line never crossed the bound, so the truncation path is not the one under test")
+                .doesNotContain("[aria] line truncated");
+    }
+
+    /**
+     * P2, second direction: the same bytes with the newline present take the normal
+     * line path, which skipped the very same trim. Both paths must be closed.
+     */
+    @Test
+    void aNewlineTerminatedLineDoesNotWriteTheStartOfASecondSecret() throws Exception {
+        Path working = workingDirectory();
+        String first = "s1-" + "a".repeat(27);
+        String second = "s2-" + "b".repeat(27);
+        RunCoreLog coreLog = RunCoreLog.open(working.resolve("newline-prefix.log"), "nl-" + RUN,
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(),
+                RunCoreLog.DEFAULT_MAX_BYTES);
+
+        byte[] line = concat(filler(RunCoreLog.MAX_LINE_BYTES - 30), utf8(first),
+                utf8(second.substring(0, 20)), utf8("\n"));
+        try {
+            coreLog.startReaderForTest("stdout", new ChunkedStream(line, 8192, 8192, 8192, 8192,
+                    8192, 8192, 8192, 8192, line.length - 8 * 8192));
+        } finally {
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the earlier complete value must still be redacted; otherwise this proves nothing")
+                .doesNotContain(first);
+        assertThat(leakedPrefix(content, second, 20))
+                .as("a newline-terminated line that ends at the bound after an earlier redaction must"
+                        + " not write the start of a second value: [%s]",
+                        leakedPrefix(content, second, 20))
+                .isNull();
+    }
+
     @Test
     void everyExactEnvironmentValueTheChildEchoesIsRedacted() throws Exception {
         Path working = workingDirectory();
@@ -521,7 +594,7 @@ class RunCoreLogTest {
         LaunchProfile profile = echoProfile(working,
                 Map.of("SYNTHETIC_LLM_KEY", SYNTHETIC_KEY, "SYNTHETIC_SESSION_TOKEN", SYNTHETIC_TOKEN),
                 "SYNTHETIC_LLM_KEY", "SYNTHETIC_SESSION_TOKEN");
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(), Set.of());
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -545,12 +618,12 @@ class RunCoreLogTest {
     }
 
     /**
-     * Finding 2: redaction is by purpose, not "every value the launch env has".
-     * On Windows the old rule replaced every {@code C:} in a path plus
+     * Finding 2: redaction is a positive allowlist, not "every value the launch env
+     * has". On Windows replacing every value turned each {@code C:} in a path plus
      * {@code PATH}, {@code SystemDrive}, {@code NUMBER_OF_PROCESSORS} and
-     * {@code TZ}, destroying exactly the evidence the log exists to hold. A
-     * documented credential name is redacted however short its value; an ordinary
-     * system path survives verbatim.
+     * {@code TZ} into {@code [redacted]}, destroying exactly the evidence the log
+     * exists to hold. A name the launcher declared non-secret (the fixed roots and
+     * the configured OS allowlist) survives verbatim; anything else is redacted.
      */
     @Test
     void aDocumentedCredentialIsRedactedWhileSystemPathsSurviveVerbatim() throws Exception {
@@ -562,7 +635,8 @@ class RunCoreLogTest {
                 "HOME", POSIX_PATH,
                 "PATH", "C:\\Windows;C:\\Tools\\bin",
                 "NUMBER_OF_PROCESSORS", "16"), "LLM_API_KEY", "TEMP", "HOME", "PATH");
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(),
+                launcherNonSecretNames());
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -592,12 +666,13 @@ class RunCoreLogTest {
     }
 
     /**
-     * P3-2 of the re-review: the redactor kept a second, drifting copy of the
-     * launcher's system allowlist, so the launcher's own {@code XDG_*} roots and a
-     * name an operator added through {@code aria.cores.launch-system-variables}
-     * (JAVA_HOME here) were redacted -- the same evidence damage finding 6 was
-     * meant to stop. The exemption now comes from the launcher's own admission
-     * rule instead of a list this class maintains.
+     * P3-A/P3-B of the third review: the exemption is a positive allowlist from one
+     * source, {@link CoreConfigurationService#launchNonSecretNames()} -- the
+     * configured {@code aria.cores.launch-system-variables} (JAVA_HOME here, which
+     * replaces the derived default) plus the names the launcher always sets
+     * ({@code XDG_*} and the run-owned HOME roots). Everything else is redacted, so
+     * the launcher's own evidence survives without widening what counts as a
+     * credential.
      */
     @Test
     void theLaunchersOwnNonSecretRootsAndAllowlistedNamesSurviveVerbatim() throws Exception {
@@ -610,7 +685,9 @@ class RunCoreLogTest {
                 "JAVA_HOME", "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11-hotspot",
                 "LLM_API_KEY", SYNTHETIC_KEY),
                 "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "JAVA_HOME", "LLM_API_KEY");
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env());
+        // The property's semantics: a configured value replaces the derived default.
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(),
+                launcherNonSecretNames(List.of("JAVA_HOME")));
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -635,9 +712,55 @@ class RunCoreLogTest {
                         + " own non-secret system evidence, not a credential")
                 .contains("out-JAVA_HOME=C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11-hotspot");
         assertThat(content)
-                .as("widening the exemption must not widen what counts as a credential: a long value"
-                        + " under a name the launcher cannot admit is still redacted")
+                .as("a name the launcher did not declare non-secret is redacted, however long its value")
                 .contains("out-LLM_API_KEY=[redacted]");
+    }
+
+    /**
+     * P3-A/P3-B of the third review: the rule is a <em>positive allowlist</em>, so a
+     * name the launcher neither set itself nor the operator allowed is redacted
+     * whatever its value looks like. Before this, a length gate wrote
+     * {@code SOME_PASSWORD=tiny} (4 characters) and {@code DEEPSEEK_API_KEY=test-key}
+     * (8 characters, the shape the test profile configures) verbatim, and the
+     * admission predicate admitted an operator-added {@code opencode.sandbox-env}
+     * name, so {@code DEEPSEEK_AUTH=sk-live-...} was written in full.
+     */
+    @Test
+    void everyNameTheLauncherDidNotDeclareNonSecretIsRedactedWhateverItsLength() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        LaunchProfile profile = echoProfile(working, Map.of(
+                "SOME_PASSWORD", "tiny",
+                "DEEPSEEK_API_KEY", "test-key",
+                "DEEPSEEK_AUTH", "sk-live-synthetic-not-a-real-key"),
+                "SOME_PASSWORD", "DEEPSEEK_API_KEY", "DEEPSEEK_AUTH");
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(), launcherNonSecretNames());
+
+        Process process = OwnedProcessController.launch(profile, coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("a credential-shaped name shorter than the old length gate is still a credential")
+                .doesNotContain("tiny")
+                .contains("out-SOME_PASSWORD=[redacted]");
+        assertThat(content)
+                .as("the operator's model-provider key is a credential whatever its length")
+                .doesNotContain("test-key")
+                .contains("err-DEEPSEEK_API_KEY=[redacted]");
+        assertThat(content)
+                .as("an operator-added opencode.sandbox-env name is not system evidence: the"
+                        + " launcher never declared it non-secret")
+                .doesNotContain("sk-live-synthetic-not-a-real-key")
+                .contains("out-DEEPSEEK_AUTH=[redacted]");
     }
 
     @Test
@@ -645,7 +768,7 @@ class RunCoreLogTest {
         Path working = workingDirectory();
         long cap = 2_048;
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("capped.log"), "capped-" + RUN,
-                Map.of(), cap);
+                Map.of(), Set.of(), cap);
 
         Process process = OwnedProcessController.launch(chattyProfile(working), coreLog);
         try {
@@ -680,7 +803,7 @@ class RunCoreLogTest {
         Path working = workingDirectory();
         long cap = 2_048;
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("shared-cap.log"), "shared-" + RUN,
-                Map.of(), cap);
+                Map.of(), Set.of(), cap);
 
         Process process = OwnedProcessController.launch(profile(working, Map.of(), "cap-cross"), coreLog);
         try {
@@ -723,7 +846,7 @@ class RunCoreLogTest {
     void aDroppedStdioMirrorChunkIsReportedOnceInsteadOfVanishing() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
 
         // Nothing reads the process handle's streams: the mirror's backlog overflows.
         Process process = OwnedProcessController.launch(profile(working, Map.of(), "mirror-overflow"), coreLog);
@@ -764,7 +887,8 @@ class RunCoreLogTest {
         Files.writeString(workspace.resolve("agent-scratch.txt"), "work");
 
         Path working = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runtimeRoot.resolve(runId.toString()), runId, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runtimeRoot.resolve(runId.toString()), runId, Map.of(),
+                Set.of());
         Process process = OwnedProcessController.launch(oneLineProfile(working, "survives-cleanup"), coreLog);
         try {
             assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
@@ -793,7 +917,7 @@ class RunCoreLogTest {
     void theTailWrittenBeforeAForcedStopIsKept() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of(), Set.of());
 
         Process process = OwnedProcessController.launch(
                 tailProfile(working, "fatal: the core refused the session"), coreLog);
@@ -815,6 +939,20 @@ class RunCoreLogTest {
         Path directory = Files.createTempDirectory("run-core-log");
         directories.add(directory);
         return directory;
+    }
+
+    /**
+     * The launcher's own exemption, taken from the class that writes the profile
+     * env -- the same one source the log itself is handed, never a copy.
+     */
+    private static Set<String> launcherNonSecretNames() {
+        return launcherNonSecretNames(CoreConfigurationService.DEFAULT_ALLOWED_SYSTEM_VARIABLES);
+    }
+
+    /** The exemption of a launcher whose {@code aria.cores.launch-system-variables} is overridden. */
+    private static Set<String> launcherNonSecretNames(List<String> configuredSystemVariables) {
+        return new CoreConfigurationService(null, null, Map.of(), configuredSystemVariables)
+                .launchNonSecretNames();
     }
 
     /**
@@ -923,6 +1061,22 @@ class RunCoreLogTest {
             at += part.length;
         }
         return joined;
+    }
+
+    /**
+     * The longest prefix of {@code secret} the content still holds, searching down
+     * to six characters: shorter fragments collide with ordinary text in the log
+     * (our own truncation marker contains "st"), so six is the shortest prefix that
+     * is evidence of a written credential.
+     */
+    private static String leakedPrefix(String content, String secret, int maxLength) {
+        for (int length = Math.min(maxLength, secret.length()); length >= 6; length--) {
+            String prefix = secret.substring(0, length);
+            if (content.contains(prefix)) {
+                return prefix;
+            }
+        }
+        return null;
     }
 
     /**

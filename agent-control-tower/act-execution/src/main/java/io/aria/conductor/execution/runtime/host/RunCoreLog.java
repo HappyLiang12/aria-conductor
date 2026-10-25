@@ -21,7 +21,6 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -56,28 +55,20 @@ import java.util.stream.Stream;
  * until capture, which happens only after the stop, so the last words before an
  * aborted launch or a dead process would have no file to reach.
  *
- * <p><b>Redaction.</b> The log holds diagnostics, not credentials, and redaction
- * is by purpose rather than "every value the launch environment happens to
- * have": replacing all of them turned every {@code C:} in a path, plus
- * {@code PATH}, {@code SystemDrive}, {@code NUMBER_OF_PROCESSORS} and {@code TZ},
- * into {@code [redacted]} -- destroying exactly the evidence the log exists to
- * hold. A value is replaced when
- * <ul>
- *   <li>its variable is one of the documented credential names
- *       ({@link #CREDENTIAL_ENVIRONMENT_NAMES}), whatever the value looks like,
- *       or</li>
- *   <li>it is at least {@value #MIN_UNNAMED_SECRET_LENGTH} characters long and
- *       its variable is not one the launcher itself can admit as a non-secret
- *       system variable
- *       ({@link CoreConfigurationService#isNonSecretLaunchVariableName}): the
- *       configured allowlist ({@code aria.cores.launch-system-variables}, e.g.
- *       {@code JAVA_HOME}) and the launcher's own {@code XDG_CONFIG_HOME}/
- *       {@code XDG_DATA_HOME}/{@code XDG_CACHE_HOME} and HOME roots are long
- *       non-secret paths, and this class takes that answer from the launcher's
- *       own admission rule instead of keeping a second list that drifts.</li>
- * </ul>
- * Replacement is still exact-value, never a "secret-looking" heuristic on the
- * text: a value the profile did not pass is never guessed at.
+ * <p><b>Redaction.</b> The log holds diagnostics, not credentials. The exempt
+ * names are a <em>positive allowlist</em> handed in by the launcher: exactly the
+ * names it sets itself as non-secret system evidence plus the operator's
+ * configured {@code aria.cores.launch-system-variables}
+ * ({@link CoreConfigurationService#launchNonSecretNames()}). <b>Every other name
+ * in the launch environment is redacted by exact value, whatever its length and
+ * whatever it looks like</b> -- a name the log was not told is non-secret is
+ * treated as one (fail-closed), so a credential can never be written because it
+ * is short or because its name does not match a pattern. The alternative --
+ * replacing every value of the launch environment -- turned every {@code C:} in a
+ * path, plus {@code PATH}, {@code SystemDrive}, {@code NUMBER_OF_PROCESSORS} and
+ * {@code TZ}, into {@code [redacted]} -- destroying exactly the evidence the log
+ * exists to hold. Replacement is still exact-value, never a "secret-looking"
+ * heuristic on the text: a value the profile did not pass is never guessed at.
  *
  * <p><b>Bound.</b> One file is capped at {@value #DEFAULT_MAX_BYTES} bytes
  * (8 MiB) shared by both streams; once the next line would cross the cap, a
@@ -99,7 +90,11 @@ import java.util.stream.Stream;
  * a whole, and only then cut on a UTF-8 code point boundary -- so a credential
  * sitting on the cut is removed rather than half-written, and a character the
  * cut splits is dropped whole instead of becoming U+FFFD. A trailing partial
- * line is flushed when the stream ends.
+ * line is flushed when the stream ends. Every write path -- the
+ * newline-terminated line, the line cut at the bound and the partial line
+ * flushed at EOF -- drops a trailing fragment that is only the start of a secret
+ * value, because a redaction earlier in the window shrinks the text and can pull
+ * that start into the retained range.
  *
  * <p><b>Ownership and the mirrored streams.</b> The drain consumes the
  * process's pipes, so a caller that speaks to the core over stdio would have
@@ -134,27 +129,6 @@ public final class RunCoreLog implements AutoCloseable {
 
     /** Replaces every occurrence of an exact value from the launch profile's environment. */
     static final String REDACTED = "[redacted]";
-
-    /**
-     * Variable names whose value is a credential by purpose, whatever it looks
-     * like: the run's model-provider key, the core's own personal access token,
-     * the bridge/control secret, the MCP bearer and the operator session bearer.
-     * The names are the launcher's, not a guess: {@code CoreConfigurationService},
-     * {@code QoderCoreAdapter}, {@code OpenCodeCoreAdapter} and
-     * {@code OperatorSessionService} are the writers of exactly these.
-     */
-    static final Set<String> CREDENTIAL_ENVIRONMENT_NAMES = Set.of(
-            "LLM_API_KEY",
-            "QODER_PERSONAL_ACCESS_TOKEN",
-            "QODER_BRIDGE_CONTROL_SECRET",
-            "ARIA_MCP_TOKEN",
-            "ARIA_OPERATOR_BEARER_TOKEN");
-
-    /**
-     * The shortest value treated as a credential when its variable name is not a
-     * documented one. Shorter values are ordinary settings and paths.
-     */
-    static final int MIN_UNNAMED_SECRET_LENGTH = 12;
 
     private static final System.Logger LOG = System.getLogger(RunCoreLog.class.getName());
 
@@ -193,12 +167,12 @@ public final class RunCoreLog implements AutoCloseable {
     private int activeReaders;
 
     private RunCoreLog(String label, Path path, OutputStream sink, long maxBytes,
-            Map<String, String> environment) {
+            Map<String, String> environment, Set<String> nonSecretNames) {
         this.label = label;
         this.path = path;
         this.sink = sink;
         this.maxBytes = maxBytes;
-        this.environmentValues = secretsOf(environment);
+        this.environmentValues = secretsOf(environment, nonSecretNames);
         this.truncationReserve = reserveFor(this.environmentValues);
     }
 
@@ -222,18 +196,27 @@ public final class RunCoreLog implements AutoCloseable {
      * the same run (a retried launch) is replaced. A file that cannot be opened
      * fails the launch: a run whose core output has nowhere to go is not
      * launched with the deadlock this class exists to remove.
+     *
+     * @param nonSecretNames the launcher's positive allowlist: the names it sets
+     *        itself as non-secret system evidence plus the operator's configured
+     *        {@code aria.cores.launch-system-variables}
+     *        ({@link CoreConfigurationService#launchNonSecretNames()}). Every other
+     *        name of {@code environment} is redacted, whatever its value looks like.
      */
-    public static RunCoreLog open(Path runRoot, UUID runId, Map<String, String> environment) {
-        return open(pathIn(runRoot, runId), runId.toString(), environment, DEFAULT_MAX_BYTES);
+    public static RunCoreLog open(Path runRoot, UUID runId, Map<String, String> environment,
+            Set<String> nonSecretNames) {
+        return open(pathIn(runRoot, runId), runId.toString(), environment, nonSecretNames,
+                DEFAULT_MAX_BYTES);
     }
 
     /** A log that drains both streams and keeps nothing; for a launch with no run-owned file. */
     static RunCoreLog discard() {
-        return new RunCoreLog("discarded", null, null, DEFAULT_MAX_BYTES, Map.of());
+        return new RunCoreLog("discarded", null, null, DEFAULT_MAX_BYTES, Map.of(), Set.of());
     }
 
     /** Test seam: the same writer with an explicit cap so the truncation path is cheap to prove. */
-    static RunCoreLog open(Path file, String label, Map<String, String> environment, long maxBytes) {
+    static RunCoreLog open(Path file, String label, Map<String, String> environment,
+            Set<String> nonSecretNames, long maxBytes) {
         Objects.requireNonNull(file, "file");
         if (maxBytes <= 0) {
             throw new IllegalArgumentException("A core log cap must be positive, got " + maxBytes);
@@ -246,7 +229,8 @@ public final class RunCoreLog implements AutoCloseable {
             OutputStream sink = new BufferedOutputStream(Files.newOutputStream(file,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE), STREAM_BUFFER);
-            return new RunCoreLog(label, file.toAbsolutePath().normalize(), sink, maxBytes, environment);
+            return new RunCoreLog(label, file.toAbsolutePath().normalize(), sink, maxBytes,
+                    environment, nonSecretNames);
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to open the run-owned core log " + file, e);
         }
@@ -378,15 +362,17 @@ public final class RunCoreLog implements AutoCloseable {
      * One completed line: our tag, the redacted text, one flush. The bound applies
      * here as well, because the newline can arrive in the very chunk that crosses
      * it -- a 65,537-byte line whose last byte and newline were read together used
-     * to be written whole and unmarked.
+     * to be written whole and unmarked. The partial-value trim runs here too (this
+     * is also the EOF flush path): a line that ends after redaction shrank an
+     * earlier value can otherwise end with the start of a second one.
      */
     private void appendLine(String tag, byte[] lineBytes) {
         if (path == null) {
             return; // discarded: draining is the point, keeping is not
         }
         byte[] body = stripCarriageReturn(lineBytes);
-        String text = redact(new String(body, 0, completeCharacters(body, body.length),
-                StandardCharsets.UTF_8));
+        String text = withoutPartialValue(redact(new String(body, 0,
+                completeCharacters(body, body.length), StandardCharsets.UTF_8)));
         if (text.getBytes(StandardCharsets.UTF_8).length <= MAX_LINE_BYTES) {
             writeTagged(tag, text);
             return;
@@ -637,15 +623,21 @@ public final class RunCoreLog implements AutoCloseable {
     /**
      * The exact environment values to redact, longest first so a value that
      * contains another value is replaced as a whole before its prefix can split
-     * it. Which values qualify is {@link #isSecret}: a documented credential name
-     * always, a long value under a name the launcher itself cannot admit as a
-     * non-secret system variable because such a name may carry a provider key
-     * this class has no name for.
+     * it. The rule is a positive allowlist and fails closed: a value is exempt
+     * only when its name is in {@code nonSecretNames} -- the launcher's own fixed
+     * names plus the operator's configured {@code aria.cores.launch-system-variables}
+     * ({@link CoreConfigurationService#launchNonSecretNames()}). Every other name
+     * is redacted whatever its value looks like, so a short credential or a
+     * provider name this class has never heard of cannot be written. The
+     * alternative -- every value of the launch environment -- replaces the drive
+     * letters of every path on Windows and hides the failure the log is for.
      */
-    private static List<String> secretsOf(Map<String, String> environment) {
+    private static List<String> secretsOf(Map<String, String> environment,
+            Set<String> nonSecretNames) {
+        Set<String> exempt = nonSecretNames == null ? Set.of() : nonSecretNames;
         LinkedHashSet<String> unique = new LinkedHashSet<>();
         environment.forEach((name, value) -> {
-            if (name != null && value != null && !value.isEmpty() && isSecret(name, value)) {
+            if (name != null && value != null && !value.isEmpty() && !exempt.contains(name)) {
                 unique.add(value);
             }
         });
@@ -666,26 +658,6 @@ public final class RunCoreLog implements AutoCloseable {
             longest = Math.max(longest, secret.getBytes(StandardCharsets.UTF_8).length);
         }
         return Math.max(0, longest - 1);
-    }
-
-    /**
-     * Redact by purpose: a credential is a value the launcher named as one, or a
-     * value long enough to be one under a name the launcher could not have handed
-     * the child as system evidence
-     * ({@link CoreConfigurationService#isNonSecretLaunchVariableName}). The
-     * alternative -- every value of the launch environment -- replaces the drive
-     * letters of every path on Windows and hides the failure the log is for.
-     */
-    static boolean isSecret(String name, String value) {
-        if (name == null || value == null || value.isEmpty()) {
-            return false;
-        }
-        String upper = name.toUpperCase(Locale.ROOT);
-        if (CREDENTIAL_ENVIRONMENT_NAMES.contains(upper)) {
-            return true;
-        }
-        return value.length() >= MIN_UNNAMED_SECRET_LENGTH
-                && !CoreConfigurationService.isNonSecretLaunchVariableName(name);
     }
 
     // ------------------------------------------------------------------ mirror

@@ -97,16 +97,6 @@ public final class CoreLogFixture {
                     out.write(line);
                 }
             }
-            case "cut-straddle" -> {
-                // A credential whose value sits on the line bound: args[1] filler
-                // bytes, then the whole secret, then the newline. The cut lands
-                // inside the secret, leaving a prefix if the bound is applied
-                // before redaction. Everything is written synchronously.
-                out.write(filler(Integer.parseInt(args[1])));
-                out.write(utf8(args[2]));
-                writeLine(out, "");
-                writeLine(out, "line-after-the-cut");
-            }
             case "cut-multibyte" -> {
                 // A 3-byte character straddling the line bound: with args[1] =
                 // bound - 1 its first byte is the last retained one, so a cut on
@@ -115,17 +105,6 @@ public final class CoreLogFixture {
                 out.write(utf8("\u20ac"));
                 writeLine(out, "");
                 writeLine(out, "after-the-cut");
-            }
-            case "newline-at-bound" -> {
-                // The newline arrives in the chunk that crosses the bound. The head
-                // is written and allowed to drain first, then the byte past the bound
-                // and the newline are written together in one syscall, so no read
-                // boundary can fall between them.
-                out.write(filler(Integer.parseInt(args[1])));
-                out.flush();
-                Thread.sleep(150);
-                out.write(utf8("x\n"));
-                writeLine(out, "after-the-long-line");
             }
             case "chatty-undrained" -> {
                 // The anti-vacuity fixture: it says it reached main() before the

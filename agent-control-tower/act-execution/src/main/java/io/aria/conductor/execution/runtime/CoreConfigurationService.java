@@ -11,6 +11,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -98,6 +99,30 @@ public class CoreConfigurationService {
     public static final List<String> DEFAULT_ALLOWED_SYSTEM_VARIABLES = List.of(
             "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "COMSPEC",
             "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "LANG", "LC_ALL", "TZ");
+
+    /** The run-owned HOME root the launcher always sets (never the operator's). */
+    public static final String HOME_VARIABLE = "HOME";
+    /** The Windows spelling of the run-owned HOME root the launcher always sets. */
+    public static final String USERPROFILE_VARIABLE = "USERPROFILE";
+    /** The run-owned temporary root the launcher always sets. */
+    public static final String TMP_VARIABLE = "TMP";
+    /** The second spelling of the run-owned temporary root the launcher always sets. */
+    public static final String TEMP_VARIABLE = "TEMP";
+    /** The run-owned OpenCode config root the launcher always sets. */
+    public static final String XDG_CONFIG_HOME_VARIABLE = "XDG_CONFIG_HOME";
+    /** The run-owned OpenCode data root the launcher always sets. */
+    public static final String XDG_DATA_HOME_VARIABLE = "XDG_DATA_HOME";
+    /** The run-owned OpenCode cache root the launcher always sets. */
+    public static final String XDG_CACHE_HOME_VARIABLE = "XDG_CACHE_HOME";
+
+    /**
+     * The names the launcher itself always sets as non-secret system evidence,
+     * whatever the configured OS allowlist is. {@link #prepare} writes exactly
+     * these constants, so this set and the launch environment cannot drift apart.
+     */
+    public static final Set<String> LAUNCH_SYSTEM_EVIDENCE_NAMES = Set.of(
+            HOME_VARIABLE, USERPROFILE_VARIABLE, TMP_VARIABLE, TEMP_VARIABLE,
+            XDG_CONFIG_HOME_VARIABLE, XDG_DATA_HOME_VARIABLE, XDG_CACHE_HOME_VARIABLE);
 
     /**
      * SDK-entrypoint, process-injection and capability variables that must never
@@ -191,10 +216,10 @@ public class CoreConfigurationService {
                 environmentVariables.put(name, value);
             }
         }
-        environmentVariables.put("HOME", home.toString());
-        environmentVariables.put("USERPROFILE", home.toString());
-        environmentVariables.put("TMP", tmp.toString());
-        environmentVariables.put("TEMP", tmp.toString());
+        environmentVariables.put(HOME_VARIABLE, home.toString());
+        environmentVariables.put(USERPROFILE_VARIABLE, home.toString());
+        environmentVariables.put(TMP_VARIABLE, tmp.toString());
+        environmentVariables.put(TEMP_VARIABLE, tmp.toString());
 
         List<String> argv;
         if (QODER_CORE_ID.equals(spec.coreId())) {
@@ -208,10 +233,10 @@ public class CoreConfigurationService {
                 throw new IllegalStateException(
                         "OpenCode launch requires a host:port endpoint, got: " + endpoint);
             }
-            environmentVariables.put("XDG_CONFIG_HOME", config.toString());
-            environmentVariables.put("XDG_DATA_HOME",
+            environmentVariables.put(XDG_CONFIG_HOME_VARIABLE, config.toString());
+            environmentVariables.put(XDG_DATA_HOME_VARIABLE,
                     createDirectories(configurationDirectory.resolve("data")).toString());
-            environmentVariables.put("XDG_CACHE_HOME",
+            environmentVariables.put(XDG_CACHE_HOME_VARIABLE,
                     createDirectories(configurationDirectory.resolve("cache")).toString());
             openCodeModelProviderEnvironment.forEach((name, value) -> {
                 if (value != null && !value.isBlank()) {
@@ -288,18 +313,26 @@ public class CoreConfigurationService {
     }
 
     /**
-     * True when this name may reach a core child as non-secret system evidence:
-     * the inverse of this launcher's own admission rule
-     * ({@link #isForbiddenLaunchVariable}), which refuses credential-shaped and
-     * SDK-entrypoint/process-injection names. The run-owned core log asks this
-     * question instead of keeping its own copy of the system allowlist, so the
-     * launcher's default names, an operator override
-     * ({@code aria.cores.launch-system-variables}, e.g. {@code JAVA_HOME}) and the
-     * launcher's own {@code XDG_*}/HOME roots are all system evidence by
-     * construction -- one rule, no second list to drift.
+     * The positive allowlist of the run-owned core log: the names this launcher
+     * may set as non-secret system evidence -- the configured OS allowlist plus the
+     * fixed names above. One source: {@link #prepare} writes exactly these names,
+     * so the log's exemption and the profile environment cannot drift apart.
      */
-    public static boolean isNonSecretLaunchVariableName(String name) {
-        return name != null && !name.isBlank() && !isForbiddenLaunchVariable(name);
+    public static Set<String> nonSecretLaunchNames(Collection<String> systemVariableNames) {
+        Set<String> names = new LinkedHashSet<>(Objects.requireNonNull(systemVariableNames,
+                "systemVariableNames"));
+        names.addAll(LAUNCH_SYSTEM_EVIDENCE_NAMES);
+        return Set.copyOf(names);
+    }
+
+    /**
+     * This launcher's effective allowlist: the validated
+     * {@code aria.cores.launch-system-variables} names plus the fixed launcher
+     * names. The run-owned core log takes its redaction exemption from here, so it
+     * keeps no list of its own to drift.
+     */
+    public Set<String> launchNonSecretNames() {
+        return nonSecretLaunchNames(allowedSystemVariables);
     }
 
     /** Case-insensitive membership: the ambient lookup is case-insensitive on Windows. */

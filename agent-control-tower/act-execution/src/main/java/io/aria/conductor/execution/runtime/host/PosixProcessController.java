@@ -102,11 +102,12 @@ final class PosixProcessController implements OwnedProcessController {
     // ------------------------------------------------------------------ port
 
     @Override
-    public OwnedProcess start(UUID runId, LaunchProfile profile) {
+    public OwnedProcess start(UUID runId, LaunchProfile profile, RunCoreLog coreLog) {
         Objects.requireNonNull(runId, "runId");
         Objects.requireNonNull(profile, "profile");
+        Objects.requireNonNull(coreLog, "coreLog");
         requireSignalHost();
-        Process process = OwnedProcessController.launch(profile);
+        Process process = OwnedProcessController.launch(profile, coreLog);
         try {
             String creation = creationOf(process.pid()).orElseThrow(() -> new IllegalStateException(
                     "The launched runtime (pid " + process.pid() + ") vanished before its start identity"

@@ -22,6 +22,7 @@ import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
+import io.aria.conductor.execution.runtime.host.RunCoreLog;
 import io.aria.conductor.execution.security.ActorTokenService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -692,7 +693,8 @@ class CoreExecutionServiceTest {
 
         assertThatThrownBy(() -> service.execute(spec(), adapter, task()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessage("Run " + RUN + " failed: the bridge event stream failed");
+                .hasMessage("Run " + RUN + " failed: the bridge event stream failed"
+                        + " (core log: " + RunCoreLog.pathIn(Path.of("C:/runtime/runs/" + RUN), RUN) + ")");
 
         assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
                 "open-session", "prompt", "stop-writers", "capture", "destroy", "release");

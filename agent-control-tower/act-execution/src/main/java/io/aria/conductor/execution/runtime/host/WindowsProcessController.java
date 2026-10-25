@@ -120,16 +120,17 @@ final class WindowsProcessController implements OwnedProcessController {
     // ------------------------------------------------------------------ port
 
     @Override
-    public OwnedProcess start(UUID runId, LaunchProfile profile) {
+    public OwnedProcess start(UUID runId, LaunchProfile profile, RunCoreLog coreLog) {
         Objects.requireNonNull(runId, "runId");
         Objects.requireNonNull(profile, "profile");
+        Objects.requireNonNull(coreLog, "coreLog");
         // The run's job must exist before the core does: the supervisor's script
         // creates the job object (with kill-on-close) before it prints the ready
         // line, and this constructor call awaits that line -- so the only
         // unsupervised window left is CreateProcess-to-assign, which the
         // identity-validated enumerated sweep covers.
         Supervisor current = supervisor();
-        Process process = OwnedProcessController.launch(profile);
+        Process process = OwnedProcessController.launch(profile, coreLog);
         try {
             String jobMembership = current.command("assign " + process.pid());
             String creation = creationOf(process.pid()).orElseThrow(() -> new IllegalStateException(

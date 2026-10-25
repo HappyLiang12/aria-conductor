@@ -16,6 +16,8 @@ import io.aria.conductor.execution.runtime.WorkspacePaths;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
@@ -93,7 +95,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * is stop, then export, then destroy: a verified stop never removes the
  * environment entry that {@link #exportWorkspace} needs, and {@link #destroy} is
  * the only operation that ends it.
+ *
+ * <p>The run's core output is drained into a run-owned log that is not part of
+ * the workspace: {@link RunCoreLog} writes below the run's retained runtime
+ * root ({@code <runConfigurationRoot>/logs/core-<runId>.log}), which neither the
+ * workspace cleanup nor {@link #destroy} removes -- {@code destroy} deletes only
+ * the generated configuration directory itself. That log is the operator's
+ * evidence when a HOST run fails before it can produce a server log.
  */
+@Slf4j
 public class HostExecutionBackend implements ExecutionBackend {
 
     /** Generated run-owned configuration, kept beside (never inside) the workspace. */
@@ -131,6 +141,8 @@ public class HostExecutionBackend implements ExecutionBackend {
     private final EndpointAllocator endpoints;
     private final Map<UUID, PreparedEnvironment> environments = new ConcurrentHashMap<>();
     private final Map<UUID, OwnedProcess> processes = new ConcurrentHashMap<>();
+    /** The run-owned stdio log of every launched runtime, memory-only like the live process. */
+    private final Map<UUID, RunCoreLog> coreLogs = new ConcurrentHashMap<>();
     /** The per-run bridge control secret minted at {@link #prepare}, memory-only. */
     private final Map<UUID, String> controlSecrets = new ConcurrentHashMap<>();
     /**
@@ -230,8 +242,20 @@ public class HostExecutionBackend implements ExecutionBackend {
         // run-owned control-secret file (e.g. opencode serve) has no use for it,
         // and least privilege keeps it in the launcher rather than in a process
         // that cannot authenticate with it.
-        OwnedProcess owned = controller.start(environment.runId(),
-                declaredControlSecret ? deliverControlSecret(profile, controlSecret) : profile);
+        LaunchProfile effective = declaredControlSecret
+                ? deliverControlSecret(profile, controlSecret) : profile;
+        // The drain starts inside the controller, the moment the process exists;
+        // the file lives below the retained runtime root, so the core's last words
+        // survive both the workspace cleanup and this backend's destroy.
+        RunCoreLog coreLog = openCoreLog(environment, effective);
+        coreLogs.put(environment.runId(), coreLog);
+        OwnedProcess owned;
+        try {
+            owned = controller.start(environment.runId(), effective, coreLog);
+        } catch (RuntimeException e) {
+            closeCoreLog(environment.runId());
+            throw e;
+        }
         if (!controller.owns(owned)) {
             discard(owned);
             throw new IllegalStateException("The launched runtime failed its ownership verification for run "
@@ -259,6 +283,35 @@ public class HostExecutionBackend implements ExecutionBackend {
         }
         return new RuntimeHandle(environment.runId(), ExecutionMode.HOST, environment.environmentId(),
                 owned.ownershipIdentity(), environment.endpoint());
+    }
+
+    /**
+     * Opens the run's stdio log below its retained runtime root and names the
+     * path in the backend log. The root is the parent of the run's generated
+     * configuration directory ({@code <lease.runtimeRoot()>}), created by
+     * {@code RunWorkspaceService.configRoot} before any launch: it is outside
+     * the workspace tree {@code WorkspaceManager.cleanup} deletes, and
+     * {@link #destroyAndReport} deletes only its {@code host} child, so the log
+     * outlives the run's placement record.
+     */
+    private static RunCoreLog openCoreLog(PreparedEnvironment environment, LaunchProfile profile) {
+        Path configuration = Path.of(environment.configurationDirectory()).toAbsolutePath().normalize();
+        Path runRoot = configuration.getParent();
+        if (runRoot == null) {
+            throw new IllegalStateException("The run-owned configuration directory of run "
+                    + environment.runId() + " has no root to hold a core log: " + configuration);
+        }
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, environment.runId(), profile.env());
+        log.info("Run {}: run-owned core log at {}", environment.runId(), coreLog.path());
+        return coreLog;
+    }
+
+    /** Closes and forgets the run's stdio log; the process it belongs to has ended. */
+    private void closeCoreLog(UUID runId) {
+        RunCoreLog coreLog = coreLogs.remove(runId);
+        if (coreLog != null) {
+            coreLog.close();
+        }
     }
 
     /**
@@ -378,6 +431,9 @@ public class HostExecutionBackend implements ExecutionBackend {
         controller.release(owned != null ? owned : OwnedProcess.parse(handle.ownershipIdentity()));
         controlSecrets.remove(handle.runId());
         sessionSecrets.remove(handle.runId());
+        // The run's writers are stopped by contract before a destroy; the drain is
+        // bounded, and its file is not part of what this method deletes.
+        closeCoreLog(handle.runId());
         PreparedEnvironment environment = environments.remove(handle.runId());
         if (environment == null) {
             return owned != null;
@@ -471,6 +527,7 @@ public class HostExecutionBackend implements ExecutionBackend {
             live.destroyForcibly();
         }
         controller.release(owned);
+        closeCoreLog(owned.runId());
     }
 
     /**

@@ -7,6 +7,7 @@ import io.aria.conductor.common.event.RunInputReceivedEvent;
 import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.event.TurnCompletedEvent;
 import io.aria.conductor.common.model.Agent;
+import io.aria.conductor.common.model.RunErrorText;
 import io.aria.conductor.common.model.RunExecutionBinding;
 import io.aria.conductor.common.model.RunStatus;
 import io.aria.conductor.common.model.SessionTrajectory;
@@ -28,12 +29,14 @@ import io.aria.conductor.execution.llm.LlmMessage;
 import io.aria.conductor.execution.llm.LlmToolCall;
 import io.aria.conductor.execution.repository.RunExecutionBindingRepository;
 import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
+import io.aria.conductor.execution.runtime.host.RunCoreLog;
 import io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackend;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLaunchRejectedException;
 import io.aria.conductor.execution.security.ActorTokenService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -536,11 +539,41 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             return new CoreResult(runtime.session().sessionId(), null, null, true, false);
         }
         if (failure != null) {
-            throw new IllegalStateException("Run " + spec.runId() + " failed: " + messageOf(failure));
+            String coreLog = spec.mode() == ExecutionMode.HOST
+                    ? " (core log: " + RunCoreLog.pathIn(Path.of(runtime.lease().runtimeRoot()), spec.runId()) + ")"
+                    : "";
+            throw new IllegalStateException(failureText(spec.runId(), messageOf(failure), coreLog));
         }
         boolean cancelled = STATE_CANCELLED.equals(state);
         return new CoreResult(result.sessionId(), result.finalOutput(), result.usage(), cancelled,
                 result.turnAlreadyAccounted());
+    }
+
+    /**
+     * The one composition of a failed turn's operator text. Public because the
+     * property that decides whether the evidence is reachable at all -- the
+     * core-log path surviving {@link RunErrorText#bound(String)} -- is pinned by
+     * a host test, next to the log the path names.
+     *
+     * <p>The path is appended last, and the bound keeps only the first ~1,850
+     * characters, so the room the path needs is reserved <em>before</em> the
+     * core's own message is kept: a long failure loses its middle, never the
+     * pointer to the file that holds it. The composed text fits
+     * {@link RunErrorText#MAX_PERSISTED_LENGTH}, so the downstream bound leaves
+     * it intact instead of cutting the suffix off.
+     */
+    public static String failureText(UUID runId, String detail, String coreLog) {
+        String prefix = "Run " + runId + " failed: ";
+        String suffix = coreLog == null ? "" : coreLog;
+        String text = detail == null ? "" : detail;
+        int room = RunErrorText.MAX_PERSISTED_LENGTH - prefix.length() - suffix.length();
+        if (text.length() > room) {
+            String marker = "... [truncated to keep the core-log path]";
+            text = room > marker.length()
+                    ? text.substring(0, room - marker.length()) + marker
+                    : text.substring(0, Math.max(0, room));
+        }
+        return prefix + text + suffix;
     }
 
     /**

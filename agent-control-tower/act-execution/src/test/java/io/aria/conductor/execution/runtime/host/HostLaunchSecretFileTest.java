@@ -59,6 +59,7 @@ class HostLaunchSecretFileTest {
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicInteger probes = new AtomicInteger();
     private final AtomicReference<LaunchProfile> startedProfile = new AtomicReference<>();
+    private final AtomicReference<RunCoreLog> startedLog = new AtomicReference<>();
     private Path root;
     private HttpServer endpoint;
 
@@ -72,7 +73,7 @@ class HostLaunchSecretFileTest {
         }
     }
 
-    private record Fixture(Path root, Path workspace, Path configuration, UUID runId,
+    private record Fixture(Path root, Path workspace, Path runtimeRoot, Path configuration, UUID runId,
             ExecutionSpec spec, WorkspaceLease lease) {
     }
 
@@ -86,15 +87,16 @@ class HostLaunchSecretFileTest {
                 "qoder:operator", "rev-1", Instant.now().plusSeconds(600));
         WorkspaceLease lease = new WorkspaceLease(UUID.randomUUID(), runId, WorkspaceKind.DIRECT,
                 workspace, workspace, runtimeRoot.toString(), null);
-        return new Fixture(root, workspace, runtimeRoot.resolve("host"), runId, spec, lease);
+        return new Fixture(root, workspace, runtimeRoot, runtimeRoot.resolve("host"), runId, spec, lease);
     }
 
     /** The placement backend under test: the stub controller never starts a real process. */
     private HostExecutionBackend backend(URI allocated) {
         OwnedProcessController controller = new OwnedProcessController() {
             @Override
-            public OwnedProcess start(UUID runId, LaunchProfile profile) {
+            public OwnedProcess start(UUID runId, LaunchProfile profile, RunCoreLog coreLog) {
                 startedProfile.set(profile);
+                startedLog.set(coreLog);
                 started.set(true);
                 return new OwnedProcess(runId, "nonce", 4711L, "4711@1", "supervisor", "stub", null);
             }
@@ -266,6 +268,43 @@ class HostLaunchSecretFileTest {
                 .as("a refused profile must never have started a runtime")
                 .isFalse();
         assertThat(outside).doesNotExist();
+    }
+
+    /**
+     * The core log is placed below the run's retained runtime root -- outside the
+     * workspace and outside the generated configuration directory -- so neither
+     * the workspace cleanup nor {@code destroy} can take the operator's evidence
+     * with them.
+     */
+    @Test
+    void theCoreLogIsOutsideTheGeneratedConfigurationAndSurvivesDestroy() throws Exception {
+        Fixture fixture = fixture();
+        endpoint = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        endpoint.createContext("/session", exchange -> answer(exchange, 200,
+                "{\"runId\":\"" + fixture.runId() + "\"}"));
+        endpoint.start();
+        HostExecutionBackend backend = backend(uriOf(endpoint));
+        PreparedEnvironment environment = backend.prepare(fixture.spec(), fixture.lease());
+        LaunchProfile profile = new LaunchProfile(List.of("stub-runtime"), Map.of(),
+                fixture.workspace().toString());
+
+        RuntimeHandle handle = backend.launch(environment, profile);
+
+        Path expected = RunCoreLog.pathIn(fixture.runtimeRoot(), fixture.runId());
+        assertThat(startedLog.get()).isNotNull();
+        assertThat(startedLog.get().path()).isEqualTo(expected);
+        assertThat(expected).exists();
+        assertThat(expected.startsWith(fixture.workspace()))
+                .as("the core log must not live in the workspace the run's cleanup deletes")
+                .isFalse();
+        assertThat(expected.startsWith(fixture.configuration()))
+                .as("the core log must not live in the generated configuration destroy deletes")
+                .isFalse();
+
+        backend.destroy(handle);
+
+        assertThat(fixture.configuration()).doesNotExist();
+        assertThat(expected).as("the core log must outlive the run's placement record").exists();
     }
 
     @Test

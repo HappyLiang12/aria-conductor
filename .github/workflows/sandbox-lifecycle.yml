@@ -11,7 +11,9 @@ name: Sandbox Lifecycle (real OpenSandbox)
 #   * verified pause (SIGSTOP of the writer tree) and resume;
 #   * automatic TTL renewal that really calls the server and stops for teardown;
 #   * background writer termination; stable export BEFORE kill; one sandbox's
-#     destroy never touching another's.
+#     destroy never touching another's;
+#   * a refused launch: the image's own supervisor.fault, the documented launcher exit
+#     codes, a provably writer-free run and no sandbox container left behind.
 #
 # Requirement-triggered (the sandbox backends, the workspace transfer, the bridge
 # and sandbox images, the startup/compose paths) and reportable separately from

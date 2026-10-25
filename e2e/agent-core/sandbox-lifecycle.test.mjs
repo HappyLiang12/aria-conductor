@@ -14,7 +14,11 @@
 //   * self-exit (a core that exits on its own after its completed turn is still verified
 //     stopped, and the completed turn survives as a stable export);
 //   * stable export THEN kill (export twice gives identical bytes; only then destroy);
-//   * unrelated sandbox preservation (destroying one run never touches another).
+//   * unrelated sandbox preservation (destroying one run never touches another);
+//   * refusal (a launch the image itself refuses is reported in the image's own words,
+//     with the documented launcher exit codes; the core's readiness wait ends on that
+//     refusal instead of its timeout; the plane proves the run writer-free and no
+//     container is left behind).
 //
 // The lane FAILS CLOSED. It never skips and never substitutes a process-only
 // fake: when the container runtime, the OpenSandbox server, the test image or
@@ -44,7 +48,14 @@ const PEER_TOKEN = 'aria-sidecar-peer-token-0123456789';
 const RUN_A = '00000000-0000-0000-0000-0000000000e1';
 const RUN_B = '00000000-0000-0000-0000-0000000000e2';
 const RUN_C = '00000000-0000-0000-0000-0000000000e3';
+const RUN_D = '00000000-0000-0000-0000-0000000000e4';
 const WRITER_LOG = '/workspace/ticks.log';
+/**
+ * An entrypoint the test image's allowlist does not name (`test.Dockerfile` pins node,
+ * mock-opencode and mock-qoder only). The launcher resolves argv[0] against that
+ * allowlist before it spawns anything, so this is the refusal class the lane owns.
+ */
+const REFUSED_ENTRYPOINT = 'aria-refused-core';
 
 /** Everything this lane requires, as an explicit list of named prerequisites. */
 export function missingPrerequisites(env = process.env) {
@@ -105,13 +116,12 @@ function runtimeCommand(runtime) {
 
 /** Builds the mock-peer image on first use (idempotent, and never silently skipped). */
 function ensureTestImage(state) {
-  const runtime = runtimeCommand(process.env.SANDBOX_RUNTIME);
   const image = process.env.SANDBOX_TEST_IMAGE ?? 'aria-conductor/runtime-sandbox-test:1.0';
   try {
-    execFileSync(runtime, ['image', 'inspect', image], { stdio: 'ignore' });
+    execFileSync(state.runtime, ['image', 'inspect', image], { stdio: 'ignore' });
     state.imageBuilt = 'present';
   } catch {
-    execFileSync(runtime, ['build', '-t', image,
+    execFileSync(state.runtime, ['build', '-t', image,
       '-f', join(REPO, 'agent-control-tower/runtime-sandbox/test.Dockerfile'), REPO], { stdio: 'inherit' });
     state.imageBuilt = 'built';
   }
@@ -281,6 +291,9 @@ async function startLane() {
       + 'opensandbox-server) or point OPEN_SANDBOX_URL at the running server.');
   }
   const state = { root: mkdtempSync(join(tmpdir(), 'aria-sandbox-lifecycle-')) };
+  // One runtime value for the whole lane (image build, residue probes): the runtime the
+  // harness is told to use. The hosted job runs docker; a local operator runs podman.
+  state.runtime = runtimeCommand(process.env.SANDBOX_RUNTIME);
   const image = ensureTestImage(state);
   const classpath = ensureHarnessClasspath(state);
   const child = spawn('java', ['--enable-preview', '-cp', classpath, HARNESS_CLASS], {
@@ -293,6 +306,7 @@ async function startLane() {
     A: { runId: RUN_A, runtimeRoot: join(state.root, 'A/runtime'), snapshot: join(state.root, 'A/snapshot') },
     B: { runId: RUN_B, runtimeRoot: join(state.root, 'B/runtime'), snapshot: join(state.root, 'B/snapshot') },
     C: { runId: RUN_C, runtimeRoot: join(state.root, 'C/runtime'), snapshot: join(state.root, 'C/snapshot') },
+    D: { runId: RUN_D, runtimeRoot: join(state.root, 'D/runtime'), snapshot: join(state.root, 'D/snapshot') },
   };
   state.image = image;
   state.url = url;
@@ -373,6 +387,79 @@ async function waitFor(predicate, { timeoutMs = 20000, description = 'condition'
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${description}`);
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
   }
+}
+
+/**
+ * The sandbox containers the runtime holds for one sandbox id. A leaked sandbox is a
+ * container the runtime still runs, not a record the control plane still keeps, so
+ * residue is read from the runtime that created it -- the one resolved once from
+ * `SANDBOX_RUNTIME` at lane start (the hosted job sets `docker`; a local operator runs
+ * `podman`), never a runtime this probe assumes. The server names its containers
+ * `sandbox-<sandbox id>`, measured against a live server. The case that uses this
+ * asserts the container is present before the refusal, so a runtime that renames its
+ * containers fails there instead of letting an always-empty list prove nothing.
+ */
+function sandboxContainers(state, sandboxId) {
+  const listed = execFileSync(state.runtime, ['ps', '-a', '--filter', `name=^sandbox-${sandboxId}$`,
+    '--format', '{{.Names}}'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  return listed.split(/\r?\n/).map((name) => name.trim()).filter((name) => name.length > 0);
+}
+
+/**
+ * The server's own record of one sandbox, read from the canonical route the SDK uses:
+ * `/v1/sandboxes/{id}` (`docs/superpowers/plans/2026-08-16-podman-support.md:98-99`;
+ * the SDK's base path appends `/v1`). The route is only worth reading because the case
+ * proves it answers 200 for the alive sandbox first. Asked without the `/v1` prefix on
+ * a server whose only route lives there, this probe answers a route-not-found 404 for
+ * every id, and an always-404 probe proves nothing. The returned `code` separates the
+ * server's own sandbox-not-found (`...::SANDBOX_NOT_FOUND`) from a route miss
+ * (`{"detail":"Not Found"}`), and `id`/`state` are the alive record's identity fields
+ * (`status` is the server's state object, whose `state` names the lifecycle state).
+ */
+async function sandboxRecord(state, sandboxId) {
+  const response = await fetch(`${state.url.replace(/\/$/, '')}/v1/sandboxes/${sandboxId}`);
+  const body = await response.json().catch(() => null);
+  return {
+    status: response.status,
+    code: typeof body?.code === 'string' ? body.code : null,
+    id: typeof body?.id === 'string' ? body.id : null,
+    state: typeof body?.status?.state === 'string' ? body.status.state : null,
+  };
+}
+
+/**
+ * The image's launcher, driven directly inside the run's real container against a
+ * manifest that names an entrypoint the image does not allowlist. Two facts the
+ * backend's own report cannot witness are measured here, in the image itself:
+ *
+ *   * the refusal is a structured `supervisor.fault` carrying the image's sentence
+ *     (`agent-control-tower/runtime-sandbox/launch.mjs:332`), not silence;
+ *   * the exit code is the documented one for that class: `LaunchFault` defaults to 78
+ *     (launch.mjs:51) and an unresolvable entrypoint is such a fault (launch.mjs:180,
+ *     launch.mjs:189), while a malformed command line is 64 (launch.mjs:68, launch.mjs:70,
+ *     launch.mjs:265) -- both are asserted, so the pair cannot drift apart.
+ *
+ * The launcher writes the fault to stderr, so the probe merges the streams and prints
+ * each exit code on the same line: this channel glues a command's lines together.
+ */
+async function launcherRefusal(state, run) {
+  const probeDirectory = `/home/aria/probe/${run.runId}`;
+  const manifest = JSON.stringify({
+    schemaVersion: 1,
+    runId: run.runId,
+    port: 4096,
+    workingDirectory: '/workspace',
+    argv: [REFUSED_ENTRYPOINT],
+    env: {},
+  });
+  const shell = [
+    `mkdir -p ${probeDirectory}`,
+    `printf '%s' '${manifest}' > ${probeDirectory}/launch-manifest.json`,
+    `node /opt/aria/launch.mjs --manifest ${probeDirectory}/launch-manifest.json 2>&1; echo " entrypoint_exit=$?"`,
+    'node /opt/aria/launch.mjs 2>&1; echo " usage_exit=$?"',
+  ].join('; ');
+  const result = await state.harness.send({ command: 'exec', runId: run.runId, shell });
+  return result.output;
 }
 
 /** Drives the peer's genuine allow-once decision flow so its writer really starts. */
@@ -661,6 +748,169 @@ test('run C: a core that exits on its own after its completed turn still stops, 
     'the exported workspace bytes must be the run snapshot bytes, not a report');
 
   await state.harness.send({ command: 'destroy', runId: runC.runId });
+});
+
+/**
+ * The lane's live defect, on a real container: an image that refuses the launch used to
+ * say so only in its own output, which the plane discarded -- the operator waited out the
+ * readiness window for a verdict already made in the first second -- and no writer could
+ * be proven stopped, so the abort path refused to destroy and the sandbox leaked with its
+ * workspace lease.
+ *
+ * Four witnesses, none of them the backend's own report:
+ *
+ *   1. the launcher, executed in that container, answers with a structured
+ *      `supervisor.fault` naming the entrypoint it does not allowlist;
+ *   2. that class exits with the launcher's documented code (78), and the malformed
+ *      command line next to it with 64;
+ *   3. the core's readiness wait, driven over the same live container through
+ *      `OpenCodeCoreAdapter.open(handle, spec, credentials, backend.launchRefusal(runId))`,
+ *      ends on the launcher's sentence -- the S-1 fail-fast -- instead of spending its
+ *      90 s budget and reporting `did not become ready within`;
+ *   4. the plane proves no writer of the run could ever have started, and no container
+ *      is left behind for the sandbox the refused launch created.
+ *
+ * The first two are the image's contract. The third is the production readiness seam the
+ * harness's `launch` command never touched (it calls `SandboxExecutionBackend.launch`
+ * directly), and it is driven by the harness's one extra command, `readiness`. The fourth
+ * is the plane's, and it is stated in the form that survives both timings the transport
+ * exhibits: the launcher's fault is prompt in the image, but the SDK's stream can deliver
+ * it to the Java side either inside the launch's verdict window (the launch then fails on
+ * the image's sentence and cleans its own sandbox up) or after it (the launch returns a
+ * handle, and the retained verdict is what a later stop must answer from -- measured
+ * locally, the stream delivered it a few seconds after the command completed). Both are
+ * the documented behaviour; a refusal the plane cannot prove is the defect, and it is
+ * what the case fails on.
+ *
+ * On 9d629f9c (before the fix) `launch` returned a live handle for this manifest -- the
+ * fault was swallowed by the background launcher thread -- and `stopWriters` then asked
+ * the in-image script, which has no launch record, so the proof below could never be
+ * reached: the sandbox stayed up. On 69135996 the launch path is repaired, but the
+ * readiness wait still burned its whole budget without the reason; that half is now
+ * asserted by the `readiness` witness above instead of living above this harness.
+ */
+test('run D: a launch the image refuses is a structured fault with the documented codes and a provable refusal', async () => {
+  const state = await lane();
+  const run = state.runs.D;
+  try {
+    const prepared = await prepareRun(state, run, {
+      coreId: 'opencode', port: 4096, notes: 'refused launch snapshot\n',
+    });
+    run.environmentId = prepared.environmentId;
+
+    // The container exists BEFORE the refusal: the residue assertion below is measured
+    // against a container this case has seen, so a different runtime naming scheme fails
+    // here, loudly, instead of an always-empty list passing for the wrong reason.
+    assert.deepEqual(sandboxContainers(state, run.environmentId), [`sandbox-${run.environmentId}`],
+      'the prepared run must own its own sandbox container before the launch is attempted');
+
+    // The route's positive control, while the sandbox is alive: `/v1/sandboxes/{id}` must
+    // answer 200 and name this sandbox. This is what makes the post-destroy 404 below
+    // mean something -- a probe pointing at the wrong path fails HERE, inside the case,
+    // instead of letting a route-not-found 404 satisfy the residue assertion for any id.
+    const alive = await waitFor(async () => {
+      const record = await sandboxRecord(state, run.environmentId);
+      return record.status === 200 ? record : null;
+    }, { timeoutMs: 30000, description: 'the alive sandbox record on the server\'s /v1 route' });
+    assert.equal(alive.id, run.environmentId,
+      'the alive record must be the run\'s own sandbox, not any 200 on the route');
+    assert.ok(typeof alive.state === 'string' && alive.state.length > 0,
+      'the alive record must carry the sandbox\'s state');
+
+    // (1) + (2): the launcher's refusal and exit codes, read from the image in the container.
+    const probe = await launcherRefusal(state, run);
+    assert.match(probe, /"event":"supervisor\.fault"/,
+      'a refusal must be a structured supervisor.fault, not silence and not a ready timeout');
+    assert.match(probe, /"name":"LaunchFault"/, 'the fault must name its class');
+    assert.match(probe, new RegExp(`not allowlisted by this image: ${REFUSED_ENTRYPOINT}`),
+      'the fault must carry the image\'s own reason');
+    assert.match(probe, /entrypoint_exit=78\b/,
+      'the entrypoint refusal is a LaunchFault: launch.mjs:51 defaults it to 78');
+    assert.match(probe, /usage_exit=64\b/,
+      'a malformed command line is the other documented code: launch.mjs:265');
+
+    // (3): the core's readiness wait over that same live sandbox. `readiness` starts the
+    // launcher through SandboxLifecycle (the two production calls the backend's launch
+    // makes, minus its destroy-on-refusal, which would remove the container the wait must
+    // run against), then opens the core adapter with the production refusal source. A
+    // regression that stops consulting the refusal cannot pass this: the wait would spend
+    // its 90 s budget and fail on `did not become ready within`.
+    const readiness = await state.harness.send({
+      command: 'readiness', runId: run.runId, argv: [REFUSED_ENTRYPOINT], workingDirectory: '/workspace',
+    });
+    assert.equal(readiness.opened, false,
+      'a launch the image refused can never become ready; the wait must fail, not open a session');
+    const readinessError = String(readiness.error ?? '');
+    assert.match(readinessError, new RegExp(`refused the launch of run ${run.runId}`),
+      'the readiness wait must end on the launcher\'s refusal, not on an unrelated failure');
+    assert.match(readinessError, new RegExp(`not allowlisted by this image: ${REFUSED_ENTRYPOINT}`),
+      'the readiness failure must carry the launcher\'s own sentence to the operator');
+    assert.doesNotMatch(readinessError, /did not become ready within/,
+      'the refusal must not be replaced by the readiness wait\'s bare timeout');
+    assert.ok(Number.isInteger(readiness.elapsedMs) && readiness.elapsedMs < 60000,
+      `the readiness wait must end on the refusal, not spend its 90 s budget (waited ${readiness.elapsedMs} ms)`);
+
+    // (4): the production launch path over the same run must never leave the refusal
+    // unproven, and must never answer with a live core for a launch that never spawned one.
+    const refused = await state.harness.sendExpectingRefusal({
+      command: 'launch',
+      runId: run.runId,
+      argv: [REFUSED_ENTRYPOINT],
+      workingDirectory: '/workspace',
+    });
+    if (!refused.ok) {
+      // The verdict landed inside the launch's own window: the launch ends on the image's
+      // sentence (never on the readiness timeout) and destroys the sandbox it created.
+      assert.match(refused.error, new RegExp(`refused the launch of run ${run.runId}`),
+        'the failure must be the refused launch, not an unrelated one');
+      assert.match(refused.error, new RegExp(`not allowlisted by this image: ${REFUSED_ENTRYPOINT}`),
+        'the failure must carry the launcher\'s own sentence to the operator');
+      assert.doesNotMatch(refused.error, /did not become ready within/,
+        'the refusal must not be replaced by the readiness wait\'s bare timeout');
+    } else {
+      // The verdict landed after the window. The run exists, and the retained verdict is
+      // the only truthful answer to a stop: the in-image script has no launch record to
+      // verify, so a proof the plane cannot reach is what "not verified stopped" looks
+      // like, forever.
+      const stopped = await waitFor(async () => {
+        const proof = await state.harness.send({ command: 'stopWriters', runId: run.runId });
+        return proof.allWritersStopped ? proof : null;
+      }, {
+        timeoutMs: 90000,
+        description: 'the plane to prove the refused launch never spawned a writer',
+      });
+      assert.equal(stopped.allWritersStopped, true,
+        'a refused launch must be provably writer-free, not unverifiable');
+    }
+  } finally {
+    // The case's own destroy is not the only exit. A failure anywhere above -- a failed
+    // readiness assertion, a probe that threw -- would otherwise leave the prepared run's
+    // container and workspace lease behind, which is exactly the leak this case exists to
+    // catch. `destroy` is run-keyed and idempotent, so the successful path pays a cheap
+    // second call and the failure path cannot leak.
+    await state.harness.send({ command: 'destroy', runId: run.runId }).catch((error) => {
+      process.stderr.write(`[sandbox-lane] run D cleanup could not destroy the run: ${error.message}\n`);
+    });
+  }
+
+  // Nothing is left behind, measured AFTER the destroy above (the case's own or the
+  // finally's). The container first (a leaked sandbox is a running container, wherever the
+  // bookkeeping stands), then the server's own record, then the harness's dropped run --
+  // bounding the first so a slow runtime kill cannot make this a race.
+  await waitFor(() => sandboxContainers(state, run.environmentId).length === 0,
+    { timeoutMs: 30000, description: 'the refused run\'s sandbox container to be gone' });
+  const gone = await waitFor(async () => {
+    const record = await sandboxRecord(state, run.environmentId);
+    return record.status === 404 ? record : null;
+  }, { timeoutMs: 30000, description: 'the server to forget the refused run\'s sandbox' });
+  assert.match(String(gone.code), /SANDBOX_NOT_FOUND/,
+    `the 404 must be the server's sandbox-not-found, not a route miss (status ${gone.status}, code ${gone.code})`);
+  const deadExec = await state.harness.sendExpectingRefusal({
+    command: 'exec', runId: run.runId, shell: 'true',
+  });
+  assert.equal(deadExec.ok, false, 'a destroyed sandbox can no longer be executed in');
+  assert.match(deadExec.error, /has no sandbox/,
+    'the refusal is the dropped run record, not an unrelated command failure');
 });
 
 after(async () => {

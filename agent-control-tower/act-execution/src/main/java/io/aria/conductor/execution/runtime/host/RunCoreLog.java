@@ -1,5 +1,7 @@
 package io.aria.conductor.execution.runtime.host;
 
+import io.aria.conductor.execution.runtime.CoreConfigurationService;
+
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -65,9 +67,14 @@ import java.util.stream.Stream;
  *       ({@link #CREDENTIAL_ENVIRONMENT_NAMES}), whatever the value looks like,
  *       or</li>
  *   <li>it is at least {@value #MIN_UNNAMED_SECRET_LENGTH} characters long and
- *       its variable is not one of the documented system names
- *       ({@link #SYSTEM_ENVIRONMENT_NAMES}), whose long values are paths and
- *       machine facts, not secrets.</li>
+ *       its variable is not one the launcher itself can admit as a non-secret
+ *       system variable
+ *       ({@link CoreConfigurationService#isNonSecretLaunchVariableName}): the
+ *       configured allowlist ({@code aria.cores.launch-system-variables}, e.g.
+ *       {@code JAVA_HOME}) and the launcher's own {@code XDG_CONFIG_HOME}/
+ *       {@code XDG_DATA_HOME}/{@code XDG_CACHE_HOME} and HOME roots are long
+ *       non-secret paths, and this class takes that answer from the launcher's
+ *       own admission rule instead of keeping a second list that drifts.</li>
  * </ul>
  * Replacement is still exact-value, never a "secret-looking" heuristic on the
  * text: a value the profile did not pass is never guessed at.
@@ -86,7 +93,12 @@ import java.util.stream.Stream;
  * a logical line longer than {@value #MAX_LINE_BYTES} bytes is written up to
  * that bound plus an explicit {@code [aria] line truncated} marker and the rest
  * of the line is discarded as it arrives, so one huge line can neither exhaust
- * memory nor postpone the flush of everything before it. A trailing partial
+ * memory nor postpone the flush of everything before it. A line whose newline
+ * arrives in the chunk that crosses the bound is cut by the same rule. The head
+ * is assembled with a reserve of the longest secret minus one byte, redacted as
+ * a whole, and only then cut on a UTF-8 code point boundary -- so a credential
+ * sitting on the cut is removed rather than half-written, and a character the
+ * cut splits is dropped whole instead of becoming U+FFFD. A trailing partial
  * line is flushed when the stream ends.
  *
  * <p><b>Ownership and the mirrored streams.</b> The drain consumes the
@@ -139,16 +151,6 @@ public final class RunCoreLog implements AutoCloseable {
             "ARIA_OPERATOR_BEARER_TOKEN");
 
     /**
-     * Variable names whose value is ordinary system evidence -- paths, the
-     * machine's own facts -- and is never redacted however long it is. A long
-     * value under any other name is treated as a possible credential.
-     */
-    static final Set<String> SYSTEM_ENVIRONMENT_NAMES = Set.of(
-            "PATH", "PATHEXT", "SYSTEMDRIVE", "SYSTEMROOT", "WINDIR", "COMSPEC",
-            "TEMP", "TMP", "HOME", "USERPROFILE", "COMPUTERNAME", "OS", "LANG",
-            "LC_ALL", "TZ", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE");
-
-    /**
      * The shortest value treated as a credential when its variable name is not a
      * documented one. Shorter values are ordinary settings and paths.
      */
@@ -176,6 +178,11 @@ public final class RunCoreLog implements AutoCloseable {
     private final OutputStream sink;
     private final long maxBytes;
     private final List<String> environmentValues;
+    /**
+     * The longest secret in UTF-8 bytes minus one: the head is assembled this much
+     * past the bound so a value the cut splits is still redacted as a whole.
+     */
+    private final int truncationReserve;
     private final TeeInputStream stdout = new TeeInputStream("stdout", this::reportMirrorOverflow);
     private final TeeInputStream stderr = new TeeInputStream("stderr", this::reportMirrorOverflow);
     private final Object writeLock = new Object();
@@ -192,6 +199,7 @@ public final class RunCoreLog implements AutoCloseable {
         this.sink = sink;
         this.maxBytes = maxBytes;
         this.environmentValues = secretsOf(environment);
+        this.truncationReserve = reserveFor(this.environmentValues);
     }
 
     // ------------------------------------------------------------------ factories
@@ -278,12 +286,25 @@ public final class RunCoreLog implements AutoCloseable {
     }
 
     /**
+     * Test seam: one reader over a caller-supplied stream, started exactly as
+     * {@link #attach} starts a process's. Lets a test observe what the drain does
+     * to the stream it consumed without a child process in the way.
+     */
+    void startReaderForTest(String streamName, InputStream stream) {
+        startReader(STDOUT_TAG, stream, new TeeInputStream(streamName, this::reportMirrorOverflow),
+                streamName);
+    }
+
+    /**
      * Reads one stream in chunks and assembles logical lines in a buffer bounded
-     * by {@link #MAX_LINE_BYTES}. A line that grows past the bound is written up
-     * to it plus the explicit truncation marker and the rest of that line is
-     * dropped as it arrives; a trailing partial line is flushed when the stream
-     * ends. Nothing here waits for a newline to consume -- or to flush -- what was
-     * already read, and nothing grows with a line that never ends.
+     * by {@link #MAX_LINE_BYTES} plus the straddle reserve. A line that grows past
+     * the bound is written up to it plus the explicit truncation marker and the
+     * rest of that line is dropped as it arrives; a trailing partial line is
+     * flushed when the stream ends. The stream this reader consumed is closed
+     * here, in its own {@code finally}: the process pipe is this reader's, and
+     * nothing else will release it. Nothing here waits for a newline to consume --
+     * or to flush -- what was already read, and nothing grows with a line that
+     * never ends.
      */
     private void drain(String tag, InputStream stream, TeeInputStream mirror) {
         byte[] chunk = new byte[STREAM_BUFFER];
@@ -310,7 +331,7 @@ public final class RunCoreLog implements AutoCloseable {
                 }
                 int remaining = read - start;
                 if (remaining > 0 && !lineDiscarded) {
-                    int room = MAX_LINE_BYTES - line.size();
+                    int room = lineCapacity() - line.size();
                     if (remaining > room) {
                         line.write(chunk, start, Math.max(0, room));
                         appendTruncatedLine(tag, line.toByteArray());
@@ -327,6 +348,7 @@ public final class RunCoreLog implements AutoCloseable {
             if (!lineDiscarded && line.size() > 0) {
                 appendLine(tag, line.toByteArray());
             }
+            closeQuietly(stream);
             mirror.complete();
             boolean last;
             synchronized (writeLock) {
@@ -338,22 +360,128 @@ public final class RunCoreLog implements AutoCloseable {
         }
     }
 
-    /** One completed line: our tag, the redacted text, one flush. */
-    private void appendLine(String tag, byte[] lineBytes) {
-        append(tag, new String(stripCarriageReturn(lineBytes), StandardCharsets.UTF_8));
+    /** The head the assembler may hold: the bound, plus room for a secret the cut splits. */
+    private int lineCapacity() {
+        return MAX_LINE_BYTES + truncationReserve;
+    }
+
+    /** Nothing downstream of the drain needs the process pipe, and its OS handle must go. */
+    private static void closeQuietly(InputStream stream) {
+        try {
+            stream.close();
+        } catch (IOException ignored) {
+            // the reader is done with it either way
+        }
     }
 
     /**
-     * One line cut at the documented bound: what fit of it goes to the file with
-     * our own marker appended <em>after</em> redaction, so the marker itself is
-     * never a value from the environment.
+     * One completed line: our tag, the redacted text, one flush. The bound applies
+     * here as well, because the newline can arrive in the very chunk that crosses
+     * it -- a 65,537-byte line whose last byte and newline were read together used
+     * to be written whole and unmarked.
+     */
+    private void appendLine(String tag, byte[] lineBytes) {
+        if (path == null) {
+            return; // discarded: draining is the point, keeping is not
+        }
+        byte[] body = stripCarriageReturn(lineBytes);
+        String text = redact(new String(body, 0, completeCharacters(body, body.length),
+                StandardCharsets.UTF_8));
+        if (text.getBytes(StandardCharsets.UTF_8).length <= MAX_LINE_BYTES) {
+            writeTagged(tag, text);
+            return;
+        }
+        writeTagged(tag, bounded(text) + " " + LINE_TRUNCATED);
+    }
+
+    /**
+     * One line cut at the documented bound. The head is decoded up to its last
+     * complete character and redacted as a whole -- the reserve guarantees that a
+     * credential the cut splits is entirely inside it -- and only the redacted
+     * text is cut, on a code point boundary, before our own marker is appended
+     * (so the marker itself is never a value from the environment).
      */
     private void appendTruncatedLine(String tag, byte[] head) {
         if (path == null) {
             return;
         }
-        writeTagged(tag, redact(new String(stripCarriageReturn(head), StandardCharsets.UTF_8))
-                + " " + LINE_TRUNCATED);
+        byte[] body = stripCarriageReturn(head);
+        String text = redact(new String(body, 0, completeCharacters(body, body.length),
+                StandardCharsets.UTF_8));
+        writeTagged(tag, bounded(withoutPartialValue(text)) + " " + LINE_TRUNCATED);
+    }
+
+    /**
+     * Drops a trailing fragment that is only the beginning of a secret value. It
+     * is needed because redaction can <em>shrink</em> the window: a value that
+     * ends on the cut loses twenty characters of its own, and the text after it
+     * moves into the retained range -- including the start of a second value that
+     * never fitted the window whole, which redaction therefore cannot have
+     * replaced. Such a start is not core output and must not be written.
+     */
+    private String withoutPartialValue(String text) {
+        String retained = text;
+        boolean trimmed = true;
+        while (trimmed && !retained.isEmpty()) {
+            trimmed = false;
+            for (String secret : environmentValues) {
+                int longest = Math.min(secret.length() - 1, retained.length());
+                for (int length = longest; length > 0; length--) {
+                    if (retained.regionMatches(retained.length() - length, secret, 0, length)) {
+                        retained = retained.substring(0, retained.length() - length);
+                        trimmed = true;
+                        break;
+                    }
+                }
+                if (trimmed) {
+                    break;
+                }
+            }
+        }
+        return retained;
+    }
+
+    /** {@code text} cut to {@link #MAX_LINE_BYTES} of UTF-8, never splitting a character. */
+    private static String bounded(String text) {
+        byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
+        if (utf8.length <= MAX_LINE_BYTES) {
+            return text;
+        }
+        return new String(utf8, 0, completeCharacters(utf8, MAX_LINE_BYTES),
+                StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The end of the last complete UTF-8 character at or before {@code limit}: a
+     * cut that splits a character must drop it whole, never decode half of it.
+     */
+    private static int completeCharacters(byte[] bytes, int limit) {
+        int end = Math.min(limit, bytes.length);
+        if (end == 0) {
+            return 0;
+        }
+        int start = end - 1;
+        while (start > 0 && (bytes[start] & 0xC0) == 0x80) {
+            start--; // a continuation byte: walk back to the character's first byte
+        }
+        int expected = sequenceLength(bytes[start] & 0xFF);
+        return expected > 1 && start + expected > end ? start : end;
+    }
+
+    private static int sequenceLength(int leadByte) {
+        if ((leadByte & 0x80) == 0) {
+            return 1;
+        }
+        if ((leadByte & 0xE0) == 0xC0) {
+            return 2;
+        }
+        if ((leadByte & 0xF0) == 0xE0) {
+            return 3;
+        }
+        if ((leadByte & 0xF8) == 0xF0) {
+            return 4;
+        }
+        return 1; // an invalid lead byte is the decoder's business, not the cut's
     }
 
     /** The bytes of a completed line, without the {@code \r} of a CRLF ending. */
@@ -362,13 +490,6 @@ public final class RunCoreLog implements AutoCloseable {
             return Arrays.copyOf(lineBytes, lineBytes.length - 1);
         }
         return lineBytes;
-    }
-
-    private void append(String tag, String line) {
-        if (path == null) {
-            return; // discarded: draining is the point, keeping is not
-        }
-        writeTagged(tag, redact(line));
     }
 
     private void writeTagged(String tag, String text) {
@@ -517,8 +638,8 @@ public final class RunCoreLog implements AutoCloseable {
      * The exact environment values to redact, longest first so a value that
      * contains another value is replaced as a whole before its prefix can split
      * it. Which values qualify is {@link #isSecret}: a documented credential name
-     * always, a long value under any other non-system name because a launch
-     * environment that is not on the system allowlist may carry a provider key
+     * always, a long value under a name the launcher itself cannot admit as a
+     * non-secret system variable because such a name may carry a provider key
      * this class has no name for.
      */
     private static List<String> secretsOf(Map<String, String> environment) {
@@ -534,11 +655,26 @@ public final class RunCoreLog implements AutoCloseable {
     }
 
     /**
+     * The longest secret in UTF-8 bytes, minus one. Redaction sees this much past
+     * the bound, so every value the cut can split is present in the window whole
+     * (a value overlapping the cut starts no later than the cut, and ends at most
+     * one byte short of this reserve beyond it).
+     */
+    private static int reserveFor(List<String> secrets) {
+        int longest = 0;
+        for (String secret : secrets) {
+            longest = Math.max(longest, secret.getBytes(StandardCharsets.UTF_8).length);
+        }
+        return Math.max(0, longest - 1);
+    }
+
+    /**
      * Redact by purpose: a credential is a value the launcher named as one, or a
-     * value long enough to be one that is not the machine's own system evidence.
-     * The alternative -- every value of the launch environment -- replaces the
-     * drive letters of every path on Windows and hides the failure the log is
-     * for.
+     * value long enough to be one under a name the launcher could not have handed
+     * the child as system evidence
+     * ({@link CoreConfigurationService#isNonSecretLaunchVariableName}). The
+     * alternative -- every value of the launch environment -- replaces the drive
+     * letters of every path on Windows and hides the failure the log is for.
      */
     static boolean isSecret(String name, String value) {
         if (name == null || value == null || value.isEmpty()) {
@@ -548,7 +684,8 @@ public final class RunCoreLog implements AutoCloseable {
         if (CREDENTIAL_ENVIRONMENT_NAMES.contains(upper)) {
             return true;
         }
-        return value.length() >= MIN_UNNAMED_SECRET_LENGTH && !SYSTEM_ENVIRONMENT_NAMES.contains(upper);
+        return value.length() >= MIN_UNNAMED_SECRET_LENGTH
+                && !CoreConfigurationService.isNonSecretLaunchVariableName(name);
     }
 
     // ------------------------------------------------------------------ mirror

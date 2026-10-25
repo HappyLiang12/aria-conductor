@@ -97,6 +97,47 @@ public final class CoreLogFixture {
                     out.write(line);
                 }
             }
+            case "cut-straddle" -> {
+                // A credential whose value sits on the line bound: args[1] filler
+                // bytes, then the whole secret, then the newline. The cut lands
+                // inside the secret, leaving a prefix if the bound is applied
+                // before redaction. Everything is written synchronously.
+                out.write(filler(Integer.parseInt(args[1])));
+                out.write(utf8(args[2]));
+                writeLine(out, "");
+                writeLine(out, "line-after-the-cut");
+            }
+            case "cut-multibyte" -> {
+                // A 3-byte character straddling the line bound: with args[1] =
+                // bound - 1 its first byte is the last retained one, so a cut on
+                // a raw byte boundary decodes to U+FFFD instead of dropping it.
+                out.write(filler(Integer.parseInt(args[1])));
+                out.write(utf8("\u20ac"));
+                writeLine(out, "");
+                writeLine(out, "after-the-cut");
+            }
+            case "newline-at-bound" -> {
+                // The newline arrives in the chunk that crosses the bound. The head
+                // is written and allowed to drain first, then the byte past the bound
+                // and the newline are written together in one syscall, so no read
+                // boundary can fall between them.
+                out.write(filler(Integer.parseInt(args[1])));
+                out.flush();
+                Thread.sleep(150);
+                out.write(utf8("x\n"));
+                writeLine(out, "after-the-long-line");
+            }
+            case "chatty-undrained" -> {
+                // The anti-vacuity fixture: it says it reached main() before the
+                // big synchronous write, so a control test can time its assertion
+                // from a known point instead of from JVM startup.
+                writeLine(out, "fixture-started");
+                out.flush();
+                byte[] line = utf8("pipe-filler-".repeat(64) + "\n");
+                for (int i = 0; i < 2048; i++) {
+                    out.write(line);
+                }
+            }
             default -> throw new IllegalArgumentException("unknown fixture mode: " + mode);
         }
         out.flush();
@@ -105,6 +146,12 @@ public final class CoreLogFixture {
 
     private static void writeLine(OutputStream stream, String line) throws Exception {
         stream.write(utf8(line + "\n"));
+    }
+
+    private static byte[] filler(int count) {
+        byte[] bytes = new byte[count];
+        java.util.Arrays.fill(bytes, (byte) 'a');
+        return bytes;
     }
 
     private static byte[] utf8(String value) {

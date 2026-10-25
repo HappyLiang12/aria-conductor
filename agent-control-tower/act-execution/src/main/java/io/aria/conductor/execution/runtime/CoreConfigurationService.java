@@ -287,6 +287,21 @@ public class CoreConfigurationService {
                 || upper.contains("CREDENTIAL") || upper.endsWith("_KEY") || upper.endsWith("APIKEY");
     }
 
+    /**
+     * True when this name may reach a core child as non-secret system evidence:
+     * the inverse of this launcher's own admission rule
+     * ({@link #isForbiddenLaunchVariable}), which refuses credential-shaped and
+     * SDK-entrypoint/process-injection names. The run-owned core log asks this
+     * question instead of keeping its own copy of the system allowlist, so the
+     * launcher's default names, an operator override
+     * ({@code aria.cores.launch-system-variables}, e.g. {@code JAVA_HOME}) and the
+     * launcher's own {@code XDG_*}/HOME roots are all system evidence by
+     * construction -- one rule, no second list to drift.
+     */
+    public static boolean isNonSecretLaunchVariableName(String name) {
+        return name != null && !name.isBlank() && !isForbiddenLaunchVariable(name);
+    }
+
     /** Case-insensitive membership: the ambient lookup is case-insensitive on Windows. */
     private static boolean isForbiddenEnvironmentVariable(String name) {
         return FORBIDDEN_ENVIRONMENT_VARIABLES.stream().anyMatch(name::equalsIgnoreCase);

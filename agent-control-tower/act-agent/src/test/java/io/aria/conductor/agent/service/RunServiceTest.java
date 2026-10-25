@@ -489,6 +489,33 @@ class RunServiceTest {
         verify(runRepository, never()).save(any(Run.class));
     }
 
+    /**
+     * Lane H3 finding P3-A: the verified wording is about the action the runtime performed,
+     * so it does not depend on the committed state being terminal. A pause whose conditional
+     * write loses to a live state (the run was parked on a clarification question while the
+     * pause was in flight) must not fall back to the bare state-machine arrow
+     * {@code WAITING_INPUT -> PAUSED}, which reads as if no pause ever happened.
+     */
+    @Test
+    void pauseRun_whenTheCommittedRowIsNonTerminalDuringTheVerifiedPause_namesTheStateAndTheVerifiedAction() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.RUNNING).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        // The core verified the pause, but the run was parked on a clarification question
+        // before the conditional write landed: the write loses to a NON-terminal state.
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.WAITING_INPUT)));
+
+        assertThatThrownBy(() -> service.pauseRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " reached WAITING_INPUT while the verified pause completed;"
+                        + " the runtime was paused but the run record was not changed.");
+        verify(runtimeControl).pause(id);
+        verify(runRepository, never()).save(any(Run.class));
+    }
+
     @Test
     void pauseRun_fromPending_isRejectedAndNotSaved() {
         UUID id = UUID.randomUUID();
@@ -594,6 +621,32 @@ class RunServiceTest {
         assertThatThrownBy(() -> service.resumeRun(id))
                 .isInstanceOf(InvalidStateTransitionException.class)
                 .hasMessage("Run " + id + " reached COMPLETED while the verified resume completed;"
+                        + " the runtime was resumed but the run record was not changed.");
+        verify(runtimeControl).resume(id);
+        verify(runRepository, never()).save(any(Run.class));
+    }
+
+    /**
+     * Lane H3 finding P3-A, the resume half: a verified resume that loses the conditional
+     * write to a non-terminal state keeps the verified wording too — naming the state the
+     * run reached and the action the runtime performed, never the bare arrow
+     * {@code WAITING_INPUT -> RUNNING}.
+     */
+    @Test
+    void resumeRun_whenTheCommittedRowIsNonTerminalDuringTheVerifiedResume_namesTheStateAndTheVerifiedAction() {
+        UUID agentId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(runRepository.findById(id)).thenReturn(Optional.of(TestDataBuilder.aRun()
+                .withId(id).withAgentId(agentId).withStatus(RunStatus.PAUSED).build()));
+        when(runtimeControlProvider.getIfAvailable()).thenReturn(runtimeControl);
+        when(runtimeControl.owns(agentId, id)).thenReturn(true);
+        // The core verified the resume, but another lifecycle write landed first and the
+        // conditional write lost to a NON-terminal state.
+        when(runRepository.findStateById(id)).thenReturn(Optional.of(stateView(RunStatus.WAITING_INPUT)));
+
+        assertThatThrownBy(() -> service.resumeRun(id))
+                .isInstanceOf(InvalidStateTransitionException.class)
+                .hasMessage("Run " + id + " reached WAITING_INPUT while the verified resume completed;"
                         + " the runtime was resumed but the run record was not changed.");
         verify(runtimeControl).resume(id);
         verify(runRepository, never()).save(any(Run.class));

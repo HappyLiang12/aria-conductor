@@ -50,7 +50,8 @@ public class RunProgressEventEntity {
     @Column(nullable = false)
     private long seq;
 
-    @Column(columnDefinition = "TEXT")
+    /** The whole observation, not the 65,535 BYTES of TEXT: widened to MEDIUMTEXT by V75. */
+    @Column(columnDefinition = "MEDIUMTEXT")
     private String content;
 
     @Column(length = 255)

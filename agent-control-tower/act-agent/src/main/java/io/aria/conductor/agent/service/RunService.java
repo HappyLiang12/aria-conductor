@@ -283,8 +283,11 @@ public class RunService {
      * that never touched a runtime keeps the pre-action wording ("nothing was
      * &lt;outcome&gt;"), while a lost write after the runtime acknowledged the action
      * ({@code verifiedAction}) names the state the run reached and says the runtime was
-     * acted on even though the record was left alone. Same exception type in both
-     * cases, so the operator still sees a 409.
+     * acted on even though the record was left alone. The verified wording applies to
+     * every committed state, not only a terminal one: the runtime action already
+     * happened, so a lost write to a live state (e.g. {@code WAITING_INPUT}) must not
+     * fall back to a bare state-machine arrow. Same exception type in both cases, so the
+     * operator still sees a 409.
      *
      * @throws ResourceNotFoundException         when the run row does not exist
      * @throws InvalidStateTransitionException   when the committed state no longer allows it
@@ -300,7 +303,7 @@ public class RunService {
             if (committed == null) {
                 throw new ResourceNotFoundException("Run", id);
             }
-            if (verifiedAction != null && TERMINAL_STATUSES.contains(committed)) {
+            if (verifiedAction != null) {
                 throw reachedWhileVerified(id, committed, verifiedAction);
             }
             throw refusal(id, committed, to, outcome);

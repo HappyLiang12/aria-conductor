@@ -5,6 +5,7 @@ import io.aria.conductor.agent.dto.RunProgressEventDto;
 import io.aria.conductor.common.model.RunProgressEventEntity;
 import io.aria.conductor.common.repository.RunProgressEventRepository;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationState;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
@@ -61,14 +62,24 @@ class V75RunProgressContentWidthMigrationTest extends BaseH2IntegrationTest {
     DataSource dataSource;
 
     @Test
-    void v75IsTheHeadAppliedByAFreshDatabase() {
-        assertThat(flyway.info().current().getVersion().getVersion())
-                .as("a fresh database must reach the widening migration")
-                .isEqualTo("75");
+    void v75IsAppliedByAFreshDatabaseAndNothingIsPending() {
+        // V75 is no longer the head once a later migration (V76) exists, so this asserts
+        // the durable fact a head check stood for: the migration was applied successfully,
+        // so an existing database actually reaches it, and nothing is left pending.
+        assertThat(flyway.info().applied())
+                .anySatisfy(info -> {
+                    assertThat(info.getVersion().getVersion()).isEqualTo("75");
+                    assertThat(info.getState()).isEqualTo(MigrationState.SUCCESS);
+                });
+        assertThat(flyway.info().pending()).isEmpty();
     }
 
     @Test
     void theContentColumnCanHoldAtLeastMediumtextCapacity() {
+        // The entity declaration is kept in step with this schema: RunProgressEventEntity.content
+        // declares columnDefinition = "MEDIUMTEXT" after V75. The h2/mariadb runtime profiles use
+        // ddl-auto: none, so this comment pins the declaration to the schema; under the base
+        // validate config it also matches the migrated column instead of the pre-V75 TEXT.
         List<Map<String, Object>> columns = jdbc.queryForList(
                 "SELECT data_type, is_nullable, character_maximum_length FROM information_schema.columns"
                         + " WHERE table_name = 'RUN_PROGRESS_EVENTS' AND column_name = 'CONTENT'");

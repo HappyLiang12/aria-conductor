@@ -6,7 +6,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -79,15 +82,27 @@ class RunCoreLogTest {
      * drain at all it has to block -- that is the pre-fix failure the drain
      * removes, and it is asserted here so shrinking the fixture cannot quietly
      * weaken it.
+     *
+     * <p>P3-5 of the re-review: waiting two seconds from {@code start()} was a
+     * startup-timing control, so a loaded host could satisfy it before the
+     * fixture ever reached its write. The fixture now announces that it reached
+     * {@code main()} first; the interval only starts once that marker has been
+     * read, so what it measures is the blocked write and nothing else.
      */
     @Test
     void theChattyFixtureWouldBlockWithoutADrain() throws Exception {
         Path working = workingDirectory();
-        LaunchProfile profile = chattyProfile(working);
+        LaunchProfile profile = profile(working, Map.of(), "chatty-undrained");
         Process undrained = new ProcessBuilder(profile.argv()).directory(working.toFile()).start();
-        try {
+        try (var stdout = new BufferedReader(
+                new InputStreamReader(undrained.getInputStream(), StandardCharsets.UTF_8))) {
+            assertThat(stdout.readLine())
+                    .as("the fixture must prove it reached its main method before anything is timed; a"
+                            + " green here without this marker only proved that a JVM can start")
+                    .isEqualTo("fixture-started");
             assertThat(undrained.waitFor(2, TimeUnit.SECONDS))
-                    .as("the fixture must fill the OS pipe and block; exit means it proved nothing")
+                    .as("the fixture is past startup and in its synchronous 1.5 MB write, so two seconds"
+                            + " without exiting means it blocked in write(); exit means it proved nothing")
                     .isFalse();
         } finally {
             undrained.destroyForcibly();
@@ -284,6 +299,221 @@ class RunCoreLogTest {
                 .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES + 512L);
     }
 
+    /**
+     * P3-1 of the re-review: the bound used to be applied to raw bytes <em>before</em>
+     * redaction, so a credential sitting on the cut survived as its prefix -- the
+     * reviewer's probe left the first 6 characters of a 30-character key in the
+     * file. Redaction must see the whole value even when the cut lands inside it.
+     */
+    @Test
+    void aCredentialStraddlingTheLineCutLeavesNoPrefixInTheFile() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        String secret = "straddling-secret-" + "a".repeat(12); // 30 characters, as in the probe
+        assertThat(secret).hasSize(30);
+        // The probe's offset: 6 characters of the value sit under the bound, 24 past it.
+        int filler = RunCoreLog.MAX_LINE_BYTES - 6;
+        LaunchProfile profile = profile(working, Map.of("LLM_API_KEY", secret),
+                "cut-straddle", String.valueOf(filler), secret);
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env());
+
+        Process process = OwnedProcessController.launch(profile, coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        String firstLine = stdoutLines(Files.readAllLines(coreLog.path())).get(0);
+        assertThat(firstLine)
+                .as("a line that crosses the bound must be cut and marked")
+                .contains("[aria] line truncated");
+        String head = headOf(firstLine);
+        String leaked = null;
+        for (int length = 6; length <= secret.length() && leaked == null; length++) {
+            String prefix = secret.substring(0, length);
+            if (content.contains(prefix)) {
+                leaked = prefix;
+            }
+        }
+        assertThat(leaked)
+                .as("a credential the cut splits must be redacted whole; a surviving prefix of it"
+                        + " ([%s] of [%s]) is a written credential", leaked, secret)
+                .isNull();
+        assertThat(head.getBytes(StandardCharsets.UTF_8).length)
+                .as("the retained head must still end at the documented bound")
+                .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES);
+        assertThat(content)
+                .as("the drain must survive the cut and keep the rest of the stream")
+                .contains("line-after-the-cut");
+    }
+
+    /**
+     * P3-1, second direction: the cut also split a multi-byte character, so a
+     * two- or three-byte character on the bound reached the file as U+FFFD. The
+     * retained head must end on a code point boundary.
+     */
+    @Test
+    void aMultiByteCharacterOnTheLineCutIsDroppedWholeInsteadOfBecomingAReplacement() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        // One byte of the 3-byte euro sign is the last retained byte of the head.
+        int filler = RunCoreLog.MAX_LINE_BYTES - 1;
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+
+        Process process = OwnedProcessController.launch(
+                profile(working, Map.of(), "cut-multibyte", String.valueOf(filler)), coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        // Read as UTF-8: a split character decodes to U+FFFD, a whole one to itself.
+        String content = new String(Files.readAllBytes(coreLog.path()), StandardCharsets.UTF_8);
+        int replacementAt = content.indexOf('\uFFFD');
+        assertThat(replacementAt)
+                .as("a character the cut splits must be dropped, never decoded as U+FFFD"
+                        + " (replacement character at byte %s of the log)", replacementAt)
+                .isNegative();
+        assertThat(content).contains("[aria] line truncated");
+        assertThat(content)
+                .as("the drain must survive the cut and keep the rest of the stream")
+                .contains("after-the-cut");
+    }
+
+    /**
+     * P3-4 of the re-review: the bound was only enforced for the tail of a chunk
+     * with no newline in it. A 65,537-byte line whose newline arrived in the
+     * crossing chunk was written whole (65,544 bytes with the tag), unmarked,
+     * while the javadoc promises every line over the bound is cut and marked.
+     */
+    @Test
+    void aLineWhoseNewlineArrivesInTheCrossingChunkIsStillCutAndMarked() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, Map.of());
+
+        Process process = OwnedProcessController.launch(
+                profile(working, Map.of(), "newline-at-bound",
+                        String.valueOf(RunCoreLog.MAX_LINE_BYTES)), coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        List<String> stdout = stdoutLines(Files.readAllLines(coreLog.path()));
+        assertThat(stdout)
+                .as("the line after the bound-crossing one must still be written")
+                .contains("after-the-long-line");
+        String firstLine = stdout.get(0);
+        assertThat(firstLine)
+                .as("a line of %s bytes must be cut at the documented %s and marked, not written whole"
+                        + " (first line bytes: %s)", RunCoreLog.MAX_LINE_BYTES + 1,
+                        RunCoreLog.MAX_LINE_BYTES, firstLine.getBytes(StandardCharsets.UTF_8).length)
+                .contains("[aria] line truncated");
+        assertThat(headOf(firstLine).getBytes(StandardCharsets.UTF_8).length)
+                .as("the retained head must end at the documented bound")
+                .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES);
+        assertThat(Files.size(coreLog.path()))
+                .as("the file must hold the bound plus our tag and marker, never the whole line")
+                .isLessThanOrEqualTo(RunCoreLog.MAX_LINE_BYTES + 512L);
+    }
+
+    /**
+     * P3-3 of the re-review: the chunked drain replaced a
+     * {@code BufferedReader} try-with-resources, and unlike it never closed the
+     * process's stream -- so every run left two OS pipe handles to the GC.
+     */
+    @Test
+    void theDrainedProcessStreamIsClosedWhenItReachesEof() throws Exception {
+        Path working = workingDirectory();
+        RunCoreLog coreLog = RunCoreLog.open(working.resolve("close.log"), "close-" + RUN,
+                Map.of(), RunCoreLog.DEFAULT_MAX_BYTES);
+        CloseRecordingStream pipe = new CloseRecordingStream("the-last-line-before-eof\n");
+        try {
+            coreLog.startReaderForTest("stdout", pipe);
+        } finally {
+            coreLog.close(); // joins the reader
+        }
+
+        assertThat(pipe.wasClosed())
+                .as("the drain consumed the process pipe, so it must close it: the line reader it"
+                        + " replaced did (try-with-resources), and without this every run leaks two"
+                        + " OS pipe handles until GC")
+                .isTrue();
+        assertThat(Files.readString(coreLog.path())).contains("[out] the-last-line-before-eof");
+    }
+
+    /**
+     * P3-1, third direction: the reserve alone does not make "no prefix" true. A
+     * redaction earlier in the window <em>shrinks</em> the text (30 characters
+     * become 10), so the retained head reaches past the raw cut and can include
+     * the beginning of a <em>second</em> credential that is not complete inside
+     * the window -- redaction cannot have replaced it, and it must not be written
+     * either.
+     *
+     * <p>Deterministic by construction: the stream hands out the window in
+     * prescribed reads, so no child process and no OS pipe decides the boundary.
+     */
+    @Test
+    void theStartOfASecondCredentialPulledInByRedactionIsNotWritten() throws Exception {
+        Path working = workingDirectory();
+        String first = "s1-" + "a".repeat(27);
+        String second = "s2-" + "b".repeat(27);
+        assertThat(first).hasSize(30);
+        assertThat(second).hasSize(30);
+        RunCoreLog coreLog = RunCoreLog.open(working.resolve("two-secrets.log"), "two-" + RUN,
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), RunCoreLog.DEFAULT_MAX_BYTES);
+
+        // MAX-30 filler, the first value ending exactly on the bound, then the whole
+        // second value: the window is MAX + 29, so the second value never fits.
+        byte[] window = concat(filler(RunCoreLog.MAX_LINE_BYTES - 30), utf8(first), utf8(second));
+        int capacity = RunCoreLog.MAX_LINE_BYTES + second.length() - 1;
+        assertThat(window.length).isEqualTo(capacity + 1);
+        byte[] line = concat(window, utf8("c".repeat(40) + "\n"), utf8("line-after-the-cut\n"));
+        // 8 x 8192 reaches MAX, 29 more fills the window, one more byte crosses it
+        // with no newline in the chunk -- the drain's own truncation path.
+        ChunkedStream pipe = new ChunkedStream(line,
+                8192, 8192, 8192, 8192, 8192, 8192, 8192, 8192, capacity - 8 * 8192, 1);
+        try {
+            coreLog.startReaderForTest("stdout", pipe);
+        } finally {
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content).contains("[aria] line truncated");
+        String leaked = null;
+        for (int length = 6; length <= second.length() && leaked == null; length++) {
+            String prefix = second.substring(0, length);
+            if (content.contains(prefix)) {
+                leaked = prefix;
+            }
+        }
+        assertThat(leaked)
+                .as("the start of a credential pulled into the head by an earlier redaction is not"
+                        + " evidence: [%s] of [%s] was written", leaked, second)
+                .isNull();
+        assertThat(content)
+                .as("the drain must survive the cut and keep the rest of the stream")
+                .contains("line-after-the-cut");
+    }
+
     @Test
     void everyExactEnvironmentValueTheChildEchoesIsRedacted() throws Exception {
         Path working = workingDirectory();
@@ -359,6 +589,55 @@ class RunCoreLogTest {
         assertThat(content)
                 .as("PATH is the launcher's own system allowlist; redacting it hides which runtime ran")
                 .contains("out-PATH=C:\\Windows;C:\\Tools\\bin");
+    }
+
+    /**
+     * P3-2 of the re-review: the redactor kept a second, drifting copy of the
+     * launcher's system allowlist, so the launcher's own {@code XDG_*} roots and a
+     * name an operator added through {@code aria.cores.launch-system-variables}
+     * (JAVA_HOME here) were redacted -- the same evidence damage finding 6 was
+     * meant to stop. The exemption now comes from the launcher's own admission
+     * rule instead of a list this class maintains.
+     */
+    @Test
+    void theLaunchersOwnNonSecretRootsAndAllowlistedNamesSurviveVerbatim() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        LaunchProfile profile = echoProfile(working, Map.of(
+                "XDG_CONFIG_HOME", "C:\\Aria\\runs\\run-1\\host\\config",
+                "XDG_DATA_HOME", "C:\\Aria\\runs\\run-1\\host\\data",
+                "XDG_CACHE_HOME", "C:\\Aria\\runs\\run-1\\host\\cache",
+                "JAVA_HOME", "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11-hotspot",
+                "LLM_API_KEY", SYNTHETIC_KEY),
+                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "JAVA_HOME", "LLM_API_KEY");
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env());
+
+        Process process = OwnedProcessController.launch(profile, coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the launcher's run-owned XDG roots are paths, not credentials: the log must show"
+                        + " which roots the core used")
+                .contains("out-XDG_CONFIG_HOME=C:\\Aria\\runs\\run-1\\host\\config")
+                .contains("err-XDG_DATA_HOME=C:\\Aria\\runs\\run-1\\host\\data")
+                .contains("out-XDG_CACHE_HOME=C:\\Aria\\runs\\run-1\\host\\cache");
+        assertThat(content)
+                .as("a name an operator added to aria.cores.launch-system-variables is the launcher's"
+                        + " own non-secret system evidence, not a credential")
+                .contains("out-JAVA_HOME=C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11-hotspot");
+        assertThat(content)
+                .as("widening the exemption must not widen what counts as a credential: a long value"
+                        + " under a name the launcher cannot admit is still redacted")
+                .contains("out-LLM_API_KEY=[redacted]");
     }
 
     @Test
@@ -613,6 +892,105 @@ class RunCoreLogTest {
     private static List<String> stderrLines(List<String> lines) {
         return lines.stream().filter(line -> line.startsWith("[err] "))
                 .map(line -> line.substring("[err] ".length())).toList();
+    }
+
+    /** The retained text of a marked line: everything before our marker and its separator. */
+    private static String headOf(String markedLine) {
+        int markerAt = markedLine.indexOf("[aria] line truncated");
+        String head = markerAt < 0 ? markedLine : markedLine.substring(0, markerAt);
+        return head.endsWith(" ") ? head.substring(0, head.length() - 1) : head;
+    }
+
+    private static byte[] filler(int count) {
+        byte[] bytes = new byte[count];
+        java.util.Arrays.fill(bytes, (byte) 'a');
+        return bytes;
+    }
+
+    private static byte[] utf8(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        int length = 0;
+        for (byte[] part : parts) {
+            length += part.length;
+        }
+        byte[] joined = new byte[length];
+        int at = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, joined, at, part.length);
+            at += part.length;
+        }
+        return joined;
+    }
+
+    /**
+     * A stream that hands its bytes out in prescribed read sizes, so a test can
+     * put an exact byte at the drain's cut without an OS pipe deciding where the
+     * read boundaries fall.
+     */
+    private static final class ChunkedStream extends java.io.InputStream {
+
+        private final byte[] bytes;
+        private final int[] chunks;
+        private int offset;
+        private int chunk;
+        private int servedOfChunk;
+
+        private ChunkedStream(byte[] bytes, int... chunks) {
+            this.bytes = bytes;
+            this.chunks = chunks;
+        }
+
+        @Override
+        public void close() {
+            // nothing to release: the bytes are in memory
+        }
+
+        @Override
+        public int read() {
+            byte[] single = new byte[1];
+            int read = read(single, 0, 1);
+            return read < 0 ? -1 : single[0] & 0xff;
+        }
+
+        @Override
+        public int read(byte[] buffer, int bufferOffset, int length) {
+            if (offset >= bytes.length) {
+                return -1;
+            }
+            int allowed = chunk < chunks.length ? chunks[chunk] - servedOfChunk : length;
+            int read = Math.min(Math.min(allowed, length), bytes.length - offset);
+            System.arraycopy(bytes, offset, buffer, bufferOffset, read);
+            offset += read;
+            servedOfChunk += read;
+            if (chunk < chunks.length && servedOfChunk == chunks[chunk]) {
+                chunk++;
+                servedOfChunk = 0;
+            }
+            return read;
+        }
+    }
+
+    /** A process pipe stand-in that records whether the drain closed it. */
+    private static final class CloseRecordingStream extends ByteArrayInputStream {
+
+        private volatile boolean closed;
+
+        private CloseRecordingStream(String content) {
+            super(content.getBytes(StandardCharsets.UTF_8));
+        }
+
+        @Override
+        public void close() throws IOException {
+            closed = true;
+            super.close();
+        }
+
+        private boolean wasClosed() {
+            return closed;
+        }
     }
 
     private static void awaitContent(Path file, String expected) throws InterruptedException {

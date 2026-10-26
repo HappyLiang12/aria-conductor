@@ -27,10 +27,12 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -292,14 +294,22 @@ public final class CoreE2eProcessBackend implements ExecutionBackend {
     /**
      * Delivers the run's minted control secret and worker credential into the
      * runtime environment exactly as the harness's "trusted launcher" role
-     * requires: the delivered values always win over profile values.
+     * requires: the delivered values always win over profile values. The profile
+     * handed to the controller keeps the secrets the adapter declared and declares
+     * the two delivered values too, so the profile describes the environment its
+     * process actually receives.
      */
     private LaunchProfile deliverSecrets(LaunchProfile profile, PreparedEnvironment environment,
             String controlSecret) {
         Map<String, String> env = new LinkedHashMap<>(profile.env());
         env.put(CONTROL_SECRET_ENVIRONMENT, controlSecret);
-        env.put(CoreE2eWorkerTokens.WORKER_TOKEN_ENV, state.workerTokens.tokenFor(environment.runId()));
-        return new LaunchProfile(profile.argv(), env, profile.workingDirectory());
+        String workerToken = state.workerTokens.tokenFor(environment.runId());
+        env.put(CoreE2eWorkerTokens.WORKER_TOKEN_ENV, workerToken);
+        Set<String> secretValues = new LinkedHashSet<>(profile.secretValues());
+        secretValues.add(controlSecret);
+        secretValues.add(workerToken);
+        return new LaunchProfile(profile.argv(), env, profile.workingDirectory(),
+                profile.controlSecretFile(), secretValues);
     }
 
     /**

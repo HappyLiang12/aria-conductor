@@ -364,6 +364,13 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         Objects.requireNonNull(credentials, "credentials");
         requireCore(spec);
         requireMatchingEnvironment(spec, environment);
+        // The merge below copies this environment into the launch verbatim. A
+        // directly constructed profile never passed the merge-time guard in
+        // CoreRuntimeConfiguration, so the guard runs here, before the copy: an
+        // operator value under HOME/TMP/XDG/ARIA_MCP_TOKEN must be refused, not
+        // written over the launcher's own.
+        CoreConfigurationService.requireNoLauncherOwnedVariables(profile.environment(),
+                "the reviewed OpenCode profile environment (opencode.sandbox-env)");
         URI endpoint = requireLoopbackEndpoint(environment);
 
         Path configurationRoot = Path.of(environment.configurationDirectory()).toAbsolutePath().normalize();
@@ -404,6 +411,16 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
         // The values this launch injects as secrets. The log reads them from this
         // very profile, so its masking input cannot drift from the child's env.
         Set<String> secretValues = new LinkedHashSet<>(credentials.environment().values());
+        // The profile environment is the operator's opencode.sandbox-env in
+        // production (CoreRuntimeConfiguration hands over exactly that map), and a
+        // production run carries credentialRef=null: those values are the run's
+        // provider credentials, so they are declared secret whatever their names
+        // look like -- the value rule masks them, not only the name rule.
+        profile.environment().forEach((name, value) -> {
+            if (value != null && !value.isBlank()) {
+                secretValues.add(value);
+            }
+        });
         // SANDBOX: the run-owned XDG roots must be SANDBOX paths. The governed
         // configuration is uploaded into the sandbox's run control directory
         // (<controlRoot>/<runId>/config, the same tree the launch manifest lives

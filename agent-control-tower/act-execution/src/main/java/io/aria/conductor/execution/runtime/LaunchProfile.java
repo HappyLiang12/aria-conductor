@@ -20,7 +20,9 @@ import java.util.Set;
  * takes its redaction input from the same object the child is launched with, so
  * there is no second producer and nothing to drift. A profile constructed
  * without it declares no known secret, and the log then relies on the
- * credential-shaped-name rule alone.
+ * credential-shaped-name rule alone. A declared secret must be a single line: a
+ * value containing CR or LF is refused here, because the log masks by line and
+ * could only mask such a value in part.
  *
  * <p>The control secret is minted by the placement (spec 5.1) and never known to
  * the adapter, so the profile only names the file while the placement owns its
@@ -39,6 +41,19 @@ public record LaunchProfile(List<String> argv, Map<String, String> env,
             controlSecretFile = null;
         }
         secretValues = secretValues == null ? Set.of() : Set.copyOf(secretValues);
+        for (String value : secretValues) {
+            requireSingleLineSecret(value);
+        }
+    }
+
+    /** Refuses a declared secret the line-scoped log cannot mask as a whole. */
+    private static void requireSingleLineSecret(String value) {
+        if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+            throw new IllegalArgumentException("A declared secret value must not contain CR or LF:"
+                    + " the run-owned core log masks by line, so a multi-line value could only be"
+                    + " masked in part and the rest would be written. Declare the secret as a single"
+                    + " line, or do not declare it as a secret value.");
+        }
     }
 
     /** A profile whose runtime does not read a run-owned control-secret file. */

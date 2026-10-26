@@ -179,6 +179,10 @@ class HostLaunchSecretFileTest {
         assertThat(backend.sessionSecret(handle).environment())
                 .as("the session opener receives exactly the minted secret")
                 .containsEntry(CONTROL_SECRET_ENVIRONMENT, written);
+        assertThat(startedProfile.get().secretValues())
+                .as("the minted control secret the placement delivers is declared secret on the profile"
+                        + " the runtime was started with, so the core log masks it by value")
+                .contains(written);
         assertThat(probes)
                 .as("a declared control-secret file keeps the authenticated bridge gate")
                 .hasValue(1);
@@ -332,10 +336,11 @@ class HostLaunchSecretFileTest {
     /**
      * The log the backend opens is fed by the profile it launched, not by a
      * parallel list: the secret value the profile declares is masked, while an
-     * ordinary value in the same environment is written. The previous version of
-     * this test claimed a {@code @Bean} context but built it with
-     * {@code registerBean}; with the launcher-policy setter gone there is no
-     * Spring wiring left to pin, so the factory is the seam under test.
+     * ordinary value in the same environment is written. The secret's variable
+     * name here is deliberately not credential-shaped, so the name rule cannot
+     * account for the masking and only the profile's declared value can; the
+     * started profile is asserted to carry it, which is what pins the backend
+     * handing the profile -- not an empty set -- to the log.
      */
     @Test
     void theCoreLogMasksTheSecretValuesOfTheProfileItLaunched() throws Exception {
@@ -348,13 +353,16 @@ class HostLaunchSecretFileTest {
         PreparedEnvironment environment = backend.prepare(fixture.spec(), fixture.lease());
         String secret = "sk-live-synthetic-secret-not-a-real-key";
         LaunchProfile profile = new LaunchProfile(List.of("stub-runtime"),
-                Map.of("DEEPSEEK_AUTH", secret, "VISIBLE_EVIDENCE", "launcher-evidence"),
+                Map.of("DEEPSEEK_ACCESS", secret, "VISIBLE_EVIDENCE", "launcher-evidence"),
                 fixture.workspace().toString(), null, Set.of(secret));
         RuntimeHandle handle = backend.launch(environment, profile);
         try {
+            assertThat(startedProfile.get().secretValues())
+                    .as("the runtime must be started with the profile that declares this secret")
+                    .contains(secret);
             RunCoreLog coreLog = startedLog.get();
             assertThat(coreLog).isNotNull();
-            byte[] line = ("out-DEEPSEEK_AUTH=" + secret
+            byte[] line = ("out-DEEPSEEK_ACCESS=" + secret
                     + " out-VISIBLE_EVIDENCE=launcher-evidence\n")
                     .getBytes(StandardCharsets.UTF_8);
             coreLog.startReaderForTest("stdout", new ByteArrayInputStream(line));
@@ -362,9 +370,10 @@ class HostLaunchSecretFileTest {
 
             String content = Files.readString(coreLog.path());
             assertThat(content)
-                    .as("the launched profile's declared secret is masked by the log the backend opened")
+                    .as("the launched profile's declared secret is masked by value by the log the"
+                            + " backend opened, though its name is not credential-shaped")
                     .doesNotContain(secret)
-                    .contains("out-DEEPSEEK_AUTH=[redacted]");
+                    .contains("out-DEEPSEEK_ACCESS=[redacted]");
             assertThat(content)
                     .as("an ordinary value is written as the core wrote it")
                     .contains("out-VISIBLE_EVIDENCE=launcher-evidence");

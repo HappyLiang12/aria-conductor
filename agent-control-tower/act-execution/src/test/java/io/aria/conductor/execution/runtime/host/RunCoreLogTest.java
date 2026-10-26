@@ -598,7 +598,9 @@ class RunCoreLogTest {
     /**
      * The core rule: the values the profile declares secret -- the credential
      * bundle the adapter injected plus {@code ARIA_MCP_TOKEN} -- are masked by
-     * exact value, whatever their name looks like. The log reads them from the
+     * exact value, whatever their name looks like. The names below are
+     * deliberately <em>not</em> credential-shaped, so the name rule cannot account
+     * for the masking: only the declared values can. The log reads them from the
      * launch profile, never from a parallel list.
      */
     @Test
@@ -606,8 +608,9 @@ class RunCoreLogTest {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
         LaunchProfile profile = withSecrets(echoProfile(working,
-                Map.of("SYNTHETIC_LLM_KEY", SYNTHETIC_KEY, "SYNTHETIC_SESSION_TOKEN", SYNTHETIC_TOKEN),
-                "SYNTHETIC_LLM_KEY", "SYNTHETIC_SESSION_TOKEN"),
+                Map.of("SYNTHETIC_LLM_ACCESS", SYNTHETIC_KEY,
+                        "SYNTHETIC_SESSION_VALUE", SYNTHETIC_TOKEN),
+                "SYNTHETIC_LLM_ACCESS", "SYNTHETIC_SESSION_VALUE"),
                 Set.of(SYNTHETIC_KEY, SYNTHETIC_TOKEN));
         RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
 
@@ -627,8 +630,8 @@ class RunCoreLogTest {
                 .as("a credential the profile handed the core must never be written verbatim")
                 .doesNotContain(SYNTHETIC_KEY)
                 .doesNotContain(SYNTHETIC_TOKEN)
-                .contains("out-SYNTHETIC_LLM_KEY=[redacted]")
-                .contains("err-SYNTHETIC_SESSION_TOKEN=[redacted]")
+                .contains("out-SYNTHETIC_LLM_ACCESS=[redacted]")
+                .contains("err-SYNTHETIC_SESSION_VALUE=[redacted]")
                 .contains("visible-line");
     }
 
@@ -868,8 +871,9 @@ class RunCoreLogTest {
         String token = profile.env().get("ARIA_MCP_TOKEN");
         assertThat(token).as("the wired Aria run must carry its run bearer").isNotBlank();
         assertThat(profile.secretValues())
-                .as("the profile itself carries the credential values and the run bearer")
-                .containsExactlyInAnyOrder(providerAuth, token);
+                .as("the profile declares the credential value and the run bearer; the operator's"
+                        + " provider environment value is part of the launch's secrets too")
+                .containsExactlyInAnyOrder(providerAuth, token, "test-key");
 
         Path runRoot = workingDirectory();
         RunCoreLog coreLog = RunCoreLog.open(runRoot, runId, profile);

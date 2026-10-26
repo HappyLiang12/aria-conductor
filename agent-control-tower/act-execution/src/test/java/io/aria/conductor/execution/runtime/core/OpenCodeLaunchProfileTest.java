@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The OpenCode launch profile's governed configuration with and without the
@@ -217,6 +218,54 @@ class OpenCodeLaunchProfileTest {
 
         assertThat(governedConfig(fixture).has("mcp")).isFalse();
         assertThat(profile.env()).doesNotContainKey("ARIA_MCP_TOKEN");
+    }
+
+    /**
+     * The operator's provider environment ({@code opencode.sandbox-env}) is the
+     * reviewed base environment of this profile, and a production run carries
+     * {@code credentialRef=null}: its values are the credentials the launch
+     * injects, so they are declared secrets of the launch and masked by value
+     * whatever their name looks like. The name here is deliberately not
+     * credential-shaped, so the name rule alone would write it.
+     */
+    @Test
+    void theOperatorProviderEnvironmentValuesAreDeclaredSecrets() throws Exception {
+        Fixture fixture = fixture(UUID.randomUUID(), null);
+        String value = "synthetic-aws-access-key-id-not-a-credential";
+        OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(),
+                        Map.of("AWS_ACCESS_KEY_ID", value), "1.14.31", "efficient"), wiring);
+
+        LaunchProfile profile = adapter.launchProfile(fixture.spec(), fixture.environment(),
+                new SecretBundle(null, Map.of()));
+
+        assertThat(profile.env()).containsEntry("AWS_ACCESS_KEY_ID", value);
+        assertThat(profile.secretValues())
+                .as("the provider environment value must be declared secret, not merely carried")
+                .contains(value);
+    }
+
+    /**
+     * The merge guard is enforced where the merge happens, so a profile that is
+     * constructed directly (a test, a future wiring) cannot carry a
+     * launcher-owned name past it. The spelling variants matter because the
+     * ambient lookup it protects is case-insensitive.
+     */
+    @Test
+    void aDirectlyConstructedProfileCannotSetALauncherOwnedVariable() throws Exception {
+        Fixture fixture = fixture(UUID.randomUUID(), null);
+        for (String name : List.of("HOME", "home", "Home", "XDG_config_home", "ARIA_MCP_TOKEN")) {
+            OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                    new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(),
+                            Map.of(name, "synthetic-operator-value"), "1.14.31", "efficient"), wiring);
+
+            assertThatThrownBy(() -> adapter.launchProfile(fixture.spec(), fixture.environment(),
+                    new SecretBundle(null, Map.of())))
+                    .as("a directly constructed profile must not carry %s into the launch", name)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(name)
+                    .hasMessageContaining("launcher owns");
+        }
     }
 
     private static void deleteTree(Path root) throws IOException {

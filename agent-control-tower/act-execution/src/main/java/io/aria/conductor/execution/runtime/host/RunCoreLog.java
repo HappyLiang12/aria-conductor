@@ -62,7 +62,9 @@ import java.util.stream.Stream;
  * value in {@link LaunchProfile#secretValues()} -- the credential bundle that
  * launch injects plus the run-scoped {@code ARIA_MCP_TOKEN}, and the placement's
  * minted control secret where one is delivered -- by exact value, whatever the
- * value looks like and whatever its length. One object carries both the
+ * value looks like and whatever its length. A declared secret that spans lines
+ * never reaches this log: {@link LaunchProfile} refuses one, because a
+ * line-scoped mask could only cover part of it. One object carries both the
  * environment and its secrets, so the log's input cannot drift from the launch
  * it describes.
  *

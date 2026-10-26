@@ -5,6 +5,7 @@ import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
+import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
@@ -204,6 +205,12 @@ public final class QoderCoreAdapter implements CoreAdapter {
         Objects.requireNonNull(credentials, "credentials");
         requireCore(spec);
         requireMatchingEnvironment(spec, environment);
+        // The launch below hands this environment to the bridge process verbatim.
+        // A profile constructed directly has not passed the guard where the
+        // operator maps are merged, so the guard runs here, before anything is
+        // written or spawned: a launcher-owned name must be refused, not copied.
+        CoreConfigurationService.requireNoLauncherOwnedVariables(profile.environment(),
+                "the reviewed Qoder bridge profile environment");
         URI endpoint = requireLoopbackEndpoint(environment);
 
         String bridgeEntry = requireExistingFile(profile.bridgeEntry(),

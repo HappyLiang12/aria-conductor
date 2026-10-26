@@ -78,6 +78,10 @@ class CoreConfigurationServiceTest {
                 "--setting-sources", "project", "--strict-mcp-config",
                 "--mcp-config", "{\"mcpServers\":{}}");
         assertThat(profile.argv()).noneMatch(argument -> argument.contains(SECRET));
+        assertThat(profile.secretValues())
+                .as("the profile carries the credential values the log must mask -- one source, the"
+                        + " same object the child is launched with")
+                .containsExactly(SECRET);
         assertThat(profile.workingDirectory()).isEqualTo(workspace.toString());
         assertThat(profile.env())
                 .containsEntry("QODER_PERSONAL_ACCESS_TOKEN", SECRET)
@@ -296,7 +300,8 @@ class CoreConfigurationServiceTest {
     @Test
     void allowlistOverrideCannotAdmitForbiddenOrCredentialShapedNames() {
         for (String name : List.of("NODE_OPTIONS", "QODER_AGENT_SDK_ENTRYPOINT",
-                "QODER_PERSONAL_ACCESS_TOKEN", "DEEPSEEK_API_KEY", "SOME_PASSWORD")) {
+                "QODER_PERSONAL_ACCESS_TOKEN", "DEEPSEEK_API_KEY", "SOME_PASSWORD",
+                "DEEPSEEK_AUTH")) {
             assertThatThrownBy(() -> new CoreConfigurationService(QODER_EXE, OPENCODE_EXE,
                     OPENCODE_PROVIDER_CREDENTIALS, List.of("PATH", name)))
                     .as("launch allowlist override must not admit %s", name)
@@ -380,6 +385,46 @@ class CoreConfigurationServiceTest {
                 new SecretBundle("qoder:operator", Map.of("QODER_PERSONAL_ACCESS_TOKEN", SECRET))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("QODER_PERSONAL_ACCESS_TOKEN");
+    }
+
+    /**
+     * The collision P2: {@code opencode.sandbox-env} is an operator map that
+     * reaches the real HOST launch environment, so a key that names a variable the
+     * launcher owns would silently override the run-owned root or the run bearer.
+     * It is refused loudly where the map is merged, naming the variable -- a
+     * silent override is how a credential under {@code HOME} was written verbatim.
+     */
+    @Test
+    void anOpencodeSandboxEnvKeyTheLauncherOwnsIsRefusedAtTheMerge() {
+        for (String name : List.of("HOME", "USERPROFILE", "TMP", "TEMP",
+                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "ARIA_MCP_TOKEN")) {
+            assertThatThrownBy(() -> CoreRuntimeConfiguration.openCodeModelProviderEnvironment(
+                    Map.of(name, "synthetic-operator-value")))
+                    .as("opencode.sandbox-env must not set %s", name)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(name)
+                    .hasMessageContaining("opencode.sandbox-env")
+                    .hasMessageContaining("launcher owns");
+        }
+        assertThat(CoreRuntimeConfiguration.openCodeModelProviderEnvironment(
+                Map.of("DEEPSEEK_API_KEY", "test-key")))
+                .as("positive control: a non-colliding provider key is still merged")
+                .containsEntry("DEEPSEEK_API_KEY", "test-key");
+    }
+
+    @Test
+    void theBaseBuilderRefusesACollidingProviderEnvironmentToo() throws IOException {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace"));
+        ExecutionSpec spec = spec("opencode", workspace);
+        CoreConfigurationService colliding = new CoreConfigurationService(
+                QODER_EXE, OPENCODE_EXE, Map.of("HOME", "synthetic-operator-value"));
+
+        assertThatThrownBy(() -> colliding.prepare(spec,
+                environment(spec.runId(), workspace, tempDir.resolve("run-config"), 9301),
+                new SecretBundle(null, Map.of())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("HOME")
+                .hasMessageContaining("launcher owns");
     }
 
     // ------------------------------------------------------------------ helpers

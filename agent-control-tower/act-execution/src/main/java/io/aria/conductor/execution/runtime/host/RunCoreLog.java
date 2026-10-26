@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime.host;
 
 import io.aria.conductor.execution.runtime.CoreConfigurationService;
+import io.aria.conductor.execution.runtime.LaunchProfile;
 
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
@@ -55,20 +56,43 @@ import java.util.stream.Stream;
  * until capture, which happens only after the stop, so the last words before an
  * aborted launch or a dead process would have no file to reach.
  *
- * <p><b>Redaction.</b> The log holds diagnostics, not credentials. The exempt
- * names are a <em>positive allowlist</em> handed in by the launcher: exactly the
- * names it sets itself as non-secret system evidence plus the operator's
- * configured {@code aria.cores.launch-system-variables}
- * ({@link CoreConfigurationService#launchNonSecretNames()}). <b>Every other name
- * in the launch environment is redacted by exact value, whatever its length and
- * whatever it looks like</b> -- a name the log was not told is non-secret is
- * treated as one (fail-closed), so a credential can never be written because it
- * is short or because its name does not match a pattern. The alternative --
- * replacing every value of the launch environment -- turned every {@code C:} in a
- * path, plus {@code PATH}, {@code SystemDrive}, {@code NUMBER_OF_PROCESSORS} and
- * {@code TZ}, into {@code [redacted]} -- destroying exactly the evidence the log
- * exists to hold. Replacement is still exact-value, never a "secret-looking"
- * heuristic on the text: a value the profile did not pass is never guessed at.
+ * <p><b>Redaction.</b> The log holds diagnostics, not credentials. What is
+ * masked is decided from the launch itself, not from a list of names: the log is
+ * handed the {@link LaunchProfile} the child is launched with, and masks every
+ * value in {@link LaunchProfile#secretValues()} -- the credential bundle that
+ * launch injects plus the run-scoped {@code ARIA_MCP_TOKEN}, and the placement's
+ * minted control secret where one is delivered -- by exact value, whatever the
+ * value looks like and whatever its length. One object carries both the
+ * environment and its secrets, so the log's input cannot drift from the launch
+ * it describes.
+ *
+ * <p>Defence in depth adds a name rule: a value whose variable name is
+ * credential-shaped ({@code TOKEN}, {@code SECRET}, {@code PASSWORD},
+ * {@code CREDENTIAL}, a {@code _KEY}/{@code _AUTH} suffix or {@code APIKEY},
+ * case-insensitive) is masked too, regardless of length, even when the launcher
+ * did not declare it secret. Everything else -- the run-owned
+ * {@code HOME}/{@code TMP}/{@code XDG_*} roots, {@code PATH}, an operator's
+ * runtime variable -- is written as the core wrote it, because that is the
+ * evidence this log exists to hold.
+ *
+ * <p><b>Accepted failure mode.</b> A secret the launcher does not know it
+ * injected is written in clear. That is any value the core introduces itself, or
+ * an operator's {@code opencode.sandbox-env} value under a name that is neither
+ * launcher-owned nor credential-shaped: the launcher has no way to know it is a
+ * secret, and guessing from the text is the heuristic this rule refuses. The
+ * collision block in {@code CoreConfigurationService} keeps such a value from
+ * riding under a launcher-owned name ({@code HOME}, the XDG roots,
+ * {@code ARIA_MCP_TOKEN}). This is the accepted cost of a log that stays useful;
+ * a log that redacts everything it does not recognize destroys the evidence it
+ * exists for.
+ *
+ * <p>Two mechanical consequences follow from masking by exact value. A very
+ * short secret masks every occurrence of those characters anywhere in the log.
+ * And a legitimate line tail that coincides with the beginning of a masked value
+ * is dropped with it -- the trim cannot tell an accidental coincidence from the
+ * start of a real secret, and writing the beginning of a secret is the worse
+ * error. Replacement is never a "secret-looking" heuristic on the text: a value
+ * the profile did not carry is never guessed at.
  *
  * <p><b>Bound.</b> One file is capped at {@value #DEFAULT_MAX_BYTES} bytes
  * (8 MiB) shared by both streams; once the next line would cross the cap, a
@@ -127,7 +151,7 @@ public final class RunCoreLog implements AutoCloseable {
      */
     public static final int MAX_LINE_BYTES = 64 * 1024;
 
-    /** Replaces every occurrence of an exact value from the launch profile's environment. */
+    /** Replaces every occurrence of an exact secret value the launch profile carries. */
     static final String REDACTED = "[redacted]";
 
     private static final System.Logger LOG = System.getLogger(RunCoreLog.class.getName());
@@ -167,12 +191,12 @@ public final class RunCoreLog implements AutoCloseable {
     private int activeReaders;
 
     private RunCoreLog(String label, Path path, OutputStream sink, long maxBytes,
-            Map<String, String> environment, Set<String> nonSecretNames) {
+            Map<String, String> environment, Set<String> secretValues) {
         this.label = label;
         this.path = path;
         this.sink = sink;
         this.maxBytes = maxBytes;
-        this.environmentValues = secretsOf(environment, nonSecretNames);
+        this.environmentValues = secretsOf(environment, secretValues);
         this.truncationReserve = reserveFor(this.environmentValues);
     }
 
@@ -192,20 +216,27 @@ public final class RunCoreLog implements AutoCloseable {
     }
 
     /**
-     * Opens the run's log below its retained runtime root; the previous file of
-     * the same run (a retried launch) is replaced. A file that cannot be opened
-     * fails the launch: a run whose core output has nowhere to go is not
-     * launched with the deadlock this class exists to remove.
-     *
-     * @param nonSecretNames the launcher's positive allowlist: the names it sets
-     *        itself as non-secret system evidence plus the operator's configured
-     *        {@code aria.cores.launch-system-variables}
-     *        ({@link CoreConfigurationService#launchNonSecretNames()}). Every other
-     *        name of {@code environment} is redacted, whatever its value looks like.
+     * Opens the run's log below its retained runtime root from the same
+     * {@link LaunchProfile} the child is launched with: the environment and the
+     * set of values the launcher knows it injected are read from one object, so
+     * the log's input cannot drift from the launch. The previous file of the same
+     * run (a retried launch) is replaced. A file that cannot be opened fails the
+     * launch: a run whose core output has nowhere to go is not launched with the
+     * deadlock this class exists to remove.
      */
-    public static RunCoreLog open(Path runRoot, UUID runId, Map<String, String> environment,
-            Set<String> nonSecretNames) {
-        return open(pathIn(runRoot, runId), runId.toString(), environment, nonSecretNames,
+    public static RunCoreLog open(Path runRoot, UUID runId, LaunchProfile profile) {
+        Objects.requireNonNull(profile, "profile");
+        return open(pathIn(runRoot, runId), runId.toString(), profile.env(),
+                profile.secretValues(), DEFAULT_MAX_BYTES);
+    }
+
+    /**
+     * Test seam with the same shape as {@link #open(Path, UUID, LaunchProfile)}:
+     * the environment and the declared secret values, never a parallel name list.
+     */
+    static RunCoreLog open(Path runRoot, UUID runId, Map<String, String> environment,
+            Set<String> secretValues) {
+        return open(pathIn(runRoot, runId), runId.toString(), environment, secretValues,
                 DEFAULT_MAX_BYTES);
     }
 
@@ -216,7 +247,7 @@ public final class RunCoreLog implements AutoCloseable {
 
     /** Test seam: the same writer with an explicit cap so the truncation path is cheap to prove. */
     static RunCoreLog open(Path file, String label, Map<String, String> environment,
-            Set<String> nonSecretNames, long maxBytes) {
+            Set<String> secretValues, long maxBytes) {
         Objects.requireNonNull(file, "file");
         if (maxBytes <= 0) {
             throw new IllegalArgumentException("A core log cap must be positive, got " + maxBytes);
@@ -230,7 +261,7 @@ public final class RunCoreLog implements AutoCloseable {
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE), STREAM_BUFFER);
             return new RunCoreLog(label, file.toAbsolutePath().normalize(), sink, maxBytes,
-                    environment, nonSecretNames);
+                    environment, secretValues);
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to open the run-owned core log " + file, e);
         }
@@ -403,7 +434,9 @@ public final class RunCoreLog implements AutoCloseable {
      * ends on the cut loses twenty characters of its own, and the text after it
      * moves into the retained range -- including the start of a second value that
      * never fitted the window whole, which redaction therefore cannot have
-     * replaced. Such a start is not core output and must not be written.
+     * replaced. The trim cannot tell that fragment from a legitimate line tail
+     * that happens to resemble it, so such a tail is dropped too; the alternative
+     * is writing the beginning of a secret, which is the worse error.
      */
     private String withoutPartialValue(String text) {
         String retained = text;
@@ -621,26 +654,33 @@ public final class RunCoreLog implements AutoCloseable {
     // ------------------------------------------------------------------ redaction
 
     /**
-     * The exact environment values to redact, longest first so a value that
-     * contains another value is replaced as a whole before its prefix can split
-     * it. The rule is a positive allowlist and fails closed: a value is exempt
-     * only when its name is in {@code nonSecretNames} -- the launcher's own fixed
-     * names plus the operator's configured {@code aria.cores.launch-system-variables}
-     * ({@link CoreConfigurationService#launchNonSecretNames()}). Every other name
-     * is redacted whatever its value looks like, so a short credential or a
-     * provider name this class has never heard of cannot be written. The
-     * alternative -- every value of the launch environment -- replaces the drive
-     * letters of every path on Windows and hides the failure the log is for.
+     * The values to redact, longest first so a value that contains another value
+     * is replaced as a whole before its prefix can split it.
+     *
+     * <p>The primary rule is by value: everything the profile declares secret is
+     * masked. Defence in depth adds every value whose variable name is
+     * credential-shaped, regardless of length, so a credential that reached the
+     * environment without being declared is still not written. Nothing else is
+     * touched: the rest of the environment is written as the core wrote it.
      */
     private static List<String> secretsOf(Map<String, String> environment,
-            Set<String> nonSecretNames) {
-        Set<String> exempt = nonSecretNames == null ? Set.of() : nonSecretNames;
+            Set<String> secretValues) {
         LinkedHashSet<String> unique = new LinkedHashSet<>();
-        environment.forEach((name, value) -> {
-            if (name != null && value != null && !value.isEmpty() && !exempt.contains(name)) {
-                unique.add(value);
+        if (secretValues != null) {
+            for (String value : secretValues) {
+                if (value != null && !value.isEmpty()) {
+                    unique.add(value);
+                }
             }
-        });
+        }
+        if (environment != null) {
+            environment.forEach((name, value) -> {
+                if (value != null && !value.isEmpty()
+                        && CoreConfigurationService.isCredentialShapedName(name)) {
+                    unique.add(value);
+                }
+            });
+        }
         List<String> sorted = new ArrayList<>(unique);
         sorted.sort(Comparator.comparingInt(String::length).reversed());
         return List.copyOf(sorted);

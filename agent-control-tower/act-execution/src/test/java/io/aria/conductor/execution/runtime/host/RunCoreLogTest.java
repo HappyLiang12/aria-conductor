@@ -1,7 +1,16 @@
 package io.aria.conductor.execution.runtime.host;
 
-import io.aria.conductor.execution.runtime.CoreConfigurationService;
+import io.aria.conductor.common.AriaConstants;
+import io.aria.conductor.common.runtime.AgentExecutionSettings;
+import io.aria.conductor.common.runtime.ExecutionMode;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
+import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
+import io.aria.conductor.execution.runtime.PreparedEnvironment;
+import io.aria.conductor.execution.runtime.SecretBundle;
+import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
+import io.aria.conductor.execution.security.ActorTokenService;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -11,9 +20,11 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -313,11 +324,11 @@ class RunCoreLogTest {
     @Test
     void aCredentialStraddlingTheLineCutLeavesNoPrefixInTheFile() throws Exception {
         Path working = workingDirectory();
-        String secret = "straddling-secret-" + "a".repeat(12); // 30 characters, as in the probe
+        String secret = "~straddling-secret-" + "a".repeat(11); // 30 characters, as in the probe
         assertThat(secret).hasSize(30);
         String tail = "TAIL-past-the-assembly-window-must-not-be-written";
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("cut-straddle.log"), "cut-" + RUN,
-                Map.of("LLM_API_KEY", secret), Set.of(), RunCoreLog.DEFAULT_MAX_BYTES);
+                Map.of("LLM_API_KEY", secret), Set.of(secret), RunCoreLog.DEFAULT_MAX_BYTES);
 
         // The probe's offset: 6 characters of the value sit under the bound, 24 past it.
         int fillerBytes = RunCoreLog.MAX_LINE_BYTES - 6;
@@ -473,12 +484,12 @@ class RunCoreLogTest {
     @Test
     void theStartOfASecondCredentialPulledInByRedactionIsNotWritten() throws Exception {
         Path working = workingDirectory();
-        String first = "s1-" + "a".repeat(27);
-        String second = "s2-" + "b".repeat(27);
+        String first = "~1-" + "a".repeat(27);
+        String second = "~2-" + "b".repeat(27);
         assertThat(first).hasSize(30);
         assertThat(second).hasSize(30);
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("two-secrets.log"), "two-" + RUN,
-                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(),
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(first, second),
                 RunCoreLog.DEFAULT_MAX_BYTES);
 
         // MAX-30 filler, the first value ending exactly on the bound, then the whole
@@ -499,13 +510,7 @@ class RunCoreLogTest {
 
         String content = Files.readString(coreLog.path());
         assertThat(content).contains("[aria] line truncated");
-        String leaked = null;
-        for (int length = 6; length <= second.length() && leaked == null; length++) {
-            String prefix = second.substring(0, length);
-            if (content.contains(prefix)) {
-                leaked = prefix;
-            }
-        }
+        String leaked = leakedPrefix(content, second, second.length());
         assertThat(leaked)
                 .as("the start of a credential pulled into the head by an earlier redaction is not"
                         + " evidence: [%s] of [%s] was written", leaked, second)
@@ -526,10 +531,10 @@ class RunCoreLogTest {
     @Test
     void aLineEndingAtEofDoesNotWriteTheStartOfASecondSecret() throws Exception {
         Path working = workingDirectory();
-        String first = "s1-" + "a".repeat(27);
-        String second = "s2-" + "b".repeat(27);
+        String first = "~1-" + "a".repeat(27);
+        String second = "~2-" + "b".repeat(27);
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("eof-prefix.log"), "eof-" + RUN,
-                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(),
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(first, second),
                 RunCoreLog.DEFAULT_MAX_BYTES);
 
         byte[] line = concat(filler(RunCoreLog.MAX_LINE_BYTES - 30), utf8(first),
@@ -545,6 +550,9 @@ class RunCoreLogTest {
         assertThat(content)
                 .as("the earlier complete value must still be redacted; otherwise this proves nothing")
                 .doesNotContain(first);
+        assertThat(leakedPrefix("prefix " + second.substring(0, 1), second, second.length()))
+                .as("positive control: the probe can see a one-character prefix when one was written")
+                .isEqualTo(second.substring(0, 1));
         assertThat(leakedPrefix(content, second, 20))
                 .as("a line that ends at EOF after redaction shrank an earlier value must not write"
                         + " the start of a second one: [%s]", leakedPrefix(content, second, 20))
@@ -561,10 +569,10 @@ class RunCoreLogTest {
     @Test
     void aNewlineTerminatedLineDoesNotWriteTheStartOfASecondSecret() throws Exception {
         Path working = workingDirectory();
-        String first = "s1-" + "a".repeat(27);
-        String second = "s2-" + "b".repeat(27);
+        String first = "~1-" + "a".repeat(27);
+        String second = "~2-" + "b".repeat(27);
         RunCoreLog coreLog = RunCoreLog.open(working.resolve("newline-prefix.log"), "nl-" + RUN,
-                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(),
+                Map.of("LLM_API_KEY", first, "ARIA_MCP_TOKEN", second), Set.of(first, second),
                 RunCoreLog.DEFAULT_MAX_BYTES);
 
         byte[] line = concat(filler(RunCoreLog.MAX_LINE_BYTES - 30), utf8(first),
@@ -587,14 +595,21 @@ class RunCoreLogTest {
                 .isNull();
     }
 
+    /**
+     * The core rule: the values the profile declares secret -- the credential
+     * bundle the adapter injected plus {@code ARIA_MCP_TOKEN} -- are masked by
+     * exact value, whatever their name looks like. The log reads them from the
+     * launch profile, never from a parallel list.
+     */
     @Test
-    void everyExactEnvironmentValueTheChildEchoesIsRedacted() throws Exception {
+    void everyDeclaredSecretValueTheChildEchoesIsRedacted() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
-        LaunchProfile profile = echoProfile(working,
+        LaunchProfile profile = withSecrets(echoProfile(working,
                 Map.of("SYNTHETIC_LLM_KEY", SYNTHETIC_KEY, "SYNTHETIC_SESSION_TOKEN", SYNTHETIC_TOKEN),
-                "SYNTHETIC_LLM_KEY", "SYNTHETIC_SESSION_TOKEN");
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(), Set.of());
+                "SYNTHETIC_LLM_KEY", "SYNTHETIC_SESSION_TOKEN"),
+                Set.of(SYNTHETIC_KEY, SYNTHETIC_TOKEN));
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -618,15 +633,13 @@ class RunCoreLogTest {
     }
 
     /**
-     * Finding 2: redaction is a positive allowlist, not "every value the launch env
-     * has". On Windows replacing every value turned each {@code C:} in a path plus
-     * {@code PATH}, {@code SystemDrive}, {@code NUMBER_OF_PROCESSORS} and
-     * {@code TZ} into {@code [redacted]}, destroying exactly the evidence the log
-     * exists to hold. A name the launcher declared non-secret (the fixed roots and
-     * the configured OS allowlist) survives verbatim; anything else is redacted.
+     * The defence-in-depth rule: a value under a credential-shaped name is masked
+     * whatever its length, even when the log was not told it is a secret. And the
+     * rest of the environment is written as the core wrote it -- a path is
+     * evidence, not a credential.
      */
     @Test
-    void aDocumentedCredentialIsRedactedWhileSystemPathsSurviveVerbatim() throws Exception {
+    void aCredentialShapedNameIsRedactedWhateverItsLengthWhileSystemPathsSurviveVerbatim() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
         LaunchProfile profile = echoProfile(working, Map.of(
@@ -635,8 +648,7 @@ class RunCoreLogTest {
                 "HOME", POSIX_PATH,
                 "PATH", "C:\\Windows;C:\\Tools\\bin",
                 "NUMBER_OF_PROCESSORS", "16"), "LLM_API_KEY", "TEMP", "HOME", "PATH");
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(),
-                launcherNonSecretNames());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -651,7 +663,7 @@ class RunCoreLogTest {
 
         String content = Files.readString(coreLog.path());
         assertThat(content)
-                .as("the run's own model-provider key is redacted whatever its length")
+                .as("a credential-shaped name is redacted whatever its length")
                 .doesNotContain("short-9f2")
                 .contains("out-LLM_API_KEY=[redacted]");
         assertThat(content)
@@ -661,21 +673,18 @@ class RunCoreLogTest {
                 .as("a POSIX path is evidence, not a credential")
                 .contains("out-HOME=" + POSIX_PATH);
         assertThat(content)
-                .as("PATH is the launcher's own system allowlist; redacting it hides which runtime ran")
+                .as("PATH is evidence of which runtime ran; it is not credential-shaped")
                 .contains("out-PATH=C:\\Windows;C:\\Tools\\bin");
     }
 
     /**
-     * P3-A/P3-B of the third review: the exemption is a positive allowlist from one
-     * source, {@link CoreConfigurationService#launchNonSecretNames()} -- the
-     * configured {@code aria.cores.launch-system-variables} (JAVA_HOME here, which
-     * replaces the derived default) plus the names the launcher always sets
-     * ({@code XDG_*} and the run-owned HOME roots). Everything else is redacted, so
-     * the launcher's own evidence survives without widening what counts as a
-     * credential.
+     * Everything the launcher writes that is not a declared secret and not
+     * credential-shaped is evidence: the run-owned roots and an operator's
+     * runtime variable survive verbatim, because the log exists to show which
+     * environment the core actually ran with.
      */
     @Test
-    void theLaunchersOwnNonSecretRootsAndAllowlistedNamesSurviveVerbatim() throws Exception {
+    void theLaunchersOwnRootsAndOrdinaryNamesSurviveVerbatim() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
         LaunchProfile profile = echoProfile(working, Map.of(
@@ -685,9 +694,7 @@ class RunCoreLogTest {
                 "JAVA_HOME", "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11-hotspot",
                 "LLM_API_KEY", SYNTHETIC_KEY),
                 "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "JAVA_HOME", "LLM_API_KEY");
-        // The property's semantics: a configured value replaces the derived default.
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(),
-                launcherNonSecretNames(List.of("JAVA_HOME")));
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -708,25 +715,22 @@ class RunCoreLogTest {
                 .contains("err-XDG_DATA_HOME=C:\\Aria\\runs\\run-1\\host\\data")
                 .contains("out-XDG_CACHE_HOME=C:\\Aria\\runs\\run-1\\host\\cache");
         assertThat(content)
-                .as("a name an operator added to aria.cores.launch-system-variables is the launcher's"
-                        + " own non-secret system evidence, not a credential")
+                .as("a name outside the credential shape is written as the core wrote it")
                 .contains("out-JAVA_HOME=C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11-hotspot");
         assertThat(content)
-                .as("a name the launcher did not declare non-secret is redacted, however long its value")
+                .as("a credential-shaped name is masked by defence in depth")
                 .contains("out-LLM_API_KEY=[redacted]");
     }
 
     /**
-     * P3-A/P3-B of the third review: the rule is a <em>positive allowlist</em>, so a
-     * name the launcher neither set itself nor the operator allowed is redacted
-     * whatever its value looks like. Before this, a length gate wrote
-     * {@code SOME_PASSWORD=tiny} (4 characters) and {@code DEEPSEEK_API_KEY=test-key}
-     * (8 characters, the shape the test profile configures) verbatim, and the
-     * admission predicate admitted an operator-added {@code opencode.sandbox-env}
-     * name, so {@code DEEPSEEK_AUTH=sk-live-...} was written in full.
+     * Defence in depth: a credential-shaped name is masked regardless of length,
+     * even when the launcher never declared its value secret. The earlier rule's
+     * length gate wrote {@code SOME_PASSWORD=tiny} and the 8-character
+     * {@code DEEPSEEK_API_KEY=test-key} verbatim, and the reviewer's
+     * {@code DEEPSEEK_AUTH=sk-live-...} probe was written in full.
      */
     @Test
-    void everyNameTheLauncherDidNotDeclareNonSecretIsRedactedWhateverItsLength() throws Exception {
+    void credentialShapedNamesAreRedactedWhateverTheirLength() throws Exception {
         Path working = workingDirectory();
         Path runRoot = workingDirectory();
         LaunchProfile profile = echoProfile(working, Map.of(
@@ -734,7 +738,7 @@ class RunCoreLogTest {
                 "DEEPSEEK_API_KEY", "test-key",
                 "DEEPSEEK_AUTH", "sk-live-synthetic-not-a-real-key"),
                 "SOME_PASSWORD", "DEEPSEEK_API_KEY", "DEEPSEEK_AUTH");
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile.env(), launcherNonSecretNames());
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
 
         Process process = OwnedProcessController.launch(profile, coreLog);
         try {
@@ -757,10 +761,144 @@ class RunCoreLogTest {
                 .doesNotContain("test-key")
                 .contains("err-DEEPSEEK_API_KEY=[redacted]");
         assertThat(content)
-                .as("an operator-added opencode.sandbox-env name is not system evidence: the"
-                        + " launcher never declared it non-secret")
+                .as("a provider auth key is credential-shaped and must not be written")
                 .doesNotContain("sk-live-synthetic-not-a-real-key")
                 .contains("out-DEEPSEEK_AUTH=[redacted]");
+    }
+
+    /**
+     * The primary rule is by value, so a secret whose name carries no credential
+     * shape at all is still masked when the profile says the launcher injected
+     * it. {@code DEEPSEEK_ACCESS} matches none of the name patterns, so only the
+     * value rule can keep it out of the file.
+     */
+    @Test
+    void aDeclaredSecretIsMaskedEvenWhenItsNameIsNotCredentialShaped() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        String auth = "sk-live-synthetic-credential-not-a-real-key";
+        LaunchProfile profile = withSecrets(echoProfile(working,
+                Map.of("DEEPSEEK_ACCESS", auth), "DEEPSEEK_ACCESS", "DEEPSEEK_ACCESS"), Set.of(auth));
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
+
+        Process process = OwnedProcessController.launch(profile, coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the profile declared this value secret, so its name shape cannot matter")
+                .doesNotContain(auth)
+                .contains("out-DEEPSEEK_ACCESS=[redacted]");
+    }
+
+    /**
+     * The documented accepted cost, pinned so it cannot be mistaken for an
+     * oversight: a value the launcher does not know it injected -- here an
+     * operator's {@code opencode.sandbox-env} entry under a name that is neither
+     * launcher-owned nor credential-shaped -- is written as the core wrote it.
+     * Masking what is not known would require guessing from the text, and that is
+     * the heuristic this rule refuses.
+     */
+    @Test
+    void anOperatorValueTheLauncherDidNotInjectIsWrittenAsTheCoreWroteIt() throws Exception {
+        Path working = workingDirectory();
+        Path runRoot = workingDirectory();
+        String operatorValue = "operator-supplied-synthetic-not-a-real-credential";
+        LaunchProfile profile = echoProfile(working,
+                Map.of("DEEPSEEK_ACCESS", operatorValue), "DEEPSEEK_ACCESS", "DEEPSEEK_ACCESS");
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, RUN, profile);
+
+        Process process = OwnedProcessController.launch(profile, coreLog);
+        try {
+            assertThat(process.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            if (process.isAlive()) {
+                process.destroyForcibly();
+                process.waitFor(10, TimeUnit.SECONDS);
+            }
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the accepted failure mode: a secret the launcher does not know it injected is"
+                        + " written; the log stays useful for everything it does know")
+                .contains("out-DEEPSEEK_ACCESS=" + operatorValue);
+    }
+
+    /**
+     * The input comes from the launch object, not a parallel list: the real
+     * OpenCode adapter builds the profile, and the log opened from that very
+     * profile masks exactly the credential-bundle value and the minted
+     * {@code ARIA_MCP_TOKEN} it carries, while the run-owned XDG root and the
+     * credential-shaped provider key are handled by their own rules.
+     */
+    @Test
+    void theRealAdapterProfileSuppliesExactlyTheSecretsItsLogMasks() throws Exception {
+        Path root = workingDirectory();
+        Path workspace = Files.createDirectories(root.resolve("workspace"));
+        Path configuration = Files.createDirectories(root.resolve("runtime").resolve("host"));
+        UUID runId = UUID.randomUUID();
+        ExecutionSpec spec = new ExecutionSpec(runId, AriaConstants.ARIA_AGENT_ID, "opencode",
+                ExecutionMode.HOST,
+                new AgentExecutionSettings("opencode", ExecutionMode.HOST, null, null, null),
+                "opencode:provider-key", "rev-1", Instant.now().plusSeconds(2700));
+        PreparedEnvironment environment = new PreparedEnvironment(runId, ExecutionMode.HOST,
+                "host-" + runId, workspace.toString(), configuration.toString(),
+                URI.create("http://127.0.0.1:46321/"));
+        McpProperties mcp = new McpProperties();
+        mcp.setAuthMode("actor");
+        mcp.setPort(4815);
+        RunMcpWiring wiring = new RunMcpWiring(mcp, new ActorTokenService());
+        OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                new OpenCodeCoreAdapter.OpenCodeProfile("opencode", List.of(),
+                        Map.of("LLM_API_KEY", "test-key"), "1.14.31", "efficient"), wiring);
+        String providerAuth = "sk-live-synthetic-credential-not-a-real-key";
+
+        LaunchProfile profile = adapter.launchProfile(spec, environment,
+                new SecretBundle("opencode:provider-key", Map.of("DEEPSEEK_ACCESS", providerAuth)));
+        String token = profile.env().get("ARIA_MCP_TOKEN");
+        assertThat(token).as("the wired Aria run must carry its run bearer").isNotBlank();
+        assertThat(profile.secretValues())
+                .as("the profile itself carries the credential values and the run bearer")
+                .containsExactlyInAnyOrder(providerAuth, token);
+
+        Path runRoot = workingDirectory();
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, runId, profile);
+        String xdg = profile.env().get("XDG_CONFIG_HOME");
+        byte[] line = ("out-DEEPSEEK_ACCESS=" + providerAuth
+                + " out-ARIA_MCP_TOKEN=" + token
+                + " out-LLM_API_KEY=test-key"
+                // The ~end sentinel cannot be the start of any secret (base64url, sk-,
+                // test-key), so the documented tail trim cannot eat into the path.
+                + " out-XDG_CONFIG_HOME=" + xdg + " ~end\n").getBytes(StandardCharsets.UTF_8);
+        try {
+            coreLog.startReaderForTest("stdout", new ByteArrayInputStream(line));
+        } finally {
+            coreLog.close();
+        }
+
+        String content = Files.readString(coreLog.path());
+        assertThat(content)
+                .as("the credential-bundle value and the run bearer are not evidence")
+                .doesNotContain(providerAuth)
+                .doesNotContain(token)
+                .contains("out-DEEPSEEK_ACCESS=[redacted]")
+                .contains("out-ARIA_MCP_TOKEN=[redacted]");
+        assertThat(content)
+                .as("the provider key is credential-shaped and masked by name")
+                .contains("out-LLM_API_KEY=[redacted]");
+        assertThat(content)
+                .as("the launcher's own XDG root is evidence and must survive verbatim")
+                .contains("out-XDG_CONFIG_HOME=" + xdg);
     }
 
     @Test
@@ -941,18 +1079,10 @@ class RunCoreLogTest {
         return directory;
     }
 
-    /**
-     * The launcher's own exemption, taken from the class that writes the profile
-     * env -- the same one source the log itself is handed, never a copy.
-     */
-    private static Set<String> launcherNonSecretNames() {
-        return launcherNonSecretNames(CoreConfigurationService.DEFAULT_ALLOWED_SYSTEM_VARIABLES);
-    }
-
-    /** The exemption of a launcher whose {@code aria.cores.launch-system-variables} is overridden. */
-    private static Set<String> launcherNonSecretNames(List<String> configuredSystemVariables) {
-        return new CoreConfigurationService(null, null, Map.of(), configuredSystemVariables)
-                .launchNonSecretNames();
+    /** The same profile, declaring which of its values the launcher knows it injected. */
+    private static LaunchProfile withSecrets(LaunchProfile profile, Set<String> secretValues) {
+        return new LaunchProfile(profile.argv(), profile.env(), profile.workingDirectory(),
+                profile.controlSecretFile(), secretValues);
     }
 
     /**
@@ -1065,12 +1195,13 @@ class RunCoreLogTest {
 
     /**
      * The longest prefix of {@code secret} the content still holds, searching down
-     * to six characters: shorter fragments collide with ordinary text in the log
-     * (our own truncation marker contains "st"), so six is the shortest prefix that
-     * is evidence of a written credential.
+     * to one character. The probes use a secret whose first character never occurs
+     * in the log's own text (the marker, paths, filler), so even a one-character
+     * survivorship is evidence of a written credential rather than a collision --
+     * the earlier six-character floor let a 1-5 character leak pass unproven.
      */
     private static String leakedPrefix(String content, String secret, int maxLength) {
-        for (int length = Math.min(maxLength, secret.length()); length >= 6; length--) {
+        for (int length = Math.min(maxLength, secret.length()); length >= 1; length--) {
             String prefix = secret.substring(0, length);
             if (content.contains(prefix)) {
                 return prefix;

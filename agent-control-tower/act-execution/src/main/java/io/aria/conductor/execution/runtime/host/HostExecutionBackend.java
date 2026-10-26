@@ -2,7 +2,6 @@ package io.aria.conductor.execution.runtime.host;
 
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.runtime.ControlAck;
-import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.ExecutionBackend;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
@@ -18,8 +17,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +37,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -154,16 +152,6 @@ public class HostExecutionBackend implements ExecutionBackend {
      * expose the minted secret to the session opener (their runtime reads it).
      */
     private final Map<UUID, String> sessionSecrets = new ConcurrentHashMap<>();
-    /**
-     * The names the run-owned core log must keep in the clear: the launcher's own
-     * launch-environment policy -- its fixed system evidence plus the operator's
-     * configured {@code aria.cores.launch-system-variables} -- from one source
-     * ({@link CoreConfigurationService#launchNonSecretNames()}). Every other name
-     * of the launch environment is redacted. A backend constructed outside the
-     * application context starts on the derived default, which is exactly what
-     * {@code prepare} writes without an operator override.
-     */
-    private volatile Set<String> nonSecretLaunchNames;
 
     public HostExecutionBackend(OwnedProcessController controller) {
         this(controller, HostExecutionBackend::allocateLoopbackEndpoint);
@@ -171,35 +159,8 @@ public class HostExecutionBackend implements ExecutionBackend {
 
     /** Explicit allocator seam: a failed bind must fail the preparation. */
     HostExecutionBackend(OwnedProcessController controller, EndpointAllocator endpoints) {
-        this(controller, endpoints, CoreConfigurationService.nonSecretLaunchNames(
-                CoreConfigurationService.DEFAULT_ALLOWED_SYSTEM_VARIABLES));
-    }
-
-    /** Explicit launch-environment policy seam: the log's redaction allowlist. */
-    HostExecutionBackend(OwnedProcessController controller, EndpointAllocator endpoints,
-            Set<String> nonSecretLaunchNames) {
         this.controller = Objects.requireNonNull(controller, "controller");
         this.endpoints = Objects.requireNonNull(endpoints, "endpoints");
-        this.nonSecretLaunchNames = Set.copyOf(nonSecretLaunchNames);
-    }
-
-    /**
-     * The launcher's launch-environment policy, injected where this backend runs
-     * inside the application context. The operator's configured
-     * {@code aria.cores.launch-system-variables} must exempt the names it admitted
-     * from the core log, or the log redacts evidence the launcher itself set; taking
-     * the names from the service that writes the profile keeps one source. Optional:
-     * a directly constructed backend (tests) keeps the derived default.
-     */
-    @Autowired(required = false)
-    public void useLaunchEnvironmentPolicy(CoreConfigurationService configuration) {
-        this.nonSecretLaunchNames = Objects.requireNonNull(configuration,
-                "configuration").launchNonSecretNames();
-    }
-
-    /** The log's redaction exemption in force: the seam the wiring test pins. */
-    Set<String> launchEnvironmentAllowlist() {
-        return nonSecretLaunchNames;
     }
 
     public static HostExecutionBackend forCurrentPlatform() {
@@ -333,9 +294,10 @@ public class HostExecutionBackend implements ExecutionBackend {
      * {@code RunWorkspaceService.configRoot} before any launch: it is outside
      * the workspace tree {@code WorkspaceManager.cleanup} deletes, and
      * {@link #destroyAndReport} deletes only its {@code host} child, so the log
-     * outlives the run's placement record. The log's redaction exemption is this
-     * backend's launch-environment policy, so it can never disagree with the
-     * profile the launcher hands the child.
+     * outlives the run's placement record. The log's redaction input -- the
+     * launch environment and the profile's declared secret values -- comes from
+     * the very profile the core is launched with, so it can never disagree with
+     * what the child receives.
      */
     private RunCoreLog openCoreLog(PreparedEnvironment environment, LaunchProfile profile) {
         Path configuration = Path.of(environment.configurationDirectory()).toAbsolutePath().normalize();
@@ -344,8 +306,7 @@ public class HostExecutionBackend implements ExecutionBackend {
             throw new IllegalStateException("The run-owned configuration directory of run "
                     + environment.runId() + " has no root to hold a core log: " + configuration);
         }
-        RunCoreLog coreLog = RunCoreLog.open(runRoot, environment.runId(), profile.env(),
-                nonSecretLaunchNames);
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, environment.runId(), profile);
         log.info("Run {}: run-owned core log at {}", environment.runId(), coreLog.path());
         return coreLog;
     }
@@ -539,8 +500,10 @@ public class HostExecutionBackend implements ExecutionBackend {
     private static LaunchProfile deliverControlSecret(LaunchProfile profile, String controlSecret) {
         Map<String, String> env = new LinkedHashMap<>(profile.env());
         env.put(CONTROL_SECRET_ENVIRONMENT, controlSecret);
+        Set<String> secrets = new LinkedHashSet<>(profile.secretValues());
+        secrets.add(controlSecret);
         return new LaunchProfile(profile.argv(), env, profile.workingDirectory(),
-                profile.controlSecretFile());
+                profile.controlSecretFile(), secrets);
     }
 
     /** A fresh 256-bit secret; the committed bridge insists on at least 16 characters. */

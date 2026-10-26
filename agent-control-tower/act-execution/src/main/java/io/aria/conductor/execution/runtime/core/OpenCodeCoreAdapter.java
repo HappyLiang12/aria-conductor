@@ -7,6 +7,7 @@ import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
+import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
@@ -27,10 +28,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * OpenCode core adapter (task 11): the reviewed OpenCode profile behind the
@@ -398,6 +401,9 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
                 : endpoint.getHost());
 
         Map<String, String> serverEnvironment = new LinkedHashMap<>(profile.environment());
+        // The values this launch injects as secrets. The log reads them from this
+        // very profile, so its masking input cannot drift from the child's env.
+        Set<String> secretValues = new LinkedHashSet<>(credentials.environment().values());
         // SANDBOX: the run-owned XDG roots must be SANDBOX paths. The governed
         // configuration is uploaded into the sandbox's run control directory
         // (<controlRoot>/<runId>/config, the same tree the launch manifest lives
@@ -419,13 +425,15 @@ public final class OpenCodeCoreAdapter implements CoreAdapter {
             // The run-scoped worker bearer of the platform MCP. The endpoint ignores it
             // in auth-mode=none and requires exactly this kind of token in auth-mode=actor;
             // the wiring never materialises for auth-mode=token.
-            serverEnvironment.put("ARIA_MCP_TOKEN", workerMcp.get().token());
+            serverEnvironment.put(CoreConfigurationService.ARIA_MCP_TOKEN_VARIABLE, workerMcp.get().token());
+            secretValues.add(workerMcp.get().token());
         }
         // The credential bundle is the last writer, exactly as the controlled
         // launch configuration does it; the bundle itself is validated there
         // (task 5) before it reaches this adapter.
         serverEnvironment.putAll(credentials.environment());
-        return new LaunchProfile(argv, serverEnvironment, workingDirectory.toString());
+        return new LaunchProfile(argv, serverEnvironment, workingDirectory.toString(), null,
+                secretValues);
     }
 
     /**

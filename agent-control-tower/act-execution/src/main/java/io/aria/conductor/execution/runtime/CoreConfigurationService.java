@@ -11,7 +11,6 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
-import java.util.Collection;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -114,15 +113,20 @@ public class CoreConfigurationService {
     public static final String XDG_DATA_HOME_VARIABLE = "XDG_DATA_HOME";
     /** The run-owned OpenCode cache root the launcher always sets. */
     public static final String XDG_CACHE_HOME_VARIABLE = "XDG_CACHE_HOME";
+    /** The run-scoped platform-MCP bearer the OpenCode adapter always sets when wired. */
+    public static final String ARIA_MCP_TOKEN_VARIABLE = "ARIA_MCP_TOKEN";
 
     /**
-     * The names the launcher itself always sets as non-secret system evidence,
-     * whatever the configured OS allowlist is. {@link #prepare} writes exactly
-     * these constants, so this set and the launch environment cannot drift apart.
+     * The names the launcher itself owns in a launch environment. An operator's
+     * {@code opencode.sandbox-env} may not carry one of these: the launcher either
+     * sets it to a run-owned root or withholds it on purpose, and a silent
+     * override is how a credential placed under {@code HOME} reached the core log
+     * verbatim. The collision is refused where the map is merged, never warned.
      */
-    public static final Set<String> LAUNCH_SYSTEM_EVIDENCE_NAMES = Set.of(
+    public static final Set<String> LAUNCHER_OWNED_ENVIRONMENT_NAMES = Set.of(
             HOME_VARIABLE, USERPROFILE_VARIABLE, TMP_VARIABLE, TEMP_VARIABLE,
-            XDG_CONFIG_HOME_VARIABLE, XDG_DATA_HOME_VARIABLE, XDG_CACHE_HOME_VARIABLE);
+            XDG_CONFIG_HOME_VARIABLE, XDG_DATA_HOME_VARIABLE, XDG_CACHE_HOME_VARIABLE,
+            ARIA_MCP_TOKEN_VARIABLE);
 
     /**
      * SDK-entrypoint, process-injection and capability variables that must never
@@ -233,6 +237,8 @@ public class CoreConfigurationService {
                 throw new IllegalStateException(
                         "OpenCode launch requires a host:port endpoint, got: " + endpoint);
             }
+            requireNoLauncherOwnedVariables(openCodeModelProviderEnvironment,
+                    "OpenCode model-provider environment (opencode.sandbox-env)");
             environmentVariables.put(XDG_CONFIG_HOME_VARIABLE, config.toString());
             environmentVariables.put(XDG_DATA_HOME_VARIABLE,
                     createDirectories(configurationDirectory.resolve("data")).toString());
@@ -250,10 +256,13 @@ public class CoreConfigurationService {
         }
 
         // The credential bundle is the last writer: only the selected core's
-        // allowed variables, validated above, are ever injected here.
+        // allowed variables, validated above, are ever injected here. The same
+        // object carries their values as the run's secrets, so the core log can
+        // mask exactly what this launch injects.
         environmentVariables.putAll(credentials.environment());
 
-        return new LaunchProfile(argv, environmentVariables, workingDirectory.toString());
+        return new LaunchProfile(argv, environmentVariables, workingDirectory.toString(), null,
+                Set.copyOf(credentials.environment().values()));
     }
 
     /** The recorded qoder invocation: ACP over stdio, run-owned config dir, empty approved MCP set. */
@@ -307,32 +316,53 @@ public class CoreConfigurationService {
         if (name == null || name.isBlank() || isForbiddenEnvironmentVariable(name)) {
             return true;
         }
+        return isCredentialShapedName(name);
+    }
+
+    /**
+     * The credential-shaped name rule shared with the run-owned core log: a value
+     * under one of these names is a credential whatever its length. It is defence
+     * in depth -- the log's primary rule is by value -- but both sides must mean
+     * the same shape, so there is one predicate and no second list to drift.
+     */
+    public static boolean isCredentialShapedName(String name) {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
         String upper = name.toUpperCase(Locale.ROOT);
         return upper.contains("TOKEN") || upper.contains("SECRET") || upper.contains("PASSWORD")
-                || upper.contains("CREDENTIAL") || upper.endsWith("_KEY") || upper.endsWith("APIKEY");
+                || upper.contains("CREDENTIAL") || upper.endsWith("_KEY") || upper.endsWith("APIKEY")
+                // A provider "auth" key (DEEPSEEK_AUTH, *_AUTH) is a credential in this
+                // product's configuration surface; the suffix is narrow so an author
+                // name or an authorization header field is not swept in.
+                || upper.endsWith("_AUTH");
     }
 
     /**
-     * The positive allowlist of the run-owned core log: the names this launcher
-     * may set as non-secret system evidence -- the configured OS allowlist plus the
-     * fixed names above. One source: {@link #prepare} writes exactly these names,
-     * so the log's exemption and the profile environment cannot drift apart.
+     * Refuses a map that would set a variable the launcher owns. Called at the
+     * point an operator's {@code opencode.sandbox-env} is merged into a launch
+     * environment: a hard block, because silently overriding the launcher's root
+     * or bearer is either evidence loss or a credential-smuggling vector.
+     *
+     * @param environment the map about to be merged
+     * @param source the operator-facing name of that map, quoted in the error
+     * @throws IllegalStateException naming the variable and the launcher
      */
-    public static Set<String> nonSecretLaunchNames(Collection<String> systemVariableNames) {
-        Set<String> names = new LinkedHashSet<>(Objects.requireNonNull(systemVariableNames,
-                "systemVariableNames"));
-        names.addAll(LAUNCH_SYSTEM_EVIDENCE_NAMES);
-        return Set.copyOf(names);
-    }
-
-    /**
-     * This launcher's effective allowlist: the validated
-     * {@code aria.cores.launch-system-variables} names plus the fixed launcher
-     * names. The run-owned core log takes its redaction exemption from here, so it
-     * keeps no list of its own to drift.
-     */
-    public Set<String> launchNonSecretNames() {
-        return nonSecretLaunchNames(allowedSystemVariables);
+    public static void requireNoLauncherOwnedVariables(Map<String, String> environment,
+            String source) {
+        if (environment == null || environment.isEmpty()) {
+            return;
+        }
+        for (String name : new TreeSet<>(environment.keySet())) {
+            if (name != null
+                    && LAUNCHER_OWNED_ENVIRONMENT_NAMES.contains(name.toUpperCase(Locale.ROOT))) {
+                throw new IllegalStateException(source + " must not set \"" + name
+                        + "\": the launcher owns this variable (it sets the run-owned"
+                        + " HOME/TMP/XDG roots or the run bearer itself), so an operator value"
+                        + " here would silently override the launch environment. Remove " + name
+                        + " from " + source + ".");
+            }
+        }
     }
 
     /** Case-insensitive membership: the ambient lookup is case-insensitive on Windows. */

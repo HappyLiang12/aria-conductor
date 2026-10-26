@@ -629,6 +629,8 @@ body.afterhours .flow-svg path { stroke: rgba(138,107,255,.35); }
 .stream .tag.warn { background: rgba(246,196,83,.15); color: #ffd884; }
 .stream .tag.err  { background: rgba(255,107,122,.15); color: #ff97a3; }
 .stream .tag.think { background: rgba(255,255,255,.06); color: var(--text-mute); }
+/* issue #103: the assistant's answer is its own affordance, not muted thinking. */
+.stream .tag.answer { background: rgba(91,140,255,.15); color: var(--brand-2); }
 .stream .msg { color: #d8e0f7; word-break: break-word; }
 .stream .caret::after {
   content: "▌"; color: var(--brand-2); animation: blink 1s steps(1) infinite;
@@ -653,6 +655,8 @@ body.afterhours .flow-svg path { stroke: rgba(138,107,255,.35); }
 .pump.on { color: #7fe2ee; border-color: rgba(63,208,224,.4); }
 .stream .ln-detail { flex: 1 0 100%; margin: 2px 0 4px 8px; font-size: 10.5px; color: var(--text-mute); }
 .stream .ln-detail .think { color: #b9a4ff; white-space: pre-wrap; word-break: break-word; }
+/* issue #103: the reply is what the operator reads, so it is the loudest line. */
+.stream .ln-detail .answer { color: var(--text); white-space: pre-wrap; word-break: break-word; }
 .stream .ln-detail .tool { color: #7fe2ee; margin-top: 2px; word-break: break-word; }
 .stream .ln-detail .res { color: #6fe2b6; margin: 2px 0 0 12px; word-break: break-word; }
 .stream .ln-detail .skills { color: var(--text-mute); margin-top: 2px; }

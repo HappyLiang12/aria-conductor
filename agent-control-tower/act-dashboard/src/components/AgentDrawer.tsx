@@ -19,16 +19,32 @@ import type { Agent, AgentHealthStatus, Run } from '../types';
 interface StreamLine {
   id: string;
   ts: string;
-  tag: 'read' | 'edit' | 'run' | 'ok' | 'warn' | 'err' | 'think' | 'tool_call' | 'tool_result';
+  tag: 'read' | 'edit' | 'run' | 'ok' | 'warn' | 'err' | 'think' | 'answer' | 'tool_call' | 'tool_result';
   msg: string;
-  // run.progress watermark (REST backlog rows and live WS frames alike) used to
-  // dedupe backlog replay against lines already folded into the stream.
+  // run.progress identity (REST backlog rows and live WS frames alike): `seq` used to
+  // dedupe a re-delivered frame against the backlog, and stays the fallback identity
+  // for a row with no part id.
   seq?: number;
+  // The part this line observes. A growing answer arrives as several observations with
+  // one partId and increasing seq, and they all belong to THIS line (issue #103).
+  partId?: string | null;
+  // The run the observation belongs to: two runs of one agent must never merge their
+  // parts into one line, so the part key is always run-scoped.
+  runId?: string;
+  // The merge key of a progress line (see progressKeyOf). Present ONLY on progress
+  // lines, which is what keeps a lifecycle line out of the part merge.
+  progressKey?: string;
+  // The observation's whole content, as received. `detail` may be a display-truncated
+  // view of it for live summaries; a persisted ANSWER/THINKING observation is rendered
+  // whole. The merge compares THIS so a bounded live frame cannot look "fuller" than
+  // the persisted row of the same part.
+  content?: string;
   detail?: {
     toolName?: string;
     toolArgs?: string;
     toolResult?: string;
     thinking?: string;
+    answer?: string;
     skills?: string[];
   };
 }
@@ -62,29 +78,149 @@ function fmtTime(d: string | Date): string {
 // run.progress fold, so replayed history and live frames render identically.
 // TOLERANT: WS frames omit null toolName and carry no id/createdAt; REST rows
 // carry both.
+//
+// The kind table mirrors RunProgressEvent.Kind (act-common). THINKING is what the
+// model works out, ANSWER is what it says back — issue #103: the assistant's
+// reply used to arrive as THINKING and was rendered under the think affordance.
+// A kind missing here falls back to 'warn', so an unmapped new kind is loud, not
+// silently styled as something it is not.
+const PROGRESS_TAG: Record<string, StreamLine['tag']> = {
+  THINKING: 'think',
+  ANSWER: 'answer',
+  TOOL_CALL: 'run',
+  TOOL_RESULT: 'ok',
+  ERROR: 'err',
+};
+
+function truncate(text: string): string {
+  return text.length > 200 ? text.slice(0, 200) + '...' : text;
+}
+
 function progressToEntry(
-  p: { kind: string; content: string; toolName?: string | null; createdAt?: string; seq?: number },
+  p: {
+    kind: string; content: string; toolName?: string | null; createdAt?: string;
+    seq?: number; partId?: string | null; runId?: string; id?: string;
+  },
 ): StreamLine {
   const kind = String(p.kind ?? '');
   const content = String(p.content ?? '');
-  const tag: StreamLine['tag'] =
-    kind === 'THINKING' ? 'think'
-    : kind === 'TOOL_CALL' ? 'run'
-    : kind === 'TOOL_RESULT' ? 'ok'
-    : kind === 'ERROR' ? 'err' : 'warn';
+  const tag: StreamLine['tag'] = PROGRESS_TAG[kind] ?? 'warn';
   return {
-    id: `prog-${p.seq ?? 'na'}-${p.createdAt ?? Math.random().toString(36).slice(2, 8)}`,
+    // A later observation of one part keeps THIS element (the merge below reuses the
+    // id of the line it replaces), so the React key never changes mid-answer and the
+    // line cannot flicker to empty or remount.
+    id: p.id ?? (p.partId
+      ? `prog-part-${p.runId ?? ''}-${p.partId}`
+      : `prog-${p.seq ?? 'na'}-${p.createdAt ?? Math.random().toString(36).slice(2, 8)}`),
     ts: fmtTime(p.createdAt || new Date()),
     tag,
     msg: `${eventLabel('run.progress')} · ${kind.toLowerCase()}`,
     seq: p.seq,
+    partId: p.partId ?? null,
+    runId: p.runId,
+    progressKey: progressKeyOf(p),
+    content,
     detail: {
-      thinking: kind === 'THINKING' && content
-        ? (content.length > 200 ? content.slice(0, 200) + '...' : content)
-        : undefined,
+      // The persisted observation is the whole answer/thinking text, so the detail
+      // block renders it whole (the stream is a fixed-height scroll area). Truncating
+      // here made a multi-KB answer unreadable while the row held all of it.
+      thinking: kind === 'THINKING' && content ? content : undefined,
+      answer: kind === 'ANSWER' && content ? content : undefined,
       toolName: p.toolName ?? undefined,
       toolResult: kind === 'TOOL_RESULT' && content ? content : undefined,
     },
+  };
+}
+
+/**
+ * The identity a progress line is merged on: the part it observed, and — only when the
+ * core reported no part id (a pre-V74 row, or a part the wire never named) — its seq.
+ * Always run-scoped, so two runs of one agent never merge into one line.
+ */
+function progressKeyOf(p: { runId?: string; partId?: string | null; seq?: number }): string {
+  const run = p.runId ?? '';
+  return p.partId ? `part:${run}:${p.partId}` : `seq:${run}:${p.seq ?? 'na'}`;
+}
+
+/**
+ * Merge progress observations into the stream, in place. Issue #103: the pump re-emits
+ * a part when its content changes or it finishes, so one answer arrives as several
+ * observations sharing a `partId` with increasing `seq`. They belong to ONE line: the
+ * newer observation replaces the older content and keeps the position (and the React
+ * key) of the first time that part appeared. An observation that is not newer than the
+ * line already on screen changes nothing, so a re-delivered frame can neither duplicate
+ * nor blank a line.
+ *
+ * Only lines carrying a `progressKey` are ever matched, so a lifecycle line can never
+ * be mistaken for an observation of a part.
+ *
+ * The live WS frame is deliberately bounded (500 chars + '...') while the persisted
+ * backlog row is the whole observation, and the two can arrive in either order. So
+ * "newest" alone is not enough: between two observations of one part the FULLER
+ * content wins, and the line remembers the higher seq. A bounded live frame therefore
+ * never erases the fuller backlog line, and a late (older) backlog row still completes
+ * a line first seen through its bounded live frame.
+ *
+ * `placement` says where a part that is not on screen yet goes: a live frame appends at
+ * the tail, a replayed backlog row prepends, because it is older history.
+ */
+function mergeProgressLines(
+  prev: StreamLine[],
+  incoming: StreamLine[],
+  placement: 'append' | 'prepend',
+): StreamLine[] {
+  const merged = prev.slice();
+  const added: StreamLine[] = [];
+  const keyOf = (l: StreamLine) => l.progressKey;
+  for (const line of incoming) {
+    const key = keyOf(line);
+    const at = merged.findIndex((l) => key && keyOf(l) === key);
+    if (at < 0) {
+      const dupInBatch = added.findIndex((l) => key && keyOf(l) === key);
+      if (dupInBatch < 0) {
+        added.push(line);
+      } else {
+        // Two observations of one part inside the same batch: same rule, in place.
+        const combined = preferFullerObservation(added[dupInBatch], line);
+        if (combined) added[dupInBatch] = combined;
+      }
+      continue;
+    }
+    const combined = preferFullerObservation(merged[at], line);
+    if (combined) merged[at] = combined;
+  }
+  return (placement === 'append' ? [...merged, ...added] : [...added, ...merged]).slice(-60);
+}
+
+/** The whole content an observation carries (see StreamLine.content). */
+function contentOf(line: StreamLine): string {
+  return line.content ?? line.detail?.toolResult ?? line.detail?.answer ?? line.detail?.thinking ?? '';
+}
+
+/**
+ * One part's line keeps its identity and position across every observation of that
+ * part. The observation with the fuller content supplies the text; the newer one
+ * supplies the line's metadata (time, kind label); the line remembers the higher seq.
+ * Returns null when the line already holds everything the incoming observation has,
+ * so a re-delivered frame changes nothing.
+ */
+function preferFullerObservation(existing: StreamLine, incoming: StreamLine): StreamLine | null {
+  const existingLen = contentOf(existing).length;
+  const incomingLen = contentOf(incoming).length;
+  const newer = (incoming.seq ?? 0) > (existing.seq ?? 0);
+  if (!newer && incomingLen <= existingLen) return null;
+  // The fuller observation supplies the text; on equal length the newer one wins, so a
+  // re-emitted part still shows its latest observation. A SHORTER newer frame (the
+  // bounded live view) never wins.
+  const useIncomingText = incomingLen > existingLen || (newer && incomingLen === existingLen);
+  const base = newer ? incoming : existing;
+  const text = useIncomingText ? incoming : existing;
+  return {
+    ...base,
+    id: existing.id,
+    seq: newer ? incoming.seq : existing.seq,
+    content: text.content,
+    detail: text.detail,
   };
 }
 
@@ -197,19 +333,16 @@ export function AgentDrawer() {
       .then((backlog) => {
         if (cancelled) return;
         // Review fix: MERGE, never replace — live frames folded while the fetch
-        // was in flight must survive backlog resolution. Prepend backlog entries
-        // whose seq is not already on screen; backlog order preserved first.
-        // On reopen the same rows are already on screen, so they dedupe out.
-        setStream((prev) => {
-          const have = new Set(
-            prev.map((l) => l.seq).filter((s): s is number => s != null)
-          );
-          const fresh = backlog
-            .map((p) => progressToEntry(p))
-            .filter((b) => b.seq == null || !have.has(b.seq));
-          // Review fix: merged result obeys the same 60-line window as the live fold.
-          return [...fresh, ...prev].slice(-60);
-        });
+        // was in flight must survive backlog resolution. Issue #103: the backlog is
+        // the ordered log of OBSERVATIONS, so several rows can name one part; the
+        // merge collapses them into that part's line and puts a part that is not on
+        // screen yet in front of the live tail (it is older history). On reopen the
+        // same rows are already on screen with the same seq, so they change nothing.
+        setStream((prev) => mergeProgressLines(
+          prev,
+          backlog.map((p) => progressToEntry(p)),
+          'prepend',
+        ));
         // Re-arm the runId+seq watermark so subsequent live frames dedupe
         // against the replayed backlog rows too (existing S11 pattern).
         backlog.forEach((p) => markSeqSeen(rk, p.seq));
@@ -268,9 +401,15 @@ export function AgentDrawer() {
           content: String(payload.content ?? ''),
           toolName: (payload.toolName as string) ?? undefined,
           seq,
+          // The part this frame observed. Without it a grown answer would append a
+          // second line; with it the frame replaces its own line (issue #103).
+          partId: (payload.partId as string | undefined) ?? null,
+          runId: runKey || undefined,
           createdAt: event.timestamp,
         });
-        setStream((prev) => [...prev.slice(-59), pLn]);
+        // Issue #103: a later observation of a part already on screen updates that
+        // line in place, keeping where the part first appeared; a new part appends.
+        setStream((prev) => mergeProgressLines(prev, [pLn], 'append'));
         return;
       }
 
@@ -559,9 +698,10 @@ export function AgentDrawer() {
                       <span className="ts">{ln.ts}</span>
                       <span className={`tag ${ln.tag}`}>{ln.tag.toUpperCase()}</span>
                       <span className="msg">{ln.msg}</span>
-                      {ln.detail && (ln.detail.thinking || ln.detail.toolName || ln.detail.toolResult || ln.detail.skills) && (
+                      {ln.detail && (ln.detail.thinking || ln.detail.answer || ln.detail.toolName || ln.detail.toolResult || ln.detail.skills) && (
                         <div className="ln-detail">
                           {ln.detail.thinking && <div className="think">{ln.detail.thinking}</div>}
+                          {ln.detail.answer && <div className="answer">{ln.detail.answer}</div>}
                           {ln.detail.toolName && (
                             <div className="tool">⚙ {ln.detail.toolName}{ln.detail.toolArgs ? ` · ${ln.detail.toolArgs}` : ''}</div>
                           )}

@@ -6,14 +6,20 @@ import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
+import io.aria.conductor.execution.mcp.McpProperties;
+import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ArtifactBundle;
 import io.aria.conductor.execution.runtime.ControlAck;
+import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
 import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
+import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
+import io.aria.conductor.execution.runtime.core.OpenCodeCoreAdapter;
+import io.aria.conductor.execution.security.ActorTokenService;
 
 import java.io.BufferedReader;
 import java.io.FileDescriptor;
@@ -48,6 +54,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>{@code prepare} -- runId, coreId, image, port, runtimeRoot, snapshot, [env]</li>
  *   <li>{@code launch} -- runId, argv, [env], [workingDirectory]; returns the endpoint</li>
+ *   <li>{@code readiness} -- runId, argv, [env], [workingDirectory]; starts the launcher
+ *       through the lifecycle (no backend destroy-on-refusal, so the sandbox the wait
+ *       runs against stays alive) and opens the core adapter on it with the production
+ *       {@link SandboxExecutionBackend#launchRefusal}; returns the wait's own outcome</li>
  *   <li>{@code renewalPlan} -- intervalMs, extensionMs (renewal counters below)</li>
  *   <li>{@code renewals} -- returns the number of renew calls the SDK made</li>
  *   <li>{@code pause} / {@code resume} -- runId; returns the ack</li>
@@ -66,7 +76,16 @@ public final class SandboxLifecycleHarness {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Map<UUID, RuntimeHandle> HANDLES = new ConcurrentHashMap<>();
     private static final Map<UUID, PreparedEnvironment> ENVIRONMENTS = new ConcurrentHashMap<>();
+    private static final Map<UUID, RunInputs> INPUTS = new ConcurrentHashMap<>();
     private static final AtomicInteger RENEWALS = new AtomicInteger();
+
+    /**
+     * What {@code prepare} resolved for a run, kept for the commands that must re-drive the
+     * launcher without the backend: the trusted image port and the run's local snapshot
+     * root (the manifest's source), never worker input.
+     */
+    private record RunInputs(String coreId, int port, Path snapshot) {
+    }
 
     /**
      * The stdout channel carries the JSON-lines protocol and NOTHING else. The lane
@@ -123,6 +142,7 @@ public final class SandboxLifecycleHarness {
             return switch (command) {
                 case "prepare" -> prepare(request);
                 case "launch" -> launch(request);
+                case "readiness" -> readiness(request);
                 case "renewalPlan" -> renewalPlan(request);
                 case "renewals" -> ok(Map.of("renewals", RENEWALS.get()));
                 case "pause" -> control(request, true);
@@ -163,6 +183,7 @@ public final class SandboxLifecycleHarness {
                 Instant.now().plus(Duration.ofMinutes(45)));
         PreparedEnvironment environment = backend.prepare(spec, lease);
         ENVIRONMENTS.put(runId, environment);
+        INPUTS.put(runId, new RunInputs(coreId, port, snapshot));
         return ok(Map.of("runId", runId.toString(), "environmentId", environment.environmentId(),
                 "endpoint", String.valueOf(environment.endpoint())));
     }
@@ -184,6 +205,81 @@ public final class SandboxLifecycleHarness {
         HANDLES.put(runId, handle);
         return ok(Map.of("runId", runId.toString(), "endpoint", String.valueOf(handle.endpoint()),
                 "ownershipIdentity", handle.ownershipIdentity()));
+    }
+
+    /**
+     * The production readiness seam over this run's own live sandbox, for the refused
+     * launch: {@code CoreExecutionService.openRuntime} calls
+     * {@code CoreAdapter.open(handle, spec, credentials, backend.launchRefusal(runId))},
+     * and the {@code launch} command above never reaches it because
+     * {@link SandboxExecutionBackend#launch} destroys the sandbox when the image refuses.
+     *
+     * <p>So this command makes the two calls the backend's launch makes before the wait --
+     * upload the run's manifest, start the lifecycle launcher -- and then performs the open
+     * itself with the same production refusal source. Nothing is faked: the launcher runs in
+     * the real container, {@link SandboxLifecycle#launchRefusalReason} answers from the
+     * observation the SDK fed, and the wait is {@link OpenCodeCoreAdapter#open} itself. The
+     * only skipped step is the backend's cleanup, which would remove the container the wait
+     * has to run against.
+     *
+     * <p>The answer carries the wait's outcome instead of failing the command, so the E2E can
+     * assert the reason: {@code opened} (it must be false for a refused launch), the failure
+     * class and message, and the elapsed time (a timeout spends the whole budget).
+     */
+    private static String readiness(Map<String, Object> request) {
+        UUID runId = UUID.fromString(required(request, "runId"));
+        PreparedEnvironment environment = ENVIRONMENTS.get(runId);
+        RunInputs inputs = INPUTS.get(runId);
+        if (environment == null || inputs == null) {
+            throw new IllegalStateException("Run " + runId + " was not prepared");
+        }
+        @SuppressWarnings("unchecked")
+        List<String> argv = (List<String>) request.get("argv");
+        @SuppressWarnings("unchecked")
+        Map<String, String> env = request.get("env") == null ? Map.of()
+                : (Map<String, String>) request.get("env");
+        String workingDirectory = request.get("workingDirectory") == null
+                ? environment.workingDirectory() : String.valueOf(request.get("workingDirectory"));
+        lifecycle.uploadSnapshot(runId, inputs.snapshot(),
+                new SandboxLifecycle.LaunchManifest(runId, inputs.port(), workingDirectory, argv, env));
+        boolean launchRejected = false;
+        String launchError = null;
+        try {
+            lifecycle.launch(runId);
+        } catch (SandboxLaunchRejectedException e) {
+            // The verdict landed inside the launch's own window. The run record and its
+            // observation stay (only the backend's cleanup destroys), which is exactly what
+            // the wait below consumes.
+            launchRejected = true;
+            launchError = e.getMessage();
+        }
+        ExecutionSpec spec = new ExecutionSpec(runId, UUID.randomUUID(), inputs.coreId(), ExecutionMode.SANDBOX,
+                new AgentExecutionSettings(inputs.coreId(), ExecutionMode.SANDBOX, WorkspaceMode.DIRECT, null, null),
+                "harness-credential-ref", "harness-configuration-revision", Instant.now().plus(Duration.ofMinutes(5)));
+        RuntimeHandle handle = new RuntimeHandle(runId, ExecutionMode.SANDBOX, environment.environmentId(),
+                "sandbox:" + runId + ":" + environment.environmentId(), environment.endpoint());
+        // The adapter's own profile is unused by the wait (the launch profile came from the
+        // manifest above), so the harness supplies the identity the adapter validates.
+        OpenCodeCoreAdapter adapter = new OpenCodeCoreAdapter(
+                new OpenCodeCoreAdapter.OpenCodeProfile(OpenCodeCoreAdapter.CORE_ID, List.of("serve"), Map.of(),
+                        "harness-core-version", "harness-model"),
+                new RunMcpWiring(new McpProperties(), new ActorTokenService()));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("launchRejected", launchRejected);
+        result.put("launchError", launchError);
+        long waitStartedNanos = System.nanoTime();
+        try {
+            CoreSession session = adapter.open(handle, spec, new SecretBundle("harness-credential-ref", Map.of()),
+                    backend.launchRefusal(runId));
+            result.put("opened", true);
+            result.put("sessionId", session.sessionId());
+        } catch (RuntimeException e) {
+            result.put("opened", false);
+            result.put("failure", e.getClass().getSimpleName());
+            result.put("error", e.getMessage());
+        }
+        result.put("elapsedMs", (System.nanoTime() - waitStartedNanos) / 1_000_000);
+        return ok(result);
     }
 
     private static String renewalPlan(Map<String, Object> request) {
@@ -228,10 +324,22 @@ public final class SandboxLifecycleHarness {
                 sandboxSdk.runCommand(sandboxId, required(request, "shell")))));
     }
 
+    /**
+     * Run-keyed and idempotent: a run that failed before it ever returned a handle (the
+     * E2E's refused launch) has an environment but no handle, and a case that fails after
+     * {@code prepare} must still be able to clean its container up. A stale handle names the
+     * same run the key does, so both shapes end in the same run-keyed destroy.
+     */
     private static String destroy(Map<String, Object> request) {
         UUID runId = UUID.fromString(required(request, "runId"));
-        backend.destroy(requireHandle(runId));
+        RuntimeHandle handle = HANDLES.get(runId);
+        if (handle == null) {
+            backend.destroyUnlaunched(runId);
+        } else {
+            backend.destroy(handle);
+        }
         ENVIRONMENTS.remove(runId);
+        INPUTS.remove(runId);
         HANDLES.remove(runId);
         return ok(Map.of("runId", runId.toString()));
     }
@@ -294,8 +402,8 @@ public final class SandboxLifecycleHarness {
         }
 
         @Override
-        public void launch(String sandboxId, String runDirectory, Duration timeout) {
-            delegate.launch(sandboxId, runDirectory, timeout);
+        public void launch(String sandboxId, String runDirectory, Duration timeout, LaunchObservation observation) {
+            delegate.launch(sandboxId, runDirectory, timeout, observation);
         }
 
         @Override

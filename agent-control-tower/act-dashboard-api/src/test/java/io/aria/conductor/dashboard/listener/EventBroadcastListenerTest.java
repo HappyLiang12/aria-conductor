@@ -100,7 +100,7 @@ class EventBroadcastListenerTest {
         UUID runId = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
         listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
-                RunProgressEvent.Kind.THINKING, "x".repeat(600), "bash", 7));
+                RunProgressEvent.Kind.THINKING, "x".repeat(600), "bash", 7, "prt_think"));
 
         WsBroadcastEvent event = captureBroadcast();
         assertThat(event.type()).isEqualTo("run.progress");
@@ -109,9 +109,56 @@ class EventBroadcastListenerTest {
                 .containsEntry("agentId", agentId.toString())
                 .containsEntry("kind", "THINKING")
                 .containsEntry("toolName", "bash")
+                .containsEntry("partId", "prt_think")
                 .containsEntry("seq", 7L);
         // 500-char truncation convention (matches onRunIteration)
         assertThat((String) event.data().get("content")).hasSize(503);
+    }
+
+    /**
+     * Lane H defect 1: the persisted observation is the record the REST backlog
+     * ({@code GET /runs/{id}/progress}) replays, and its column is TEXT. Cutting it to
+     * 500 chars before the insert bought nothing and destroyed replay: the live WS
+     * frame is a bounded VIEW, the stored observation is the record.
+     */
+    @Test
+    void onRunProgress_persistsTheWholeObservation_whileTheBroadcastStaysBounded() {
+        String content = "a".repeat(3200) + "TAIL-OF-THE-ANSWER";
+        listener.onRunProgress(new RunProgressEvent(this, UUID.randomUUID(), UUID.randomUUID(), 3,
+                RunProgressEvent.Kind.ANSWER, content, null, 12, "prt_full"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        String stored = captor.getValue().getContent();
+        assertThat(stored).hasSize(content.length());
+        assertThat(stored).isEqualTo(content);
+        assertThat(stored).endsWith("TAIL-OF-THE-ANSWER");
+
+        // The live frame stays bounded exactly as before: no socket frame grows.
+        assertThat((String) captureBroadcast().data().get("content")).hasSize(503).endsWith("...");
+    }
+
+    /**
+     * A multi-byte observation must be stored whole, not cut mid-codepoint. The emoji
+     * straddles the 500-char boundary on purpose: a substring cut there would split the
+     * surrogate pair, so an intact round-trip proves the stored row is the whole string.
+     */
+    @Test
+    void onRunProgress_persistsAMultiByteObservationWithoutCuttingIt() {
+        String content = "x".repeat(499) + "\uD83D\uDE00" + "tail-\u4E2D\u6587";
+        listener.onRunProgress(new RunProgressEvent(this, UUID.randomUUID(), UUID.randomUUID(), 4,
+                RunProgressEvent.Kind.THINKING, content, null, 13, "prt_utf8"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        String stored = captor.getValue().getContent();
+        assertThat(stored).isEqualTo(content);
+        assertThat(stored.codePointCount(0, stored.length()))
+                .isEqualTo(content.codePointCount(0, content.length()));
+        assertThat(stored).contains("\uD83D\uDE00");
+        assertThat(stored).endsWith("tail-\u4E2D\u6587");
+        assertThat(stored.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .hasSameSizeAs(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Test
@@ -119,7 +166,7 @@ class EventBroadcastListenerTest {
         UUID runId = UUID.randomUUID();
         UUID agentId = UUID.randomUUID();
         RunProgressEvent event = new RunProgressEvent(this, runId, agentId, 2,
-                RunProgressEvent.Kind.THINKING, "thinking fragment", null, 7);
+                RunProgressEvent.Kind.THINKING, "thinking fragment", null, 7, "prt_1");
 
         listener.onRunProgress(event);
 
@@ -130,14 +177,66 @@ class EventBroadcastListenerTest {
         assertThat(saved.getSeq()).isEqualTo(7L);
         assertThat(saved.getKind()).isEqualTo("THINKING");
         assertThat(saved.getContent()).isEqualTo("thinking fragment");
+        assertThat(saved.getPartId()).isEqualTo("prt_1");
         verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
+    }
+
+    /**
+     * Issue #103: both halves of the surface must name the observed part, or the live
+     * frame and the replayed row cannot be merged into one stream line. Persisting the
+     * id (the replay source) and broadcasting it (the live view) are the same write of
+     * the same field, so they are asserted together.
+     */
+    @Test
+    void onRunProgress_persistsAndBroadcastsAnAnswerFragment() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.ANSWER, "Consensus needs a majority.", null, 8, "prt_answer"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        RunProgressEventEntity saved = captor.getValue();
+        assertThat(saved.getKind()).isEqualTo("ANSWER");
+        assertThat(saved.getContent()).isEqualTo("Consensus needs a majority.");
+        assertThat(saved.getSeq()).isEqualTo(8L);
+        assertThat(saved.getPartId()).isEqualTo("prt_answer");
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.progress");
+        assertThat(event.data())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString())
+                .containsEntry("kind", "ANSWER")
+                .containsEntry("seq", 8L)
+                .containsEntry("partId", "prt_answer")
+                .containsEntry("content", "Consensus needs a majority.");
+        assertThat(event.data()).doesNotContainKey("toolName");
+    }
+
+    /**
+     * A core that reports no part id must not become a frame carrying an invented one:
+     * the member is simply absent, which is the drawer's documented signal to fall back
+     * to seq. Same for the persisted row, which keeps part_id NULL.
+     */
+    @Test
+    void onRunProgress_withNoPartIdOmitsTheMemberAndPersistsNull() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
+                RunProgressEvent.Kind.ANSWER, "no id from the core", null, 4, null));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        assertThat(captor.getValue().getPartId()).isNull();
+
+        assertThat(captureBroadcast().data()).doesNotContainKey("partId");
     }
 
     @Test
     void onRunProgress_persistFailure_doesNotBreakBroadcast() {
         UUID runId = UUID.randomUUID();
         RunProgressEvent event = new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
-                RunProgressEvent.Kind.THINKING, "frag", null, 3);
+                RunProgressEvent.Kind.THINKING, "frag", null, 3, "prt_1");
         when(progressRepository.save(any())).thenThrow(new RuntimeException("db down"));
 
         listener.onRunProgress(event);

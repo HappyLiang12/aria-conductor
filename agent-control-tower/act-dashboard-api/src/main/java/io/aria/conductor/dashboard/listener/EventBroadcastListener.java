@@ -191,6 +191,21 @@ public class EventBroadcastListener {
         ));
     }
 
+    /**
+     * Persists and broadcasts one progress observation. A row is an observation of a
+     * part, so the part's stable identity travels with it: the live WS frame and the
+     * REST replay both carry {@code partId}, which is the key the drawer merges on when
+     * the same part is observed again with more content. The member is omitted when the
+     * event has none (a core that reports no part id, or a pre-V74 row), leaving seq --
+     * which the pump still guarantees monotonic -- as the consumer's fallback identity,
+     * exactly as it omits a null toolName.
+     *
+     * <p>The persisted observation is the WHOLE observation: it is the record
+     * {@code GET /runs/{id}/progress} replays and its column is MEDIUMTEXT (V75, widened
+     * from the TEXT of V51 because a large tool result or answer overflowed 65,535
+     * bytes), so truncating it before the insert bought no storage and destroyed replay.
+     * Only the live WS frame is bounded (below) -- it is a view, not the record.
+     */
     @EventListener
     public void onRunProgress(RunProgressEvent event) {
         // Persist first (history replay source), broadcast best-effort (live view).
@@ -202,8 +217,9 @@ public class EventBroadcastListener {
                     .iteration(event.getIteration())
                     .kind(event.getKind().name())
                     .seq(event.getSeq())
-                    .content(truncate(event.getContent()))
+                    .content(event.getContent())
                     .toolName(event.getToolName())
+                    .partId(event.getPartId())
                     .createdAt(Instant.now())
                     .build());
         } catch (Exception e) {
@@ -217,6 +233,9 @@ public class EventBroadcastListener {
         payload.put("seq", event.getSeq());
         if (event.getToolName() != null) {
             payload.put("toolName", event.getToolName());
+        }
+        if (event.getPartId() != null) {
+            payload.put("partId", event.getPartId());
         }
         payload.put("content", truncate(event.getContent()));
         broadcast("run.progress", payload);

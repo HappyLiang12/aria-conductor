@@ -3,6 +3,7 @@ package io.aria.conductor.execution.runtime.core;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.aria.conductor.common.AriaConstants;
+import io.aria.conductor.common.event.RunProgressEvent;
 import io.aria.conductor.common.runtime.AgentExecutionSettings;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceMode;
@@ -45,6 +46,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -656,9 +658,17 @@ class CoreAdapterContractTest {
             assertThat(result.usage().credits()).isNull();
             assertThat(result.cancelled()).isFalse();
 
-            assertThat(events).hasSize(1);
-            CoreEvent message = events.get(0);
-            assertThat(message.type()).isEqualTo("opencode.message");
+            // The pump is asynchronous: a poll that catches the recorded turn
+            // before the session stops it may add opencode.progress events. The
+            // completion contract itself stays exact: exactly one
+            // opencode.message with the recorded envelope, and every progress
+            // event that did arrive must be well formed. No timing-dependent
+            // total event count.
+            List<CoreEvent> messageEvents = events.stream()
+                    .filter(event -> "opencode.message".equals(event.type()))
+                    .toList();
+            assertThat(messageEvents).hasSize(1);
+            CoreEvent message = messageEvents.get(0);
             assertThat(message.runId()).isEqualTo(run.runId());
             assertThat(message.sessionId()).isEqualTo(recordedSessionId);
             JsonNode envelope = JSON.readTree(message.payloadJson());
@@ -667,6 +677,36 @@ class CoreAdapterContractTest {
             assertThat(envelope.path("parts").toString())
                     .isEqualTo("[{\"type\":\"text\",\"text\":\"fixture-complete\"}]");
             assertThat(run.adapter().model()).isEqualTo(MODEL_PIN);
+
+            List<CoreEvent> progressEvents = events.stream()
+                    .filter(event -> "opencode.progress".equals(event.type()))
+                    .toList();
+            long previousSeq = 0;
+            for (CoreEvent progress : progressEvents) {
+                assertThat(progress.runId()).isEqualTo(run.runId());
+                assertThat(progress.sessionId()).isEqualTo(recordedSessionId);
+                JsonNode payload = payload(progress);
+                String kind = payload.path("kind").asText(null);
+                assertThat(kind)
+                        .as("every emitted progress kind must be a known RunProgressEvent.Kind")
+                        .isNotNull()
+                        .isIn(Arrays.stream(RunProgressEvent.Kind.values())
+                                .map(Enum::name).toList());
+                long seq = payload.path("seq").asLong();
+                assertThat(seq).as("progress seq must be positive and monotonic").isGreaterThan(previousSeq);
+                previousSeq = seq;
+                assertThat(payload.path("iteration").asInt()).isZero();
+                assertThat(payload.path("content").isTextual())
+                        .as("progress content is always a JSON string")
+                        .isTrue();
+                // Issue #103: a progress row is an OBSERVATION of a part, so the peer's
+                // own part id has to reach the payload. The fixture names every listed
+                // part, so a blank or missing member means the identity was lost on the
+                // way out of the session -- the case that made a growing answer freeze.
+                assertThat(payload.path("partId").asText(null))
+                        .as("every emitted progress observation names the part it observed")
+                        .isNotBlank();
+            }
         }
     }
 

@@ -5,6 +5,7 @@ import io.aria.conductor.execution.mcp.RunMcpWiring;
 import io.aria.conductor.execution.runtime.ControlStrategy;
 import io.aria.conductor.execution.runtime.CoreAdapter;
 import io.aria.conductor.execution.runtime.CoreCapabilities;
+import io.aria.conductor.execution.runtime.CoreConfigurationService;
 import io.aria.conductor.execution.runtime.CoreSession;
 import io.aria.conductor.execution.runtime.ExecutionSpec;
 import io.aria.conductor.execution.runtime.LaunchProfile;
@@ -21,10 +22,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -202,6 +205,12 @@ public final class QoderCoreAdapter implements CoreAdapter {
         Objects.requireNonNull(credentials, "credentials");
         requireCore(spec);
         requireMatchingEnvironment(spec, environment);
+        // The launch below hands this environment to the bridge process verbatim.
+        // A profile constructed directly has not passed the guard where the
+        // operator maps are merged, so the guard runs here, before anything is
+        // written or spawned: a launcher-owned name must be refused, not copied.
+        CoreConfigurationService.requireNoLauncherOwnedVariables(profile.environment(),
+                "the reviewed Qoder bridge profile environment");
         URI endpoint = requireLoopbackEndpoint(environment);
 
         String bridgeEntry = requireExistingFile(profile.bridgeEntry(),
@@ -236,6 +245,10 @@ public final class QoderCoreAdapter implements CoreAdapter {
             add(argv, "--child-env", entry.getKey() + "=" + entry.getValue());
         }
         Map<String, String> credentialEnvironment = credentialEnvironment(credentials);
+        // The values this launch injects as secrets: the bundle's values (written to
+        // the run-owned credential file) and the run-scoped MCP bearer (written to
+        // its token file). The log reads them from this profile, one launch object.
+        Set<String> secretValues = new LinkedHashSet<>(credentials.environment().values());
         if (!credentialEnvironment.isEmpty()) {
             if (credentialEnvironment.size() > 1) {
                 throw new IllegalArgumentException("The Qoder bridge takes exactly one credential variable, got "
@@ -272,12 +285,13 @@ public final class QoderCoreAdapter implements CoreAdapter {
             // trusted-launcher side of the contract); the token itself never
             // reaches the argv.
             Path tokenFile = writeWorkerMcpTokenFile(environment, workerMcp.get().token());
+            secretValues.add(workerMcp.get().token());
             add(argv, "--worker-mcp-name", "aria-conductor");
             add(argv, "--worker-mcp-url", workerMcp.get().url());
             add(argv, "--worker-mcp-token-file", tokenFile.toString());
         }
         return new LaunchProfile(argv, profile.environment(), workingDirectory.toString(),
-                controlSecretFile.toString());
+                controlSecretFile.toString(), secretValues);
     }
 
     /**

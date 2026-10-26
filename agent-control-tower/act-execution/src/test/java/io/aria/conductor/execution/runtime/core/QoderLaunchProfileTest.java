@@ -120,6 +120,10 @@ class QoderLaunchProfileTest {
                 "--host", "127.0.0.1",
                 "--port", "46321"));
         assertThat(profile.workingDirectory()).isEqualTo(fixture.workspace().toString());
+        assertThat(profile.secretValues())
+                .as("the credential value this launch writes to the run-owned file is a declared secret"
+                        + " of the launch, so the log masks it by value")
+                .containsExactly(CREDENTIAL_VALUE);
         assertThat(profile.controlSecretFile())
                 .as("the placement writes the minted control secret into exactly this file")
                 .isEqualTo(controlSecretFile.toString());
@@ -168,6 +172,9 @@ class QoderLaunchProfileTest {
                 .as("the file carries the run-scoped worker bearer minted for this run")
                 .get()
                 .satisfies(actor -> assertThat(actor.runId()).isEqualTo(fixture.runId()));
+        assertThat(profile.secretValues())
+                .as("the run bearer written to the token file is a declared secret of the launch")
+                .contains(CREDENTIAL_VALUE, token.strip());
         for (String argument : profile.argv()) {
             assertThat(argument)
                     .as("a token value must never appear in the launch argv")
@@ -276,6 +283,31 @@ class QoderLaunchProfileTest {
         assertThat(profile.argv())
                 .as("the CLI invocation carries the recorded ACP mode")
                 .containsSubsequence("--cli", cli.toString(), "--cli-arg", "--acp");
+    }
+
+    /**
+     * The merge guard is enforced where the bridge environment is copied, so a
+     * profile constructed directly cannot set a variable the launcher owns. The
+     * spelling variants matter because the ambient lookup it protects is
+     * case-insensitive.
+     */
+    @Test
+    void aDirectlyConstructedProfileCannotSetALauncherOwnedVariable() throws Exception {
+        Fixture fixture = fixture();
+        Path cli = executable(fixture.root().resolve("bin"), "qodercli.exe");
+        Path bridge = bridgeEntry(fixture.root().resolve("bridge"));
+        for (String name : List.of("TMP", "tmp", "XDG_data_home", "ARIA_MCP_TOKEN")) {
+            QoderCoreAdapter adapter = new QoderCoreAdapter(new QoderCoreAdapter.QoderProfile(
+                    "node", bridge.toString(), cli.toString(), List.of(), Map.of(),
+                    Map.of(name, "synthetic-operator-value"), "1.1.61", "efficient"), wiring);
+
+            assertThatThrownBy(() -> adapter.launchProfile(fixture.spec(), fixture.environment(),
+                    new SecretBundle(null, Map.of())))
+                    .as("a directly constructed profile must not carry %s into the launch", name)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(name)
+                    .hasMessageContaining("launcher owns");
+        }
     }
 
     private static void deleteTree(Path root) throws IOException {

@@ -164,6 +164,12 @@ public class CoreRuntimeConfiguration {
      * (including {@code ObjectProvider#getIfAvailable()} at run time, once both
      * singletons exist) deterministically returns the coordinator instead of
      * raising {@code NoUniqueBeanDefinitionException}.
+     *
+     * <p>The run store's committed status is wired as the coordinator's
+     * {@link RunStatusReader}: an in-flight launch re-reads it before opening its
+     * core session and before prompting, so a cancel that was recorded while the
+     * run was still unregistered stops the core the launch started instead of
+     * leaving it running behind a CANCELLED row (#111 fix round 2).
      */
     @Bean
     @Primary
@@ -175,10 +181,19 @@ public class CoreRuntimeConfiguration {
             org.springframework.context.ApplicationEventPublisher eventPublisher,
             TaskDeadlineProperties taskDeadlines,
             io.aria.conductor.agent.repository.AgentRepository agentRepository,
-            SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters) {
+            SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters,
+            io.aria.conductor.agent.repository.RunRepository runs) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
                 permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
-                eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters);
+                eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters,
+                committedStatusReader(runs));
+    }
+
+    /** The run row's committed status, read straight from the database (never a cached entity). */
+    static RunStatusReader committedStatusReader(io.aria.conductor.agent.repository.RunRepository runs) {
+        return runId -> runs.findStateById(runId)
+                .map(io.aria.conductor.agent.repository.RunRepository.RunStateView::getStatus)
+                .orElse(null);
     }
 
     /**
@@ -224,8 +239,16 @@ public class CoreRuntimeConfiguration {
      * the provider credential the governed configuration references as
      * {@code {env:LLM_API_KEY}}. Blank values are dropped, so an unset key is
      * absent from the launch environment instead of present and empty.
+     *
+     * <p>An operator key that names a variable the launcher owns is refused here,
+     * where the map is merged, with an actionable error naming it -- a silent
+     * override of the run-owned {@code HOME}/TMP/XDG roots or of
+     * {@code ARIA_MCP_TOKEN} is either evidence loss or a credential-smuggling
+     * vector ({@link CoreConfigurationService#requireNoLauncherOwnedVariables}).
      */
     static Map<String, String> openCodeModelProviderEnvironment(Map<String, String> sandboxEnv) {
+        CoreConfigurationService.requireNoLauncherOwnedVariables(sandboxEnv,
+                "opencode.sandbox-env");
         Map<String, String> environment = new LinkedHashMap<>();
         sandboxEnv.forEach((name, value) -> {
             if (value != null && !value.isBlank()) {

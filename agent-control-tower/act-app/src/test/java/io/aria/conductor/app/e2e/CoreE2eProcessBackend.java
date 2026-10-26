@@ -27,10 +27,12 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -217,9 +219,40 @@ public final class CoreE2eProcessBackend implements ExecutionBackend {
         return state.controller.resume(resolve(handle), Objects.requireNonNull(deadline, "deadline"));
     }
 
+    /**
+     * Verified stop of the run's owned peer tree, with the harness-only
+     * already-gone fallback.
+     *
+     * <p>The real controller runs first and its answer is authoritative. Its
+     * production contract deliberately refuses a root that vanished without a
+     * kill from that stop (it can no longer enumerate or attribute whatever the
+     * root orphaned). The harness mock session, however, cancels a run by
+     * terminating its mock peer itself, so by the time the run finalizes the peer
+     * root is already gone and the controller answers {@code allWritersStopped=false}
+     * for a tree that has in fact stopped. The harness transports a
+     * single-process mock peer fixture, so a gone root with no controller binding
+     * left is a verified stopped writer tree here.
+     *
+     * <p>The fallback is therefore narrow on purpose: it applies only when the
+     * owned peer root is no longer alive (absent, or a not-yet-reaped zombie:
+     * {@code ProcessHandle.of(rootPid) == null || !isAlive()}) and the controller
+     * no longer owns the record ({@code !controller.owns(owned)}). A live root,
+     * or one the controller still owns, keeps the controller's refusal unchanged
+     * — this must never mask a live peer or descendant. The production
+     * verified-stop contract is untouched.
+     */
     @Override
     public StopProof stopWriters(RuntimeHandle handle, Instant deadline) {
-        return state.controller.stop(resolve(handle), Objects.requireNonNull(deadline, "deadline"));
+        OwnedProcess owned = resolve(handle);
+        StopProof proof = state.controller.stop(owned, Objects.requireNonNull(deadline, "deadline"));
+        if (proof != null && proof.allWritersStopped()) {
+            return proof;
+        }
+        ProcessHandle root = ProcessHandle.of(owned.rootPid()).orElse(null);
+        if ((root == null || !root.isAlive()) && !state.controller.owns(owned)) {
+            return new StopProof(handle.runId(), true);
+        }
+        return proof;
     }
 
     @Override
@@ -261,14 +294,22 @@ public final class CoreE2eProcessBackend implements ExecutionBackend {
     /**
      * Delivers the run's minted control secret and worker credential into the
      * runtime environment exactly as the harness's "trusted launcher" role
-     * requires: the delivered values always win over profile values.
+     * requires: the delivered values always win over profile values. The profile
+     * handed to the controller keeps the secrets the adapter declared and declares
+     * the two delivered values too, so the profile describes the environment its
+     * process actually receives.
      */
     private LaunchProfile deliverSecrets(LaunchProfile profile, PreparedEnvironment environment,
             String controlSecret) {
         Map<String, String> env = new LinkedHashMap<>(profile.env());
         env.put(CONTROL_SECRET_ENVIRONMENT, controlSecret);
-        env.put(CoreE2eWorkerTokens.WORKER_TOKEN_ENV, state.workerTokens.tokenFor(environment.runId()));
-        return new LaunchProfile(profile.argv(), env, profile.workingDirectory());
+        String workerToken = state.workerTokens.tokenFor(environment.runId());
+        env.put(CoreE2eWorkerTokens.WORKER_TOKEN_ENV, workerToken);
+        Set<String> secretValues = new LinkedHashSet<>(profile.secretValues());
+        secretValues.add(controlSecret);
+        secretValues.add(workerToken);
+        return new LaunchProfile(profile.argv(), env, profile.workingDirectory(),
+                profile.controlSecretFile(), secretValues);
     }
 
     /**

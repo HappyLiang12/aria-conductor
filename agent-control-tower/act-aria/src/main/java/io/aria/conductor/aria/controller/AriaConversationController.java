@@ -147,19 +147,21 @@ public class AriaConversationController {
 
         List<UUID> runIds = runs.stream().map(Run::getId).toList();
 
-        // Soft-delete: cancel active runs; completed/failed runs are hard-deleted
-        // along with their child data since trajectories and tool-calls will be removed.
+        // Soft-delete: cancel active runs through the verified cancel path; completed/failed
+        // runs are hard-deleted along with their child data since trajectories and tool-calls
+        // will be removed.
         for (Run run : runs) {
             RunStatus status = run.getStatus();
-            if (status == RunStatus.RUNNING || status == RunStatus.PENDING) {
-                run.setStatus(RunStatus.CANCELLED);
-                runRepository.save(run);
-            } else if (status == RunStatus.WAITING_INPUT) {
-                // A parked run must be WOKEN, not just relabelled: the loop thread
-                // sits on the coordinator future, so cancelRun publishes the
-                // RunCompletedEvent(CANCELLED) that completes it. A direct status
-                // write here would strand the run parked with its history deleted
-                // below — an unreachable run plus a destroyed re-seed source.
+            if (status == RunStatus.RUNNING || status == RunStatus.PENDING
+                    || status == RunStatus.WAITING_INPUT) {
+                // #111: a live run may still be owned by this process's core, so the delete
+                // must go through runService.cancelRun -- the only path that requests and
+                // verifies the core stop before recording CANCELLED. A refused stop aborts
+                // the delete with the mapped 409 before any child data is purged, instead of
+                // relabelling a core that is still alive. A parked WAITING_INPUT run also
+                // must be WOKEN, not just relabelled: the loop thread sits on the
+                // coordinator future, so cancelRun publishes the RunCompletedEvent
+                // (CANCELLED) that completes it.
                 runService.cancelRun(run.getId());
             }
         }

@@ -81,6 +81,13 @@ public class RunController {
         return ResponseEntity.ok(runService.getRun(id));
     }
 
+    /**
+     * The ordered replay of one run's progress observations. Every observation is
+     * returned in {@code seq} order, including the successive observations of one part
+     * (same {@code partId}, greater {@code seq}): the client merges them into a single
+     * stream line, so a reopened drawer shows exactly what the live stream showed --
+     * including an answer that grew after it first appeared.
+     */
     @GetMapping("/{id}/progress")
     public ResponseEntity<List<RunProgressEventDto>> getRunProgress(
             @PathVariable UUID id,
@@ -90,7 +97,7 @@ public class RunController {
                 .stream()
                 .map(p -> new RunProgressEventDto(p.getId(), p.getRunId(), p.getAgentId(),
                         p.getIteration(), p.getKind(), p.getSeq(), p.getContent(),
-                        p.getToolName(), p.getCreatedAt()))
+                        p.getToolName(), p.getPartId(), p.getCreatedAt()))
                 .toList();
         return ResponseEntity.ok(events);
     }

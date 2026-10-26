@@ -25,6 +25,7 @@ import io.aria.conductor.execution.runtime.CoreRunLauncher;
 import io.aria.conductor.execution.runtime.CoreTask;
 import io.aria.conductor.execution.runtime.RunAdmissionQueue;
 import io.aria.conductor.execution.runtime.RunRuntimeRegistry;
+import io.aria.conductor.execution.runtime.RunTerminatedDuringLaunchException;
 import io.aria.conductor.execution.runtime.UsageSnapshot;
 import io.aria.conductor.execution.approval.ApprovalGate;
 import io.aria.conductor.execution.approval.PermissionCoordinator;
@@ -300,7 +301,7 @@ public class AgentLoopEngine {
             return;
         }
         CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(runId)) {
+        if (coordinator != null && coordinator.ownsRun(ctx.getAgentId(), runId)) {
             ControlAck ack = awaitControl(coordinator.pause(runId), runId, "pause");
             if (ack.state() != ControlState.PAUSED || !ack.verified()) {
                 throw new IllegalStateException("Run " + runId + " was not paused: "
@@ -334,7 +335,7 @@ public class AgentLoopEngine {
                     "Run " + runId + " is waiting for human approval; decide the approval instead of resuming.");
         }
         CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(runId)) {
+        if (coordinator != null && coordinator.ownsRun(ctx.getAgentId(), runId)) {
             ControlAck ack = awaitControl(coordinator.resume(runId), runId, "resume");
             if (ack.state() != ControlState.RUNNING || !ack.verified()) {
                 throw new IllegalStateException("Run " + runId + " was not resumed: "
@@ -406,6 +407,18 @@ public class AgentLoopEngine {
             }
             tryEmit(emitter, "done", donePayload(ctx, null));
             completeRun(ctx, result.cancelled() ? RunStatus.CANCELLED : RunStatus.COMPLETED);
+        } catch (RunTerminatedDuringLaunchException terminated) {
+            // The coordinator found the run already terminal while its core was still launching,
+            // stopped the launched core through the verified abort path and released it. The
+            // committed row owns the terminal transition, so this attempt records nothing, publishes
+            // no second completion and never relabels a CANCELLED as FAILED (#111 fix round 2).
+            RunStatus committed = committedStatus(ctx.getRunId(),
+                    runRepository.findById(ctx.getRunId())
+                            .orElseThrow(() -> new ResourceNotFoundException("Run", ctx.getRunId())));
+            log.info("Run {} was terminated during its core launch: the launched core was stopped and"
+                    + " released and the run keeps its committed {} state", ctx.getRunId(), committed);
+            tryEmit(emitter, "done", donePayload(ctx, null));
+            abandonContext(ctx, committed);
         } catch (Exception e) {
             log.error("Coordinated core run failed: runId={}", ctx.getRunId(), e);
             ctx.addError(e);
@@ -940,9 +953,11 @@ public class AgentLoopEngine {
 
         // Runtime-coordination branch: a run whose runtime is owned by the run coordinator
         // is driven by its run-owned core session (prompt, events, permissions, finalization).
-        // No second execution is started for that run.
+        // No second execution is started for that run. The engine asks the coordinator's one
+        // ownership predicate, the same answer the run store's control port gives (#111 fix
+        // round 2, ruling 4).
         CoreExecutionService coordinator = runCoordinator();
-        if (coordinator != null && coordinator.activeRuns(ctx.getAgentId()).contains(ctx.getRunId())) {
+        if (coordinator != null && coordinator.ownsRun(ctx.getAgentId(), ctx.getRunId())) {
             log.info("Run {} is owned by its run-owned core session; no provider-level execution is started",
                     ctx.getRunId());
             return;
@@ -1158,9 +1173,11 @@ public class AgentLoopEngine {
     }
 
     /**
-     * Completes the run — updates DB entities and clears state.
+     * Completes the run — writes the terminal row and clears state.
      * Note: @Transactional omitted because this is a self-invocation from within the same class.
-     * Each repository.save() call runs in its own transaction, which is acceptable here.
+     * Each repository call runs in its own transaction, which is acceptable here. The terminal
+     * status itself is a single conditional UPDATE ({@code completeIfNotTerminal}) so exactly one
+     * writer — this completion or an external cancel — owns the transition and its event.
      */
     protected void completeRun(RunContext ctx, RunStatus finalStatus) {
         log.info("Completing run: runId={}, status={}, iterations={}, tokens={}",
@@ -1168,46 +1185,36 @@ public class AgentLoopEngine {
 
         CompletionFailure completionError = completionError(ctx, finalStatus);
 
-        // Tracks whether an external actor (e.g. RunService.cancelRun) already moved this run to a
-        // terminal state AND published its RunCompletedEvent. In that case we must neither overwrite
-        // the status nor publish a second (duplicate / contradictory) event.
+        // Tracks whether another writer already owns this run's terminal transition. The
+        // conditional update below is the single arbiter: only the writer whose update wins
+        // publishes RunCompletedEvent (fix round 1, I1).
         java.util.concurrent.atomic.AtomicBoolean alreadyTerminatedExternally = new java.util.concurrent.atomic.AtomicBoolean(false);
 
-        // Persist the Run entity FIRST — this is the authoritative status/output read by callers
+        // Persist the Run row FIRST — this is the authoritative status/output read by callers
         // (AriaService, dashboard). Doing it before session bookkeeping ensures a session-persistence
         // hiccup can never leave the run stuck in RUNNING.
         try {
-            runRepository.findById(ctx.getRunId()).ifPresent(run -> {
-                // Guard: do not overwrite a terminal state already set externally (e.g. CANCELLED by RunService)
-                if (run.getStatus() == RunStatus.CANCELLED && finalStatus != RunStatus.CANCELLED) {
-                    log.info("Run {} already CANCELLED externally, skipping overwrite with {}", ctx.getRunId(), finalStatus);
-                    alreadyTerminatedExternally.set(true);
-                    return;
-                }
-                // Guard: if the run was already CANCELLED (REST cancel path), RunService has already
-                // published the CANCELLED event — persist nothing and publish nothing to avoid a duplicate.
-                if (run.getStatus() == RunStatus.CANCELLED) {
-                    log.info("Run {} already CANCELLED externally, skipping duplicate completion event", ctx.getRunId());
-                    alreadyTerminatedExternally.set(true);
-                    return;
-                }
-                run.setStatus(finalStatus);
-                run.setIterationCount(ctx.getIterationCount());
-                run.setTotalTokensUsed(ctx.getTotalTokensUsed());
-                run.setCompletedAt(Instant.now());
-                if (!completionError.message().isEmpty()) {
-                    run.setErrorMessage(completionError.message());
-                    run.setErrorCode(completionError.code());
-                    run.setErrorSurface(completionError.surface());
-                }
-                // Store the final output (last assistant response)
-                if (ctx.getLastAssistantResponse() != null) {
-                    run.setFinalOutput(ctx.getLastAssistantResponse());
-                }
-                runRepository.save(run);
-            });
+            Instant completedAt = Instant.now();
+            String errorMessage = completionError.message().isEmpty() ? null : completionError.message();
+            int updated = runRepository.completeIfNotTerminal(
+                    ctx.getRunId(), finalStatus, ctx.getIterationCount(), ctx.getTotalTokensUsed(),
+                    completedAt, ctx.getLastAssistantResponse(),
+                    errorMessage,
+                    errorMessage == null ? null : completionError.code(),
+                    errorMessage == null ? null : completionError.surface(),
+                    completedAt, TERMINAL_STATUSES);
+            if (updated == 0) {
+                // A cancel (or another completion) committed the terminal transition and
+                // published its event first. This finalize must neither relabel the row nor
+                // publish a second, contradictory completion.
+                log.info("Run {} already reached a terminal state externally; this completion"
+                        + " does not own the terminal transition", ctx.getRunId());
+                alreadyTerminatedExternally.set(true);
+            }
         } catch (Exception e) {
             log.error("Error persisting final run state for {}: {}", ctx.getRunId(), e.getMessage(), e);
+            // The terminal write was not confirmed, so this completion cannot claim the event.
+            alreadyTerminatedExternally.set(true);
         }
 
         // Session bookkeeping — isolated so an optimistic-lock hiccup cannot abort run completion.

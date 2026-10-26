@@ -65,7 +65,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -144,6 +146,7 @@ class AgentLoopEngineCoreDispatchTest {
         lenient().when(knowledgeProvider.buildKnowledgeContextPrompt(5)).thenReturn("");
         when(coreRunLauncherProvider.getIfAvailable()).thenReturn(coreRunLauncher());
         stubStatusWrites();
+        stubCompletionWrites();
     }
 
     /** Mirrors the repository's conditional update onto the shared in-memory run double. */
@@ -160,6 +163,44 @@ class AgentLoopEngineCoreDispatchTest {
                                 return 1;
                             })
                             .orElse(0);
+                });
+    }
+
+    /** Mirrors the repository's conditional completion update onto the shared in-memory run double. */
+    private void stubCompletionWrites() {
+        lenient().when(runRepository.completeIfNotTerminal(any(), any(), anyInt(), anyLong(),
+                        any(), any(), any(), any(), any(), any(), anyList()))
+                .thenAnswer(invocation -> {
+                    UUID id = invocation.getArgument(0);
+                    RunStatus status = invocation.getArgument(1);
+                    Run current = runRepository.findById(id).orElse(null);
+                    List<RunStatus> terminal = List.of(RunStatus.COMPLETED, RunStatus.FAILED,
+                            RunStatus.CANCELLED, RunStatus.ABORTED);
+                    if (current == null || terminal.contains(current.getStatus())) {
+                        return 0;
+                    }
+                    current.setStatus(status);
+                    current.setIterationCount(invocation.getArgument(2));
+                    current.setTotalTokensUsed(invocation.getArgument(3));
+                    current.setCompletedAt(invocation.getArgument(4));
+                    String finalOutput = invocation.getArgument(5);
+                    if (finalOutput != null) {
+                        current.setFinalOutput(finalOutput);
+                    }
+                    String errorMessage = invocation.getArgument(6);
+                    if (errorMessage != null) {
+                        current.setErrorMessage(errorMessage);
+                    }
+                    String errorCode = invocation.getArgument(7);
+                    if (errorCode != null) {
+                        current.setErrorCode(errorCode);
+                    }
+                    String errorSurface = invocation.getArgument(8);
+                    if (errorSurface != null) {
+                        current.setErrorSurface(errorSurface);
+                    }
+                    current.setUpdatedAt(invocation.getArgument(9));
+                    return 1;
                 });
     }
 

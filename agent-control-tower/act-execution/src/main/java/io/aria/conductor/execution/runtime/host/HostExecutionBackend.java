@@ -16,6 +16,8 @@ import io.aria.conductor.execution.runtime.WorkspacePaths;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
@@ -35,10 +37,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,17 +61,27 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Preparation also mints the run's bridge control secret. The committed
  * run-bound bridge (spec 5.1) authenticates every HTTP route but {@code /health}
- * with that secret, so the backend delivers it to the runtime's environment at
- * launch and then <em>proves</em> the endpoint it allocated is that runtime's:
- * only a 200 from the authenticated session route whose binding names this run
- * declares the launch ready. The file-name stem comparison of the launch
- * profile's executable against the OS-reported command stays in place as a
- * cheap first filter, but the authenticated call is the real gate -- a listener
- * that does not hold the secret (an unrelated service on the port, a runtime
- * that lost the secret) is refused, and the runtime this backend launched is
+ * with that secret, so a launch profile that declares a control-secret file is a
+ * <em>bridge launch</em>: the backend writes the minted secret into that
+ * run-owned file, delivers it to the runtime's environment, and then
+ * <em>proves</em> the endpoint it allocated is that runtime's -- only a 200 from
+ * the authenticated session route whose binding names this run declares the
+ * launch ready. The file-name stem comparison of the launch profile's executable
+ * against the OS-reported command stays in place as a cheap first filter, but
+ * the authenticated call is the real gate for those launches: a listener that
+ * does not hold the secret (an unrelated service on the port, a runtime that
+ * lost the secret) is refused, and the runtime this backend launched is
  * terminated instead of being supervised on trust. {@code /health} is never the
- * gate: it answers anyone and proves nothing. A runtime that serves no
- * authenticated endpoint is therefore refused by this backend, deliberately.
+ * gate: it answers anyone and proves nothing.
+ *
+ * <p>The authenticated gate is bridge-specific by contract, not universal. A
+ * launch profile that declares no control-secret file (e.g. the OpenCode Host
+ * runtime, whose {@code opencode serve} endpoint authenticates another way and
+ * does not speak the bridge's {@code x-bridge-control-secret} contract) is not
+ * probed here, is not handed the minted secret and gets no secret file: it is
+ * launched on the ownership this backend verified for the process it started
+ * (its in-memory binding, never a process name), and its endpoint readiness is
+ * the core adapter's own serve and session contract.
  *
  * <p>Writer termination and configuration cleanup are separate operations:
  * {@link #stopWriters} produces the {@link StopProof} that capture and lock
@@ -83,7 +97,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * is stop, then export, then destroy: a verified stop never removes the
  * environment entry that {@link #exportWorkspace} needs, and {@link #destroy} is
  * the only operation that ends it.
+ *
+ * <p>The run's core output is drained into a run-owned log that is not part of
+ * the workspace: {@link RunCoreLog} writes below the run's retained runtime
+ * root ({@code <runConfigurationRoot>/logs/core-<runId>.log}), which neither the
+ * workspace cleanup nor {@link #destroy} removes -- {@code destroy} deletes only
+ * the generated configuration directory itself. That log is the operator's
+ * evidence when a HOST run fails before it can produce a server log.
  */
+@Slf4j
 public class HostExecutionBackend implements ExecutionBackend {
 
     /** Generated run-owned configuration, kept beside (never inside) the workspace. */
@@ -121,6 +143,8 @@ public class HostExecutionBackend implements ExecutionBackend {
     private final EndpointAllocator endpoints;
     private final Map<UUID, PreparedEnvironment> environments = new ConcurrentHashMap<>();
     private final Map<UUID, OwnedProcess> processes = new ConcurrentHashMap<>();
+    /** The run-owned stdio log of every launched runtime, memory-only like the live process. */
+    private final Map<UUID, RunCoreLog> coreLogs = new ConcurrentHashMap<>();
     /** The per-run bridge control secret minted at {@link #prepare}, memory-only. */
     private final Map<UUID, String> controlSecrets = new ConcurrentHashMap<>();
     /**
@@ -183,6 +207,18 @@ public class HostExecutionBackend implements ExecutionBackend {
         return environment;
     }
 
+    /**
+     * Launches the run's prepared runtime and returns the handle of the process
+     * tree this backend now owns.
+     *
+     * <p>A profile that declares a control-secret file is a bridge launch: it is
+     * gated on the endpoint authenticating the run's secret (see the class
+     * javadoc). A profile that declares none belongs to a runtime that
+     * authenticates another way; it is launched without that probe and without
+     * the minted secret, and its readiness gate is the core adapter's own serve
+     * and session contract. Both paths require the ownership verification before
+     * the process is supervised.
+     */
     @Override
     public RuntimeHandle launch(PreparedEnvironment environment, LaunchProfile profile) {
         Objects.requireNonNull(environment, "environment");
@@ -200,21 +236,45 @@ public class HostExecutionBackend implements ExecutionBackend {
         // is started, every file the profile tells it to read must exist. The
         // control secret is this placement's, memory-only until now, so it is
         // written here (never carried in the argv) into the run-owned
-        // configuration directory the profile named.
-        writeControlSecretFile(environment, profile, controlSecret);
+        // configuration directory the profile named. A profile naming no file
+        // writes nothing and reads nothing: it is not a bridge launch.
         boolean declaredControlSecret = profile.controlSecretFile() != null;
-        OwnedProcess owned = controller.start(environment.runId(), deliverControlSecret(profile, controlSecret));
+        writeControlSecretFile(environment, profile, controlSecret);
+        // Only a bridge launch receives the minted secret: a runtime that reads no
+        // run-owned control-secret file (e.g. opencode serve) has no use for it,
+        // and least privilege keeps it in the launcher rather than in a process
+        // that cannot authenticate with it.
+        LaunchProfile effective = declaredControlSecret
+                ? deliverControlSecret(profile, controlSecret) : profile;
+        // The drain starts inside the controller, the moment the process exists;
+        // the file lives below the retained runtime root, so the core's last words
+        // survive both the workspace cleanup and this backend's destroy.
+        RunCoreLog coreLog = openCoreLog(environment, effective);
+        coreLogs.put(environment.runId(), coreLog);
+        OwnedProcess owned;
+        try {
+            owned = controller.start(environment.runId(), effective, coreLog);
+        } catch (RuntimeException e) {
+            closeCoreLog(environment.runId());
+            throw e;
+        }
         if (!controller.owns(owned)) {
             discard(owned);
             throw new IllegalStateException("The launched runtime failed its ownership verification for run "
                     + environment.runId() + "; it was terminated instead of being supervised on trust");
         }
         try {
-            // The real gate: the runtime at the allocated endpoint must prove it
-            // holds this run's control secret. The executable-stem check inside
-            // controller.start is only a cheap first filter -- any process of
-            // that name would satisfy it.
-            authenticateRuntimeEndpoint(environment, controlSecret);
+            if (declaredControlSecret) {
+                // The authenticated gate of a bridge launch: the runtime at the
+                // allocated endpoint must prove it holds this run's control
+                // secret. The executable-stem check inside controller.start is
+                // only a cheap first filter -- any process of that name would
+                // satisfy it. A non-bridge launch has no such route to prove and
+                // no secret to prove with: it is trusted on the ownership
+                // verified above, and the core adapter's serve/session open is
+                // its readiness gate.
+                authenticateRuntimeEndpoint(environment, controlSecret);
+            }
         } catch (RuntimeException e) {
             discard(owned);
             throw e;
@@ -225,6 +285,38 @@ public class HostExecutionBackend implements ExecutionBackend {
         }
         return new RuntimeHandle(environment.runId(), ExecutionMode.HOST, environment.environmentId(),
                 owned.ownershipIdentity(), environment.endpoint());
+    }
+
+    /**
+     * Opens the run's stdio log below its retained runtime root and names the
+     * path in the backend log. The root is the parent of the run's generated
+     * configuration directory ({@code <lease.runtimeRoot()>}), created by
+     * {@code RunWorkspaceService.configRoot} before any launch: it is outside
+     * the workspace tree {@code WorkspaceManager.cleanup} deletes, and
+     * {@link #destroyAndReport} deletes only its {@code host} child, so the log
+     * outlives the run's placement record. The log's redaction input -- the
+     * launch environment and the profile's declared secret values -- comes from
+     * the very profile the core is launched with, so it can never disagree with
+     * what the child receives.
+     */
+    private RunCoreLog openCoreLog(PreparedEnvironment environment, LaunchProfile profile) {
+        Path configuration = Path.of(environment.configurationDirectory()).toAbsolutePath().normalize();
+        Path runRoot = configuration.getParent();
+        if (runRoot == null) {
+            throw new IllegalStateException("The run-owned configuration directory of run "
+                    + environment.runId() + " has no root to hold a core log: " + configuration);
+        }
+        RunCoreLog coreLog = RunCoreLog.open(runRoot, environment.runId(), profile);
+        log.info("Run {}: run-owned core log at {}", environment.runId(), coreLog.path());
+        return coreLog;
+    }
+
+    /** Closes and forgets the run's stdio log; the process it belongs to has ended. */
+    private void closeCoreLog(UUID runId) {
+        RunCoreLog coreLog = coreLogs.remove(runId);
+        if (coreLog != null) {
+            coreLog.close();
+        }
     }
 
     /**
@@ -344,6 +436,9 @@ public class HostExecutionBackend implements ExecutionBackend {
         controller.release(owned != null ? owned : OwnedProcess.parse(handle.ownershipIdentity()));
         controlSecrets.remove(handle.runId());
         sessionSecrets.remove(handle.runId());
+        // The run's writers are stopped by contract before a destroy; the drain is
+        // bounded, and its file is not part of what this method deletes.
+        closeCoreLog(handle.runId());
         PreparedEnvironment environment = environments.remove(handle.runId());
         if (environment == null) {
             return owned != null;
@@ -397,15 +492,18 @@ public class HostExecutionBackend implements ExecutionBackend {
     }
 
     /**
-     * The per-run bridge control secret, delivered into the runtime's
-     * environment. The secret the run was prepared with always wins over a
+     * The run's minted bridge control secret, delivered into the environment of
+     * a bridge launch profile -- one that declares the control-secret file its
+     * runtime reads. The secret the run was prepared with always wins over a
      * profile-supplied value: the delivery is the backend's, never a caller's.
      */
     private static LaunchProfile deliverControlSecret(LaunchProfile profile, String controlSecret) {
         Map<String, String> env = new LinkedHashMap<>(profile.env());
         env.put(CONTROL_SECRET_ENVIRONMENT, controlSecret);
+        Set<String> secrets = new LinkedHashSet<>(profile.secretValues());
+        secrets.add(controlSecret);
         return new LaunchProfile(profile.argv(), env, profile.workingDirectory(),
-                profile.controlSecretFile());
+                profile.controlSecretFile(), secrets);
     }
 
     /** A fresh 256-bit secret; the committed bridge insists on at least 16 characters. */
@@ -436,19 +534,22 @@ public class HostExecutionBackend implements ExecutionBackend {
             live.destroyForcibly();
         }
         controller.release(owned);
+        closeCoreLog(owned.runId());
     }
 
     /**
-     * Proves the run's endpoint is served by this run's runtime. The committed
-     * bridge (spec 5.1) authenticates every route but {@code /health} with the
-     * per-run control secret, so a 200 from the session route whose binding
-     * names this run is the runtime's proof that it received the secret this
-     * backend minted and delivered; {@code /health} is never consulted, because
-     * it answers anyone and identifies nothing. A runtime that has not started
-     * yet leaves the port unbound (retried until the window elapses); an answer
-     * that is not that proof -- a refusal, a foreign service, a wrong binding --
-     * is definitive and refuses the launch immediately. The failure carries no
-     * secret value.
+     * Proves the run's endpoint is served by this run's runtime; called only for
+     * a bridge launch -- a profile that declares the control-secret file its
+     * runtime reads. A runtime that authenticates another way is never probed
+     * through this route. The committed bridge (spec 5.1) authenticates every
+     * route but {@code /health} with the per-run control secret, so a 200 from
+     * the session route whose binding names this run is the runtime's proof that
+     * it received the secret this backend minted and delivered; {@code /health}
+     * is never consulted, because it answers anyone and identifies nothing. A
+     * runtime that has not started yet leaves the port unbound (retried until the
+     * window elapses); an answer that is not that proof -- a refusal, a foreign
+     * service, a wrong binding -- is definitive and refuses the launch
+     * immediately. The failure carries no secret value.
      */
     private static void authenticateRuntimeEndpoint(PreparedEnvironment environment, String controlSecret) {
         URI target = environment.endpoint().resolve(SESSION_ROUTE);

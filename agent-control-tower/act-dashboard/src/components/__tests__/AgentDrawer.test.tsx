@@ -162,6 +162,56 @@ describe('AgentDrawer live stream (S2)', () => {
     expect(container.querySelectorAll('.stream .ln').length).toBe(linesBefore);
   });
 
+  // Issue #103 growth defect (d): the pump now streams one OBSERVATION PER PART
+  // CHANGE, so a growing answer arrives as two frames that share a partId and carry
+  // a newer seq. The stream line is the part: it must be updated in place, never
+  // duplicated, never blanked.
+  it('updates one part line in place when a later frame of the same partId grows it', async () => {
+    const { rerender, container } = ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'ANSWER', partId: 'prt-1', content: 'Distributed consensus begins with Raft,', seq: 1 }, timestamp: '2026-08-29T06:00:00Z' });
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
+    });
+    expect(screen.getByText('Distributed consensus begins with Raft,')).toBeInTheDocument();
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'ANSWER', partId: 'prt-1', content: 'Distributed consensus begins with Raft, and Raft needs a majority.', seq: 2 }, timestamp: '2026-08-29T06:00:02Z' });
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
+    });
+
+    // One line for the part, showing the grown text; the opening snapshot is gone.
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(1);
+    expect(screen.getByText('Distributed consensus begins with Raft, and Raft needs a majority.')).toBeInTheDocument();
+    expect(screen.queryByText('Distributed consensus begins with Raft,')).not.toBeInTheDocument();
+
+    // A re-delivered identical frame (same partId AND same seq) changes nothing.
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'ANSWER', partId: 'prt-1', content: 'Distributed consensus begins with Raft, and Raft needs a majority.', seq: 2 }, timestamp: '2026-08-29T06:00:03Z' });
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
+    });
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(1);
+  });
+
+  it('renders an ANSWER frame as the assistant answer, distinctly from thinking (issue #103)', async () => {
+    const { rerender, container } = ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'a-1', agentId: 'a-1', kind: 'ANSWER', content: 'Consensus needs a majority.', seq: 4 }, timestamp: '2026-08-29T06:00:03Z' });
+      rerender(drawerTree(new QueryClient({ defaultOptions: { queries: { retry: false } } })));
+    });
+
+    // The answer text reaches the screen (it used to be dropped: only THINKING
+    // filled the detail body), on its own affordance rather than 'think'.
+    expect(screen.getByText('Consensus needs a majority.')).toBeInTheDocument();
+    expect(screen.getByText('ANSWER')).toBeInTheDocument();
+    expect(screen.getByText('Agent Progress · answer')).toBeInTheDocument();
+    expect(container.querySelector('.stream .tag.answer')).not.toBeNull();
+    expect(container.querySelectorAll('.stream .tag.think')).toHaveLength(0);
+  });
+
   it('collapse toggle hides the stream body but keeps the header', async () => {
     const { rerender, container } = ui();
     await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
@@ -235,6 +285,134 @@ describe('AgentDrawer backlog replay + stub removal (Task 6)', () => {
       push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: 'live output', seq: 3 }, timestamp: '2026-09-06T06:00:04Z' });
     });
     expect(container.querySelectorAll('.stream .ln').length).toBe(3);
+  });
+
+  // Issue #103: the persisted/replayed ANSWER row renders on its own affordance,
+  // next to the thinking row of the same run — the REST replay path uses the very
+  // same kind table as the live WS fold.
+  it('drawer_replaysAnAnswerRow_distinctlyFromThinking', async () => {
+    const replay: RunProgressEntry[] = [
+      { id: 'pa-1', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'THINKING', seq: 1, content: 'outlining the essay', toolName: null, createdAt: '2026-09-06T06:00:01Z' },
+      { id: 'pa-2', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'ANSWER', seq: 2, content: 'Consensus needs a majority.', toolName: null, createdAt: '2026-09-06T06:00:02Z' },
+    ];
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(replay);
+    const { container } = ui();
+
+    expect(await screen.findByText('outlining the essay')).toBeInTheDocument();
+    expect(screen.getByText('Consensus needs a majority.')).toBeInTheDocument();
+    expect(screen.getByText('THINK')).toBeInTheDocument();
+    expect(screen.getByText('ANSWER')).toBeInTheDocument();
+    expect(screen.getByText('Agent Progress · answer')).toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .tag.answer')).toHaveLength(1);
+    expect(container.querySelectorAll('.stream .tag.think')).toHaveLength(1);
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(2);
+  });
+
+  // Lane H2 finding 3: the persisted ANSWER/THINKING row is the WHOLE observation
+  // (the 200-char cut in progressToEntry predates that). The operator must be able to
+  // read the stored text in the detail block; only the live WS frame is bounded.
+  it('drawer_replaysALongAnswerInFull_insideTheScrollableStream', async () => {
+    const longAnswer = 'A'.repeat(620) + ' ANSWER-TAIL';
+    const longThinking = 'thinking: '.repeat(60) + 'THINKING-TAIL';
+    const replay: RunProgressEntry[] = [
+      { id: 'pl-1', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'THINKING', seq: 1, content: longThinking, toolName: null, createdAt: '2026-09-06T06:00:01Z' },
+      { id: 'pl-2', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'ANSWER', seq: 2, content: longAnswer, toolName: null, createdAt: '2026-09-06T06:00:02Z' },
+    ];
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(replay);
+    const { container } = ui();
+
+    const answer = await waitFor(() => {
+      const el = container.querySelector('.stream .ln-detail .answer');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    // Equality, not "contains": the rendered text IS the stored observation, whole.
+    expect(answer.textContent).toBe(longAnswer);
+    expect(answer.textContent!.length).toBeGreaterThan(500);
+    expect(answer.textContent).toContain('ANSWER-TAIL');
+    expect(container.querySelector('.stream .ln-detail .think')!.textContent).toBe(longThinking);
+    // The whole block lives inside the existing fixed-height scrollable stream.
+    expect(container.querySelector('.stream')).toContainElement(answer);
+  });
+
+  // Issue #103: the REST backlog is the ordered log of OBSERVATIONS, so one part that
+  // grew is two rows with the same partId. The replay must therefore show the same
+  // single line the live stream showed — the client merge is the only place that
+  // collapses them.
+  it('drawer_replaysOnePart_asOneLineCarryingItsNewestObservation', async () => {
+    const replay: RunProgressEntry[] = [
+      { id: 'pa-1', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'ANSWER', seq: 1, content: 'Consensus needs', toolName: null, partId: 'prt_1', createdAt: '2026-09-06T06:00:01Z' },
+      { id: 'pa-2', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'ANSWER', seq: 2, content: 'Consensus needs a majority of the voters.', toolName: null, partId: 'prt_1', createdAt: '2026-09-06T06:00:02Z' },
+      { id: 'pa-3', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'TOOL_RESULT', seq: 3, content: '3 tests passed', toolName: 'bash', partId: 'prt_2', createdAt: '2026-09-06T06:00:03Z' },
+    ];
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockResolvedValue(replay);
+    const { container } = ui();
+
+    expect(await screen.findByText('Consensus needs a majority of the voters.')).toBeInTheDocument();
+    // The opening observation is not a second line, and it is not on screen either.
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(2);
+    expect(screen.queryByText('Consensus needs')).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.stream .tag.answer')).toHaveLength(1);
+    expect(screen.getByText(/3 tests passed/)).toBeInTheDocument();
+  });
+
+  // Lane H: the live WS frame is bounded (500 chars + '...') while the persisted row is
+  // the whole observation. A part first seen through its bounded live frame must be
+  // completed by the fuller backlog row of the same part -- one line, whole text.
+  it('drawer_boundedLiveFrame_thenFullerBacklogRow_rendersTheWholeTextOnce', async () => {
+    const full = 'T'.repeat(700) + 'FULL-TAIL';
+    const bounded = full.slice(0, 500) + '...';
+    let resolveBacklog!: (v: RunProgressEntry[]) => void;
+    vi.mocked(listRuns).mockResolvedValue([runningRun]);
+    vi.mocked(getRunProgress).mockImplementation(
+      () => new Promise<RunProgressEntry[]>((res) => { resolveBacklog = res; }),
+    );
+    const { container } = ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+
+    // The bounded frame reaches the drawer while the backlog fetch is still in flight.
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: bounded, partId: 'prt-9', seq: 5 }, timestamp: '2026-09-06T06:00:05Z' });
+    });
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(1);
+
+    // The backlog row of the same part is older (seq 4) but whole: it must win the text.
+    await act(async () => {
+      resolveBacklog([
+        { id: 'p-full', runId: 'r-1', agentId: 'a-1', iteration: 1, kind: 'TOOL_RESULT', seq: 4, content: full, toolName: null, partId: 'prt-9', createdAt: '2026-09-06T06:00:04Z' },
+      ]);
+    });
+
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(1);
+    expect(container.querySelector('.stream .ln .ln-detail .res')!.textContent).toBe('✓ ' + full);
+    expect(screen.getByText(/FULL-TAIL/)).toBeInTheDocument();
+  });
+
+  // Lane H: the bound must not erase content in the other direction either -- a newer
+  // live frame that carries only the bounded prefix of a part already shown in full
+  // leaves the fuller line on screen (still one line).
+  it('drawer_fullFrame_thenAShorterLiveFrame_keepsTheFullerContent', async () => {
+    const full = 'T'.repeat(700) + 'FULL-TAIL';
+    const bounded = full.slice(0, 500) + '...';
+    vi.mocked(listRuns).mockResolvedValue([]);
+    vi.mocked(getRunProgress).mockResolvedValue([]);
+    const { container } = ui();
+    await waitFor(() => expect(screen.getByRole('button', { name: /collapse/i })).toBeInTheDocument());
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: full, partId: 'prt-9', seq: 4 }, timestamp: '2026-09-06T06:00:04Z' });
+    });
+    expect(container.querySelector('.stream .ln .ln-detail .res')!.textContent).toBe('✓ ' + full);
+
+    act(() => {
+      push({ type: 'run.progress', payload: { runId: 'r-1', agentId: 'a-1', kind: 'TOOL_RESULT', content: bounded, partId: 'prt-9', seq: 5 }, timestamp: '2026-09-06T06:00:05Z' });
+    });
+
+    expect(container.querySelectorAll('.stream .ln')).toHaveLength(1);
+    expect(container.querySelector('.stream .ln .ln-detail .res')!.textContent).toBe('✓ ' + full);
   });
 
   it('drawer_failedRun_isNotActiveRun', async () => {

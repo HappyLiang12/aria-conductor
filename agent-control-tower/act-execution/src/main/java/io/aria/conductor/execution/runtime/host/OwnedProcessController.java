@@ -49,8 +49,26 @@ public interface OwnedProcessController extends AutoCloseable {
      * its script creates the run's job object first, with kill-on-close), and
      * membership is requested as soon as the OS returned the process, so a
      * descendant spawned afterwards is still covered by the enumerated sweep.
+     *
+     * <p>Both stdio streams of the launched runtime are drained for the life of
+     * the process into {@code coreLog} (one daemon reader per stream, started
+     * the moment the OS returned the process), so a core that writes more than
+     * the OS pipe buffer never deadlocks in {@code write()}. The caller that
+     * created the log owns it and closes it after the process ended; this
+     * controller never closes it -- a stop path must not close a file another
+     * thread may still be writing.
      */
-    OwnedProcess start(UUID runId, LaunchProfile profile);
+    OwnedProcess start(UUID runId, LaunchProfile profile, RunCoreLog coreLog);
+
+    /**
+     * Starts a run-owned runtime whose output is drained and discarded: no
+     * run-owned log file is kept. The drain is the point -- it is what keeps a
+     * chatty core from blocking -- and a test harness or a caller that has no
+     * retained run root still gets it.
+     */
+    default OwnedProcess start(UUID runId, LaunchProfile profile) {
+        return start(runId, profile, RunCoreLog.discard());
+    }
 
     /**
      * True only for a record this controller bound at {@link #start} -- run
@@ -95,8 +113,16 @@ public interface OwnedProcessController extends AutoCloseable {
      * variables are applied, and a verification that the process the OS actually
      * started is the executable the trusted profile named. The platform default
      * environment and any shell interpolation are deliberately not used.
+     *
+     * <p>Both streams are handed to {@code coreLog} the instant the OS returned
+     * the process -- before the executable verification below, which can block
+     * on an OS round trip -- so the core's pipes are never full while the
+     * launcher is still busy. The returned handle delegates every process
+     * operation to the real process and serves its stdio read side from the
+     * drain's mirror, so a stdio-transport caller keeps its stream contract.
+     * The caller owns the log and closes it.
      */
-    static Process launch(LaunchProfile profile) {
+    static Process launch(LaunchProfile profile, RunCoreLog coreLog) {
         List<String> argv = profile.argv();
         if (argv.isEmpty()) {
             throw new IllegalArgumentException("LaunchProfile has an empty argv");
@@ -111,8 +137,14 @@ public interface OwnedProcessController extends AutoCloseable {
         } catch (IOException e) {
             throw new IllegalStateException("Unable to launch the run-owned runtime: " + e.getMessage(), e);
         }
+        Process live = coreLog.attach(process);
         verifyExecutable(argv.get(0), process);
-        return process;
+        return live;
+    }
+
+    /** Launches a runtime whose output is drained and discarded (no run-owned log file). */
+    static Process launch(LaunchProfile profile) {
+        return launch(profile, RunCoreLog.discard());
     }
 
     /**

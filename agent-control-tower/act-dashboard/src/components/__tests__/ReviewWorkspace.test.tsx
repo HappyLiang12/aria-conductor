@@ -343,11 +343,26 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(screen.queryByTestId('review-workspace')).toBeNull();
   });
 
-  it('focuses the Collapse button when the workspace opens (keyboard entry point)', async () => {
+  it('focuses the card heading when the workspace opens (keyboard entry point)', async () => {
     renderWorkspace();
     await openReview();
-    const collapse = await screen.findByRole('button', { name: /collapse/i });
-    expect(document.activeElement).toBe(collapse);
+    const heading = await screen.findByRole('heading', { name: 'Spec task' });
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
+  it('restores the opener when the workspace collapses (Task 7)', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    const trigger = screen.getByTestId('open-review');
+    trigger.focus();
+    await user.click(trigger);
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: /collapse/i }));
+
+    // The Expand control lives in the drawer, which stays mounted in the app;
+    // here the harness's trigger stands in for it.
+    expect(trigger).toHaveFocus();
   });
 
   it('auto-exits when the card leaves REVIEW (refetch returns a non-REVIEW status)', async () => {

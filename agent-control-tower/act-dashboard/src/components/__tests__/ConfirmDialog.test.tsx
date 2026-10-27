@@ -177,6 +177,20 @@ describe('ConfirmDialog destroy-safe keyboard contract (Task 7)', () => {
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Cancel', 'Confirm']);
   });
 
+  it('traps Tab when focus was lost to the page body by an inside click', () => {
+    // Clicking the dialog title/message moves focus to <body> in real browsers;
+    // the keydown then targets body, not the dialog. The trap must still fire.
+    setup({ danger: true });
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toHaveFocus();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+
+    expect(cancel).toHaveFocus();
+  });
+
   it('traps Tab/Shift+Tab inside a danger dialog and never reaches the background', () => {
     const outside = document.createElement('button');
     outside.textContent = 'Outside';

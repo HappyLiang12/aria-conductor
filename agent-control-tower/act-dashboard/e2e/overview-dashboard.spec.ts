@@ -12,14 +12,15 @@ test.describe('Overview dashboard', () => {
 
     const exec = page.locator('#panel-exec');
     await expect(exec.locator('h2')).toContainText('Executive Summary');
-    // HITL redesign: the old 'Pending Approvals' stat became 'Waiting on you'
-    // (aggregates pendingAskCount over cards in ANY column).
-    for (const label of ['Active Agents', 'Waiting on you', 'Total Runs']) {
+    // Decision-first Overview (2026-10-27): the fabricated 'Waiting on you'
+    // stat is gone; approvals now own the decision queue above the board.
+    for (const label of ['Active Agents', 'Total Runs']) {
       await expect(exec.locator('.stat').filter({ hasText: label })).toBeVisible();
     }
-    // The approvals surface moved into the board: the Review Queue panel lists
-    // cards waiting on a decision.
-    await expect(page.locator('#panel-queue h2')).toContainText('Review Queue');
+    // The approval surface is the decision queue; the Review Queue panel now
+    // lives inside the review workspace, not on the Overview.
+    await expect(page.getByTestId('decision-queue')).toContainText('Waiting on you');
+    await expect(page.getByTestId('attention-queue')).toBeVisible();
     // Panels nest, so the section.panel+hasText filter also matches the outer
     // wrapper; assert the board heading at page level instead.
     await expect(page.locator('h2').filter({ hasText: 'Kanban Board' }).first()).toBeVisible();

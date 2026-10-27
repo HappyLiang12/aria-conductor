@@ -1,0 +1,1233 @@
+{
+  "task": "Investigate current UI/UX problems and provide enhancement designs",
+  "date": "2026-10-24",
+  "phase": "implemented, reviewed, clean-room verified, pushed; hosted CI green at HEAD; PR open, not merged",
+  "baseline": {
+    "branch": "main",
+    "head": "9ab7ebd4cd0f75660b9aee701cde0a9670f20457",
+    "evidence": [
+      {
+        "command": "git status -sb",
+        "output": "## main...origin/main"
+      },
+      {
+        "command": "git status --porcelain=v1",
+        "output": ""
+      },
+      {
+        "command": "git log -5 --oneline",
+        "output": "9ab7ebd4 fix(errors): actionable, visible failure handling (#108)\n60d542f1 refactor(execution)!: retire the legacy NATIVE/ADK execution path (#109)\n5d16e349 feat: fleet runtime governance - one core/mode for the whole fleet (#107)\n691afa09 feat: loopback authority, plain core credentials, waiting-input loop (#106)\nc6693fbe feat(kanban,dashboard): review-flow UX - outcome-aware cards, card-layer batch, qoder ask UX (#105)"
+      }
+    ],
+    "pre_existing_modified_or_untracked_reported_by_git": [],
+    "preserve": "All pre-existing files, including ignored logs, screenshots, runtime data, NUL if present, and .env. Never read .env values."
+  },
+  "plan": {
+    "scope": "Current dashboard main journeys, navigation, status/action clarity, error recovery, form safety, keyboard access, responsive layout and perceived performance. Audit and design only.",
+    "lanes": [
+      {
+        "owner": "Workspace Scout",
+        "stage": 1,
+        "task": "Read-only current UI map, existing design decisions/tokens, source-backed candidate issues and verification targets",
+        "writes": []
+      },
+      {
+        "owner": "Release QA",
+        "stage": 2,
+        "task": "Browser verification of main journeys and candidate findings; desktop and mobile; no destructive actions or paid agent runs",
+        "writes": "Only explicitly assigned new audit evidence files; no product/config edits"
+      },
+      {
+        "owner": "Independent Reviewer",
+        "stage": 2,
+        "task": "Read-only validate findings against current code and prior approved designs, reject stale or unsupported claims",
+        "writes": []
+      },
+      {
+        "owner": "Delivery Lead",
+        "stage": 3,
+        "task": "Integrate verified findings, priorities, design alternatives, interaction states and acceptance checks",
+        "writes": "This ledger and new task-specific audit/design artifacts only"
+      }
+    ],
+    "idle_member": "TDD Implementer: no implementation authorized or assigned",
+    "integration": "Scout brief precedes QA/review briefs. QA and reviewer can then work independently with one browser owner. Lead deduplicates findings and labels code-only implications INFERRED; runtime claims require fresh observation.",
+    "acceptance": [
+      "Coverage inventory of primary routes and key journeys with inspected/uninspected status",
+      "Every finding has location, severity, user impact, fresh evidence and verification status",
+      "At least desktop 1440x900 and mobile 390x844 inspected when a safe live app is available",
+      "Test loading, empty, error, permission, long-content and keyboard states where safely reproducible; mark remaining states NOT VERIFIED",
+      "Prioritized enhancement themes with traceability to findings and explicit design tradeoffs",
+      "Design artifacts follow existing tokens and approved information architecture, or explicitly flag conflicts",
+      "No product code, credentials, runtime data, branch, commit, push or deployment changes"
+    ],
+    "risks": [
+      "Running UI may not match source HEAD; establish runtime provenance before claiming current behavior",
+      "Historical review findings may already be fixed, especially after #105 through #109",
+      "Live actions can change user data or trigger LLM spend; use read-only navigation and safe isolated fixtures only",
+      "No full accessibility compliance or user-research claim from a heuristic audit"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D1",
+      "decision": "Use the current aria-conductor workspace; inspect current source before asking broad scope questions",
+      "basis": "Current git root, AGENTS.md, README.md and user request"
+    },
+    {
+      "id": "D2",
+      "decision": "Investigate before designing; no implementation in this task",
+      "basis": "User requested investigation and enhancement design, not product changes"
+    },
+    {
+      "id": "D3",
+      "decision": "Use JSON for the delivery ledger; do not create Markdown documentation absent explicit authorization",
+      "basis": "Session file-writing constraints"
+    },
+    {
+      "id": "D4",
+      "decision": "Treat removed LangChain/Python lanes as not applicable to current validation",
+      "basis": "AGENTS.md:7-11 and .github/workflows/ci.yml:3-15"
+    },
+    {
+      "id": "D5",
+      "decision": "Record the explicit post-brief user approval as approval for design continuation only, not for implementation, planning-for-code or release",
+      "basis": "User approved after the brief review and asked to continue; brief.out_of_scope still lists 'No product code yet'; implementation remains NOT_APPROVED"
+    },
+    {
+      "id": "D6",
+      "decision": "Produce design-spec-only flow artifacts and skip the flow-web/flow-mobile code-generation phases",
+      "basis": "The product uses bespoke CSS tokens while both skills require a replacement component stack for code generation; the brief forbids a new framework and product code. Interactive skill confirmations were also skipped because the approved brief fixes scenario, direction and constraints and the host required continuation without new questions. This is disclosed in both artifacts' deviation_from_skill."
+    },
+    {
+      "id": "D7",
+      "decision": "Write an implementation plan in small, independently testable units with disjoint frontend file ownership and concurrent lanes; do not implement until the plan is explicitly approved",
+      "basis": "User requested planning with subagent concurrency for speed and quality; the plan is saved at docs/superpowers/plans/2026-10-27-decision-first-uiux-repairs.md and the Spec -> Plan -> Execute gates remain separate"
+    },
+    {
+      "id": "D8",
+      "decision": "Revise the implementation plan in place for all 10 independent review findings before asking for approval; do not start implementation on a BLOCKED plan",
+      "basis": "Independent plan review returned BLOCKED (5 P1, 5 P2). The revised plan resolves Cancel activation semantics, partial/freshness all-clear, real 409 details, chat grid width, permission honesty, Unattributed rendering, taskless approvals, phase-aware KPIs, the real Toast harness and runs/provider invalidation."
+    }
+  ],
+  "ci_ledger": {
+    "state": "NOT RUN",
+    "reason": "Audit/design phase; no code change or release requested",
+    "mapped_commands": [
+      {
+        "cwd": "agent-control-tower/act-dashboard",
+        "command": "pnpm test -- --coverage",
+        "state": "NOT RUN"
+      },
+      {
+        "cwd": "agent-control-tower/act-dashboard",
+        "command": "pnpm build",
+        "state": "NOT RUN"
+      },
+      {
+        "cwd": "agent-control-tower/act-dashboard",
+        "command": "npx playwright test",
+        "state": "NOT RUN; broad suite may mutate live data or incur spend, inspect and isolate before using"
+      }
+    ]
+  },
+  "evidence_ledger": [
+    {
+      "claim": "Dashboard build and test scripts are tsc -b && vite build and vitest run",
+      "source": "agent-control-tower/act-dashboard/package.json:7-11",
+      "status": "verified-source"
+    },
+    {
+      "claim": "Playwright accepts BASE_URL and has a default 1400x900 viewport",
+      "source": "agent-control-tower/act-dashboard/playwright.config.ts:13-23",
+      "status": "verified-source"
+    },
+    {
+      "claim": "The CI UI lanes use a deterministic backend harness, distinct from the live sandbox workflow",
+      "source": ".github/workflows/ci.yml:3-15,265-303",
+      "status": "verified-source"
+    }
+  ],
+  "handoffs": [
+    {
+      "owner": "Workspace Scout",
+      "assignment": "Read-only current UI/UX reconnaissance",
+      "dispatch": "Confirmed by delegation tool",
+      "status": "INTERRUPTED_FOR_USER_REQUESTED_RECOVERY",
+      "prior_status": "BLOCKED_PENDING_INTERACTION",
+      "diagnostic_provenance": "Controller-authored; fresh user-requested status inspection; evidence below records the pre-recovery snapshot",
+      "evidence": [
+        {
+          "command": "list_chat_sessions(limit=20, archived=false)",
+          "result": "Matching Scout task: runtimeState=waiting-user; pendingInteractionCount=1"
+        },
+        {
+          "command": "read_chat_session(Scout session, turnLimit=1, includeToolOutputs=true)",
+          "result": "runtimeState=waiting-user; pendingInteractionCount=1; queuedTurnCount=0; backgroundAgentCount=0; no assistant text or deliverable; two Bash tool entries marked running, with no returned outputs"
+        },
+        {
+          "command": "wait_chat_sessions(Scout session, timeoutMs=0)",
+          "result": "outcome=needs_attention; runtimeState=waiting-user; pendingInteractionCount=1"
+        }
+      ],
+      "unverified": "Pending interaction details and the underlying Bash commands are not exposed in the returned snapshot. Cannot determine whether this is a permission request or a user question, or approve it without details.",
+      "actions_not_taken": "At the initial inspection no restart, cancellation, duplicate dispatch or permission approval occurred. The later user-authorized interruption is recorded below."
+    }
+  ],
+  "recovery": {
+    "provenance": "Controller-authored from fresh tool results; not a report from the interrupted Team Scout",
+    "authorization": "User explicitly requested: you fix that",
+    "classification": "Workflow unblocked through interruption and an authorized current-workspace read-only fallback; original runtime root cause remains unverified",
+    "evidence": [
+      {
+        "command": "stop_chat_session(Scout session)",
+        "result": "status=interrupted; canceledTurnIds=[]"
+      },
+      {
+        "command": "read_chat_session(Scout session) after stop",
+        "result": "runtimeState=ready; activeTurnId=null; pendingInteractionCount=0; queuedTurnCount=0; backgroundAgentCount=0; both Bash entries ended failed after interruption"
+      },
+      {
+        "command": "git status -sb; git rev-parse --short HEAD; git diff --stat; git diff --check",
+        "result": "main...origin/main; only untracked delivery ledger; HEAD=9ab7ebd4; no tracked diff or whitespace errors; exit=0"
+      },
+      {
+        "command": "SearchWorkspace(current authorized repository)",
+        "result": "Successful source retrieval: 10 canonical routes plus catch-all and shared UI primitives"
+      },
+      {
+        "command": "Agent(general-purpose, foreground, read-only, no Bash)",
+        "result": "Completed research response with 6 candidates; reported 15 unique files read; no writes; tests NOT RUN; browser NOT RUN"
+      }
+    ],
+    "safety": "No unknown request approved; no permission settings changed; no product edits or new services; no duplicate live Scout task",
+    "remaining": "Original pending interaction text and underlying Bash commands were unavailable. Recovery does not establish a Qoder runtime bug fix or successful execution of those canceled Bash calls."
+  },
+  "reconnaissance": {
+    "status": "INITIAL_SOURCE_BRIEF_COMPLETE; NOT A COMPLETE UX AUDIT",
+    "provenance": "Controller-persisted summary of current-workspace search and local read-only subagent report",
+    "routes": [
+      "/",
+      "/crew",
+      "/providers",
+      "/knowledge",
+      "/reports",
+      "/chat",
+      "/workflows",
+      "/ops",
+      "/scheduled-jobs",
+      "/runs"
+    ],
+    "route_evidence": "agent-control-tower/act-dashboard/src/App.tsx:33-43",
+    "candidate_status": "Source-backed candidates; user impact INFERRED; browser and independent review pending",
+    "candidates": [
+      {
+        "id": "C1",
+        "severity": "medium",
+        "title": "Initial Kanban list loading/failure can resemble an empty board",
+        "source": "agent-control-tower/act-dashboard/src/components/KanbanBoard.tsx:159-163,291-299,389-415",
+        "check": "Compare pending, failing and successful-empty GET states in isolated browser fixtures"
+      },
+      {
+        "id": "C2",
+        "severity": "high",
+        "title": "Destructive Confirm receives autofocus; focus containment/restore needs verification",
+        "source": "agent-control-tower/act-dashboard/src/components/ConfirmDialog.tsx:39-73",
+        "check": "Check initial focus, Tab/Shift+Tab and Escape without confirming any real destructive action"
+      },
+      {
+        "id": "C3",
+        "severity": "medium",
+        "title": "Toast announcements and five-second action window may be inaccessible",
+        "source": "agent-control-tower/act-dashboard/src/components/Toast.tsx:94,102-117,128-138",
+        "check": "Keyboard/screen-reader testing; distinguish persistent notification fallback from ephemeral toast"
+      },
+      {
+        "id": "C4",
+        "severity": "medium",
+        "title": "Unmapped aria.notification types still display a no-op View action",
+        "source": "agent-control-tower/act-dashboard/src/components/Toast.tsx:71-94; agent-control-tower/act-dashboard/src/components/__tests__/Toast.test.tsx:336-378",
+        "check": "Inject unmapped and mapped notifications in isolated fixtures; compare visible actions and results"
+      },
+      {
+        "id": "C5",
+        "severity": "low",
+        "title": "Rail route buttons omit link/current-page semantics",
+        "source": "agent-control-tower/act-dashboard/src/components/RailNav.tsx:37-50",
+        "check": "Accessibility tree, current-page announcement and native link operations"
+      },
+      {
+        "id": "C6",
+        "severity": "medium",
+        "title": "Create-item error may discard structured backend recovery information",
+        "source": "agent-control-tower/act-dashboard/src/components/KanbanBoard.tsx:231-234,258-274,707",
+        "check": "Inspect actual backend contract and use intercepted POST rejection fixtures; never mutate live backend"
+      }
+    ],
+    "lead_spot_checks": [
+      "Read Toast.test.tsx:330-379: tests explicitly click View for unmapped notification types and expect no navigation. Source inspection only; not executed.",
+      "Read ConfirmDialog.test.tsx:110-150: tests explicitly expect Confirm autofocus and separately verify destructive styling and no implicit onConfirm. Source inspection only; not executed."
+    ],
+    "constraints": [
+      "Do not label Overview responsive-broken until actual browser geometry and CSS overrides are evaluated",
+      "Retain fleet-wide runtime settings and distinction between new runs and frozen running bindings",
+      "Source currently labels Approval Gates as preview/not backend-enforced; do not imply enforcement",
+      "Toast cap is five from prev.slice(-4) plus the new toast, not four as one search summary stated"
+    ],
+    "not_verified": [
+      "Browser UI",
+      "Screen reader behavior",
+      "Responsive and contrast measurements",
+      "Backend create rejection contract",
+      "All-route journeys",
+      "Tests and builds",
+      "Complete independent review",
+      "Enhancement design"
+    ]
+  },
+  "design_context": {
+    "provenance": "Lead source inspection; no runtime claims or design approval implied",
+    "existing_visual_language": {
+      "source": "agent-control-tower/act-dashboard/src/styles/index.css:6-29,45,114-124,137-153",
+      "system": "Custom CSS tokens; dark navy surfaces, blue brand accents, semantic green/amber/red, system font stack, compact controls. Reuse tokens; do not introduce a replacement component framework."
+    },
+    "historical_designs": [
+      {
+        "source": "docs/superpowers/specs/2026-09-12-uiux-ia-revamp-design.md:3-6,32-78,249-283",
+        "status": "Draft for review with seven locked decisions; not proof all phases approved or implemented",
+        "still_relevant": "Operator-first signals, real-data honesty, explicit decision depth, grouped navigation",
+        "stale": "LangChain/Python runtime references; historic defect counts and line references require fresh checks"
+      },
+      {
+        "source": "docs/superpowers/specs/2026-10-03-review-flow-ux-design.md:15-20,26-34,47-51,82-90,150-156",
+        "status": "Records explicit operator approval; its implementation-not-started heading is historical, not current runtime evidence",
+        "preserve": "Outcome-aware REVIEW cards; card-layer batch with count and new-run warning; native permissions remain separate one-use grants; do not unify approval/card semantics or introduce remembered run_agent grants"
+      }
+    ],
+    "additional_candidates": [
+      {
+        "id": "C7",
+        "severity": "major",
+        "title": "Knowledge owner fallback fabricates per-agent attribution and filters",
+        "source": "agent-control-tower/act-dashboard/src/pages/KnowledgePage.tsx:90-100,203-216,345-390",
+        "proved": "Missing/unresolved agent ownership selects agents by item-id hash; that derived owner drives per-agent counts and review filtering",
+        "impact": "INFERRED: operators may trust ownership and review subsets unsupported by source data",
+        "proposed_acceptance": "Only display verified attribution; missing ownership remains explicitly Shared or Unattributed; adding an unrelated agent cannot reassign displayed ownership"
+      },
+      {
+        "id": "C8",
+        "severity": "major",
+        "title": "Configure mixes real settings with non-persistent permission controls",
+        "source": "agent-control-tower/act-dashboard/src/components/ConfigureModal.tsx:74-89,123-133,249-269,289-295,417-482",
+        "proved": "Skills initialize permission=USE from real skill names, permission edits only set local React state, footer reports full access; gate preview warning exists but controls and Done remain active",
+        "impact": "INFERRED: operators can mistake local illustrative choices for actual enforced policy",
+        "proposed_acceptance": "Present unsupported policy as non-interactive reference or hide it; show only real persisted settings and explicit effective scope. No backend security-policy implementation is implied."
+      },
+      {
+        "id": "C9",
+        "severity": "medium",
+        "title": "Chat heading describes agent-to-agent conversations but items are operator-run transcripts",
+        "source": "agent-control-tower/act-dashboard/src/pages/ChatPage.tsx:173-192,325,448",
+        "proved": "Threads map runs and explicitly set participants to Operator plus one agent; page heading says Agent to Agent Conversations",
+        "impact": "INFERRED: users may look for a cross-agent messaging model that this surface does not represent",
+        "proposed_acceptance": "Use accurate Run conversations wording; any navigation consolidation must preserve transcript and inject-message capabilities"
+      },
+      {
+        "id": "C10",
+        "severity": "major",
+        "title": "Executive summary can describe unknown data as healthy/no pending work",
+        "source": "agent-control-tower/act-dashboard/src/components/ExecutiveSummary.tsx:53-63,83-95,149-160",
+        "proved": "Undefined summary yields degraded=0 and All healthy; undefined kanban data yields waitingAsks=0 and Nothing pending",
+        "impact": "INFERRED: loading or failed reads may look operationally all-clear",
+        "proposed_acceptance": "Unknown/loading/error/empty states remain distinct; absence of a successful query cannot establish healthy or no pending work"
+      },
+      {
+        "id": "C11",
+        "severity": "medium",
+        "title": "Same token metric is labeled Today and Cumulative on different surfaces",
+        "source": "agent-control-tower/act-dashboard/src/components/TopBar.tsx:69,122-124; agent-control-tower/act-dashboard/src/components/ExecutiveSummary.tsx:174-177",
+        "proved": "Both read summary.totalTokensBurned; header says Tokens Today, summary says Cumulative spend",
+        "impact": "INFERRED: metric time scope is ambiguous; backend aggregation range not yet checked",
+        "proposed_acceptance": "Document actual aggregation period and use matching labels everywhere; tokens are not a currency-spend estimate"
+      }
+    ],
+    "already_improved": [
+      "TopBar.tsx:70-86 derives healthy/unavailable/unknown from provider probes rather than agent existence; do not repeat the old always-healthy bug claim.",
+      "KnowledgePage.tsx:83-88 formats null and already-prefixed versions correctly; old v/vv bug must not be carried forward.",
+      "ConfigureModal.tsx:232-245 places the one-time Qoder credential alongside LLM provider setup and keeps fleet Runtime separate; preserve config-once scope."
+    ],
+    "open_design_choice": "Compare operator-first Overview with progressive detail against a Kanban-first layout with trust/state repairs. No existing routes or product behavior will be changed without design approval."
+  },
+  "independent_review": {
+    "status": "C1-C6_SOURCE_REVIEW_COMPLETE; BROWSER_PENDING",
+    "provenance": "Controller-persisted summary of independent local reviewer terminal response; tests executed by reviewer, not Lead",
+    "head": "9ab7ebd4cd0f75660b9aee701cde0a9670f20457",
+    "verdicts": [
+      {
+        "id": "C1",
+        "status": "confirmed-source",
+        "severity": "medium",
+        "qualification": "Initial failed load can resemble empty; failed background refresh with cached data instead lacks stale/error indication. WebSocket ConnectionBanner is not REST-query status.",
+        "source": "agent-control-tower/act-dashboard/src/components/KanbanBoard.tsx:159-163,291-299,389-415; src/components/ExecutiveSummary.tsx:59-63,93-95,155-160; src/api/client.ts:17-34"
+      },
+      {
+        "id": "C2",
+        "status": "confirmed-source; policy-revision-required",
+        "severity": "medium",
+        "qualification": "No local Tab containment/focus restoration. Confirm autofocus is explicitly required by the historical plan, not an implementation regression. Opening the dialog does not execute a mutation. Quick deny is intentionally outside the irreversible-operation confirmation policy.",
+        "source": "agent-control-tower/act-dashboard/src/components/ConfirmDialog.tsx:39-76; docs/superpowers/plans/2026-09-12-uiux-revamp-phase1.md:1009-1017"
+      },
+      {
+        "id": "C3",
+        "status": "confirmed-source; narrowed",
+        "severity": "medium",
+        "qualification": "Five-toast cap and five-second timeout are intentional existing assertions. Missing pause/announcement needs enhancement; blanket notification-loss claim rejected because persisted notification fallback exists. Actual AT behavior unverified.",
+        "source": "agent-control-tower/act-dashboard/src/components/Toast.tsx:94-116,125-139; src/components/NotificationBell.tsx:39-48,171-184; act-aria/src/main/java/io/aria/conductor/aria/service/NotificationService.java:49-63,90-93"
+      },
+      {
+        "id": "C4",
+        "status": "confirmed-source",
+        "severity": "low",
+        "qualification": "Only offer View for a resolved destination; preserve null routing and fine-grained type. approval.expired is a real unmapped producer example.",
+        "source": "agent-control-tower/act-dashboard/src/components/Toast.tsx:71-109; src/utils/notificationRoutes.ts:17-28; act-aria/src/main/java/io/aria/conductor/aria/listener/NotificationTriggerListener.java:63-70"
+      },
+      {
+        "id": "C5",
+        "status": "confirmed-source",
+        "severity": "medium",
+        "qualification": "Navigation landmark and labels exist; native link behavior and programmatic current-page state do not. Configure remains an action button; no IA restructure required for this repair.",
+        "source": "agent-control-tower/act-dashboard/src/components/RailNav.tsx:26-50"
+      },
+      {
+        "id": "C6",
+        "status": "confirmed-source; narrowly-scoped",
+        "severity": "medium",
+        "qualification": "Shared Axios client preserves rejection bodies but create handler only uses err.message. Do not portray template-picker eligibility failure as a synchronous create 409: UI sends agentTemplateId, whereas synchronous eligibility check uses linkedAgentId. Later pickup failures persist as card lastError.",
+        "source": "agent-control-tower/act-dashboard/src/components/KanbanBoard.tsx:231-234,258-274,315-320; src/api/kanban.ts:32-35; src/api/client.ts:17-34; act-execution/src/main/java/io/aria/conductor/execution/kanban/KanbanService.java:257-308; act-execution/src/main/java/io/aria/conductor/execution/kanban/KanbanAutoDispatchListener.java:63-82,118-139"
+      }
+    ],
+    "additional_finding": {
+      "id": "C12",
+      "status": "confirmed-source; browser-pending",
+      "severity": "medium",
+      "title": "Kanban card body lacks keyboard task-opening control",
+      "source": "agent-control-tower/act-dashboard/src/components/KanbanBoard.tsx:448-470",
+      "acceptance": "Provide a named keyboard-operable task-opening control without conflating nested actions or breaking pointer drag/drop"
+    },
+    "test_receipt": {
+      "command": "pnpm --dir D:/project/aria-conductor/agent-control-tower/act-dashboard exec vitest run src/components/__tests__/KanbanBoard.test.tsx src/components/__tests__/ConfirmDialog.test.tsx src/components/__tests__/Toast.test.tsx --no-file-parallelism",
+      "exit_code": 0,
+      "vitest": "2.1.9",
+      "duration_seconds": 13.04,
+      "files_passed": 3,
+      "files_failed": 0,
+      "tests_passed": 81,
+      "tests_failed": 0,
+      "per_file": {
+        "KanbanBoard": 47,
+        "ConfirmDialog": 12,
+        "Toast": 22
+      },
+      "meaning": "Existing assertions pass; this is not UX readiness and does not cover the identified gaps"
+    },
+    "lead_verification": [
+      "Read historical plan lines 1009-1017: confirmed mandated Confirm autofocus and Quick deny exception",
+      "Read KanbanBoard lines 444-473: confirmed clickable/draggable div with no role/tabIndex/keyboard task-opening handler on that body",
+      "Read api/client.ts:17-34: interceptor logs and rethrows rather than normalizing error.message"
+    ],
+    "not_verified": [
+      "Browser/keyboard/assistive-technology behavior",
+      "Live failure scenarios",
+      "C7-C11 independent review",
+      "Full gate",
+      "Hosted CI"
+    ]
+  },
+  "additional_independent_review": {
+    "provenance": "Controller-persisted summary of a separate read-only source reviewer response for C7-C11",
+    "status": "COMPLETE_SOURCE_ONLY",
+    "tests": "NOT RUN; original 81-test receipt not rerun",
+    "verdicts": [
+      {
+        "id": "C7",
+        "status": "confirmed-source",
+        "severity": "medium",
+        "qualification": "Missing or unmatched agentId triggers undisclosed hash attribution used by counts, filters and displayed names. Unknown provenance must be Unattributed, not Shared permission semantics.",
+        "source": "agent-control-tower/act-dashboard/src/pages/KnowledgePage.tsx:90-100,203-216,345-390,493-507,625,653"
+      },
+      {
+        "id": "C8",
+        "status": "confirmed-source",
+        "severity": "medium",
+        "qualification": "Skills metadata is real but permission editing is local-only and its authority claim lacks a preview disclaimer; Gates has a preview warning. Runtime/LLM mutations are real and must remain intact. This is UX honesty, not evidence of authorization bypass.",
+        "source": "agent-control-tower/act-dashboard/src/components/ConfigureModal.tsx:74-89,121-143,249-269,289-295,417-488,528-539; agent-control-tower/act-dashboard/src/pages/SettingsPage.tsx:52-74"
+      },
+      {
+        "id": "C9",
+        "status": "confirmed-source",
+        "severity": "low",
+        "qualification": "Operator-plus-agent run transcripts mislabeled agent-to-agent. Preserve trajectory, persisted message injection and contextual actions before any Runs consolidation. Inject endpoint proves transcript persistence, not core delivery.",
+        "source": "agent-control-tower/act-dashboard/src/pages/ChatPage.tsx:173-192,240-251,293-306,325-328,394-397,448,529; agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/controller/RunToolCallController.java:37-57"
+      },
+      {
+        "id": "C10",
+        "status": "confirmed-source; merged-into-C1",
+        "severity": "medium",
+        "qualification": "All healthy / Nothing pending from unavailable data is the same query-state honesty issue as C1. Count once, cover both surfaces. Do not assume background refetch discards cache.",
+        "source": "agent-control-tower/act-dashboard/src/components/ExecutiveSummary.tsx:53-63,83-95,149-160"
+      },
+      {
+        "id": "C11",
+        "status": "confirmed-source",
+        "severity": "medium",
+        "qualification": "Backend summary sums input/output over findAll(), no date predicate. Use cumulative recorded token usage over retained records, not Today, lifetime-history certainty, or monetary spend.",
+        "source": "agent-control-tower/act-dashboard/src/components/TopBar.tsx:69,122-124; agent-control-tower/act-dashboard/src/components/ExecutiveSummary.tsx:174-177; agent-control-tower/act-dashboard-api/src/main/java/io/aria/conductor/dashboard/controller/DashboardController.java:56-62; agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/repository/PromptCallRepository.java:15-28"
+      }
+    ],
+    "design_constraints": [
+      "Historical 2026-09-12 spec lines 216-222 proposed removing per-agent spaces, hiding gates, read-only skills and merging Chat. An alternative that retains those concepts must explicitly acknowledge a design revision; do not silently erase real capabilities.",
+      "Original C2 autofocus change is a design-policy revision, not a regression fix; focus containment/restoration is independently missing.",
+      "Keep source behavior, inferred user harm, browser measurements and human-tested usability evidence separate."
+    ]
+  },
+  "browser_review": {
+    "status": "BOUNDED_FIXTURE_AUDIT_COMPLETE_WITH_FINDINGS",
+    "provenance": "Browser QA terminal report, complete script and captured JSON reviewed by Lead; supplemental fixture screenshots viewed by Lead",
+    "command": "node docs/reviews/evidence/2026-10-24-uiux/browser-audit.mjs",
+    "prerequisite_command": "pnpm --dir agent-control-tower/act-dashboard exec vite --host localhost --port 5174 --strictPort",
+    "result": {
+      "exit_code": 2,
+      "assertions": 108,
+      "passed": 91,
+      "finding_assertions": 17,
+      "harness_errors": 0,
+      "unknown_fixtures": 0,
+      "inventory_rows": 20,
+      "routes": 10,
+      "viewports": [
+        "1440x900",
+        "390x844"
+      ],
+      "navigation_clicks": 20,
+      "safe_control_scenarios_completed": 19,
+      "safe_control_scenarios_total": 20
+    },
+    "interpretation": "Exit 2 indicates observed UX findings, not harness failure or product readiness. The 17 failing criteria are not 17 distinct bugs.",
+    "new_responsive_findings": [
+      {
+        "surface": "Overview",
+        "measured": "390px viewport: main column 0px, New Item and review-expand pointer-unreachable; expanded review at mobile after desktop opening overflows 718px",
+        "source": "agent-control-tower/act-dashboard/src/pages/OverviewPage.tsx:19-25,50-53",
+        "qualification": "No existing responsive Overview .layout rule was established; do not claim that an inline style overrides one."
+      },
+      {
+        "surface": "Chat",
+        "measured": "390px viewport: transcript column 2px, page overflow 46px",
+        "source": "agent-control-tower/act-dashboard/src/styles/index.css:1757-1764"
+      },
+      {
+        "surface": "Ops",
+        "measured": "390px viewport: two columns approximately 156.8px/101.2px, no document overflow",
+        "source": "agent-control-tower/act-dashboard/src/pages/OpsPage.tsx:315-318; agent-control-tower/act-dashboard/src/styles/index.css:1557-1558",
+        "qualification": "Here the inline grid does override a verified max-width:1100px single-column rule."
+      }
+    ],
+    "candidates_reproduced": [
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "C5",
+      "C6"
+    ],
+    "qualifications": [
+      "C2 Confirm autofocus is observed but changing it remains an explicit design-policy revision; focus escape/restoration are separately demonstrated.",
+      "C6 injected 400 tests loss of a structured message; the title-length fixture is not evidence that the backend enforces that exact length.",
+      "Toast announcement claims concern DOM semantics only, not tested screen-reader speech."
+    ],
+    "safety": {
+      "intercepted_api_requests": 396,
+      "synthetic_rejected_post": 1,
+      "forwarded_api_requests": 0,
+      "real_backend_mutations": 0,
+      "audit_only_server_stopped": true
+    },
+    "runtime_provenance": {
+      "module_source_maps_matched": 9,
+      "css_matched": true,
+      "tracked_frontend_diff": "empty",
+      "backend_runtime_sha": "NOT VERIFIED",
+      "backend_observation": "Health availability changed externally from refused to UP; no backend startup by QA"
+    },
+    "lead_validation": "node --check browser-audit.mjs and programmatic checks of browser-results.json/browser-session.json exited 0: 108=91+17, 20 rows, zero harness errors/unknown fixtures, nine matching source maps and matching CSS",
+    "not_verified": [
+      "Real business flows",
+      "Populated tables and long content",
+      "Other themes/browsers",
+      "Screen readers",
+      "Contrast and performance budgets",
+      "Full build/full tests/hosted CI"
+    ]
+  },
+  "delivery": {
+    "audit_context": "spark-output/context/audit.json",
+    "design_chain_dashboard": "spark-output/dashboard.html",
+    "synthesis": "14 unique findings after merging C10 into C1 and adding three responsive findings; 4 enhancement themes. Severity is UX audit classification, not security scoring.",
+    "design": "User selected B: decision-first Overview retaining the existing Kanban. Preserve the same trust, accessibility and responsive repair scope across all 14 findings.",
+    "approval": "Direction B and Cancel initial focus for destructive confirmations explicitly approved by the user. Quick deny and non-destructive dialogs are unchanged. Detailed spec, implementation plan, product implementation and route removals are not approved. No commit, push or release performed.",
+    "brief_draft": {
+      "status": "REVIEW_DRAFT_CREATED; ONE_INHERITED_TEMPLATE_CHECK_FAILS; NOT_FINAL_APPROVAL",
+      "context_artifact": "spark-output/context/brief.json",
+      "html_artifact": "spark-output/brief/aria-decision-first.html",
+      "verification": {
+        "provenance": "Document producer ran artifact tests; Lead read brief/context/report, inspected screenshot, verified hash, exact template CSS/scripts and all-14-finding traceability",
+        "command": "node spark-output/brief/brief-verify.mjs --append-run",
+        "passed": 42,
+        "failed": 1,
+        "exit_code": 2,
+        "failing_check": "edit-buttons-keyboard-entry-without-hover",
+        "classification": "INHERITED_TEMPLATE_LIMITATION: title/meta edit buttons are visibility:hidden before pointer hover and cannot receive initial keyboard focus. Source template is preserved; no product or installed-skill edits.",
+        "passed_scope": "Three document layouts, no content overflow, theme and scale switching, title/meta editing after hover, actual PNG download, seven cards, CSS/scripts preservation",
+        "export_limit": "Browser and PNG background/bullet spacing differ; no pixel-identical export fidelity claimed",
+        "lead_structural_validation": "PASS: exact CSS/scripts, artifact SHA match, 14 finding IDs, Cancel approval and 42/1 counts; git diff --check exit 0",
+        "scope": "Design document only; no new product verification or implementation"
+      },
+      "type": "Product redesign of an existing operator dashboard",
+      "upstream": "spark-output/context/audit.json; 14 findings and 4 opportunity themes",
+      "primary_user": "Operator managing agent work, reviewing outcomes, supplying input and recovering failed work; based on the selected direction and existing product, not new user research",
+      "business_goal": "Reduce overlooked decisions, wrong actions based on misleading state and effort to recover stalled work; no measured business baseline or improvement percentage claimed",
+      "strategies": [
+        {
+          "dimension": "Information hierarchy",
+          "thesis": "Show required decisions before passive metrics",
+          "tactics": [
+            "Waiting on you with contextual next action",
+            "Needs attention with recovery location",
+            "Existing Kanban promoted only after successful all-clear checks"
+          ]
+        },
+        {
+          "dimension": "Trustworthy interaction",
+          "thesis": "Every state and control must match real capability",
+          "tactics": [
+            "Distinguish pending/error/stale/empty data",
+            "Preserve drafts and actionable server errors",
+            "Remove fabricated ownership and unbacked permission controls"
+          ]
+        },
+        {
+          "dimension": "Responsive and keyboard access",
+          "thesis": "Core work remains operable across viewports and input modes",
+          "tactics": [
+            "Mobile stacked sections and lane/task list",
+            "Thread list/detail navigation preserves context",
+            "Named task controls plus contained/restored dialog focus"
+          ]
+        }
+      ],
+      "design_targets": [
+        "Core flows usable at 375/390/768/1024/1440px without page overflow",
+        "No all-clear from unknown or failed queries",
+        "No dead action or fabricated attribution",
+        "Keyboard navigation and feedback preserve user context"
+      ],
+      "preserve": [
+        "Existing CSS tokens and outcome-aware Kanban",
+        "Distinct card decisions and one-use native permission asks",
+        "Fleet-wide configuration and Configure credential ownership",
+        "Ops and Chat capabilities and routes until any later consolidation is explicitly approved"
+      ],
+      "out_of_scope": [
+        "New backend permission system",
+        "Remembered tool grants",
+        "Runtime/provider replacement",
+        "Unapproved route removal",
+        "Product implementation in the design phase"
+      ],
+      "resolved_policy": "User selected Cancel: irreversible-operation dialogs initially focus Cancel, trap Tab/Shift+Tab, dismiss on Escape/Cancel and restore focus to the trigger or meaningful successor. Enter at initial focus cannot confirm a mutation. Quick deny and non-destructive dialogs are unchanged. This supersedes historical Confirm autofocus only for destructive confirmations, and is not product implementation authorization."
+    },
+    "residual_risks": "Fixture-only browser evidence; no real user research, full accessibility certification, real backend/LLM validation or release gate. Existing 81 unit tests passing does not establish UX readiness."
+  },
+  "detailed_design": {
+    "status": "DRAFT_COMPLETE_DESIGN_ONLY; PENDING_REVIEW",
+    "provenance": "Controller-authored from the approved brief, verified audit findings and read-only source inspection of the current dashboard. No product code, no browser rerun, no implementation plan.",
+    "artifacts": {
+      "desktop": "spark-output/context/flow-web.json",
+      "mobile": "spark-output/context/flow-mobile.json",
+      "session_state": "spark-output/context/_session-state.json",
+      "dashboard": "spark-output/dashboard.html",
+      "validation_script": "spark-output/context/validate-flows.mjs",
+      "dashboard_script": "spark-output/context/build-dashboard.mjs",
+      "dashboard_verifier": "spark-output/context/verify-dashboard.mjs",
+      "dashboard_preview": "spark-output/dashboard-preview.png"
+    },
+    "counts": {
+      "desktop_flows": 8,
+      "desktop_screens": 37,
+      "mobile_flows": 5,
+      "mobile_screens": 19,
+      "audit_coverage": "14/14"
+    },
+    "flows": [
+      {
+        "id": "F1",
+        "name": "Decision triage (Waiting on you)",
+        "screens": 5,
+        "audit_ids": [
+          "audit-04",
+          "audit-05",
+          "audit-14"
+        ]
+      },
+      {
+        "id": "F2",
+        "name": "Recovery (Needs attention)",
+        "screens": 5,
+        "audit_ids": [
+          "audit-04",
+          "audit-09"
+        ]
+      },
+      {
+        "id": "F3",
+        "name": "Create task with honest errors",
+        "screens": 5,
+        "audit_ids": [
+          "audit-09"
+        ]
+      },
+      {
+        "id": "F4",
+        "name": "Board keyboard and destructive confirmation",
+        "screens": 5,
+        "audit_ids": [
+          "audit-05",
+          "audit-14"
+        ]
+      },
+      {
+        "id": "F5",
+        "name": "Feedback lifecycle",
+        "screens": 4,
+        "audit_ids": [
+          "audit-06",
+          "audit-07"
+        ]
+      },
+      {
+        "id": "F6",
+        "name": "Run conversation context",
+        "screens": 4,
+        "audit_ids": [
+          "audit-12"
+        ]
+      },
+      {
+        "id": "F7",
+        "name": "Configuration honesty",
+        "screens": 5,
+        "audit_ids": [
+          "audit-11"
+        ]
+      },
+      {
+        "id": "F8",
+        "name": "Truthful attribution and metric scope",
+        "screens": 4,
+        "audit_ids": [
+          "audit-10",
+          "audit-13"
+        ]
+      },
+      {
+        "id": "M1",
+        "name": "Decision triage on a phone",
+        "screens": 5,
+        "audit_ids": [
+          "audit-01",
+          "audit-05",
+          "audit-08",
+          "audit-14"
+        ]
+      },
+      {
+        "id": "M2",
+        "name": "Board lane navigation on a phone",
+        "screens": 4,
+        "audit_ids": [
+          "audit-01",
+          "audit-14"
+        ]
+      },
+      {
+        "id": "M3",
+        "name": "Run conversations on a phone",
+        "screens": 4,
+        "audit_ids": [
+          "audit-02",
+          "audit-12"
+        ]
+      },
+      {
+        "id": "M4",
+        "name": "Ops stacked sections",
+        "screens": 3,
+        "audit_ids": [
+          "audit-03"
+        ]
+      },
+      {
+        "id": "M5",
+        "name": "Review and destructive confirmation on touch",
+        "screens": 3,
+        "audit_ids": [
+          "audit-05",
+          "audit-14"
+        ]
+      }
+    ],
+    "decisions": [
+      "Decision rows are composed from existing approvals plus board items; if the join is unavailable the row degrades to Run short id and 'task details unavailable' rather than inventing a title.",
+      "Recovery maps only to real capabilities: card transition to Todo (with fresh-run count), Configure, or query refetch. No fake retry endpoint is proposed.",
+      "The approved Cancel-first focus contract applies to destructive dialogs only. Classifying Finalize-run as destructive is a proposal pending review, not part of the approved policy; Quick deny and non-destructive dialogs stay unchanged.",
+      "All-clear/compression requires every contributing source to be successfully loaded and non-stale; loading, error, stale or partial data can never authorize it.",
+      "Batch actions state affected counts; native permission asks remain one-use and excluded from batch.",
+      "Desktop keeps the existing routes and CSS tokens; the Overview gains decision/attention sections above the Kanban and support content moves below.",
+      "Mobile uses the existing responsive H5 product: stacked sections, board lane selector plus list, chat list/transcript modes, Ops stacking. No new framework, native app, route removal or bottom TabBar.",
+      "Skills is a read-only catalog and Gates are hidden or reference-only outside effective settings; real Runtime/LLM/credential mutations are preserved."
+    ],
+    "verification": {
+      "command": "node spark-output/context/validate-flows.mjs",
+      "result": "14 PASS / 0 FAIL; web 8 flows / 37 screens; mobile 5 flows / 19 screens; coverage 14/14; exit 0",
+      "dashboard_command": "node spark-output/context/verify-dashboard.mjs",
+      "dashboard_result": "7 PASS / 0 FAIL; 4 done nodes, 5 phases, timestamp present, 0 console errors, 0 page errors; exit 0",
+      "meaning": "Structural design-artifact validation only. Not product verification, accessibility certification or implementation feasibility."
+    },
+    "independent_review": {
+      "status": "TWO_REVIEW_ROUNDS_COMPLETE; NO_P0_P1_REMAINING; P2_P3_FOLLOWUPS_APPLIED; FINAL_STRUCTURAL_CHECK_PASS",
+      "reviewer": "Independent Reviewer, read-only, no edits/tests/browser",
+      "initial_verdict": "BLOCKED (no P0)",
+      "counts": {
+        "P1": 3,
+        "P2": 8,
+        "P3": 3
+      },
+      "p1_findings": [
+        "Fake pickup retry: TODO -> TODO is a no-op and auto-dispatch is create-only; 'Send back to Todo' cannot retry a TODO pickup failure.",
+        "Create modal invented an acceptance-criteria field and dropped the explicit Backlog target.",
+        "Finalize was treated as destructive in mobile/ledger while marked pending in desktop."
+      ],
+      "lead_verification_before_fix": [
+        "KanbanTransitionService.java:97-113: same-status no-op; TODO -> IN_PROGRESS is the pickup path; BACKLOG/DONE -> TODO dispatches; REVIEW -> TODO requests changes",
+        "KanbanBoard.tsx:640-722: real fields are Title, Description, Priority, Assign; two targets Create in Todo and Backlog; no acceptance field",
+        "ConfirmDialog.tsx:57-76 and TaskDrawer confirmReject: dialog closes before the mutation resolves and has no retry control",
+        "ChatPage.tsx:206-219: no run query-param targeting; auto-selects the first thread",
+        "Toast.tsx:127-140: no dismiss control; NotificationBell persistence is only for persisted notification records",
+        "ConfigureModal.tsx:204-247: System Config tab and real key/value mutations exist",
+        "KnowledgePage.tsx:124,412,636: agent filter and inline detail exist; no owner filter or Back control",
+        "OpsPage.tsx:322,459,573: section headers only; no anchor/open control or action-level retry",
+        "flow-mobile M3-S2 Back incorrectly targeted the composer instead of the thread list"
+      ],
+      "fixes_applied": [
+        "Recovery now maps to the real status-specific transitions (TODO -> IN_PROGRESS, REVIEW -> TODO, DONE -> TODO, BACKLOG -> TODO) with explicit run counts; no batch recovery.",
+        "Create flow restores the real fields and the explicit Create in Todo / Backlog targets.",
+        "Finalize confirmation is labelled a design proposal everywhere, including mobile and the decision log.",
+        "Chat run targeting, Open task from transcript, toast dismiss, dialog failure/retry, Knowledge close detail, Ops anchor/retry and summary removal are labelled design targets.",
+        "System Config is preserved as effective settings; toast durability is scoped to persisted notification records.",
+        "M3-S2 Back now returns to the thread list."
+      ],
+      "re_review": {
+        "verdict": "PASS_WITH_FINDINGS (no P0/P1 remaining)",
+        "result": "9 FIXED / 5 PARTIAL / 0 NOT_FIXED; 4 new minor inconsistencies identified",
+        "followups_applied": [
+          "Recovery labels now carry per-action run counts; DONE/BACKLOG counts made explicit.",
+          "Finalize transition and acceptance text no longer treat classification as mandatory.",
+          "Mobile review Collapse, dialog failure/retry, Ops retry and in-page transitions are labelled design targets.",
+          "Chat run selection route no longer implies query-param support; summary wireframe no longer invents attempt counts.",
+          "Provider rows in the attention queue now expose Open Configure and Retry load; the transcript Open task stays a design target."
+        ],
+        "limit": "Follow-up fixes were checked structurally and against source, but not reviewed a third time by an independent agent. Browser, keyboard and product verification remain NOT RUN."
+      }
+    },
+    "not_verified": [
+      "Real data availability for decision/attention joins",
+      "Implementation feasibility and test impact",
+      "Screen-reader and keyboard behavior in the product",
+      "Contrast and performance budgets",
+      "Any build, full test suite or hosted CI",
+      "User research or measured business impact"
+    ]
+  },
+  "implementation_plan": {
+    "status": "REVIEWED_AND_REVISED; PENDING_USER_APPROVAL; NO_CODE_WRITTEN; NO_BRANCH_CREATED",
+    "artifact": "docs/superpowers/plans/2026-10-27-decision-first-uiux-repairs.md",
+    "scope": "Frontend-only repairs for audit-01..14 in agent-control-tower/act-dashboard; no Java/API/DB, dependency, route or design-system changes",
+    "task_count": 16,
+    "lanes": 5,
+    "max_concurrent_implementers": 6,
+    "wave_schedule": [
+      "Wave 0: baseline + shared state/focus primitives (serial)",
+      "Wave 1: decision queue, attention queue, board query/mobile states, dialog focus, chat mobile (parallel)",
+      "Wave 2: Overview integration, board keyboard/create errors, toast/rail, Ops, Knowledge, Configure (parallel where files are disjoint)",
+      "Wave 3: focused Playwright specs + independent review",
+      "Wave 4: full vitest/coverage/build + QA sign-off",
+      "Wave 5: clean-room, PR, hosted CI and release DoD (requires explicit approval)"
+    ],
+    "ownership_rule": "One writer per file; no implementer git; focused tests only; Lead commits at wave boundaries and runs full gates serially",
+    "verification": "Task-focused Vitest -> wave full Vitest + coverage + build -> focused Playwright -> independent review -> clean-room -> hosted CI at final HEAD",
+    "deferred_design_targets": [
+      "Finalize destructive classification",
+      "run deep links",
+      "transcript-to-task opening",
+      "toast dismiss",
+      "dialog failure retry lifecycle",
+      "Ops anchors/retry",
+      "non-drag keyboard card movement",
+      "route/IA consolidation",
+      "backend permission enforcement"
+    ],
+    "not_verified": [
+      "No implementation started",
+      "No branch, commit, PR, build or CI",
+      "Data joins and implementation feasibility still require execution",
+      "Independent re-review of the revision was attempted but not completed (daily usage limit); Lead self-verification only",
+      "Screen-reader, contrast and performance certification not included"
+    ],
+    "plan_review": {
+      "reviewer": "Independent Reviewer (read-only)",
+      "initial_verdict": "BLOCKED",
+      "findings_total": 10,
+      "findings_p1": 5,
+      "findings_p2": 5,
+      "resolution": "All 10 resolved in the plan revision: Cancel activation semantics and opener capture; partial/freshness-safe all-clear and null counts; real KanbanRejection details and ownership; chat grid track fix; permission model removed and Gates present-disabled; Unattributed space rendered and counted; kanbanItemId join plus taskless decide/inline answer; phase-aware TopBar KPIs; existing Toast harness and two intentional test rewrites; runs-all invalidation, ask-less REVIEW runs and mixed provider fleets",
+      "revalidation": "Plan structure rechecked: 16 tasks, 105 checkboxes, all code fences balanced; no product files changed"
+    },
+    "re_review": {
+      "attempted": "Independent Reviewer (read-only) dispatched after the revision",
+      "result": "NOT RUN - the subagent failed with the daily chat usage limit before producing a report",
+      "fallback": "Lead self-verification: 22/22 resolution checks pass across the 10 findings; 16 tasks, 105 checkboxes, balanced fences (124 fences); source-shape spot checks for Approval.kanbanItemId, KanbanRejection, .chat-shell 320px, runs-all, Toast helpers and ConfirmDialog tests; no product code touched",
+      "residual_risk": "A second independent read of the revised plan has not happened; this is a process gap, not a source-evidence claim",
+      "evidence": "node C:/Users/User/AppData/Local/Temp/aria-finding-check.js -> 22 PASS / 0 FAIL; plan validator -> 16 tasks, 105 checkboxes, fences balanced, required tokens present"
+    }
+  },
+  "verification_wave": {
+    "status": "COMPLETE_BOUNDED_AUDIT; PRODUCT_GATE_NOT_PASSED",
+    "coordination": "Continue using local current-workspace subagents after the confirmed interruption of the original Team Scout; do not resurrect its pending execution or change agent permissions.",
+    "lanes": [
+      {
+        "role": "Browser QA",
+        "ownership": "Exclusive browser owner; may create only new docs/reviews/evidence/2026-10-24-uiux/browser-* evidence files",
+        "task": "Verify available runtime provenance, inspect 10 primary routes on desktop/mobile, and safely reproduce candidates using isolated browser fixtures. Never send mutations to the real backend or invoke LLMs."
+      },
+      {
+        "role": "Independent source reviewer",
+        "ownership": "Read-only source and narrow frontend unit-test execution; no browser or file edits",
+        "task": "Validate or disprove C1-C6 with code and exact tests, including backend create-error contract and shared interceptor behavior. No broad E2E or builds."
+      },
+      {
+        "role": "Delivery Lead",
+        "ownership": "Ledger and new design/audit artifacts only",
+        "task": "Read current design tokens and prior committed design constraints, integrate verified findings, then develop enhancement alternatives."
+      }
+    ],
+    "acceptance": "Evidence identifies source HEAD versus runtime provenance, actual viewports, non-mutating interactions, exact commands and counts; every untested criterion stays NOT VERIFIED. Design follows verified user impact rather than assumed defects."
+  },
+  "next": "Report the green CI evidence and stop. Merge is the human decision; the agent must not merge.",
+  "implementation_wave": {
+    "provenance": "Lead-run implementation wave on branch feat/uiux-decision-first, rebased onto origin/main 605ecbba; all commands run in agent-control-tower/act-dashboard except git.",
+    "plan": "docs/superpowers/plans/2026-10-27-decision-first-uiux-repairs.md",
+    "branch": "feat/uiux-decision-first",
+    "base": "605ecbba",
+    "verification_point": "0950fd0c",
+    "commits": [
+      "04a64d50 feat(uiux): add honest query-state and focus primitives",
+      "7dbc7fef feat(uiux): add decision and attention queues",
+      "9c0b3e8a feat(uiux): decision-first overview with honest summary states",
+      "76fd7f1e feat(uiux): honest board query states and mobile lane selector",
+      "3a5ee76e feat(uiux): keyboard card opener, served create errors, counted batch copy",
+      "e95567d7 feat(uiux): cancel-first destructive dialogs and drawer focus return",
+      "436bc242 feat(uiux): pausable toast live region and real rail links",
+      "8b9a7dde feat(uiux): honest run-conversation copy and single-pane mobile chat",
+      "0802905b fix(uiux): let the Ops grid collapse at the stylesheet breakpoint",
+      "5efaf0c8 fix(uiux): truthful knowledge ownership with an Unattributed bucket",
+      "b8759be3 fix(uiux): make Configure state what this build enforces",
+      "c00dc93f fix(uiux): a failed approvals fetch is an error, not an empty queue",
+      "7c3c76bf fix(uiux): give the phone chat the full width it was promised",
+      "9ad8b2f2 test(uiux): e2e cover the decision-first surfaces on real Chromium",
+      "b6adb9cc fix(uiux): the overview must not inherit the global three-column layout",
+      "541f959e test(uiux): point the Overview regression at the decision queue",
+      "ceb30dbb fix(uiux): Escape must close the drawer from its own focused heading",
+      "28899d7c fix(uiux): attention queue must not hide probe failures behind stale counts",
+      "0db73e93 fix(uiux): knowledge ownership degrades honestly when the agent list fails",
+      "747debd8 fix(uiux): a failed transcript load says so instead of claiming it is empty",
+      "f17b96c9 fix(uiux): the confirm dialog traps focus from anywhere inside it",
+      "3e9742a0 fix(uiux): configure stops advertising a reset that resets nothing",
+      "775c49ee fix(uiux): kanban cards stay draggable and batch actions skip pending asks",
+      "3a8934d6 fix(uiux): each decision row owns its busy state so queues stop re-sorting",
+      "8a4b80f9 fix(uiux): the executive summary marks last-known values as stale"
+    ],
+    "deviations": [
+      "ChatPage gained a .chat-page wrapper class (the inline padding had no CSS hook) so phones can drop page padding.",
+      "All mobile chat overrides are scoped under .chat-page because index.css is injected after page stylesheets and wins at equal specificity; the Task 9 1fr override never applied before this fix.",
+      "Overview page templates are compounded with .layout for the same cascade reason.",
+      "useDecisionQueue: approvals alone own the error phase (found by the decision-first E2E spec).",
+      "TaskDrawer gained a local Escape handler because focus now starts inside the drawer and DrawerContext ignores inner Escape (regression found by Lead self-review)."
+    ],
+    "gates": [
+      {
+        "gate": "wave-full-post-fix",
+        "command": "pnpm test -- --coverage",
+        "result": "72 files / 621 tests passed, exit 0; 74.75% lines, 82.27% branches, 61.16% functions"
+      },
+      {
+        "gate": "build-post-fix",
+        "command": "pnpm build",
+        "result": "tsc -b + vite build, exit 0"
+      },
+      {
+        "gate": "e2e-new-artifact-first-post-fix",
+        "command": "clean-room worktree at 0950fd0c; pnpm build; pnpm preview --port 4176; BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0",
+        "result": "20 passed (42.4s) at 1440x900 / 1024x768 / 390x844 against the built artifact"
+      },
+      {
+        "gate": "e2e-regression-artifact-first-post-fix",
+        "command": "same preview; playwright test e2e/overview-dashboard.spec.ts e2e/notification-toast.spec.ts e2e/configure-modal-close.spec.ts e2e/unknown-route.spec.ts --grep-invert \"seeded agent\"",
+        "result": "6 passed (12.6s); the seeded-agent case is CI-only"
+      },
+      {
+        "gate": "clean-room-post-fix",
+        "command": "git worktree add --detach /d/project/aria-uiux-cleanroom4 0950fd0c; pnpm install --frozen-lockfile; pnpm test -- --coverage; pnpm build",
+        "result": "install exit 0; 72 files / 621 tests passed; coverage identical (74.75/82.27/61.16); build exit 0; no dist/ at checkout"
+      },
+      {
+        "gate": "hosted-ci",
+        "result": "see release.ci_run_id (code HEAD); the final docs-only commit gets its own quick run, reported with the PR"
+      }
+    ],
+    "implementation_review": {
+      "provenance": "Read-only independent reviewer over the full branch diff at 342d8775 plus the in-flight drawer fix; verdict BLOCKED with 12 findings. All fixed on this branch; two High findings (H3, H4) were fixed before the verdict landed and their commits are listed.",
+      "verdict": "BLOCKED -> all 12 findings fixed; gates re-run at the final HEAD",
+      "findings": [
+        {
+          "id": "H1",
+          "severity": "high",
+          "finding": "A failed /adk/providers query was indistinguishable from no providers; the attention phase could never be error and still showed an all-clear.",
+          "fix": "28899d7c"
+        },
+        {
+          "id": "H2",
+          "severity": "high",
+          "finding": "An agent-list failure relabelled every knowledge item Unattributed and claimed no agents exist.",
+          "fix": "0db73e93"
+        },
+        {
+          "id": "H3",
+          "severity": "high",
+          "finding": "Overview lost the media-query cascade to index.css (three-column layout, 260px board).",
+          "fix": "b6adb9cc"
+        },
+        {
+          "id": "H4",
+          "severity": "high",
+          "finding": "Escape could not close the drawer from its own focused heading.",
+          "fix": "ceb30dbb"
+        },
+        {
+          "id": "M1",
+          "severity": "medium",
+          "finding": "Configure gate rows still asserted enforcement under a reference-only panel.",
+          "fix": "3e9742a0"
+        },
+        {
+          "id": "M2",
+          "severity": "medium",
+          "finding": "Runtime tab exposed a Reset to defaults button that reset nothing.",
+          "fix": "3e9742a0"
+        },
+        {
+          "id": "M3",
+          "severity": "medium",
+          "finding": "draggable=false on the card-wide opener removed the pointer drag affordance.",
+          "fix": "775c49ee"
+        },
+        {
+          "id": "M4",
+          "severity": "medium",
+          "finding": "Tab trap only ran while focus was on Cancel/Confirm; clicking the message let Tab escape.",
+          "fix": "f17b96c9"
+        },
+        {
+          "id": "M5",
+          "severity": "medium",
+          "finding": "Queue lock dropped focus when the pointer left; one shared busyId let a second click duplicate a decision.",
+          "fix": "3a8934d6"
+        },
+        {
+          "id": "M6",
+          "severity": "medium",
+          "finding": "A failed transcript fetch rendered \"No messages recorded yet\".",
+          "fix": "747debd8"
+        },
+        {
+          "id": "M7",
+          "severity": "medium",
+          "finding": "REVIEW batch presets included cards with pending asks.",
+          "fix": "775c49ee"
+        },
+        {
+          "id": "L1",
+          "severity": "low",
+          "finding": "Executive summary showed stale runtime/runs values without saying they were last-known.",
+          "fix": "8a4b80f9"
+        }
+      ],
+      "test_quality_notes": [
+        "Every fix landed with a failing test first or a rewritten assertion; no suite was skipped or weakened.",
+        "The drag fix is asserted with an elementFromPoint hit-test because Playwright dragTo synthesizes drags without hit-testing, which would false-pass a non-draggable source.",
+        "The stale-summary test uses waitFor because the assertion ran before the state flush in an earlier attempt."
+      ]
+    },
+    "defects_found_by_e2e": [
+      {
+        "id": "E2E-1",
+        "title": "phone chat kept the 320px desktop track",
+        "evidence": "computed grid-template-columns: 320px 0px at 390px; transcript 334px; document scrollWidth 418",
+        "fix": "6df24ac1"
+      },
+      {
+        "id": "E2E-2",
+        "title": "failed approvals rendered an all-clear",
+        "evidence": "approvals 500 + board 200 produced phase success + partial + zero rows",
+        "fix": "72e9ef68"
+      },
+      {
+        "id": "ART-1",
+        "title": "Overview inherited the global three-column .layout",
+        "evidence": "1024x768 screenshot: 260px board column, empty 340px third column, executive strip vertical text",
+        "fix": "41db98fc"
+      },
+      {
+        "id": "SELF-1",
+        "title": "Escape could not close the drawer from its own focused heading",
+        "evidence": "DrawerContext ignores inner Escape; Task 7 moves focus inside on open",
+        "fix": "64d052f2"
+      }
+    ],
+    "artifact_checks": {
+      "local_evidence": "docs/reviews/evidence/2026-10-27-uiux-release/ (not committed)",
+      "overview_1440x900": "verified by screenshot and assertions (main lane > 700px)",
+      "overview_1024x768": "verified by screenshot and the 1024 case in decision-first-overview.spec.ts",
+      "overview_390x844": "verified programmatically (queue above board, no horizontal overflow)",
+      "mobile_chat": "verified: transcript 306px at 390px, Back preserves row, no overflow",
+      "ops_mobile": "verified: single computed column, no overflow",
+      "configure_honesty": "verified: reference-only copy, inert controls, no permission column",
+      "board_keyboard": "verified: Tab to named opener, Enter opens, Escape closes, focus returns",
+      "destructive_dialog": "verified: cancel-first, Tab trap, Enter does not mutate, Escape dismisses only the dialog"
+    },
+    "not_verified": [
+      "Hosted CI has not run in this session yet; the branch is not pushed at ledger write time.",
+      "Backend-dependent Playwright specs (kanban-hitl, chat-smoke, observability-live, journey suites, seeded overview case) run only in hosted CI.",
+      "Native pointer drag is asserted by hit-test plus draggable state, not by a real mouse drag on CI hardware."
+    ]
+  },
+  "release": {
+    "status": "HOSTED_CI_GREEN",
+    "branch": "feat/uiux-decision-first",
+    "base": "605ecbba",
+    "verification_point": "8a4b80f9",
+    "pr_body": "docs/reviews/2026-10-27-uiux-pr-body.md",
+    "push": "pushed; upstream feat/uiux-decision-first",
+    "pr_url": "https://github.com/HappyLiang12/aria-conductor/pull/115",
+    "ci_run_id": "40554394382",
+    "ci_head": "0950fd0cf275ae20cc2a50a747c9c7554fb01352",
+    "ci_url": "https://github.com/HappyLiang12/aria-conductor/actions/runs/40554394382",
+    "ci_result": "success",
+    "ci_jobs": [
+      {
+        "name": "Frontend Build Check",
+        "conclusion": "success"
+      },
+      {
+        "name": "Detect Changed Trees",
+        "conclusion": "success"
+      },
+      {
+        "name": "Build Backend + Harness Distribution (once)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (api-mcp-app)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (common-agent)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (execution)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (knowledge-aria)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Integration Tests (Failsafe)",
+        "conclusion": "success"
+      },
+      {
+        "name": "TS MCP Server Tests + Coverage",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "E2E Smoke Test (deterministic harness)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Docker Build Verification",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 2/4)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 1/4)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 3/4)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 4/4)",
+        "conclusion": "success"
+      }
+    ],
+    "ci_note": "Java lanes and docker-build also ran on this frontend-only PR; every non-skipped job must be success. This run verifies the product code at 0950fd0c; the documentation-only commit that follows changes no product file and gets its own docs-only run, checked on the PR before reporting."
+  },
+  "defects_found_by_ci": [
+    {
+      "id": "CI-1",
+      "title": "ReviewWorkspace heading focus raced the feedback draft on slow runners",
+      "classification": "product defect (timing race), not a flake to retry away",
+      "evidence": "hosted run 40551694153, Frontend Build Check annotation: src/components/__tests__/ReviewWorkspace.test.tsx:336 AssertionError: expected \"\" to be \"keep my draft\"; the same suite was green locally and in clean-room because the frame landed earlier on faster hardware",
+      "root_cause": "the heading focus was deferred with requestAnimationFrame; on the CI runner the frame landed after the test/operator had focused the Request-changes textarea, so keystrokes went to the heading and the controlled draft stayed empty",
+      "fix": "2027711d - focus synchronously in the opening layout effect; new deterministic test holds every frame callback unrun and asserts the heading already has focus, then asserts a late frame cannot steal the caret from the draft",
+      "red_evidence": "vitest ReviewWorkspace.test.tsx -t \"heading focus in the opening commit\" against the rAF version: 1 failed, heading not focused (focus stayed on the opener button)"
+    },
+    {
+      "id": "CI-2",
+      "title": "Create-form error lost the .kanban-form-error contract the board E2E spec keys off",
+      "classification": "product regression from the structured create-error change (Task 6); the hosted spec was the only coverage of the visual form-error slot",
+      "evidence": "hosted run 40552479882, E2E Playwright shard 2/4: e2e/kanban-board.spec.ts:71 expect(.kanban-form-error).toHaveText(\"Title is required\") - element(s) not found (failed on retry too); shard summary 1 failed / 1 flaky / 60 passed",
+      "root_cause": "the create error was re-rendered through ErrorNotice inside a kanban-create-error wrapper, dropping the kanban-form-error class that carried both the red styling and the spec hook; the board-level slot with that class is suppressed while the modal is open",
+      "fix": "0950fd0c - pass className=\"kanban-form-error\" to the create ErrorNotice and assert the class in the empty-title unit test (text and no-API-call assertions unchanged)",
+      "red_evidence": "unit assertion added against the previous markup fails (closest(.kanban-form-error) is null); hosted shard failure is the end-to-end red"
+    }
+  ],
+  "not_verified": [
+    "Backend-dependent Playwright specs (kanban-hitl, chat-smoke, observability-live, journey suites, seeded overview case) are verified only by the hosted shards, not locally.",
+    "Native pointer drag is asserted by hit-test plus draggable state, not by a real mouse drag on CI hardware."
+  ]
+}

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { KnowledgePage, formatVersion } from '../KnowledgePage';
@@ -23,6 +23,7 @@ vi.mock('../../components/Layout', () => ({
 }));
 
 import { listKnowledge, updateKnowledge, batchReviewKnowledge } from '../../api/knowledge';
+import { listAgents } from '../../api/agents';
 
 function mkItem(over: Partial<KnowledgeItem> = {}): KnowledgeItem {
   return {
@@ -218,5 +219,140 @@ describe('formatVersion', () => {
   });
   it('returns an em dash when the backend sends a whitespace-only value', () => {
     expect(formatVersion('   ')).toBe('—');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 11: ownership is a fact, not an inference. An item without a matching
+// agentId belongs to the Unattributed bucket - never a hash-picked agent and
+// never a "Shared" permission claim.
+// ---------------------------------------------------------------------------
+
+const agentA = {
+  id: 'agent-a', name: 'Agent A', role: 'developer', agentType: 'ADK',
+  healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode',
+  createdAt: '2026-01-01T00:00:00Z',
+} as never;
+const agentB = {
+  id: 'agent-b', name: 'Agent B', role: 'qa', agentType: 'ADK',
+  healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode',
+  createdAt: '2026-01-01T00:00:00Z',
+} as never;
+const agentC = {
+  id: 'agent-c', name: 'Agent C', role: 'reviewer', agentType: 'ADK',
+  healthStatus: 'HEALTHY', description: '', model: '', provider: 'opencode',
+  createdAt: '2026-01-01T00:00:00Z',
+} as never;
+
+function totalOf(button: HTMLElement): number {
+  return Number(button.querySelector('.metrics b')?.textContent ?? Number.NaN);
+}
+
+function spaceButtons(): HTMLElement[] {
+  return Array.from(document.querySelectorAll('.kspace')) as HTMLElement[];
+}
+
+describe('KnowledgePage truthful ownership (Task 11)', () => {
+  beforeEach(() => {
+    vi.mocked(listAgents).mockResolvedValue([agentA, agentB] as never);
+  });
+
+  afterEach(() => {
+    vi.mocked(listAgents).mockResolvedValue([]);
+  });
+
+  it('shows Unattributed for a missing owner and never invents one', async () => {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'item-1', name: 'Legacy import', status: 'APPROVED', agentId: 'missing-agent' } as never),
+    ]);
+    ui();
+
+    expect(await screen.findByRole('button', { name: /unattributed/i })).toBeInTheDocument();
+    expect((await screen.findAllByText('Unattributed')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Shared')).not.toBeInTheDocument();
+  });
+
+  it('does not migrate an unowned item when another agent is added', async () => {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'item-1', agentId: 'missing-agent' } as never),
+    ]);
+
+    const first = ui();
+    expect(totalOf(await screen.findByRole('button', { name: /unattributed/i }))).toBe(1);
+    first.unmount();
+
+    // A third unrelated agent appears: ownership cannot change, because none
+    // was ever derived from the agent list.
+    vi.mocked(listAgents).mockResolvedValue([agentA, agentB, agentC] as never);
+    ui();
+    expect(totalOf(await screen.findByRole('button', { name: /unattributed/i }))).toBe(1);
+    expect(totalOf(screen.getByRole('button', { name: /Agent C/ }))).toBe(0);
+  });
+
+  it('filters the review queue to unowned items from the Unattributed space', async () => {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'owned', name: 'Owned pending', status: 'PENDING', agentId: 'agent-a' } as never),
+      mkItem({ id: 'lost', name: 'Unowned pending', status: 'PENDING', agentId: 'gone' } as never),
+    ]);
+    ui();
+
+    expect(await screen.findByText('Owned pending')).toBeInTheDocument();
+    expect(screen.getByText('Unowned pending')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /unattributed/i }));
+    await waitFor(() => expect(screen.queryByText('Owned pending')).not.toBeInTheDocument());
+    expect(screen.getByText('Unowned pending')).toBeInTheDocument();
+
+    // Toggling the same space again clears the filter.
+    fireEvent.click(screen.getByRole('button', { name: /unattributed/i }));
+    await waitFor(() => expect(screen.getByText('Owned pending')).toBeInTheDocument());
+  });
+
+  it('accounts for every loaded item across real spaces and the Unattributed bucket', async () => {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'k-1', status: 'PENDING', agentId: 'agent-a' } as never),
+      mkItem({ id: 'k-2', status: 'APPROVED', agentId: 'agent-b' } as never),
+      mkItem({ id: 'k-3', status: 'PENDING', agentId: 'gone' } as never),
+      mkItem({ id: 'k-4', status: 'APPROVED' } as never),
+    ]);
+    ui();
+
+    await screen.findByRole('button', { name: /unattributed/i });
+    const spaces = spaceButtons();
+    const total = spaces.reduce((sum, el) => sum + totalOf(el), 0);
+    expect(total).toBe(4);
+  });
+
+  it('labels an unowned approved item Unattributed in the row and the detail', async () => {
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'k-live', name: 'Legacy playbook', status: 'APPROVED', agentId: 'gone' } as never),
+    ]);
+    ui();
+
+    const title = await screen.findByText('Legacy playbook');
+    const row = title.closest('.kitem') as HTMLElement;
+    expect(row.textContent).toContain('Unattributed');
+    expect(screen.queryByText('Shared')).not.toBeInTheDocument();
+
+    fireEvent.click(row);
+    const detail = document.querySelector('.kb-detail .meta') as HTMLElement;
+    expect(detail.textContent).toContain('Unattributed');
+    expect(detail.textContent).not.toContain('Shared');
+  });
+
+  it('never claims an item is Unattributed when the agent list failed to load', async () => {
+    // A failed ownership source is not evidence of missing ownership: the item
+    // must still be listed, but no bucket and no ownership label may be invented.
+    vi.mocked(listAgents).mockRejectedValue(new Error('agents unavailable'));
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'k-live', name: 'Legacy playbook', status: 'APPROVED', agentId: 'agent-a' } as never),
+    ]);
+    ui();
+
+    expect(await screen.findByText('Legacy playbook')).toBeInTheDocument();
+    expect(await screen.findByText(/agent ownership unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Unattributed')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No agents registered yet/i)).not.toBeInTheDocument();
+    expect(spaceButtons()).toHaveLength(0);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import ExecutiveSummary from '../ExecutiveSummary';
@@ -134,5 +134,67 @@ describe('ExecutiveSummary runtime card', () => {
     window.removeEventListener('act:open-configure', listener);
 
     expect(dispatched).toEqual(['runtime']);
+  });
+});
+
+describe('ExecutiveSummary honest states', () => {
+  it('does not claim health or an empty queue while the summary is loading', () => {
+    mockedSummary.mockReturnValue(new Promise(() => {}) as never);
+    mockedAgents.mockReturnValue(new Promise(() => {}) as never);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    expect(screen.queryByText('All healthy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Nothing pending')).not.toBeInTheDocument();
+    expect(screen.queryByText('Waiting on you')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Loading').length).toBeGreaterThan(0);
+  });
+
+  it('shows Unavailable instead of zero when the summary fails', async () => {
+    mockedSummary.mockRejectedValue(new Error('summary down'));
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    expect((await screen.findAllByText('Unavailable')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('All healthy')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cumulative spend')).not.toBeInTheDocument();
+  });
+
+  it('labels retained-record token scope without a spend claim', async () => {
+    mockedAgents.mockResolvedValue([agent({ id: 'a1' })]);
+    mockedRuns.mockResolvedValue([] as never);
+    renderSummary();
+
+    expect(await screen.findByText('Recorded tokens')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText('Cumulative recorded input + output over retained records')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Tokens Used')).not.toBeInTheDocument();
+  });
+
+  it('marks the runtime and the run count as last-known after a failed refresh', async () => {
+    mockedAgents.mockResolvedValue([agent({ id: 'a1', adkProvider: 'qoder', executionMode: 'HOST' })]);
+    mockedRuns.mockResolvedValue([run({ id: 'r1' })] as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ExecutiveSummary />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('qoder/HOST')).toBeTruthy();
+
+    mockedAgents.mockRejectedValue(new Error('agents down'));
+    mockedRuns.mockRejectedValue(new Error('runs down'));
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['agents'] });
+      await client.refetchQueries({ queryKey: ['runs-all'] });
+    });
+
+    // Values stay (last known) and say so instead of passing for fresh data.
+    expect(screen.getByText('qoder/HOST')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getAllByText(/Last known data; refresh failed/).length).toBeGreaterThanOrEqual(2),
+    );
   });
 });

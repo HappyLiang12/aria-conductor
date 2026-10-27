@@ -11,6 +11,7 @@ import { listAgents } from '../api/agents';
 import { apiErrorMessage } from '../api/operatorSession';
 import { presentError } from '../api/errorPresentation';
 import ErrorNotice from '../components/ErrorNotice';
+import { StateNotice } from '../components/StateNotice';
 import { useWebSocketContext } from '../components/Layout';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { formatTimestamp } from '../utils/formatTime';
@@ -87,16 +88,22 @@ export function formatVersion(version: string | number | null | undefined): stri
   return text.startsWith('v') ? text : `v${text}`;
 }
 
+/** Stable key for the bucket that owns every item without a real owner. */
+const UNATTRIBUTED = '__unattributed__';
+
+/**
+ * Truthful ownership: an agent owns an item only when the item names that agent
+ * and the agent exists. Missing/unmatched ownership is a fact about the data —
+ * it must never be replaced by a hash-picked agent (that invented authority).
+ */
 function ownerOf(item: ExtendedKnowledgeItem, agents: Agent[]): Agent | null {
-  if (item.agentId) {
-    const found = agents.find((a) => a.id === item.agentId);
-    if (found) return found;
-  }
-  if (agents.length === 0) return null;
-  // Stable fallback — distribute items across agents by hash of id.
-  let h = 0;
-  for (let i = 0; i < item.id.length; i++) h = (h * 17 + item.id.charCodeAt(i)) >>> 0;
-  return agents[h % agents.length];
+  if (!item.agentId) return null;
+  return agents.find((a) => a.id === item.agentId) ?? null;
+}
+
+/** The single bucket key used by the space map and both filters. */
+function ownerKeyOf(item: ExtendedKnowledgeItem, agents: Agent[]): string {
+  return ownerOf(item, agents)?.id ?? UNATTRIBUTED;
 }
 
 // ---------- Page ---------- //
@@ -110,12 +117,21 @@ export function KnowledgePage() {
     queryKey: ['knowledge'],
     queryFn: () => listKnowledge(),
   });
-  const { data: agentsRaw } = useQuery({
+  const {
+    data: agentsRaw,
+    isLoading: agentsLoading,
+    error: agentsError,
+    refetch: refetchAgents,
+  } = useQuery({
     queryKey: ['agents'],
     queryFn: listAgents,
   });
   const items: ExtendedKnowledgeItem[] = useMemo(() => itemsRaw ?? [], [itemsRaw]);
   const agents: Agent[] = useMemo(() => agentsRaw ?? [], [agentsRaw]);
+  // Ownership labels and buckets are only as trustworthy as the agent list. A
+  // first-load failure means ownership is UNKNOWN, not "nobody owns anything":
+  // every item would otherwise be mislabelled Unattributed.
+  const ownershipKnown = agentsRaw !== undefined;
 
   // ui state
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
@@ -203,18 +219,25 @@ export function KnowledgePage() {
   const itemsByAgent = useMemo(() => {
     const map = new Map<string, ExtendedKnowledgeItem[]>();
     for (const a of agents) map.set(a.id, []);
+    // Seeded even with no agents: unowned items still need a home, and the
+    // bucket must never borrow a real agent's identity.
+    map.set(UNATTRIBUTED, []);
     for (const it of items) {
-      const owner = ownerOf(it, agents);
-      if (!owner) continue;
-      map.get(owner.id)?.push(it);
+      map.get(ownerKeyOf(it, agents))?.push(it);
     }
     return map;
   }, [items, agents]);
 
   const visiblePending = useMemo(() => {
-    if (!activeAgentId) return pending;
-    return pending.filter((it) => ownerOf(it, agents)?.id === activeAgentId);
-  }, [pending, agents, activeAgentId]);
+    if (!ownershipKnown || !activeAgentId) return pending;
+    return pending.filter((it) => ownerKeyOf(it, agents) === activeAgentId);
+  }, [pending, agents, activeAgentId, ownershipKnown]);
+
+  const unattributedItems = itemsByAgent.get(UNATTRIBUTED) ?? [];
+
+  /** Owner display label; unavailable ownership never reads as "Unattributed". */
+  const ownerLabelOf = (item: ExtendedKnowledgeItem): string =>
+    ownerOf(item, agents)?.name ?? (ownershipKnown ? 'Unattributed' : 'ownership unavailable');
 
   const filteredApproved = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -345,15 +368,38 @@ export function KnowledgePage() {
       {/* ---------- 2. Per-Agent Knowledge Spaces ---------- */}
       <section className="panel" style={{ marginBottom: 16 }}>
         <h2>
-          Per-Agent Spaces <span className="accent">/ {agents.length} agents</span>
+          Per-Agent Spaces{' '}
+          <span className="accent">
+            / {ownershipKnown ? `${agents.length} agents` : 'ownership unavailable'}
+          </span>
+          {ownershipKnown && unattributedItems.length > 0 && (
+            <span className="accent"> · {unattributedItems.length} unattributed</span>
+          )}
         </h2>
         <div className="knowledge-spaces">
-          {agents.length === 0 && (
+          {!ownershipKnown && (
+            <div style={{ gridColumn: '1 / -1' }} data-testid="ownership-unavailable">
+              {agentsLoading ? (
+                <StateNotice kind="loading" title="Loading agent spaces…" />
+              ) : (
+                <StateNotice
+                  kind="error"
+                  title="Agent ownership unavailable"
+                  message={apiErrorMessage(agentsError, 'Items are listed without ownership labels.')}
+                  actionLabel="Retry"
+                  onAction={() => {
+                    void refetchAgents();
+                  }}
+                />
+              )}
+            </div>
+          )}
+          {ownershipKnown && agents.length === 0 && (
             <div style={{ gridColumn: '1 / -1', padding: 24, color: 'var(--text-mute)', fontSize: 12, textAlign: 'center' }}>
               No agents registered yet. Create an agent to allocate a knowledge space.
             </div>
           )}
-          {agents.map((a) => {
+          {ownershipKnown && agents.map((a) => {
             const owned = itemsByAgent.get(a.id) ?? [];
             const draft = owned.filter((i) => i.status === 'DRAFT' || i.status === 'PENDING').length;
             const live = owned.filter((i) => i.status === 'APPROVED').length;
@@ -390,6 +436,46 @@ export function KnowledgePage() {
               </button>
             );
           })}
+          {ownershipKnown && unattributedItems.length > 0 && (() => {
+            const owned = unattributedItems;
+            const draft = owned.filter((i) => i.status === 'DRAFT' || i.status === 'PENDING').length;
+            const live = owned.filter((i) => i.status === 'APPROVED').length;
+            const isActive = activeAgentId === UNATTRIBUTED;
+            return (
+              <button
+                type="button"
+                className={`kspace ${isActive ? 'active' : ''}`}
+                onClick={() => setActiveAgentId(isActive ? null : UNATTRIBUTED)}
+                style={{ textAlign: 'left', font: 'inherit', color: 'inherit' }}
+              >
+                <div className="top">
+                  {/* Never a real agent's avatar or name: this bucket means
+                      "no owner recorded", not shared authority. */}
+                  <div style={avatarStyle(UNATTRIBUTED)}>{avatarChar('Unattributed')}</div>
+                  <div>
+                    <div className="name">
+                      <span className="pill dim">Unattributed</span>
+                    </div>
+                    <div className="sub">No owner recorded</div>
+                  </div>
+                </div>
+                <div className="metrics">
+                  <div>
+                    <b>{owned.length}</b>
+                    <span>Total</span>
+                  </div>
+                  <div>
+                    <b>{draft}</b>
+                    <span>In Review</span>
+                  </div>
+                  <div>
+                    <b>{live}</b>
+                    <span>Live</span>
+                  </div>
+                </div>
+              </button>
+            );
+          })()}
         </div>
       </section>
 
@@ -401,7 +487,9 @@ export function KnowledgePage() {
             Submitted For Review{' '}
             <span className="accent">
               / {visiblePending.length} pending
-              {activeAgentId ? ` · ${agents.find((a) => a.id === activeAgentId)?.name}` : ''}
+              {activeAgentId
+                ? ` · ${activeAgentId === UNATTRIBUTED ? 'Unattributed' : agents.find((a) => a.id === activeAgentId)?.name}`
+                : ''}
             </span>
             {activeAgentId && (
               <button
@@ -490,7 +578,6 @@ export function KnowledgePage() {
                 </div>
               )}
               {visiblePending.map((it) => {
-                const owner = ownerOf(it, agents);
                 const checked = checkedIds.has(it.id);
                 return (
                   <div key={it.id} className="kitem" style={{ gridTemplateColumns: 'auto auto 1fr auto' }}>
@@ -504,7 +591,7 @@ export function KnowledgePage() {
                     <div>
                       <div className="ttl">{it.name}</div>
                       <div className="desc">
-                        {owner ? owner.name : 'Unattributed'} · submitted {formatDate(it.createdAt)}
+                        {ownerLabelOf(it)} · submitted {formatDate(it.createdAt)}
                         {it.description ? ` · ${it.description.slice(0, 60)}${it.description.length > 60 ? '…' : ''}` : ''}
                       </div>
                     </div>
@@ -610,7 +697,6 @@ export function KnowledgePage() {
                 </div>
               )}
               {filteredApproved.map((it) => {
-                const owner = ownerOf(it, agents);
                 const isActive = selectedItemId === it.id;
                 return (
                   <div
@@ -622,7 +708,7 @@ export function KnowledgePage() {
                     <div>
                       <div className="ttl">{it.name}</div>
                       <div className="desc">
-                        {formatVersion(it.currentVersion)} · {owner ? owner.name : 'Shared'} · {formatDate(it.createdAt)}
+                        {formatVersion(it.currentVersion)} · {ownerLabelOf(it)} · {formatDate(it.createdAt)}
                       </div>
                     </div>
                     <span style={{ fontSize: 10, color: 'var(--text-mute)', letterSpacing: '.5px' }}>
@@ -650,7 +736,7 @@ export function KnowledgePage() {
                     <span className={`stage ${stageClass(selected)}`} style={{ marginRight: 6 }}>
                       {selected.type}
                     </span>
-                    {formatVersion(selected.currentVersion)} · {ownerOf(selected, agents)?.name ?? 'Shared'} · approved{' '}
+                    {formatVersion(selected.currentVersion)} · {ownerLabelOf(selected)} · approved{' '}
                     {formatDate(selected.createdAt)} · {selected.sensitivity}
                   </div>
                   {selected.type === 'WORKFLOW' && (

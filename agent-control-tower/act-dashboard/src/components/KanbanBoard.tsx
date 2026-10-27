@@ -4,6 +4,8 @@ import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/
 import type { KanbanRejection } from '../api/kanban';
 import { executeHousekeeping } from '../api/housekeeping';
 import { apiErrorMessage } from '../api/operatorSession';
+import { presentError, type PresentedError } from '../api/errorPresentation';
+import { ErrorNotice } from './ErrorNotice';
 import { listAgentTemplates, listAgents } from '../api/agents';
 import type {
   CreateKanbanItemRequest,
@@ -13,8 +15,12 @@ import type {
 } from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
+import { queryPhase } from '../utils/queryState';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { StateNotice } from './StateNotice';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RunOutcomeChip } from './ReviewPanels';
+import '../styles/kanban-flow.css';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
 // that sent { id } silently swallowed every card click (TaskDrawer never opened).
 import { dispatchOpenTaskDrawer, useDrawerContext } from './DrawerContext';
@@ -124,6 +130,10 @@ export default function KanbanBoard() {
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<{
+    presented: PresentedError;
+    details?: KanbanRejection['details'];
+  } | null>(null);
   // Flash kinds: ok/err = transition result; assign = "Aria assigning…" while
   // the pickup's assign phase runs (spec 4.2).
   const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' | 'assign' } | null>(null);
@@ -156,11 +166,14 @@ export default function KanbanBoard() {
     queryFn: listAgentTemplates,
   });
 
-  const { data: items } = useQuery({
+  const { data: items, isPending, isError, isSuccess, refetch } = useQuery({
     queryKey: ['kanban-items'],
     queryFn: () => listKanbanItems(),
     refetchInterval: 12000,
   });
+  const phase = queryPhase({ data: items, isPending, isError, isSuccess });
+  const narrow = useMediaQuery('(max-width: 900px)');
+  const [selectedLane, setSelectedLane] = useState<KanbanStatus>('TODO');
 
   // React instantly to kanban or run lifecycle events from WebSocket.
   // S1 whitelist: high-frequency streaming events (run.progress) must NOT
@@ -214,6 +227,7 @@ export default function KanbanBoard() {
       if (e.key === 'Escape') {
         setShowCreate(false);
         setError(null);
+        setCreateError(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -227,10 +241,14 @@ export default function KanbanBoard() {
       setShowCreate(false);
       setDraft(EMPTY_DRAFT);
       setError(null);
+      setCreateError(null);
     },
     onError: (err: unknown) => {
-      const anyErr = err as { message?: string };
-      setError(anyErr?.message ?? 'Failed to create item');
+      const rejection = (err as { response?: { data?: KanbanRejection } })?.response?.data;
+      setCreateError({
+        presented: presentError(err, 'Create failed.'),
+        details: rejection?.details,
+      });
     },
   });
 
@@ -298,6 +316,10 @@ export default function KanbanBoard() {
     return map;
   }, [items]);
 
+  const visibleColumns = narrow
+    ? COLUMNS.filter((col) => col.key === selectedLane)
+    : COLUMNS;
+
   // H2: quick-clear finished cards (DONE + CANCELLED) via the housekeeping batch.
   // CANCELLED has no column by design (cancel is an action, not a state column);
   // the housekeeping sweep is its only exit, so count both from the list.
@@ -309,7 +331,7 @@ export default function KanbanBoard() {
   const handleCreate = (target: 'TODO' | 'BACKLOG') => {
     const title = draft.title.trim();
     if (!title) {
-      setError('Title is required');
+      setCreateError({ presented: { text: 'Title is required' } });
       return;
     }
     createMutation.mutate({
@@ -378,6 +400,7 @@ export default function KanbanBoard() {
           onClick={() => {
             setShowCreate(true);
             setError(null);
+            setCreateError(null);
           }}
         >
           + New Item
@@ -392,14 +415,59 @@ export default function KanbanBoard() {
         </div>
       )}
 
-      <div className="kanban">
-        <div className="kanban-grid">
-          {COLUMNS.map((col) => {
+      {phase === 'loading' && <StateNotice kind="loading" title="Loading board…" />}
+      {phase === 'error' && (
+        <StateNotice
+          kind="error"
+          title="Board unavailable"
+          message="The kanban items could not be loaded."
+          actionLabel="Retry"
+          onAction={() => { void refetch(); }}
+        />
+      )}
+      {phase === 'stale' && (
+        <StateNotice
+          kind="stale"
+          title="Refresh failed — showing last known board"
+          actionLabel="Retry"
+          onAction={() => { void refetch(); }}
+        />
+      )}
+      {phase === 'success' && (items ?? []).length === 0 && (
+        <StateNotice kind="empty" title="No tasks on the board" />
+      )}
+
+      {items !== undefined && (
+        <div
+          className={narrow ? 'kanban-mobile' : 'kanban'}
+          role={narrow ? 'region' : undefined}
+          aria-label={narrow ? 'Kanban board' : undefined}
+        >
+          {narrow && (
+            <label className="kanban-lane-select">
+              Lane
+              <select
+                aria-label="Select lane"
+                value={selectedLane}
+                onChange={(e) => setSelectedLane(e.target.value as KanbanStatus)}
+              >
+                {COLUMNS.map((col) => (
+                  <option key={col.key} value={col.key}>{col.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className={narrow ? 'kanban-mobile-list' : 'kanban-grid'}>
+            {visibleColumns.map((col) => {
             const columnItems = grouped[col.key] ?? [];
+            // A card with a pending native ask needs an individual decision, so
+            // no batch preset may include it. Counts state only the eligible set.
+            const batchItems = columnItems.filter((it) => !it.pendingAskCount);
+            const heldByAsk = columnItems.length - batchItems.length;
             // Task 8: batch sets come from the same runOutcome filters the
-            // buttons display (Cancel acts on every REVIEW card).
-            const completedItems = columnItems.filter((it) => it.runOutcome === 'COMPLETED');
-            const failedItems = columnItems.filter((it) => it.runOutcome === 'FAILED');
+            // buttons display.
+            const completedItems = batchItems.filter((it) => it.runOutcome === 'COMPLETED');
+            const failedItems = batchItems.filter((it) => it.runOutcome === 'FAILED');
             return (
               <div
                 key={col.key}
@@ -415,7 +483,12 @@ export default function KanbanBoard() {
                   <span className="count">{columnItems.length}</span>
                 </header>
                 {col.isGate && columnItems.length > 0 && (
-                  <div className="batch-actions">
+                  <div
+                    className="batch-actions"
+                    title={heldByAsk > 0
+                      ? `${heldByAsk} card${heldByAsk === 1 ? '' : 's'} with pending asks need${heldByAsk === 1 ? 's' : ''} an individual decision`
+                      : undefined}
+                  >
                     <button
                       disabled={batchRunning || completedItems.length === 0}
                       onClick={() =>
@@ -431,10 +504,10 @@ export default function KanbanBoard() {
                       Rework all failed ({failedItems.length})
                     </button>
                     <button
-                      disabled={batchRunning}
-                      onClick={() => setBatchAction({ kind: 'CANCEL', items: columnItems })}
+                      disabled={batchRunning || batchItems.length === 0}
+                      onClick={() => setBatchAction({ kind: 'CANCEL', items: batchItems })}
                     >
-                      Cancel all ({columnItems.length})
+                      Cancel all ({batchItems.length})
                     </button>
                   </div>
                 )}
@@ -467,8 +540,22 @@ export default function KanbanBoard() {
                         setTimeout(() => setDraggingId(item.id), 0);
                       }}
                       onDragEnd={() => setDraggingId(null)}
-                      onClick={() => dispatchOpenTaskDrawer(item.id)}
                     >
+                      <button
+                        type="button"
+                        className="card-open"
+                        // The opener covers the card body, so it must itself be
+                        // the drag source: a draggable={false} button would
+                        // leave only the padding able to start a drag. dragstart
+                        // bubbles to the card handler above, which moves the
+                        // card; a clean click still opens the drawer.
+                        draggable
+                        aria-label={`Open task ${item.title}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dispatchOpenTaskDrawer(item.id);
+                        }}
+                      >
                       <div className="gateline" />
                       <div className="id">{item.id.slice(0, 8)}</div>
                       <div className="t">{item.title}</div>
@@ -502,6 +589,7 @@ export default function KanbanBoard() {
                           <span className="owner">@{item.assignee}</span>
                         )}
                       </div>
+                      </button>
                       {item.status === 'REVIEW' && (
                         // Full quick decision lives on the card face: approve,
                         // request changes (inline composer) and deny without
@@ -619,8 +707,9 @@ export default function KanbanBoard() {
               </div>
             );
           })}
+          </div>
         </div>
-      </div>
+      )}
 
       {showCreate && (
         <div
@@ -628,6 +717,7 @@ export default function KanbanBoard() {
           onClick={() => {
             setShowCreate(false);
             setError(null);
+            setCreateError(null);
           }}
         >
           <div
@@ -704,7 +794,31 @@ export default function KanbanBoard() {
                   )}
                 </select>
               </label>
-              {error && <div className="kanban-form-error">{error}</div>}
+              {createError && (
+                <div className="kanban-create-error">
+                  {/* kanban-form-error is the form-error contract the board's
+                      E2E spec (and the red styling) already depends on; the
+                      structured details below keep the served reasons. */}
+                  <ErrorNotice className="kanban-form-error" presented={createError.presented} />
+                  {!!createError.details?.reasons?.length && (
+                    <ul className="create-error-details">
+                      {createError.details.reasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {!!createError.details?.excluded?.length && (
+                    <ul className="create-error-details">
+                      {createError.details.excluded.map((entry) => (
+                        <li key={entry.name}>
+                          <strong>{entry.name}</strong>
+                          {entry.reasons.length > 0 ? `: ${entry.reasons.join(', ')}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <div className="modal-actions">
                 <button
                   className="btn primary"
@@ -725,6 +839,7 @@ export default function KanbanBoard() {
                   onClick={() => {
                     setShowCreate(false);
                     setError(null);
+                    setCreateError(null);
                   }}
                 >
                   Close

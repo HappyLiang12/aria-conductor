@@ -170,3 +170,25 @@ describe('OpsPage normalized native asks (Task 15 fix round 1)', () => {
     expect(decide?.headers.get(OPERATOR_CSRF_HEADER)).toBe('csrf-fixture-token');
   });
 });
+
+// Task 10: the two-column Ops layout must collapse to one column at 1100px.
+// The stylesheet already has that rule; an inline track list on the grid would
+// beat it at every width, so the inline style must stay gone.
+describe('OpsPage responsive stacking (Task 10)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    serve([]);
+  });
+
+  afterEach(() => {
+    client.defaults.adapter = originalAdapter;
+    localStorage.clear();
+  });
+
+  it('does not pin the Ops columns inline', () => {
+    const { container } = ui();
+    const grid = container.querySelector('.ops-grid-2') as HTMLElement;
+    expect(grid).not.toBeNull();
+    expect(grid.style.gridTemplateColumns).toBe('');
+  });
+});

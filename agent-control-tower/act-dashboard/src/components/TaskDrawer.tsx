@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -103,12 +103,63 @@ export function TaskDrawer() {
   // transition fires from its Confirm handler. Approve is untouched.
   const [confirmingReject, setConfirmingReject] = useState(false);
 
+  // Task 7 focus contract: opening moves focus to the card heading (the first
+  // thing worth reading), closing returns it to the opener; if the opener is
+  // gone, the close control is the fallback. The opener is captured before the
+  // programmatic focus so a dialog-like open cannot capture its own heading.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const closeRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) {
+      openerRef.current = active;
+    }
+    const raf = requestAnimationFrame(() => headingRef.current?.focus());
+    return () => {
+      cancelAnimationFrame(raf);
+      const opener = openerRef.current;
+      openerRef.current = null;
+      const target = opener?.isConnected ? opener : closeRef.current;
+      // React restores focus to the element that was focused when the commit
+      // began (the heading) after running mutation effects, which would undo a
+      // synchronous restore here. One microtask later the opener wins.
+      queueMicrotask(() => {
+        if (target?.isConnected) target.focus();
+      });
+    };
+  }, [open]);
+
   // The dialog is a sibling of the drawer (fixed positioning needs to escape
   // the drawer's transform). Closing the drawer must therefore drop the gate
   // explicitly, or it would re-open over the next card.
   useEffect(() => {
     if (!open) setConfirmingReject(false);
   }, [open]);
+
+  // Focus starts inside the drawer now, and DrawerContext deliberately ignores
+  // Escape that originates inside it. Keep Escape working for the drawer itself
+  // without stealing the key from a draft or from a dialog stacked on top.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const drawer = document.querySelector('.drawer.open');
+      const target = e.target instanceof Node ? e.target : null;
+      if (!drawer || !target || !drawer.contains(target)) return;
+      if (document.querySelector('.modal-overlay, .modal.open')) return;
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      ) {
+        return;
+      }
+      closeTaskDrawer();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, closeTaskDrawer]);
 
   const taskQuery = useQuery({
     queryKey: ['kanban', 'item', itemId],
@@ -214,7 +265,7 @@ export function TaskDrawer() {
             <div className="id">
               {item ? `TASK · ${item.id.slice(0, 8).toUpperCase()}` : 'TASK'}
             </div>
-            <h3 style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <h3 ref={headingRef} tabIndex={-1} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {item?.title ?? (taskQuery.isLoading ? 'Loading…' : 'Select a task')}
             </h3>
           </div>
@@ -238,7 +289,14 @@ export function TaskDrawer() {
               ⤢ Expand
             </button>
           )}
-          <div className="close" onClick={closeTaskDrawer} role="button" aria-label="Close">
+          <div
+            ref={closeRef}
+            className="close"
+            onClick={closeTaskDrawer}
+            role="button"
+            tabIndex={-1}
+            aria-label="Close"
+          >
             ✕
           </div>
         </header>

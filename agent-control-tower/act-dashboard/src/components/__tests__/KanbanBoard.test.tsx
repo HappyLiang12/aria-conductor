@@ -3,6 +3,8 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import KanbanBoard from '../KanbanBoard';
+import { listKanbanItems } from '../../api/kanban';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { DrawerProvider, useDrawerContext, type DrawerContextValue } from '../DrawerContext';
 import type { KanbanItem, WsEvent } from '../../types';
 
@@ -11,6 +13,7 @@ vi.mock('../../api/kanban', () => ({
   createKanbanItem: vi.fn().mockResolvedValue({ id: 'k-1' }),
   transitionKanbanItem: vi.fn().mockResolvedValue({ id: 'k-1' }),
 }));
+vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: vi.fn(() => false) }));
 vi.mock('../../api/housekeeping', () => ({
   scanHousekeeping: vi.fn(),
   executeHousekeeping: vi.fn().mockResolvedValue({ categories: [], executedAt: 't' }),
@@ -183,7 +186,9 @@ describe('KanbanBoard card click opens the TaskDrawer (regression)', () => {
 
       const card = container.querySelector('[data-card="k-9"]') as HTMLElement;
       expect(card).not.toBeNull();
-      act(() => { card.click(); });
+      act(() => {
+        screen.getByRole('button', { name: 'Open task Click me' }).click();
+      });
 
       // DrawerContext reads detail.itemId — dispatching { id } left the drawer closed.
       expect(received).toHaveLength(1);
@@ -761,7 +766,47 @@ describe('KanbanBoard new-task modal (Task 13)', () => {
     await openModal();
     await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
     expect(screen.getByText('Title is required')).toBeInTheDocument();
+    // The hosted board spec (and the red form-error styling) key off this
+    // class; the structured create error must keep it.
+    expect(screen.getByText('Title is required').closest('.kanban-form-error')).not.toBeNull();
     expect(createKanbanItem).not.toHaveBeenCalled();
+  });
+
+  it('renders the served 409 message and details without a generic status error', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          code: 'AGENT_NOT_ELIGIBLE',
+          message: 'Agent qa-bot cannot receive a card: [MISSING_RUNTIME]',
+          details: { agentId: 'agent-1', reasons: ['MISSING_RUNTIME'] },
+        },
+      },
+    });
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'keep this draft');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+
+    expect(await screen.findByText('Agent qa-bot cannot receive a card: [MISSING_RUNTIME]')).toBeInTheDocument();
+    expect(screen.getByText('MISSING_RUNTIME')).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code 409/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Title *')).toHaveValue('keep this draft');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: /\+ new item/i }));
+    expect(screen.getByLabelText('Title *')).toHaveValue('keep this draft');
+  });
+
+  it('clears the draft only after a successful create', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockResolvedValueOnce(baseItem());
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'created task');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New task' })).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /\+ new item/i }));
+    expect(screen.getByLabelText('Title *')).toHaveValue('');
   });
 
   it('exposes dialog semantics and closes on Escape', async () => {
@@ -857,6 +902,20 @@ describe('KanbanBoard batch decisions on the REVIEW column (Task 8)', () => {
     expect(screen.getByRole('button', { name: 'Rework all failed (2)' })).toBeInTheDocument();
     // Cancel acts on every REVIEW card, regardless of outcome (spec D3/item 5).
     expect(screen.getByRole('button', { name: 'Cancel all (3)' })).toBeInTheDocument();
+  });
+
+  it('never includes a card with a pending ask in a batch preset', async () => {
+    // A card with a native ask needs an individual decision; a batch must not
+    // decide it behind the operator's back.
+    await renderBoard([
+      baseItem({ id: 'k-c1', title: 'completed card', status: 'REVIEW', runOutcome: 'COMPLETED' }),
+      baseItem({ id: 'k-ask', title: 'ask card', status: 'REVIEW', runOutcome: 'COMPLETED', pendingAskCount: 2 }),
+      baseItem({ id: 'k-f1', title: 'failed ask card', status: 'REVIEW', runOutcome: 'FAILED', pendingAskCount: 1 }),
+    ]);
+
+    expect(screen.getByRole('button', { name: 'Accept all completed (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rework all failed (0)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel all (1)' })).toBeInTheDocument();
   });
 
   it('accept-all gates on a count-stating confirm, then transitions each completed card', async () => {
@@ -1006,5 +1065,105 @@ describe('KanbanBoard board-card outcome chip (R-RFUX4)', () => {
     expect(lane.querySelector('[data-card="k-unk"]')!.querySelector('.pill.risk')).toBeNull();
     expect(lane.querySelector('[data-card="k-unk"]')!.textContent).not.toContain('UNKNOWN');
     expect(lane.querySelector('[data-card="k-none"]')!.querySelector('.pill.risk')).toBeNull();
+  });
+});
+
+describe('KanbanBoard honest query states and mobile lane selector', () => {
+  const mockedList = vi.mocked(listKanbanItems);
+  const mockedMedia = vi.mocked(useMediaQuery);
+
+  beforeEach(() => {
+    mockedMedia.mockReturnValue(false);
+    mockedList.mockReset();
+  });
+
+  it('does not turn a failed first load into empty lanes', async () => {
+    mockedList.mockRejectedValue(new Error('network down'));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    expect(await screen.findByTestId('state-notice-error')).toHaveTextContent(/could not be loaded/i);
+    const retry = screen.getByRole('button', { name: /retry/i });
+    expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
+    await userEvent.click(retry);
+    await waitFor(() => expect(mockedList.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('renders a loading notice without fake zero lanes', async () => {
+    mockedList.mockReturnValue(new Promise(() => {}) as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    expect(screen.getByTestId('state-notice-loading')).toHaveTextContent(/loading board/i);
+    expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
+  });
+
+  it('keeps the last known cards and shows a stale notice after a failed refetch', async () => {
+    mockedList
+      .mockResolvedValueOnce([baseItem({ id: 'k-1', title: 'Last known card' })] as never)
+      .mockRejectedValueOnce(new Error('refetch down'));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    expect(await screen.findByText('Last known card')).toBeInTheDocument();
+    await qc.refetchQueries({ queryKey: ['kanban-items'] });
+    expect(await screen.findByTestId('state-notice-stale')).toBeInTheDocument();
+    expect(screen.getByText('Last known card')).toBeInTheDocument();
+  });
+
+  it('shows one selectable lane at narrow widths', async () => {
+    mockedMedia.mockReturnValue(true);
+    mockedList.mockResolvedValue([
+      baseItem({ id: 'k-1', title: 'Review me', status: 'REVIEW' }),
+      baseItem({ id: 'k-2', title: 'Todo item', status: 'TODO' }),
+    ] as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = ui(qc);
+
+    const select = await screen.findByRole('combobox', { name: /select lane/i });
+    expect(select).toHaveValue('TODO');
+    expect(screen.getByText('Todo item')).toBeInTheDocument();
+    expect(screen.queryByText('Review me')).not.toBeInTheDocument();
+    expect(container.querySelector('.kanban-grid')).toBeNull();
+    expect(container.querySelector('.kanban-mobile')).not.toBeNull();
+    expect(screen.getByTestId('lane-TODO')).toBeInTheDocument();
+
+    await userEvent.selectOptions(select, 'REVIEW');
+    expect(screen.getByText('Review me')).toBeInTheDocument();
+    expect(screen.queryByText('Todo item')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
+    mockedMedia.mockReturnValue(false);
+  });
+});
+
+describe('KanbanBoard named keyboard card opener', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    kanbanData = [baseItem({ id: 'k-open', title: 'Keyboard me', status: 'TODO' })];
+    vi.mocked(listKanbanItems).mockImplementation(() => Promise.resolve(kanbanData) as never);
+  });
+
+  it('opens from the named button with Enter, and not from the card body', async () => {
+    const received: Array<Record<string, unknown>> = [];
+    const listener = (e: Event) => received.push((e as CustomEvent).detail);
+    window.addEventListener('act:open-task-drawer', listener);
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { container } = ui(qc);
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+      const card = container.querySelector('[data-card="k-open"]') as HTMLElement;
+      expect(card).not.toBeNull();
+      act(() => { card.click(); });
+      expect(received).toHaveLength(0);
+
+      const opener = screen.getByRole('button', { name: 'Open task Keyboard me' });
+      opener.focus();
+      await userEvent.keyboard('{Enter}');
+      expect(received).toHaveLength(1);
+      expect(received[0]).toEqual({ itemId: 'k-open' });
+    } finally {
+      window.removeEventListener('act:open-task-drawer', listener);
+    }
   });
 });

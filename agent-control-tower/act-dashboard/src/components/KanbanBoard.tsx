@@ -13,8 +13,12 @@ import type {
 } from '../types';
 import { useWebSocketContext } from './Layout';
 import { isKanbanEvent, isRunLifecycleEvent } from '../utils/wsEvents';
+import { queryPhase } from '../utils/queryState';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { StateNotice } from './StateNotice';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RunOutcomeChip } from './ReviewPanels';
+import '../styles/kanban-flow.css';
 // Canonical dispatcher — DrawerContext reads detail.itemId; a local variant
 // that sent { id } silently swallowed every card click (TaskDrawer never opened).
 import { dispatchOpenTaskDrawer, useDrawerContext } from './DrawerContext';
@@ -156,11 +160,14 @@ export default function KanbanBoard() {
     queryFn: listAgentTemplates,
   });
 
-  const { data: items } = useQuery({
+  const { data: items, isPending, isError, isSuccess, refetch } = useQuery({
     queryKey: ['kanban-items'],
     queryFn: () => listKanbanItems(),
     refetchInterval: 12000,
   });
+  const phase = queryPhase({ data: items, isPending, isError, isSuccess });
+  const narrow = useMediaQuery('(max-width: 900px)');
+  const [selectedLane, setSelectedLane] = useState<KanbanStatus>('TODO');
 
   // React instantly to kanban or run lifecycle events from WebSocket.
   // S1 whitelist: high-frequency streaming events (run.progress) must NOT
@@ -298,6 +305,10 @@ export default function KanbanBoard() {
     return map;
   }, [items]);
 
+  const visibleColumns = narrow
+    ? COLUMNS.filter((col) => col.key === selectedLane)
+    : COLUMNS;
+
   // H2: quick-clear finished cards (DONE + CANCELLED) via the housekeeping batch.
   // CANCELLED has no column by design (cancel is an action, not a state column);
   // the housekeeping sweep is its only exit, so count both from the list.
@@ -392,9 +403,50 @@ export default function KanbanBoard() {
         </div>
       )}
 
-      <div className="kanban">
-        <div className="kanban-grid">
-          {COLUMNS.map((col) => {
+      {phase === 'loading' && <StateNotice kind="loading" title="Loading board…" />}
+      {phase === 'error' && (
+        <StateNotice
+          kind="error"
+          title="Board unavailable"
+          message="The kanban items could not be loaded."
+          actionLabel="Retry"
+          onAction={() => { void refetch(); }}
+        />
+      )}
+      {phase === 'stale' && (
+        <StateNotice
+          kind="stale"
+          title="Refresh failed — showing last known board"
+          actionLabel="Retry"
+          onAction={() => { void refetch(); }}
+        />
+      )}
+      {phase === 'success' && (items ?? []).length === 0 && (
+        <StateNotice kind="empty" title="No tasks on the board" />
+      )}
+
+      {items !== undefined && (
+        <div
+          className={narrow ? 'kanban-mobile' : 'kanban'}
+          role={narrow ? 'region' : undefined}
+          aria-label={narrow ? 'Kanban board' : undefined}
+        >
+          {narrow && (
+            <label className="kanban-lane-select">
+              Lane
+              <select
+                aria-label="Select lane"
+                value={selectedLane}
+                onChange={(e) => setSelectedLane(e.target.value as KanbanStatus)}
+              >
+                {COLUMNS.map((col) => (
+                  <option key={col.key} value={col.key}>{col.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <div className={narrow ? 'kanban-mobile-list' : 'kanban-grid'}>
+            {visibleColumns.map((col) => {
             const columnItems = grouped[col.key] ?? [];
             // Task 8: batch sets come from the same runOutcome filters the
             // buttons display (Cancel acts on every REVIEW card).
@@ -619,8 +671,9 @@ export default function KanbanBoard() {
               </div>
             );
           })}
+          </div>
         </div>
-      </div>
+      )}
 
       {showCreate && (
         <div

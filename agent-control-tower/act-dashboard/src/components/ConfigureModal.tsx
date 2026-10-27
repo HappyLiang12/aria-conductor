@@ -9,6 +9,7 @@ import { applyFleetRuntime, listAgents } from '../api/agents';
 import { listAdkProviders } from '../api/adk';
 import { composeRuntimes } from '../utils/runtimeComposition';
 import type { ExecutionMode } from '../types';
+import '../styles/configure-flow.css';
 
 /**
  * Pipeline stages shown in the Approval Gates tab.
@@ -58,35 +59,26 @@ const DEFAULT_GATES: Gate[] = [
   { id: 'g-staging-prod', from: 'staging', to: 'production', label: 'Staging → Production', on: true, role: 'Release Manager', sla: 24 },
 ];
 
-type Permission = 'RO' | 'USE' | 'RW';
-
 interface SkillRow {
   name: string;
   category: string;
   description: string;
-  permission: Permission;
 }
 
 // B2: Skills are loaded from the backend skill registry (GET /api/v1/skills), not hardcoded.
-
-const PERMISSION_OPTIONS: Permission[] = ['RO', 'USE', 'RW'];
+// The registry has no permission field — the UI must not invent one (Task 12).
 
 export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string } = {}) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>(initialTab);
-  const [gates, setGates] = useState<Gate[]>(() => DEFAULT_GATES.map((g) => ({ ...g })));
-  const [skills, setSkills] = useState<SkillRow[]>([]);
 
   // B2: Skills tab is backed by the real skill registry (GET /api/v1/skills), not hardcoded data.
   const { data: realSkills } = useQuery({ queryKey: ['skills'], queryFn: () => listSkills(), enabled: open });
-  useEffect(() => {
-    setSkills((realSkills ?? []).map((s) => ({
-      name: s.name,
-      category: s.category ?? 'General',
-      description: s.description ?? '',
-      permission: 'USE' as Permission,
-    })));
-  }, [realSkills]);
+  const skills: SkillRow[] = (realSkills ?? []).map((s) => ({
+    name: s.name,
+    category: s.category ?? 'General',
+    description: s.description ?? '',
+  }));
 
   // Listen for the rail-nav custom event that opens the modal. The event may
   // carry { detail: { tab } } to open directly on a specific tab (the Overview
@@ -120,26 +112,11 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
 
   const close = () => setOpen(false);
 
-  const toggleGate = (id: string) => {
-    setGates((prev) => prev.map((g) => (g.id === id ? { ...g, on: !g.on } : g)));
-  };
-
-  const updateGate = <K extends keyof Gate>(id: string, key: K, value: Gate[K]) => {
-    setGates((prev) => prev.map((g) => (g.id === id ? { ...g, [key]: value } : g)));
-  };
-
-  const updateSkill = (name: string, permission: Permission) => {
-    setSkills((prev) => prev.map((s) => (s.name === name ? { ...s, permission } : s)));
-  };
-
+  // Gates and skills are reference data in this build; there is no editable
+  // policy state to reset. The control stays on Runtime only (Task 12).
   const resetDefaults = () => {
-    setGates(DEFAULT_GATES.map((g) => ({ ...g })));
-    setSkills((realSkills ?? []).map((s) => ({
-      name: s.name,
-      category: s.category ?? 'General',
-      description: s.description ?? '',
-      permission: 'USE' as Permission,
-    })));
+    /* no editable local policy state: gates/skills come from the build and the
+       real skill registry, and the runtime pair is re-read from the backend. */
   };
 
   return (
@@ -220,14 +197,10 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
 
         <div className="tab-body">
           {activeTab === 'gates' && (
-            <GatesPane
-              gates={gates}
-              onToggle={toggleGate}
-              onChange={updateGate}
-            />
+            <GatesPane gates={DEFAULT_GATES} />
           )}
           {activeTab === 'skills' && (
-            <SkillsPane skills={skills} onChange={updateSkill} />
+            <SkillsPane skills={skills} />
           )}
           {activeTab === 'llm' && (
             <div style={{ padding: '0', margin: '0' }}>
@@ -249,9 +222,9 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
         <footer>
           <div className="info">
             {activeTab === 'gates'
-              ? `${gates.filter((g) => g.on).length} of ${gates.length} gates require human approval`
+              ? 'Reference only — gates are not enforced'
               : activeTab === 'skills'
-              ? `${skills.length} skills configured · ${skills.filter((s) => s.permission === 'RW').length} with full access`
+              ? `${skills.length} skills in the read-only catalog`
               : activeTab === 'llm'
               ? 'Configure LLM providers and the one-time Qoder runtime credential'
               : activeTab === 'runtime'
@@ -259,7 +232,7 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
               : 'Runtime settings stored in the database — changes take effect immediately'}
           </div>
           <div className="actions">
-            {activeTab !== 'llm' && activeTab !== 'config' && (
+            {activeTab === 'runtime' && (
               <button type="button" className="btn" onClick={resetDefaults}>
                 Reset to defaults
               </button>
@@ -276,22 +249,20 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
 
 interface GatesPaneProps {
   gates: Gate[];
-  onToggle: (id: string) => void;
-  onChange: <K extends keyof Gate>(id: string, key: K, value: Gate[K]) => void;
 }
 
-function GatesPane({ gates, onToggle, onChange }: GatesPaneProps) {
+function GatesPane({ gates }: GatesPaneProps) {
   const gateBetween = (from: string, to: string) =>
     gates.find((g) => g.from === from && g.to === to);
 
   return (
     <>
-      <div style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid var(--amber, #f59e0b)', borderRadius: 6, padding: '8px 10px', fontSize: 12, marginBottom: 12 }}>
-        ⚠ Preview — these approval gates are illustrative and are <strong>not yet enforced</strong> by the backend.
+      <div className="configure-reference-note">
+        Reference only — not enforced by the backend. This panel does not change runtime behavior.
       </div>
       <p style={{ color: 'var(--text-dim)', fontSize: 12.5, margin: '0 0 14px' }}>
-        Configure where humans must approve before work flows to the next stage.
-        Toggle a gate on to require sign-off, choose the approver role, and set an SLA.
+        These gate definitions are shown for reference so the intended approval
+        policy stays visible; no control here can enable or change a runtime gate.
       </p>
 
       {/* Pipeline visualisation: stage → gate → stage */}
@@ -360,11 +331,7 @@ function GatesPane({ gates, onToggle, onChange }: GatesPaneProps) {
             </div>
             <div>
               <div className="col-label">Approver</div>
-              <select
-                value={g.role}
-                onChange={(e) => onChange(g.id, 'role', e.target.value)}
-                disabled={!g.on}
-              >
+              <select value={g.role} disabled>
                 {APPROVER_ROLES.map((r) => (
                   <option key={r} value={r}>
                     {r}
@@ -379,8 +346,8 @@ function GatesPane({ gates, onToggle, onChange }: GatesPaneProps) {
                 min={1}
                 max={168}
                 value={g.sla}
-                disabled={!g.on}
-                onChange={(e) => onChange(g.id, 'sla', Number(e.target.value) || 0)}
+                disabled
+                readOnly
               />
             </div>
             <div>
@@ -393,14 +360,8 @@ function GatesPane({ gates, onToggle, onChange }: GatesPaneProps) {
               className={`switch${g.on ? ' on' : ''}`}
               role="switch"
               aria-checked={g.on}
-              tabIndex={0}
-              onClick={() => onToggle(g.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onToggle(g.id);
-                }
-              }}
+              aria-disabled="true"
+              tabIndex={-1}
             />
           </div>
         ))}
@@ -411,29 +372,19 @@ function GatesPane({ gates, onToggle, onChange }: GatesPaneProps) {
 
 interface SkillsPaneProps {
   skills: SkillRow[];
-  onChange: (name: string, permission: Permission) => void;
 }
 
-function SkillsPane({ skills, onChange }: SkillsPaneProps) {
-  const lvlClass = (p: Permission) => (p === 'RW' ? 'lvl rw' : p === 'RO' ? 'lvl ro' : 'lvl');
-
+function SkillsPane({ skills }: SkillsPaneProps) {
   return (
     <>
-      <p style={{ color: 'var(--text-dim)', fontSize: 12.5, margin: '0 0 12px' }}>
-        Define which capabilities the agent fleet may invoke. Levels:{' '}
-        <span className="lvl ro">RO</span> read-only ·{' '}
-        <span className="lvl">USE</span> can execute ·{' '}
-        <span className="lvl rw">RW</span> full read/write.
-      </p>
+      <div className="configure-reference-note">
+        Read-only catalog. No skill permission is editable or enforced in this build.
+      </div>
 
-      <div
-        className="skill-table"
-        style={{ gridTemplateColumns: '1.4fr 1fr 1fr' }}
-      >
+      <div className="skill-table" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
         <div className="row" style={{ display: 'contents' }}>
           <div className="th first">Skill</div>
           <div className="th">Category</div>
-          <div className="th">Permission</div>
         </div>
         {skills.map((sk) => (
           <div key={sk.name} className="row" style={{ display: 'contents' }}>
@@ -456,30 +407,6 @@ function SkillsPane({ skills, onChange }: SkillsPaneProps) {
             </div>
             <div className="cell" style={{ justifyContent: 'flex-start' }}>
               <span className="skill-tag">{sk.category}</span>
-            </div>
-            <div className="cell">
-              <span className={lvlClass(sk.permission)} style={{ marginRight: 8 }}>
-                {sk.permission}
-              </span>
-              <select
-                value={sk.permission}
-                onChange={(e) => onChange(sk.name, e.target.value as Permission)}
-                style={{
-                  padding: '4px 6px',
-                  borderRadius: 6,
-                  background: 'rgba(0,0,0,.25)',
-                  color: 'var(--text)',
-                  border: '1px solid var(--line-2)',
-                  fontSize: 11,
-                  outline: 'none',
-                }}
-              >
-                {PERMISSION_OPTIONS.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
             </div>
           </div>
         ))}

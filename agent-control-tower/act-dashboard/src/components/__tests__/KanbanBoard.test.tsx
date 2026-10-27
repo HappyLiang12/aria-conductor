@@ -186,7 +186,9 @@ describe('KanbanBoard card click opens the TaskDrawer (regression)', () => {
 
       const card = container.querySelector('[data-card="k-9"]') as HTMLElement;
       expect(card).not.toBeNull();
-      act(() => { card.click(); });
+      act(() => {
+        screen.getByRole('button', { name: 'Open task Click me' }).click();
+      });
 
       // DrawerContext reads detail.itemId — dispatching { id } left the drawer closed.
       expect(received).toHaveLength(1);
@@ -767,6 +769,43 @@ describe('KanbanBoard new-task modal (Task 13)', () => {
     expect(createKanbanItem).not.toHaveBeenCalled();
   });
 
+  it('renders the served 409 message and details without a generic status error', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          code: 'AGENT_NOT_ELIGIBLE',
+          message: 'Agent qa-bot cannot receive a card: [MISSING_RUNTIME]',
+          details: { agentId: 'agent-1', reasons: ['MISSING_RUNTIME'] },
+        },
+      },
+    });
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'keep this draft');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+
+    expect(await screen.findByText('Agent qa-bot cannot receive a card: [MISSING_RUNTIME]')).toBeInTheDocument();
+    expect(screen.getByText('MISSING_RUNTIME')).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code 409/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Title *')).toHaveValue('keep this draft');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: /\+ new item/i }));
+    expect(screen.getByLabelText('Title *')).toHaveValue('keep this draft');
+  });
+
+  it('clears the draft only after a successful create', async () => {
+    const { createKanbanItem } = await import('../../api/kanban');
+    vi.mocked(createKanbanItem).mockResolvedValueOnce(baseItem());
+    await openModal();
+    await userEvent.type(screen.getByLabelText('Title *'), 'created task');
+    await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New task' })).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /\+ new item/i }));
+    expect(screen.getByLabelText('Title *')).toHaveValue('');
+  });
+
   it('exposes dialog semantics and closes on Escape', async () => {
     await openModal();
     const dialog = screen.getByRole('dialog', { name: 'New task' });
@@ -1077,5 +1116,37 @@ describe('KanbanBoard honest query states and mobile lane selector', () => {
     expect(screen.queryByText('Todo item')).not.toBeInTheDocument();
     expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
     mockedMedia.mockReturnValue(false);
+  });
+});
+
+describe('KanbanBoard named keyboard card opener', () => {
+  beforeEach(() => {
+    mockCtx = { lastMessage: null, isConnected: false };
+    kanbanData = [baseItem({ id: 'k-open', title: 'Keyboard me', status: 'TODO' })];
+    vi.mocked(listKanbanItems).mockImplementation(() => Promise.resolve(kanbanData) as never);
+  });
+
+  it('opens from the named button with Enter, and not from the card body', async () => {
+    const received: Array<Record<string, unknown>> = [];
+    const listener = (e: Event) => received.push((e as CustomEvent).detail);
+    window.addEventListener('act:open-task-drawer', listener);
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const { container } = ui(qc);
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+
+      const card = container.querySelector('[data-card="k-open"]') as HTMLElement;
+      expect(card).not.toBeNull();
+      act(() => { card.click(); });
+      expect(received).toHaveLength(0);
+
+      const opener = screen.getByRole('button', { name: 'Open task Keyboard me' });
+      opener.focus();
+      await userEvent.keyboard('{Enter}');
+      expect(received).toHaveLength(1);
+      expect(received[0]).toEqual({ itemId: 'k-open' });
+    } finally {
+      window.removeEventListener('act:open-task-drawer', listener);
+    }
   });
 });

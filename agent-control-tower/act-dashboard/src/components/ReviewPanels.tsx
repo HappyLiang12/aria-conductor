@@ -171,12 +171,13 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
       <button
         className="btn primary"
         disabled={resolveAsk.isPending || batchApprovable.length === 0}
+        title={`Approve ${batchApprovable.length} eligible ask${batchApprovable.length === 1 ? '' : 's'} at once`}
         onClick={() => {
           setError(null);
           batchApprovable.forEach((a) => resolveAsk.mutate({ ask: a, approved: true, answer: answers[a.id] || undefined }));
         }}
       >
-        ✓ Approve all
+        ✓ Approve all ({batchApprovable.length})
       </button>
       {nativeAsks.length > 0 && (
         <div className="ask-ctx">
@@ -201,7 +202,7 @@ export function DecisionPanel({ item, pendingAsks }: PanelProps) {
           setRequestFeedback('');
         }}
       >
-        ✎ Request changes
+        ✎ Request changes (starts 1 fresh run)
       </button>
       {error && <ErrorNotice className="kanban-form-error" presented={error} />}
       {operatorRejected && (
@@ -329,7 +330,7 @@ export function ShortApprovalView({
       {error && <ErrorNotice className="kanban-form-error" presented={error} />}
       <div className="ask-actions">
         <button className="btn primary" onClick={() => move.mutate({ status: 'DONE' })}>Approve</button>
-        <button className="btn" onClick={() => { move.mutate({ status: 'TODO', feedback: feedback.trim() || undefined }); setFeedback(''); }}>Request changes</button>
+        <button className="btn" onClick={() => { move.mutate({ status: 'TODO', feedback: feedback.trim() || undefined }); setFeedback(''); }}>Request changes (starts 1 fresh run)</button>
         <button className="btn danger" onClick={() => move.mutate({ status: 'CANCELLED' })}>Deny</button>
       </div>
     </div>

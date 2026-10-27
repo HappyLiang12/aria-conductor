@@ -165,7 +165,7 @@ describe('Toast', () => {
     renderToast();
     emit({
       type: 'aria.notification',
-      payload: { id: 'n-1', title: 'Build finished' },
+      payload: { id: 'n-1', title: 'Build finished', type: 'report.generated' },
       timestamp: 't1',
     });
 
@@ -333,7 +333,7 @@ describe('Toast', () => {
     expect(paths).toContain('/reports');
   });
 
-  it('does not navigate when the notification type has no mapped route', () => {
+  it('does not offer View when the notification type has no mapped route', () => {
     const paths: string[] = [];
     render(
       inRouter(
@@ -349,7 +349,10 @@ describe('Toast', () => {
       timestamp: 't1',
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    // Task 8: no action whose click would be a no-op — the toast renders, the
+    // View button does not, and the route never changes.
+    expect(screen.getByText('Daily brief')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View' })).not.toBeInTheDocument();
     expect(paths).toEqual(['/']);
   });
 
@@ -357,7 +360,7 @@ describe('Toast', () => {
   // notification is deliberately NOT a routing key — only the fine-grained
   // `type` field maps to routes. Keying on resourceType was the original bug:
   // the fine-grained keys never matched, so View was a silent no-op.
-  it('does not navigate when only the coarse resourceType is present', () => {
+  it('does not offer View when only the coarse resourceType is present', () => {
     const paths: string[] = [];
     render(
       inRouter(
@@ -373,7 +376,100 @@ describe('Toast', () => {
       timestamp: 't1',
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(screen.getByText('Build finished')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View' })).not.toBeInTheDocument();
+    expect(paths).toEqual(['/']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 8: the toast stack is a polite live region, hover/focus pauses the
+// expiry clock, and the cap evicts the oldest toast that does not hold focus.
+// ---------------------------------------------------------------------------
+
+describe('Toast lifecycle (Task 8)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is a polite live region and pauses expiry while the stack is hovered', () => {
+    renderToast();
+    emit({ type: 'run.completed', payload: { status: 'COMPLETED' }, timestamp: 't1' });
+    const stack = screen.getByRole('status');
+    expect(stack).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByText('Run Completed')).toBeInTheDocument();
+
+    // React derives onMouseEnter/onMouseLeave from mouseover/mouseout.
+    fireEvent.mouseOver(stack);
+    act(() => { vi.advanceTimersByTime(6000); });
+    expect(screen.getByText('Run Completed')).toBeInTheDocument();
+
+    fireEvent.mouseOut(stack);
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(screen.queryByText('Run Completed')).not.toBeInTheDocument();
+  });
+
+  it('pauses expiry while a toast control holds focus and resumes on blur', () => {
+    renderToast();
+    emit({ type: 'approval.requested', payload: { n: 1 }, timestamp: 't1' });
+    const view = screen.getByRole('button', { name: 'View' });
+
+    act(() => { view.focus(); });
+    act(() => { vi.advanceTimersByTime(6000); });
+    expect(screen.getByText('Approval Needed')).toBeInTheDocument();
+
+    act(() => { view.blur(); });
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(screen.queryByText('Approval Needed')).not.toBeInTheDocument();
+  });
+
+  it('keeps a focused View action when a sixth toast arrives', () => {
+    renderToast();
+    for (let i = 0; i < 5; i += 1) {
+      emit({
+        type: 'aria.notification',
+        payload: { id: `n-${i}`, title: `Notice ${i}`, type: 'run.completed' },
+        timestamp: `t${i}`,
+      });
+    }
+    const viewButtons = screen.getAllByRole('button', { name: 'View' });
+    expect(viewButtons).toHaveLength(5);
+    act(() => { viewButtons[4].focus(); });
+
+    emit({
+      type: 'aria.notification',
+      payload: { id: 'n-5', title: 'Notice 5', type: 'run.completed' },
+      timestamp: 't5',
+    });
+
+    expect(screen.getAllByRole('button', { name: 'View' })).toHaveLength(5);
+    expect(screen.queryByText('Notice 0')).not.toBeInTheDocument();
+    expect(screen.getByText('Notice 5')).toBeInTheDocument();
+    expect(viewButtons[4]).toHaveFocus();
+  });
+
+  it('renders no View action for an unmapped notification type', () => {
+    const paths: string[] = [];
+    render(
+      inRouter(
+        <WsStubProvider>
+          <Toast />
+          <LocationTracker paths={paths} />
+        </WsStubProvider>,
+      ),
+    );
+    emit({
+      type: 'aria.notification',
+      payload: { id: 'n-2', title: 'Daily brief', type: 'brief' },
+      timestamp: 't1',
+    });
+
+    expect(screen.getByText('Daily brief')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View' })).not.toBeInTheDocument();
     expect(paths).toEqual(['/']);
   });
 });

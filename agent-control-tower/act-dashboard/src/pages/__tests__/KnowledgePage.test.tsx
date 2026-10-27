@@ -339,4 +339,20 @@ describe('KnowledgePage truthful ownership (Task 11)', () => {
     expect(detail.textContent).toContain('Unattributed');
     expect(detail.textContent).not.toContain('Shared');
   });
+
+  it('never claims an item is Unattributed when the agent list failed to load', async () => {
+    // A failed ownership source is not evidence of missing ownership: the item
+    // must still be listed, but no bucket and no ownership label may be invented.
+    vi.mocked(listAgents).mockRejectedValue(new Error('agents unavailable'));
+    vi.mocked(listKnowledge).mockResolvedValue([
+      mkItem({ id: 'k-live', name: 'Legacy playbook', status: 'APPROVED', agentId: 'agent-a' } as never),
+    ]);
+    ui();
+
+    expect(await screen.findByText('Legacy playbook')).toBeInTheDocument();
+    expect(await screen.findByText(/agent ownership unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Unattributed')).not.toBeInTheDocument();
+    expect(screen.queryByText(/No agents registered yet/i)).not.toBeInTheDocument();
+    expect(spaceButtons()).toHaveLength(0);
+  });
 });

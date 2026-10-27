@@ -167,6 +167,41 @@ test.describe('kanban keyboard contract', () => {
     expect(transitions).toHaveLength(0);
   });
 
+  test('dragging the card body still starts a native drag and moves the card', async ({ page }) => {
+    // The opener covers the card body; if it refused to be a drag source the
+    // only draggable pixels left would be the card padding.
+    await stubWebSocket(page);
+    await stubApi(page);
+    const transitions: string[] = [];
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && req.url().includes('/transition')) transitions.push(req.url());
+    });
+    await page.goto('/');
+
+    const card = page.locator('[data-card="k-keyboard"]');
+    await expect(card).toBeVisible();
+
+    // The title text is the natural place to grab a card. Its opener must be a
+    // drag source itself: a button with draggable={false} swallows the native
+    // drag while Playwright's synthetic dragTo still succeeds.
+    const hit = await card.evaluate((el) => {
+      const title = el.querySelector('.t') as HTMLElement;
+      const r = title.getBoundingClientRect();
+      const target = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const opener = target?.closest('.card-open');
+      return {
+        tag: target?.tagName ?? null,
+        openerDraggable: opener instanceof HTMLElement ? opener.draggable : null,
+      };
+    });
+    expect(hit.openerDraggable, JSON.stringify(hit)).toBe(true);
+
+    await card.dragTo(page.getByTestId('lane-TODO'));
+
+    await expect.poll(() => transitions.length).toBeGreaterThan(0);
+    expect(transitions[0]).toContain('/kanban/items/k-keyboard/transition');
+  });
+
   test('quick deny stays a single button that moves the card without a dialog', async ({ page }) => {
     await stubWebSocket(page);
     await stubApi(page);

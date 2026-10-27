@@ -68,7 +68,9 @@ export function useDecisionQueue(options: { locked: boolean }): {
   const phase: QueryPhase =
     phases.includes('loading')
       ? 'loading'
-      : approvalPhase === 'error' && kanbanPhase === 'error'
+      // Approvals are the row identity: without them the queue is unknown, not
+      // partially known. A failed board join alone only withholds card context.
+      : approvalPhase === 'error'
         ? 'error'
         : phases.includes('stale')
           ? 'stale'

@@ -82,4 +82,16 @@ describe('useDecisionQueue', () => {
     expect(result.current.rows[0].taskId).toBeNull();
     expect(result.current.count).toBeNull();
   });
+
+  it('reports an error phase when the approvals source fails but the board succeeds', async () => {
+    // Approvals own the row identity: a successful board cannot turn a failed
+    // approvals fetch into an all-clear or a partial view with zero rows.
+    vi.mocked(listApprovals).mockRejectedValue(new Error('approvals unavailable'));
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useDecisionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('error'));
+    expect(result.current.count).toBeNull();
+    expect(result.current.rows).toHaveLength(0);
+  });
 });

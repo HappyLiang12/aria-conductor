@@ -766,6 +766,9 @@ describe('KanbanBoard new-task modal (Task 13)', () => {
     await openModal();
     await userEvent.click(screen.getByRole('button', { name: 'Create in Todo' }));
     expect(screen.getByText('Title is required')).toBeInTheDocument();
+    // The hosted board spec (and the red form-error styling) key off this
+    // class; the structured create error must keep it.
+    expect(screen.getByText('Title is required').closest('.kanban-form-error')).not.toBeNull();
     expect(createKanbanItem).not.toHaveBeenCalled();
   });
 

@@ -65,6 +65,13 @@ describe('AttentionQueue', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/unavailable/i);
   });
 
+  it('shows the stale notice, never the all-clear, when a source failed', () => {
+    renderQueue({ rows: [], phase: 'success', partial: true, count: null });
+    expect(screen.getByText(/refresh failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing needs attention/i)).not.toBeInTheDocument();
+    expect(screen.getByText('—')).toBeInTheDocument();
+  });
+
   it('renders a served action error on the matching row', () => {
     renderQueue({ actionError: { id: pickup.id, presented: { text: 'Pickup was rejected' } } });
     expect(screen.getByRole('alert')).toHaveTextContent('Pickup was rejected');

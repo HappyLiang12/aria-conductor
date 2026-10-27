@@ -312,10 +312,7 @@ export default function OpsPage() {
 
       {/* ---------- 2-column ops grid (wide left, narrow right) ---------- */}
       <HousekeepingPanel />
-      <div
-        className="ops-grid-2"
-        style={{ gridTemplateColumns: 'minmax(0, 1.55fr) minmax(0, 1fr)' }}
-      >
+      <div className="ops-grid-2">
         {/* =================== LEFT COLUMN =================== */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* ----- Approval Queue ----- */}

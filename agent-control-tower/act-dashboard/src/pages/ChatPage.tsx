@@ -10,6 +10,7 @@ import { apiErrorMessage } from '../api/operatorSession';
 import { formatTimestamp } from '../utils/formatTime';
 import { isRunLifecycleEvent } from '../utils/wsEvents';
 import type { Run, Agent, SessionTrajectory } from '../types';
+import '../styles/chat-flow.css';
 
 // ---------- Types ----------
 interface ChatThread {
@@ -145,6 +146,8 @@ function deriveMessages(
 export default function ChatPage() {
   const queryClient = useQueryClient();
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  // Task 9: one pane at a time on narrow screens; desktop shows both.
+  const [mobilePane, setMobilePane] = useState<'list' | 'thread'>('list');
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
   const [injectedByThread, setInjectedByThread] = useState<Record<string, ChatMessage[]>>({});
@@ -266,6 +269,7 @@ export default function ChatPage() {
 
   const handleSelectThread = useCallback((id: string) => {
     setActiveThreadId(id);
+    setMobilePane('thread');
     setReadThreads((prev) => ({ ...prev, [id]: true }));
   }, []);
 
@@ -322,15 +326,16 @@ export default function ChatPage() {
       <div style={{ padding: 16 }}>
         <div className="view-header">
           <div>
-            <h1>💬 Agent ↔ Agent Conversations</h1>
-            <div className="sub">
-              Inter-agent handoffs, clarifications and reviews — fully auditable. Humans can inject
-              messages into any thread.
-            </div>
+            <h1>Run conversations</h1>
+            <div className="sub">Operator and agent transcript for each run</div>
           </div>
         </div>
 
-        <div className="chat-shell">
+        <div
+          className="chat-shell"
+          data-testid="chat-shell"
+          data-mobile-pane={mobilePane}
+        >
           {/* ---------- Thread list ---------- */}
           <div className="chat-list-panel">
             <header>Threads</header>
@@ -373,12 +378,19 @@ export default function ChatPage() {
           {/* ---------- Message panel ---------- */}
           <div className="chat-thread-panel">
             <header>
+              <button
+                type="button"
+                className="chat-back"
+                onClick={() => setMobilePane('list')}
+              >
+                ← Back to conversations
+              </button>
               <div>
                 <div className="h-ttl">
                   {activeThread ? activeThread.title : 'Select a thread'}
                 </div>
                 <div className="h-parts">
-                  {activeThread ? activeThread.participants.join(' ↔ ') : '—'}
+                  {activeThread ? activeThread.participants.join(' · ') : '—'}
                 </div>
               </div>
               <span className="badge governed" style={{ marginLeft: 'auto' }}>
@@ -526,7 +538,7 @@ function ThreadRow({
       </div>
       <div className="preview">{thread.lastMessage}</div>
       <div className="meta">
-        <span>{thread.participants.length} agents</span>
+        <span>{thread.participants.length} participants</span>
         <span>·</span>
         <span>{formatTime(thread.lastTimestamp)}</span>
         <span>·</span>

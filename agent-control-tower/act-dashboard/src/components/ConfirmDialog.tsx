@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef } from 'react';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import '../styles/feedback-flow.css';
 
 /**
@@ -65,32 +65,34 @@ export function ConfirmDialog({
     };
   }, [open, danger]);
 
+  // Escape dismisses; Tab is trapped. The trap lives on the window because a
+  // click on the dialog title or message moves focus to <body>: the next Tab
+  // then targets body and a dialog-scoped handler would never see it, letting
+  // focus reach the page behind an aria-modal dialog.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape') {
+        onCancel();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const first = danger ? cancelRef.current : confirmRef.current;
+      const second = danger ? confirmRef.current : cancelRef.current;
+      e.preventDefault();
+      if (document.activeElement === first) {
+        second?.focus();
+      } else if (document.activeElement === second) {
+        first?.focus();
+      } else {
+        first?.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onCancel]);
+  }, [open, onCancel, danger]);
 
   if (!open) return null;
-
-  // Two controls, so "tab to the other control" is the whole trap: it both
-  // advances and wraps in either direction and never leaks to the background.
-  const trapTab = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Tab') return;
-    const first = danger ? cancelRef.current : confirmRef.current;
-    const second = danger ? confirmRef.current : cancelRef.current;
-    const active = document.activeElement;
-    if (active === first) {
-      e.preventDefault();
-      second?.focus();
-    } else if (active === second) {
-      e.preventDefault();
-      first?.focus();
-    }
-  };
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
@@ -100,7 +102,6 @@ export function ConfirmDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onKeyDown={trapTab}
         // A click inside the dialog body must not reach the backdrop handler.
         onClick={(e) => e.stopPropagation()}
       >

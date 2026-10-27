@@ -323,7 +323,7 @@ export default function ChatPage() {
 
   return (
     <div className="view-zone" data-view="chat">
-      <div style={{ padding: 16 }}>
+      <div className="chat-page">
         <div className="view-header">
           <div>
             <h1>Run conversations</h1>

@@ -1,7 +1,11 @@
 /* Task 9: on narrow screens the conversation shell shows one pane at a time.
    The base .chat-shell (index.css) is a fixed 320px list + fluid transcript on
-   desktop; a single 1fr track is required here or hiding a pane would leave the
-   transcript squeezed into the old 320px track. */
+   desktop; a single minmax(0, 1fr) track is required here or hiding a pane
+   would leave the transcript squeezed into the old 320px track. */
+
+.chat-page {
+  padding: 16px;
+}
 
 .chat-back {
   display: none;
@@ -24,17 +28,41 @@
 }
 
 @media (max-width: 900px) {
-  .chat-shell {
-    grid-template-columns: 1fr;
+  /* The rail still owns 84px on a phone; every pixel of page padding is width
+     the transcript loses, so the conversation surface goes edge to edge. */
+  .chat-page {
+    padding: 0;
+  }
+
+  /* The base .chat-shell rule lives in index.css and is injected after this
+     file, so it wins on equal specificity. Scope every layout override under
+     .chat-page (0,2,0) or the phone would keep the 320px desktop track. */
+  .chat-page .chat-shell {
+    grid-template-columns: minmax(0, 1fr);
     height: auto;
     min-height: 0;
     gap: 0;
   }
 
-  .chat-shell .chat-list-panel,
-  .chat-shell .chat-thread-panel {
+  /* minmax(0, 1fr) alone is not enough: a grid item defaults to
+     min-width:auto, so one wide child (a chip row, a long token) would drag the
+     panel past the viewport and reintroduce horizontal scroll. */
+  .chat-page .chat-shell .chat-list-panel,
+  .chat-page .chat-shell .chat-thread-panel {
     grid-column: 1 / -1;
+    min-width: 0;
     min-height: 0;
+  }
+
+  .chat-page .chat-shell .chat-run-context,
+  .chat-page .chat-shell .chat-stack,
+  .chat-page .chat-shell .chat-compose {
+    min-width: 0;
+  }
+
+  .chat-page .chat-shell .chat-thread-panel header {
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
 
   /* The list pane owns the viewport height; the thread pane fills what is left

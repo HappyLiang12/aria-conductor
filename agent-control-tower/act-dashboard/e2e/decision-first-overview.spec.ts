@@ -182,6 +182,12 @@ test.describe('decision-first overview', () => {
     const permissionRow = page.getByTestId('decision-row-a-perm');
     await expect(permissionRow.getByRole('button', { name: 'Review permission' })).toBeVisible();
     await expect(permissionRow.getByRole('button', { name: /approve all/i })).toHaveCount(0);
+
+    // The main lane must own the decision-first template, not inherit the old
+    // global three-column .layout (260px board column + an empty 340px one).
+    const mainBox = await page.locator('.overview-main').boundingBox();
+    expect(mainBox).not.toBeNull();
+    expect(mainBox!.width).toBeGreaterThan(700);
   });
 
   test('Review opens the in-flow workspace for a task-backed row', async ({ page }) => {
@@ -260,5 +266,34 @@ test.describe('decision-first overview', () => {
     await expect(page.getByTestId('attention-queue')).toHaveAttribute('data-collapsed', 'true');
     await expect(page.getByTestId('decision-queue')).toContainText('No decisions waiting');
     await expect(page.getByTestId('attention-queue')).toContainText('Nothing needs attention');
+  });
+});
+
+test.describe('decision-first overview at 1024x768', () => {
+  test.use({ viewport: { width: 1024, height: 768 } });
+
+  test('stacks the support column under a full-width main lane with no overflow', async ({ page }) => {
+    await stubWebSocket(page);
+    await stubApi(page, { approvals: [CARD_APPROVAL], kanban: [REVIEW_CARD] });
+    await page.goto('/');
+
+    const queue = page.getByTestId('decision-queue');
+    await expect(queue).toContainText('Ship the export');
+
+    // <=1100 collapses to one lane; the support column must sit below it, not
+    // in a stray third column of the old .layout template.
+    const mainBox = await page.locator('.overview-main').boundingBox();
+    const supportBox = await page.locator('.overview-support').boundingBox();
+    const queueBox = await queue.boundingBox();
+    expect(mainBox).not.toBeNull();
+    expect(supportBox).not.toBeNull();
+    expect(mainBox!.width).toBeGreaterThan(800);
+    expect(supportBox!.y).toBeGreaterThan(queueBox!.y);
+
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.clientWidth);
   });
 });

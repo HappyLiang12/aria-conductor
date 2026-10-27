@@ -186,13 +186,19 @@ describe('ConfigureModal honesty (Task 12)', () => {
     screen.getAllByRole('combobox').forEach((c) => expect(c).toBeDisabled());
     screen.getAllByRole('spinbutton').forEach((i) => expect(i).toBeDisabled());
     expect(screen.queryByRole('button', { name: /reset to defaults/i })).not.toBeInTheDocument();
+
+    // Row copy must not claim runtime behaviour the build does not enforce.
+    expect(screen.queryByText(/Human approval required before work flows on/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Blocks until approved/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Policy target:/).length).toBeGreaterThan(0);
   });
 
-  it('keeps Reset to defaults and the real apply control on Runtime', async () => {
+  it('keeps the real apply control on Runtime and offers no no-op Reset', async () => {
     await renderTab('runtime');
 
     expect(await screen.findByRole('button', { name: /apply to all agents/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /reset to defaults/i })).toBeInTheDocument();
+    // There is no editable local policy state, so a Reset button could only lie.
+    expect(screen.queryByRole('button', { name: /reset to defaults/i })).not.toBeInTheDocument();
   });
 
   it('keeps the System Config panel and its per-key save/reset controls', async () => {

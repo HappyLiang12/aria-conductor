@@ -650,6 +650,20 @@ describe('TaskDrawer focus contract (Task 7)', () => {
     expect((note as HTMLTextAreaElement).value).toBe('keep this draft');
   });
 
+  it('Escape on the focused heading closes the drawer', async () => {
+    // Opening moves focus INTO the drawer, and DrawerContext ignores Escape
+    // that originates inside it. Without a drawer-local handler, a keyboard
+    // user who just tabbed to the heading could not Escape out.
+    renderDrawer();
+    openTaskDrawerEvent();
+    const heading = await screen.findByRole('heading', { name: 'Spec task' });
+    await waitFor(() => expect(heading).toHaveFocus());
+
+    fireEvent.keyDown(heading, { key: 'Escape' });
+
+    expect(screen.getByTestId('task-open').textContent).toBe('false');
+  });
+
   it('falls back to the close control when the opener is gone', async () => {
     const opener = document.createElement('button');
     opener.textContent = 'Open card';

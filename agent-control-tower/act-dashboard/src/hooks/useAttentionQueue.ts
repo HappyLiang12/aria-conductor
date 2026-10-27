@@ -57,14 +57,21 @@ export function useAttentionQueue(options: { locked: boolean }): {
   const runsPhase = queryPhase(runsQuery);
   const providersPhase = queryPhase(providersQuery);
   const providerCount = providersQuery.data?.length ?? 0;
+  // A failed provider LIST is an error, not "no providers configured": treating
+  // it as success pinned the whole queue at success and made the error phase
+  // unreachable while nothing had actually loaded.
   const probePhase: QueryPhase =
-    providerCount === 0
-      ? 'success'
-      : healthResults.some((result) => result.isPending)
-        ? 'loading'
-        : healthResults.some((result) => result.isError)
-          ? healthResults.every((result) => result.data === undefined) ? 'error' : 'stale'
-          : 'success';
+    providersPhase === 'loading'
+      ? 'loading'
+      : providersPhase === 'error'
+        ? 'error'
+        : providerCount === 0
+          ? 'success'
+          : healthResults.some((result) => result.isPending)
+            ? 'loading'
+            : healthResults.some((result) => result.isError)
+              ? healthResults.every((result) => result.data === undefined) ? 'error' : 'stale'
+              : 'success';
 
   const phases = [kanbanPhase, runsPhase, providersPhase, probePhase];
   const partial =

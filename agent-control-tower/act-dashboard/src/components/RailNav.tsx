@@ -1,4 +1,4 @@
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 interface RailItem {
   path: string;
@@ -21,7 +21,6 @@ const ITEMS: RailItem[] = [
 
 export function RailNav() {
   const location = useLocation();
-  const navigate = useNavigate();
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
@@ -36,18 +35,22 @@ export function RailNav() {
   return (
     <aside className="rail" role="navigation" aria-label="Main views">
       {ITEMS.map((item) => (
-        <button
+        // Real links, not buttons: middle-click, open-in-new-tab, focus order
+        // and assistive-tech semantics come free; aria-current names the
+        // current view. Task 8.
+        <Link
           key={item.path}
-          type="button"
+          to={item.path}
           className={`rail-btn${isActive(item.path) ? ' active' : ''}`}
           data-view={item.label.toLowerCase()}
-          onClick={() => navigate(item.path)}
+          aria-current={isActive(item.path) ? 'page' : undefined}
+          style={{ textDecoration: 'none' }}
         >
           <span className="ico" aria-hidden="true">
             {item.icon}
           </span>
           {item.label}
-        </button>
+        </Link>
       ))}
 
       <div className="rail-sep" />

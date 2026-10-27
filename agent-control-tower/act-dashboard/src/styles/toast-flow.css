@@ -1,0 +1,19 @@
+/* Task 8: the toast stack is a polite live region that pauses on hover/focus.
+   Only toast-specific rules live here; base toast visuals stay in index.css. */
+
+.toast-container:focus-within {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+/* A paused toast stays readable; keep the transient stack from shifting under
+   the pointer while it is hovered. */
+.toast-container:hover .toast-item {
+  pointer-events: auto;
+}
+
+.toast-item:has(button:focus-visible) {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 2px;
+}

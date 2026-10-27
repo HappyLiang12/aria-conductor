@@ -1,22 +1,29 @@
-/* Decision-first Overview: queues first, board and support below. */
-.overview-grid {
+/* Decision-first Overview: queues first, board and support below.
+
+   These rules are compounded with .layout on purpose. index.css is imported
+   after every page stylesheet (main.tsx imports App before ./styles/index.css),
+   so its single-class .layout rule wins the cascade at equal specificity: an
+   unscoped .overview-grid would keep the old 260px / 1fr / 340px three-column
+   template, put the board in the 260px column and leave the third column empty.
+   .layout.overview-grid (0,2,0) is immune to injection order. */
+.layout.overview-grid {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   align-items: start;
 }
-.overview-grid--review { grid-template-columns: minmax(0, 1fr); }
+.layout.overview-grid--review { grid-template-columns: minmax(0, 1fr); }
 .overview-main { min-width: 0; }
 .overview-support { min-width: 0; }
 .overview-queues { display: flex; flex-direction: column; gap: 0; }
-.overview-strip {
+.layout.overview-strip {
   grid-template-columns: repeat(4, minmax(240px, 1fr));
   padding: 0 16px 16px;
 }
 @media (max-width: 1180px) {
-  .overview-strip { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
+  .layout.overview-strip { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
 }
 @media (max-width: 1100px) {
-  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .layout.overview-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
-  .overview-strip { grid-template-columns: minmax(0, 1fr); }
+  .layout.overview-strip { grid-template-columns: minmax(0, 1fr); }
 }

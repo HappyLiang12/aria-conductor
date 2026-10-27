@@ -25,7 +25,7 @@ function renderQueue(over: Partial<React.ComponentProps<typeof DecisionQueue>> =
       phase="success"
       partial={false}
       count={1}
-      onRetry={vi.fn()}
+      retry={vi.fn()}
       onActivate={vi.fn()}
       onDecide={vi.fn()}
       onAnswer={vi.fn()}
@@ -52,7 +52,7 @@ describe('DecisionQueue', () => {
     rerender(
       <DecisionQueue
         rows={[]} phase="error" partial={false} count={null}
-        onRetry={vi.fn()} onActivate={vi.fn()} onDecide={vi.fn()} onAnswer={vi.fn()}
+        retry={vi.fn()} onActivate={vi.fn()} onDecide={vi.fn()} onAnswer={vi.fn()}
         collapsed={false}
       />,
     );

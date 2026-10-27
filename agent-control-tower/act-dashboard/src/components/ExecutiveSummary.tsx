@@ -4,9 +4,9 @@ import { listKanbanItems } from '../api/kanban';
 import { listRuns } from '../api/runs';
 import { listKnowledge } from '../api/knowledge';
 import { listAgents } from '../api/agents';
-import { dispatchOpenTaskDrawer } from './DrawerContext';
 import { composeRuntimes, effectiveRuntimeOf } from '../utils/runtimeComposition';
-import type { KanbanItem, RunStatus } from '../types';
+import { queryPhase, type QueryPhase } from '../utils/queryState';
+import type { RunStatus } from '../types';
 
 /** The run statuses after which no core/mode migration is ever relevant. */
 const TERMINAL_RUN_STATUSES: RunStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED', 'ABORTED'];
@@ -49,36 +49,56 @@ function formatNumber(n: number | undefined): string {
   return n.toLocaleString();
 }
 
+function phaseDetail(phase: QueryPhase): string | null {
+  if (phase === 'loading') return 'Loading';
+  if (phase === 'error') return 'Unavailable';
+  if (phase === 'stale') return 'Last known data; refresh failed';
+  return null;
+}
+
 export default function ExecutiveSummary() {
-  const { data: summary } = useQuery({
+  const summaryQuery = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: getSummary,
     refetchInterval: 15000,
   });
 
-  const { data: kanbanItems } = useQuery({
+  const kanbanQuery = useQuery({
     queryKey: ['kanban-items'],
     queryFn: () => listKanbanItems(),
     refetchInterval: 15000,
   });
 
-  const { data: runs } = useQuery({
+  const runsQuery = useQuery({
     queryKey: ['runs-all'],
     queryFn: listRuns,
     refetchInterval: 30000,
   });
 
-  const { data: knowledge } = useQuery({
+  const knowledgeQuery = useQuery({
     queryKey: ['knowledge-all'],
     queryFn: () => listKnowledge(),
     refetchInterval: 60000,
   });
 
-  const { data: agents } = useQuery({
+  const agentsQuery = useQuery({
     queryKey: ['agents'],
     queryFn: listAgents,
     refetchInterval: 30000,
   });
+
+  const summary = summaryQuery.data;
+  const kanbanItems = kanbanQuery.data;
+  const runs = runsQuery.data;
+  const knowledge = knowledgeQuery.data;
+  const agents = agentsQuery.data;
+
+  const summaryPhase = queryPhase(summaryQuery);
+  const kanbanPhase = queryPhase(kanbanQuery);
+  const runsPhase = queryPhase(runsQuery);
+  const knowledgePhase = queryPhase(knowledgeQuery);
+  const agentsPhase = queryPhase(agentsQuery);
+  const hasAgents = agentsPhase === 'success' || agentsPhase === 'stale';
 
   const tasksInProgress = (kanbanItems ?? []).filter(
     (item) => item.status === 'IN_PROGRESS'
@@ -86,13 +106,6 @@ export default function ExecutiveSummary() {
   const totalRuns = runs?.length ?? 0;
   const knowledgeCount = knowledge?.length ?? 0;
   const degraded = summary?.degradedAgents ?? 0;
-
-  // Single HITL signal: every ask waiting on the operator, on cards in ANY
-  // column (mid-run gate asks included); the click opens the first card
-  // that has pending asks.
-  const cardsWithAsks = (kanbanItems ?? []).filter((i) => (i.pendingAskCount ?? 0) > 0);
-  const waitingAsks = cardsWithAsks.reduce((sum, i) => sum + (i.pendingAskCount ?? 0), 0);
-  const firstCardWithAsks: KanbanItem | undefined = cardsWithAsks[0];
 
   // Fleet runtime governance: the composition over non-retired agents, and the
   // runs still working on a runtime their agent has moved off (they drain to
@@ -115,17 +128,24 @@ export default function ExecutiveSummary() {
   ).length;
   const runtimeUniform = composition.length <= 1;
   const runtimeLabel =
-    liveAgentCount === 0
+    !hasAgents || liveAgentCount === 0
       ? '—'
       : runtimeUniform
         ? composition[0].runtime
         : 'Mixed';
   const runtimeDetail =
-    liveAgentCount === 0
-      ? 'No agents'
-      : runtimeUniform
-        ? `${composition[0].count} agent${composition[0].count === 1 ? '' : 's'}${draining > 0 ? ` · ${draining} draining` : ''}`
-        : `${composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}${draining > 0 ? ` · ${draining} draining` : ''}`;
+    !hasAgents
+      ? phaseDetail(agentsPhase) ?? 'No agents'
+      : liveAgentCount === 0
+        ? 'No agents'
+        : runtimeUniform
+          ? `${composition[0].count} agent${composition[0].count === 1 ? '' : 's'}${draining > 0 ? ` · ${draining} draining` : ''}`
+          : `${composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}${draining > 0 ? ` · ${draining} draining` : ''}`;
+
+  const summaryFresh = summaryPhase === 'success' || summaryPhase === 'stale';
+  const kanbanFresh = kanbanPhase === 'success' || kanbanPhase === 'stale';
+  const runsFresh = runsPhase === 'success' || runsPhase === 'stale';
+  const knowledgeFresh = knowledgePhase === 'success' || knowledgePhase === 'stale';
 
 
   return (
@@ -139,7 +159,7 @@ export default function ExecutiveSummary() {
           label="Runtime"
           value={runtimeLabel}
           detail={runtimeDetail}
-          variant={runtimeUniform ? 'green' : 'amber'}
+          variant={hasAgents && runtimeUniform ? 'green' : hasAgents ? 'amber' : undefined}
           onClick={() =>
             window.dispatchEvent(
               new CustomEvent('act:open-configure', { detail: { tab: 'runtime' } }),
@@ -148,39 +168,32 @@ export default function ExecutiveSummary() {
         />
         <StatCell
           label="Active Agents"
-          value={summary?.activeAgents ?? '—'}
-          detail={degraded > 0 ? `Healthy · ${degraded} degraded` : 'All healthy'}
-          variant={degraded > 0 ? 'amber' : undefined}
-        />
-        <StatCell
-          label="Waiting on you"
-          value={waitingAsks}
-          detail={waitingAsks > 0 ? 'Cards need a decision' : 'Nothing pending'}
-          variant={waitingAsks > 0 ? 'amber' : undefined}
-          onClick={firstCardWithAsks ? () => dispatchOpenTaskDrawer(firstCardWithAsks.id) : undefined}
+          value={summaryFresh ? summary?.activeAgents ?? '—' : '—'}
+          detail={phaseDetail(summaryPhase) ?? (degraded > 0 ? `Healthy · ${degraded} degraded` : 'All healthy')}
+          variant={summaryFresh && degraded > 0 ? 'amber' : undefined}
         />
         <StatCell
           label="Tasks In Progress"
-          value={tasksInProgress}
-          detail="Across kanban board"
+          value={kanbanFresh ? tasksInProgress : '—'}
+          detail={phaseDetail(kanbanPhase) ?? 'Across kanban board'}
           variant="cyan"
         />
         <StatCell
           label="Total Runs"
-          value={totalRuns}
-          detail={`${summary?.runningRuns ?? 0} running now`}
+          value={runsFresh ? totalRuns : '—'}
+          detail={summaryFresh ? `${summary?.runningRuns ?? 0} running now` : phaseDetail(summaryPhase) ?? 'Running count unavailable'}
           variant="purple"
         />
         <StatCell
-          label="Tokens Used"
-          value={formatNumber(summary?.totalTokensBurned)}
-          detail="Cumulative spend"
+          label="Recorded tokens"
+          value={summaryFresh ? formatNumber(summary?.totalTokensBurned) : '—'}
+          detail={phaseDetail(summaryPhase) ?? 'Cumulative recorded input + output over retained records'}
           variant="green"
         />
         <StatCell
           label="Knowledge Items"
-          value={knowledgeCount}
-          detail="Indexed assets"
+          value={knowledgeFresh ? knowledgeCount : '—'}
+          detail={phaseDetail(knowledgePhase) ?? 'Indexed assets'}
         />
       </div>
     </section>

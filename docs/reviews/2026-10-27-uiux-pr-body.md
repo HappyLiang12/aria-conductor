@@ -77,24 +77,37 @@ A read-only reviewer audited the full diff at `342d8775` plus the in-flight draw
 | M7 | Medium | REVIEW batch presets included cards with pending asks | presets operate on ask-free cards and name the held count (`775c49ee`) |
 | L1 | Low | Executive summary showed stale runtime/runs values without saying they were last-known | stale detail prefixes on both surfaces (`8a4b80f9`) |
 
+## Hosted CI findings
+
+The first hosted run (`40551694153`, head `8d38cccc`) failed only `Frontend Build Check`, on `ReviewWorkspace.test.tsx:336`: expected `""` to be `"keep my draft"`. The same suite was green locally and in a clean-room on faster hardware, so this was not retried away.
+
+- **CI-1 — the review heading focus raced the feedback draft.** The heading focus was deferred with `requestAnimationFrame`; on the slower runner that frame landed after the test (or an operator) had focused the Request-changes textarea, so keystrokes went to the heading and the controlled draft stayed empty. Fix `2027711d`: focus synchronously in the opening layout effect, plus a deterministic regression test that holds every frame callback unrun and asserts (a) the heading already has focus in the opening commit and (b) a late frame cannot steal the caret from the draft. RED evidence: against the rAF version the new test fails with focus still on the opener button.
+- The E2E shards never produced signal in that run: they require `frontend-build`'s artifact, so a frontend failure skips them. They run on the fixed head.
+
+The second hosted run (`40552479882`, head `2027711d`) fixed the frontend job and finally exercised every shard: Java lanes, build, smoke, Docker and shards 1, 3, 4 were green; shard 2 failed `kanban-board.spec.ts`.
+
+- **CI-2 — the create-form error lost the `.kanban-form-error` contract.** The structured create error (Task 6) renders through `ErrorNotice` inside a `.kanban-create-error` wrapper, which dropped the class that carried both the red form-error styling and the hosted spec's hook; the board-level slot with that class is suppressed while the modal is open. Fix `0950fd0c`: the create `ErrorNotice` keeps `className="kanban-form-error"`, and the empty-title unit test now asserts the class in addition to the exact text and the no-API-call guarantee. The other failure in that shard (`housekeeping-cleanup`) passed on retry and is not treated as green-by-retry for CI-2.
+
 ## Verification
 
-Verification point: `8a4b80f9` (last code commit; the documentation commit that follows is comments only). Commands and results:
+Verification point: `0950fd0c` (last code commit; the documentation commit that follows is comments only). Commands and results:
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Unit + coverage | `pnpm --dir agent-control-tower/act-dashboard test -- --coverage` | 72 files / 620 tests passed, exit 0; 74.75% lines / 82.29% branches / 61.16% functions |
+| Unit + coverage | `pnpm --dir agent-control-tower/act-dashboard test -- --coverage` | 72 files / 621 tests passed, exit 0; 74.75% lines / 82.27% branches / 61.16% functions |
 | Build | `pnpm --dir agent-control-tower/act-dashboard build` | `tsc -b` + `vite build`, exit 0 |
-| E2E (new features, artifact-first) | clean-room worktree at `8a4b80f9`, `pnpm build`, `pnpm preview --port 4174`, then `BASE_URL=http://localhost:4174 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0` | 20 tests passed (37.7s) at 1440x900 / 1024x768 / 390x844 against the built artifact |
-| E2E (regression subset, artifact-first) | same preview, `overview-dashboard` (backend-independent cases), `notification-toast`, `configure-modal-close`, `unknown-route` | 6 passed (10.7s) |
-| Clean-room | fresh worktree at `8a4b80f9`: `pnpm install --frozen-lockfile`, `pnpm test -- --coverage`, `pnpm build` | install exit 0; 620 tests passed; coverage identical to local; build exit 0; no `dist/` at checkout |
-| Independent review | read-only full-diff review, then re-gate after the fix wave | 12 findings fixed; local and clean-room gates re-run at the final HEAD |
+| E2E (new features, artifact-first) | clean-room worktree at `0950fd0c`, `pnpm build`, `pnpm preview --port 4176`, then `BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0` | 20 tests passed (42.4s) at 1440x900 / 1024x768 / 390x844 against the built artifact |
+| E2E (regression subset, artifact-first) | same preview, `overview-dashboard` (backend-independent cases), `notification-toast`, `configure-modal-close`, `unknown-route` | 6 passed (12.6s) |
+| Clean-room | fresh worktree at `0950fd0c`: `pnpm install --frozen-lockfile`, `pnpm test -- --coverage`, `pnpm build` | install exit 0; 621 tests passed; coverage identical to local; build exit 0; no `dist/` at checkout |
+| Independent review | read-only full-diff review, then re-gate after the fix wave | 12 findings fixed; local and clean-room gates re-run |
+| Hosted CI run 1 | run 40551694153 at `8d38cccc` | red: `Frontend Build Check` only; E2E shards were skipped because they need that job's artifact (CI-1) |
+| Hosted CI run 2 | run 40552479882 at `2027711d` | red: shard 2 only, `kanban-board.spec.ts` create-error hook (CI-2); everything else green |
 
 The new specs use `page.route` / `page.routeWebSocket` fixtures only: no backend, no LLM, no credentials. Backend-dependent specs (`overview-dashboard` seeded case, `kanban-hitl`, `chat-smoke`, `observability-live`, all journey specs) run in the hosted Playwright shards, not locally.
 
 Artifact checks (screenshots kept locally under `docs/reviews/evidence/2026-10-27-uiux-release/`, not committed): Overview at 1440x900, 1024x768 and 390x844; mobile chat thread; board keyboard opener and dialog focus are covered by the specs above.
 
-Hosted CI: pending at the time this file was written; the final run is recorded in `docs/reviews/2026-10-24-uiux-delivery-ledger.json`.
+Hosted CI: run [40554394382](https://github.com/HappyLiang12/aria-conductor/actions/runs/40554394382) at `0950fd0cf275ae20cc2a50a747c9c7554fb01352` — **green**. Jobs: Frontend Build Check; Detect Changed Trees; Build Backend + Harness Distribution (once); Java Unit Tests (api-mcp-app); Java Unit Tests (common-agent); Java Unit Tests (execution); Java Unit Tests (knowledge-aria); Java Integration Tests (Failsafe); E2E Smoke Test (deterministic harness); Docker Build Verification; E2E Playwright (shard 2/4); E2E Playwright (shard 1/4); E2E Playwright (shard 3/4); E2E Playwright (shard 4/4).
 
 ## Deferred (documented, not implemented)
 

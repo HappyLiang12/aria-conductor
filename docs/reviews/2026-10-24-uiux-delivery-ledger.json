@@ -1,7 +1,7 @@
 {
   "task": "Investigate current UI/UX problems and provide enhancement designs",
   "date": "2026-10-24",
-  "phase": "implemented, independently reviewed, fix wave landed, clean-room green on feat/uiux-decision-first; release gate (push, PR, hosted CI) pending",
+  "phase": "implemented, reviewed, clean-room verified, pushed; hosted CI green at HEAD; PR open, not merged",
   "baseline": {
     "branch": "main",
     "head": "9ab7ebd4cd0f75660b9aee701cde0a9670f20457",
@@ -932,13 +932,13 @@
     ],
     "acceptance": "Evidence identifies source HEAD versus runtime provenance, actual viewports, non-mutating interactions, exact commands and counts; every untested criterion stays NOT VERIFIED. Design follows verified user impact rather than assumed defects."
   },
-  "next": "Push feat/uiux-decision-first, open the PR with docs/reviews/2026-10-27-uiux-pr-body.md, drive hosted CI green at HEAD, then record the run ID and artifact checks in this ledger. Do not merge.",
+  "next": "Report the green CI evidence and stop. Merge is the human decision; the agent must not merge.",
   "implementation_wave": {
     "provenance": "Lead-run implementation wave on branch feat/uiux-decision-first, rebased onto origin/main 605ecbba; all commands run in agent-control-tower/act-dashboard except git.",
     "plan": "docs/superpowers/plans/2026-10-27-decision-first-uiux-repairs.md",
     "branch": "feat/uiux-decision-first",
     "base": "605ecbba",
-    "verification_point": "8a4b80f9",
+    "verification_point": "0950fd0c",
     "commits": [
       "04a64d50 feat(uiux): add honest query-state and focus primitives",
       "7dbc7fef feat(uiux): add decision and attention queues",
@@ -975,33 +975,33 @@
     ],
     "gates": [
       {
-        "gate": "wave-full",
+        "gate": "wave-full-post-fix",
         "command": "pnpm test -- --coverage",
-        "result": "72 files / 620 tests passed, exit 0; 74.75% lines, 82.29% branches, 61.16% functions"
+        "result": "72 files / 621 tests passed, exit 0; 74.75% lines, 82.27% branches, 61.16% functions"
       },
       {
-        "gate": "build",
+        "gate": "build-post-fix",
         "command": "pnpm build",
         "result": "tsc -b + vite build, exit 0"
       },
       {
-        "gate": "e2e-new-artifact-first",
-        "command": "clean-room worktree at 8a4b80f9; pnpm build; pnpm preview --port 4174; BASE_URL=http://localhost:4174 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0",
-        "result": "20 passed (37.7s) at 1440x900 / 1024x768 / 390x844 against the built artifact"
+        "gate": "e2e-new-artifact-first-post-fix",
+        "command": "clean-room worktree at 0950fd0c; pnpm build; pnpm preview --port 4176; BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0",
+        "result": "20 passed (42.4s) at 1440x900 / 1024x768 / 390x844 against the built artifact"
       },
       {
-        "gate": "e2e-regression-artifact-first",
+        "gate": "e2e-regression-artifact-first-post-fix",
         "command": "same preview; playwright test e2e/overview-dashboard.spec.ts e2e/notification-toast.spec.ts e2e/configure-modal-close.spec.ts e2e/unknown-route.spec.ts --grep-invert \"seeded agent\"",
-        "result": "6 passed (10.7s); the seeded-agent case is CI-only"
+        "result": "6 passed (12.6s); the seeded-agent case is CI-only"
       },
       {
-        "gate": "clean-room",
-        "command": "git worktree add --detach /d/project/aria-uiux-cleanroom2 8a4b80f9; pnpm install --frozen-lockfile; pnpm test -- --coverage; pnpm build",
-        "result": "install exit 0; 72 files / 620 tests passed; coverage identical (74.75/82.29/61.16); build exit 0; no dist/ at checkout"
+        "gate": "clean-room-post-fix",
+        "command": "git worktree add --detach /d/project/aria-uiux-cleanroom4 0950fd0c; pnpm install --frozen-lockfile; pnpm test -- --coverage; pnpm build",
+        "result": "install exit 0; 72 files / 621 tests passed; coverage identical (74.75/82.27/61.16); build exit 0; no dist/ at checkout"
       },
       {
         "gate": "hosted-ci",
-        "result": "PENDING - not pushed yet"
+        "result": "see release.ci_run_id (code HEAD); the final docs-only commit gets its own quick run, reported with the PR"
       }
     ],
     "implementation_review": {
@@ -1131,14 +1131,103 @@
     ]
   },
   "release": {
-    "status": "PENDING_PUSH",
+    "status": "HOSTED_CI_GREEN",
     "branch": "feat/uiux-decision-first",
     "base": "605ecbba",
     "verification_point": "8a4b80f9",
     "pr_body": "docs/reviews/2026-10-27-uiux-pr-body.md",
-    "push": "NOT RUN",
-    "pr_url": null,
-    "ci_run_id": null,
-    "ci_result": null
-  }
+    "push": "pushed; upstream feat/uiux-decision-first",
+    "pr_url": "https://github.com/HappyLiang12/aria-conductor/pull/115",
+    "ci_run_id": "40554394382",
+    "ci_head": "0950fd0cf275ae20cc2a50a747c9c7554fb01352",
+    "ci_url": "https://github.com/HappyLiang12/aria-conductor/actions/runs/40554394382",
+    "ci_result": "success",
+    "ci_jobs": [
+      {
+        "name": "Frontend Build Check",
+        "conclusion": "success"
+      },
+      {
+        "name": "Detect Changed Trees",
+        "conclusion": "success"
+      },
+      {
+        "name": "Build Backend + Harness Distribution (once)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (api-mcp-app)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (common-agent)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (execution)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Unit Tests (knowledge-aria)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Java Integration Tests (Failsafe)",
+        "conclusion": "success"
+      },
+      {
+        "name": "TS MCP Server Tests + Coverage",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "E2E Smoke Test (deterministic harness)",
+        "conclusion": "success"
+      },
+      {
+        "name": "Docker Build Verification",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 2/4)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 1/4)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 3/4)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 4/4)",
+        "conclusion": "success"
+      }
+    ],
+    "ci_note": "Java lanes and docker-build also ran on this frontend-only PR; every non-skipped job must be success. This run verifies the product code at 0950fd0c; the documentation-only commit that follows changes no product file and gets its own docs-only run, checked on the PR before reporting."
+  },
+  "defects_found_by_ci": [
+    {
+      "id": "CI-1",
+      "title": "ReviewWorkspace heading focus raced the feedback draft on slow runners",
+      "classification": "product defect (timing race), not a flake to retry away",
+      "evidence": "hosted run 40551694153, Frontend Build Check annotation: src/components/__tests__/ReviewWorkspace.test.tsx:336 AssertionError: expected \"\" to be \"keep my draft\"; the same suite was green locally and in clean-room because the frame landed earlier on faster hardware",
+      "root_cause": "the heading focus was deferred with requestAnimationFrame; on the CI runner the frame landed after the test/operator had focused the Request-changes textarea, so keystrokes went to the heading and the controlled draft stayed empty",
+      "fix": "2027711d - focus synchronously in the opening layout effect; new deterministic test holds every frame callback unrun and asserts the heading already has focus, then asserts a late frame cannot steal the caret from the draft",
+      "red_evidence": "vitest ReviewWorkspace.test.tsx -t \"heading focus in the opening commit\" against the rAF version: 1 failed, heading not focused (focus stayed on the opener button)"
+    },
+    {
+      "id": "CI-2",
+      "title": "Create-form error lost the .kanban-form-error contract the board E2E spec keys off",
+      "classification": "product regression from the structured create-error change (Task 6); the hosted spec was the only coverage of the visual form-error slot",
+      "evidence": "hosted run 40552479882, E2E Playwright shard 2/4: e2e/kanban-board.spec.ts:71 expect(.kanban-form-error).toHaveText(\"Title is required\") - element(s) not found (failed on retry too); shard summary 1 failed / 1 flaky / 60 passed",
+      "root_cause": "the create error was re-rendered through ErrorNotice inside a kanban-create-error wrapper, dropping the kanban-form-error class that carried both the red styling and the spec hook; the board-level slot with that class is suppressed while the modal is open",
+      "fix": "0950fd0c - pass className=\"kanban-form-error\" to the create ErrorNotice and assert the class in the empty-title unit test (text and no-API-call assertions unchanged)",
+      "red_evidence": "unit assertion added against the previous markup fails (closest(.kanban-form-error) is null); hosted shard failure is the end-to-end red"
+    }
+  ],
+  "not_verified": [
+    "Backend-dependent Playwright specs (kanban-hitl, chat-smoke, observability-live, journey suites, seeded overview case) are verified only by the hosted shards, not locally.",
+    "Native pointer drag is asserted by hit-test plus draggable state, not by a real mouse drag on CI hardware."
+  ]
 }

@@ -460,10 +460,14 @@ export default function KanbanBoard() {
           <div className={narrow ? 'kanban-mobile-list' : 'kanban-grid'}>
             {visibleColumns.map((col) => {
             const columnItems = grouped[col.key] ?? [];
+            // A card with a pending native ask needs an individual decision, so
+            // no batch preset may include it. Counts state only the eligible set.
+            const batchItems = columnItems.filter((it) => !it.pendingAskCount);
+            const heldByAsk = columnItems.length - batchItems.length;
             // Task 8: batch sets come from the same runOutcome filters the
-            // buttons display (Cancel acts on every REVIEW card).
-            const completedItems = columnItems.filter((it) => it.runOutcome === 'COMPLETED');
-            const failedItems = columnItems.filter((it) => it.runOutcome === 'FAILED');
+            // buttons display.
+            const completedItems = batchItems.filter((it) => it.runOutcome === 'COMPLETED');
+            const failedItems = batchItems.filter((it) => it.runOutcome === 'FAILED');
             return (
               <div
                 key={col.key}
@@ -479,7 +483,12 @@ export default function KanbanBoard() {
                   <span className="count">{columnItems.length}</span>
                 </header>
                 {col.isGate && columnItems.length > 0 && (
-                  <div className="batch-actions">
+                  <div
+                    className="batch-actions"
+                    title={heldByAsk > 0
+                      ? `${heldByAsk} card${heldByAsk === 1 ? '' : 's'} with pending asks need${heldByAsk === 1 ? 's' : ''} an individual decision`
+                      : undefined}
+                  >
                     <button
                       disabled={batchRunning || completedItems.length === 0}
                       onClick={() =>
@@ -495,10 +504,10 @@ export default function KanbanBoard() {
                       Rework all failed ({failedItems.length})
                     </button>
                     <button
-                      disabled={batchRunning}
-                      onClick={() => setBatchAction({ kind: 'CANCEL', items: columnItems })}
+                      disabled={batchRunning || batchItems.length === 0}
+                      onClick={() => setBatchAction({ kind: 'CANCEL', items: batchItems })}
                     >
-                      Cancel all ({columnItems.length})
+                      Cancel all ({batchItems.length})
                     </button>
                   </div>
                 )}
@@ -535,7 +544,12 @@ export default function KanbanBoard() {
                       <button
                         type="button"
                         className="card-open"
-                        draggable={false}
+                        // The opener covers the card body, so it must itself be
+                        // the drag source: a draggable={false} button would
+                        // leave only the padding able to start a drag. dragstart
+                        // bubbles to the card handler above, which moves the
+                        // card; a clean click still opens the drawer.
+                        draggable
                         aria-label={`Open task ${item.title}`}
                         onClick={(e) => {
                           e.stopPropagation();

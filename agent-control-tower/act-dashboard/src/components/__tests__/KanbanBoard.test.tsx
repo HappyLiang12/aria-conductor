@@ -901,6 +901,20 @@ describe('KanbanBoard batch decisions on the REVIEW column (Task 8)', () => {
     expect(screen.getByRole('button', { name: 'Cancel all (3)' })).toBeInTheDocument();
   });
 
+  it('never includes a card with a pending ask in a batch preset', async () => {
+    // A card with a native ask needs an individual decision; a batch must not
+    // decide it behind the operator's back.
+    await renderBoard([
+      baseItem({ id: 'k-c1', title: 'completed card', status: 'REVIEW', runOutcome: 'COMPLETED' }),
+      baseItem({ id: 'k-ask', title: 'ask card', status: 'REVIEW', runOutcome: 'COMPLETED', pendingAskCount: 2 }),
+      baseItem({ id: 'k-f1', title: 'failed ask card', status: 'REVIEW', runOutcome: 'FAILED', pendingAskCount: 1 }),
+    ]);
+
+    expect(screen.getByRole('button', { name: 'Accept all completed (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rework all failed (0)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel all (1)' })).toBeInTheDocument();
+  });
+
   it('accept-all gates on a count-stating confirm, then transitions each completed card', async () => {
     const { transitionKanbanItem, listKanbanItems } = await import('../../api/kanban');
     vi.mocked(transitionKanbanItem).mockResolvedValue(baseItem({ status: 'DONE' }));

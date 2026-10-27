@@ -4,6 +4,8 @@ import { createKanbanItem, listKanbanItems, transitionKanbanItem } from '../api/
 import type { KanbanRejection } from '../api/kanban';
 import { executeHousekeeping } from '../api/housekeeping';
 import { apiErrorMessage } from '../api/operatorSession';
+import { presentError, type PresentedError } from '../api/errorPresentation';
+import { ErrorNotice } from './ErrorNotice';
 import { listAgentTemplates, listAgents } from '../api/agents';
 import type {
   CreateKanbanItemRequest,
@@ -128,6 +130,10 @@ export default function KanbanBoard() {
   const [showCreate, setShowCreate] = useState(false);
   const [draft, setDraft] = useState<NewItemDraft>(EMPTY_DRAFT);
   const [error, setError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<{
+    presented: PresentedError;
+    details?: KanbanRejection['details'];
+  } | null>(null);
   // Flash kinds: ok/err = transition result; assign = "Aria assigning…" while
   // the pickup's assign phase runs (spec 4.2).
   const [flash, setFlash] = useState<{ itemId: string; kind: 'ok' | 'err' | 'assign' } | null>(null);
@@ -221,6 +227,7 @@ export default function KanbanBoard() {
       if (e.key === 'Escape') {
         setShowCreate(false);
         setError(null);
+        setCreateError(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -234,10 +241,14 @@ export default function KanbanBoard() {
       setShowCreate(false);
       setDraft(EMPTY_DRAFT);
       setError(null);
+      setCreateError(null);
     },
     onError: (err: unknown) => {
-      const anyErr = err as { message?: string };
-      setError(anyErr?.message ?? 'Failed to create item');
+      const rejection = (err as { response?: { data?: KanbanRejection } })?.response?.data;
+      setCreateError({
+        presented: presentError(err, 'Create failed.'),
+        details: rejection?.details,
+      });
     },
   });
 
@@ -320,7 +331,7 @@ export default function KanbanBoard() {
   const handleCreate = (target: 'TODO' | 'BACKLOG') => {
     const title = draft.title.trim();
     if (!title) {
-      setError('Title is required');
+      setCreateError({ presented: { text: 'Title is required' } });
       return;
     }
     createMutation.mutate({
@@ -389,6 +400,7 @@ export default function KanbanBoard() {
           onClick={() => {
             setShowCreate(true);
             setError(null);
+            setCreateError(null);
           }}
         >
           + New Item
@@ -519,8 +531,17 @@ export default function KanbanBoard() {
                         setTimeout(() => setDraggingId(item.id), 0);
                       }}
                       onDragEnd={() => setDraggingId(null)}
-                      onClick={() => dispatchOpenTaskDrawer(item.id)}
                     >
+                      <button
+                        type="button"
+                        className="card-open"
+                        draggable={false}
+                        aria-label={`Open task ${item.title}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dispatchOpenTaskDrawer(item.id);
+                        }}
+                      >
                       <div className="gateline" />
                       <div className="id">{item.id.slice(0, 8)}</div>
                       <div className="t">{item.title}</div>
@@ -554,6 +575,7 @@ export default function KanbanBoard() {
                           <span className="owner">@{item.assignee}</span>
                         )}
                       </div>
+                      </button>
                       {item.status === 'REVIEW' && (
                         // Full quick decision lives on the card face: approve,
                         // request changes (inline composer) and deny without
@@ -681,6 +703,7 @@ export default function KanbanBoard() {
           onClick={() => {
             setShowCreate(false);
             setError(null);
+            setCreateError(null);
           }}
         >
           <div
@@ -757,7 +780,28 @@ export default function KanbanBoard() {
                   )}
                 </select>
               </label>
-              {error && <div className="kanban-form-error">{error}</div>}
+              {createError && (
+                <div className="kanban-create-error">
+                  <ErrorNotice presented={createError.presented} />
+                  {!!createError.details?.reasons?.length && (
+                    <ul className="create-error-details">
+                      {createError.details.reasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {!!createError.details?.excluded?.length && (
+                    <ul className="create-error-details">
+                      {createError.details.excluded.map((entry) => (
+                        <li key={entry.name}>
+                          <strong>{entry.name}</strong>
+                          {entry.reasons.length > 0 ? `: ${entry.reasons.join(', ')}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <div className="modal-actions">
                 <button
                   className="btn primary"
@@ -778,6 +822,7 @@ export default function KanbanBoard() {
                   onClick={() => {
                     setShowCreate(false);
                     setError(null);
+                    setCreateError(null);
                   }}
                 >
                   Close

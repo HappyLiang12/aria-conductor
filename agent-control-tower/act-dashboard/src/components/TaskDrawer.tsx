@@ -138,6 +138,29 @@ export function TaskDrawer() {
     if (!open) setConfirmingReject(false);
   }, [open]);
 
+  // Focus starts inside the drawer now, and DrawerContext deliberately ignores
+  // Escape that originates inside it. Keep Escape working for the drawer itself
+  // without stealing the key from a draft or from a dialog stacked on top.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const drawer = document.querySelector('.drawer.open');
+      const target = e.target instanceof Node ? e.target : null;
+      if (!drawer || !target || !drawer.contains(target)) return;
+      if (document.querySelector('.modal-overlay, .modal.open')) return;
+      if (
+        target instanceof Element &&
+        target.closest('input, textarea, select, [contenteditable="true"]')
+      ) {
+        return;
+      }
+      closeTaskDrawer();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, closeTaskDrawer]);
+
   const taskQuery = useQuery({
     queryKey: ['kanban', 'item', itemId],
     queryFn: () => getKanbanItem(itemId as string),

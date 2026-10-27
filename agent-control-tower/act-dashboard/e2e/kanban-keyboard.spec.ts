@@ -82,7 +82,7 @@ async function tabUntilFocused(page: Page, target: ReturnType<Page['locator']>, 
 test.use({ viewport: { width: 1440, height: 900 } });
 
 test.describe('kanban keyboard contract', () => {
-  test('Tab reaches the named opener; Enter opens; Escape outside returns focus to it', async ({ page }) => {
+  test('Tab reaches the named opener; Enter opens; Escape from the drawer closes and returns focus', async ({ page }) => {
     await stubWebSocket(page);
     await stubApi(page);
     await page.goto('/');
@@ -95,17 +95,32 @@ test.describe('kanban keyboard contract', () => {
     await page.keyboard.press('Enter');
     const drawer = page.locator('.drawer.open');
     await expect(drawer).toBeVisible();
-    await expect(drawer.getByRole('heading', { name: 'Keyboard card' })).toBeVisible();
+    const heading = drawer.getByRole('heading', { name: 'Keyboard card' });
+    await expect(heading).toBeVisible();
+    // Opening moves focus to the heading, so Escape is pressed from inside.
+    await expect(heading).toBeFocused();
 
-    // Escape is only a drawer shortcut when pressed outside the open drawer;
-    // the drawer's own Escape guard intentionally protects inner editing. The
-    // body-level dispatch is that outside press (a real key press would target
-    // the heading the drawer just focused).
-    await page.evaluate(() => {
-      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    });
+    await page.keyboard.press('Escape');
     await expect(page.locator('.drawer.open')).toHaveCount(0);
     await expect(opener).toBeFocused();
+  });
+
+  test('Escape from the comment draft keeps the drawer open and keeps the text', async ({ page }) => {
+    await stubWebSocket(page);
+    await stubApi(page);
+    await page.goto('/');
+
+    await page.getByRole('button', { name: 'Open task Keyboard card' }).click();
+    const drawer = page.locator('.drawer.open');
+    await expect(drawer).toBeVisible();
+
+    const note = drawer.getByPlaceholder(/Add a comment/);
+    await note.click();
+    await note.fill('keep this draft');
+    await page.keyboard.press('Escape');
+
+    await expect(drawer).toBeVisible();
+    await expect(note).toHaveValue('keep this draft');
   });
 
   test('a destructive dialog is cancel-first, traps Tab and never mutates on Enter', async ({ page }) => {

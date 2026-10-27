@@ -32,13 +32,20 @@ export default function OverviewPage() {
   const queryClient = useQueryClient();
   const { state, openTaskDrawer, openReviewMode } = useDrawerContext();
   const reviewId = state.reviewTargetId;
-  const [queueInteraction, setQueueInteraction] = useState(false);
-  const [decisionBusyId, setDecisionBusyId] = useState<string | null>(null);
+  // Hover and focus are tracked separately: leaving with the pointer while an
+  // inline answer still has focus must not let a poll re-sort the rows.
+  const [queueHover, setQueueHover] = useState(false);
+  const [queueFocus, setQueueFocus] = useState(false);
   const [decisionError, setDecisionError] = useState<RowError | null>(null);
+  // One set, not one id: two different rows may be decided concurrently, and a
+  // shared useMutation instance cannot express that with its own isPending.
+  const [decisionBusyIds, setDecisionBusyIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [attentionBusyId, setAttentionBusyId] = useState<string | null>(null);
   const [attentionError, setAttentionError] = useState<RowError | null>(null);
 
-  const locked = Boolean(reviewId) || state.taskDrawer.open || queueInteraction;
+  const locked = Boolean(reviewId) || state.taskDrawer.open || queueHover || queueFocus;
   const decision = useDecisionQueue({ locked });
   const attention = useAttentionQueue({ locked });
 
@@ -48,20 +55,20 @@ export default function OverviewPage() {
     void queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
   };
 
+  const markDecisionBusy = (id: string, busy: boolean) => {
+    setDecisionBusyIds((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   const decideMutation = useMutation({
     mutationFn: async ({ row, approved }: { row: DecisionRow; approved: boolean }) => {
       applyOperatorHeaders();
       return approved ? approveApproval(row.approvalId) : rejectApproval(row.approvalId);
     },
-    onMutate: ({ row }) => {
-      setDecisionBusyId(row.id);
-      setDecisionError(null);
-    },
-    onSuccess: invalidateDecision,
-    onError: (error, { row }) => {
-      setDecisionError({ id: row.id, presented: presentError(error, 'Decision failed.') });
-    },
-    onSettled: () => setDecisionBusyId(null),
   });
 
   const answerMutation = useMutation({
@@ -69,16 +76,37 @@ export default function OverviewPage() {
       applyOperatorHeaders();
       return answerAsk(row.approvalId, { answer, approved: true });
     },
-    onMutate: ({ row }) => {
-      setDecisionBusyId(row.id);
-      setDecisionError(null);
-    },
-    onSuccess: invalidateDecision,
-    onError: (error, { row }) => {
-      setDecisionError({ id: row.id, presented: presentError(error, 'Answer failed.') });
-    },
-    onSettled: () => setDecisionBusyId(null),
   });
+
+  const runDecision = (row: DecisionRow, approved: boolean) => {
+    setDecisionError(null);
+    markDecisionBusy(row.id, true);
+    decideMutation.mutate(
+      { row, approved },
+      {
+        onSuccess: invalidateDecision,
+        onError: (error) => {
+          setDecisionError({ id: row.id, presented: presentError(error, 'Decision failed.') });
+        },
+        onSettled: () => markDecisionBusy(row.id, false),
+      },
+    );
+  };
+
+  const runAnswer = (row: DecisionRow, answer: string) => {
+    setDecisionError(null);
+    markDecisionBusy(row.id, true);
+    answerMutation.mutate(
+      { row, answer },
+      {
+        onSuccess: invalidateDecision,
+        onError: (error) => {
+          setDecisionError({ id: row.id, presented: presentError(error, 'Answer failed.') });
+        },
+        onSettled: () => markDecisionBusy(row.id, false),
+      },
+    );
+  };
 
   const retryPickupMutation = useMutation({
     mutationFn: async (row: AttentionRow) => {
@@ -125,10 +153,15 @@ export default function OverviewPage() {
             <>
               <div
                 className="overview-queues"
-                onMouseEnter={() => setQueueInteraction(true)}
-                onMouseLeave={() => setQueueInteraction(false)}
-                onFocusCapture={() => setQueueInteraction(true)}
-                onBlurCapture={() => setQueueInteraction(false)}
+                onMouseEnter={() => setQueueHover(true)}
+                onMouseLeave={() => setQueueHover(false)}
+                onFocusCapture={() => setQueueFocus(true)}
+                onBlurCapture={(e) => {
+                  const next = e.relatedTarget;
+                  if (!(next instanceof Node) || !e.currentTarget.contains(next)) {
+                    setQueueFocus(false);
+                  }
+                }}
               >
                 <DecisionQueue
                   rows={decision.rows}
@@ -137,9 +170,9 @@ export default function OverviewPage() {
                   count={decision.count}
                   retry={decision.retry}
                   onActivate={handleActivate}
-                  onDecide={(row, approved) => decideMutation.mutate({ row, approved })}
-                  onAnswer={(row, answer) => answerMutation.mutate({ row, answer })}
-                  busyId={decisionBusyId}
+                  onDecide={runDecision}
+                  onAnswer={runAnswer}
+                  busyIds={decisionBusyIds}
                   actionError={decisionError}
                   collapsed={allClear}
                 />

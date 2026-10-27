@@ -21,10 +21,12 @@ export interface DecisionQueueProps {
   onActivate: (row: DecisionRow) => void;
   onDecide: (row: DecisionRow, approved: boolean) => void;
   onAnswer: (row: DecisionRow, answer: string) => void;
-  busyId?: string | null;
+  busyIds?: ReadonlySet<string>;
   actionError?: DecisionActionError | null;
   collapsed: boolean;
 }
+
+const EMPTY_BUSY_IDS: ReadonlySet<string> = new Set();
 
 function waited(iso: string): string {
   const then = Date.parse(iso);
@@ -134,7 +136,7 @@ export function DecisionQueue({
   onActivate,
   onDecide,
   onAnswer,
-  busyId = null,
+  busyIds = EMPTY_BUSY_IDS,
   actionError = null,
   collapsed,
 }: DecisionQueueProps): ReactElement {
@@ -175,7 +177,7 @@ export function DecisionQueue({
           onAction={retry}
         />
       )}
-      {phase === 'success' && rows.length === 0 && (
+      {phase === 'success' && !partial && rows.length === 0 && (
         <StateNotice kind="empty" title="No decisions waiting" />
       )}
 
@@ -185,7 +187,7 @@ export function DecisionQueue({
             <Row
               key={row.id}
               row={row}
-              busy={busyId === row.id}
+              busy={busyIds.has(row.id)}
               error={actionError?.id === row.id ? actionError.presented : null}
               onActivate={onActivate}
               onDecide={onDecide}

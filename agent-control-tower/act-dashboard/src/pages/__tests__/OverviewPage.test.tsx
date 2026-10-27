@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, act, within, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import OverviewPage from '../OverviewPage';
 import type { DrawerState } from '../../components/DrawerContext';
+import type { DecisionRow } from '../../hooks/useDecisionQueue';
 import { useDecisionQueue } from '../../hooks/useDecisionQueue';
 import { useAttentionQueue } from '../../hooks/useAttentionQueue';
+import { approveApproval, rejectApproval } from '../../api/approvals';
 
 vi.mock('../../components/ExecutiveSummary', () => ({ default: () => <div data-testid="exec-summary" /> }));
 vi.mock('../../components/KanbanBoard', () => ({ default: () => <div data-testid="kanban-board" /> }));
@@ -18,6 +20,11 @@ vi.mock('../../components/ReviewWorkspace', () => ({
 }));
 vi.mock('../../hooks/useDecisionQueue', () => ({ useDecisionQueue: vi.fn() }));
 vi.mock('../../hooks/useAttentionQueue', () => ({ useAttentionQueue: vi.fn() }));
+vi.mock('../../api/approvals', () => ({
+  approveApproval: vi.fn(),
+  rejectApproval: vi.fn(),
+  answerAsk: vi.fn(),
+}));
 
 let mockState: DrawerState = {
   taskDrawer: { open: false, itemId: null },
@@ -129,5 +136,67 @@ describe('OverviewPage decision-first layout', () => {
     const layout = container.querySelector('.layout') as HTMLElement;
     expect(layout.classList.contains('overview-grid--review')).toBe(true);
     expect(layout.style.gridTemplateColumns).toBe('');
+  });
+
+  const decisionRow = (id: string): DecisionRow => ({
+    id,
+    approvalId: id,
+    runId: 'run-1',
+    taskId: null,
+    title: `Run ${id}`,
+    state: 'UNKNOWN',
+    askType: 'APPROVAL',
+    source: 'LEGACY_GATE',
+    reason: 'Decide this run',
+    requestedAt: '2026-10-27T08:00:00Z',
+    isPermission: false,
+  });
+
+  it('stays locked while focus remains in the queues after the pointer leaves', () => {
+    setQueues({ rows: [decisionRow('ap-a')], count: 1 });
+    ui();
+    const queue = screen.getByTestId('decision-queue');
+    const approve = within(queue).getByRole('button', { name: 'Approve' });
+
+    act(() => {
+      fireEvent.mouseEnter(queue);
+      approve.focus();
+    });
+    expect(decisionMock).toHaveBeenLastCalledWith({ locked: true });
+
+    // Pointer gone, focus still inside: rows must not re-sort under the thumb.
+    fireEvent.mouseLeave(queue);
+    expect(decisionMock).toHaveBeenLastCalledWith({ locked: true });
+
+    act(() => approve.blur());
+    expect(decisionMock).toHaveBeenLastCalledWith({ locked: false });
+  });
+
+  it('keeps each row busy for its own in-flight decision', async () => {
+    setQueues({ rows: [decisionRow('ap-a'), decisionRow('ap-b')], count: 2 });
+    let resolveA: (value: unknown) => void = () => {};
+    vi.mocked(approveApproval).mockImplementation(
+      () => new Promise((resolve) => { resolveA = resolve; }) as never,
+    );
+    vi.mocked(rejectApproval).mockResolvedValue({} as never);
+
+    ui();
+    const rowA = screen.getByTestId('decision-row-ap-a');
+    const rowB = screen.getByTestId('decision-row-ap-b');
+
+    fireEvent.click(within(rowA).getByRole('button', { name: 'Approve' }));
+    await waitFor(() =>
+      expect(within(rowA).getByRole('button', { name: 'Approve' })).toBeDisabled(),
+    );
+
+    fireEvent.click(within(rowB).getByRole('button', { name: 'Deny' }));
+    await waitFor(() => expect(within(rowB).getByRole('button', { name: 'Deny' })).not.toBeDisabled());
+
+    // B settling must not clear A's in-flight state and re-open its buttons.
+    expect(within(rowA).getByRole('button', { name: 'Approve' })).toBeDisabled();
+
+    await act(async () => {
+      resolveA({});
+    });
   });
 });

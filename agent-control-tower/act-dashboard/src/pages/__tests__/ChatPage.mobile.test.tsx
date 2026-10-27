@@ -124,4 +124,15 @@ describe('ChatPage run conversations (Task 9)', () => {
     expect(shell).toHaveAttribute('data-mobile-pane', 'thread');
     expect(document.querySelector('.chat-thread-panel .h-ttl')?.textContent).toContain('2222');
   });
+
+  it('reports a failed transcript instead of claiming the run has no messages', async () => {
+    const { getRunTrajectory } = await import('../../api/runs');
+    vi.mocked(getRunTrajectory).mockRejectedValueOnce(new Error('trajectory unavailable'));
+    renderChat();
+
+    await userEvent.click(await screen.findByRole('button', { name: /run 1111/i }));
+
+    expect(await screen.findByText(/Failed to load this transcript/)).toBeInTheDocument();
+    expect(screen.queryByText(/No messages recorded yet/)).not.toBeInTheDocument();
+  });
 });

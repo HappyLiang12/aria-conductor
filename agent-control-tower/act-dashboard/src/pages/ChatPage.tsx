@@ -240,7 +240,12 @@ export default function ChatPage() {
     }
   }, [lastMessage, activeThreadId, queryClient]);
 
-  const { data: trajectory, isLoading: trajLoading } = useQuery({
+  const {
+    data: trajectory,
+    isLoading: trajLoading,
+    isError: trajError,
+    refetch: refetchTrajectory,
+  } = useQuery({
     queryKey: ['run-trajectory', activeThreadId],
     queryFn: () => getRunTrajectory(activeThreadId as string),
     enabled: !!activeThreadId,
@@ -422,7 +427,25 @@ export default function ChatPage() {
                   Loading transcript…
                 </div>
               )}
-              {activeThread && !trajLoading && messages.length === 0 && (
+              {activeThread && trajError && (
+                <div
+                  role="alert"
+                  className="error-state"
+                  style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}
+                >
+                  Failed to load this transcript.
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      void refetchTrajectory();
+                    }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {activeThread && !trajLoading && !trajError && messages.length === 0 && (
                 <div style={{ color: 'var(--text-mute)', fontSize: 12, padding: 8 }}>
                   No messages recorded yet. Inject a message below to bootstrap the thread.
                 </div>

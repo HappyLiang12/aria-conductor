@@ -70,8 +70,12 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
   useLayoutEffect(() => {
     if (!item || focusedForRef.current === itemId) return;
     focusedForRef.current = itemId;
-    const raf = requestAnimationFrame(() => headingRef.current?.focus());
-    return () => cancelAnimationFrame(raf);
+    // Focus synchronously. A requestAnimationFrame here deferred the focus by
+    // a frame, and on a slow runner the frame landed after the operator had
+    // already clicked into the feedback textarea, stealing the caret: the
+    // draft stayed empty while keystrokes went to the heading (observed on
+    // hosted CI, ReviewWorkspace.test.tsx "Escape while typing").
+    headingRef.current?.focus();
   }, [item, itemId]);
 
   // Auto-exit when the card leaves REVIEW (e.g. the short-view Approve moved

@@ -3,6 +3,8 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import KanbanBoard from '../KanbanBoard';
+import { listKanbanItems } from '../../api/kanban';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { DrawerProvider, useDrawerContext, type DrawerContextValue } from '../DrawerContext';
 import type { KanbanItem, WsEvent } from '../../types';
 
@@ -11,6 +13,7 @@ vi.mock('../../api/kanban', () => ({
   createKanbanItem: vi.fn().mockResolvedValue({ id: 'k-1' }),
   transitionKanbanItem: vi.fn().mockResolvedValue({ id: 'k-1' }),
 }));
+vi.mock('../../hooks/useMediaQuery', () => ({ useMediaQuery: vi.fn(() => false) }));
 vi.mock('../../api/housekeeping', () => ({
   scanHousekeeping: vi.fn(),
   executeHousekeeping: vi.fn().mockResolvedValue({ categories: [], executedAt: 't' }),
@@ -1006,5 +1009,73 @@ describe('KanbanBoard board-card outcome chip (R-RFUX4)', () => {
     expect(lane.querySelector('[data-card="k-unk"]')!.querySelector('.pill.risk')).toBeNull();
     expect(lane.querySelector('[data-card="k-unk"]')!.textContent).not.toContain('UNKNOWN');
     expect(lane.querySelector('[data-card="k-none"]')!.querySelector('.pill.risk')).toBeNull();
+  });
+});
+
+describe('KanbanBoard honest query states and mobile lane selector', () => {
+  const mockedList = vi.mocked(listKanbanItems);
+  const mockedMedia = vi.mocked(useMediaQuery);
+
+  beforeEach(() => {
+    mockedMedia.mockReturnValue(false);
+    mockedList.mockReset();
+  });
+
+  it('does not turn a failed first load into empty lanes', async () => {
+    mockedList.mockRejectedValue(new Error('network down'));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    expect(await screen.findByTestId('state-notice-error')).toHaveTextContent(/could not be loaded/i);
+    const retry = screen.getByRole('button', { name: /retry/i });
+    expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
+    await userEvent.click(retry);
+    await waitFor(() => expect(mockedList.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('renders a loading notice without fake zero lanes', async () => {
+    mockedList.mockReturnValue(new Promise(() => {}) as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    expect(screen.getByTestId('state-notice-loading')).toHaveTextContent(/loading board/i);
+    expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
+  });
+
+  it('keeps the last known cards and shows a stale notice after a failed refetch', async () => {
+    mockedList
+      .mockResolvedValueOnce([baseItem({ id: 'k-1', title: 'Last known card' })] as never)
+      .mockRejectedValueOnce(new Error('refetch down'));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ui(qc);
+
+    expect(await screen.findByText('Last known card')).toBeInTheDocument();
+    await qc.refetchQueries({ queryKey: ['kanban-items'] });
+    expect(await screen.findByTestId('state-notice-stale')).toBeInTheDocument();
+    expect(screen.getByText('Last known card')).toBeInTheDocument();
+  });
+
+  it('shows one selectable lane at narrow widths', async () => {
+    mockedMedia.mockReturnValue(true);
+    mockedList.mockResolvedValue([
+      baseItem({ id: 'k-1', title: 'Review me', status: 'REVIEW' }),
+      baseItem({ id: 'k-2', title: 'Todo item', status: 'TODO' }),
+    ] as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = ui(qc);
+
+    const select = await screen.findByRole('combobox', { name: /select lane/i });
+    expect(select).toHaveValue('TODO');
+    expect(screen.getByText('Todo item')).toBeInTheDocument();
+    expect(screen.queryByText('Review me')).not.toBeInTheDocument();
+    expect(container.querySelector('.kanban-grid')).toBeNull();
+    expect(container.querySelector('.kanban-mobile')).not.toBeNull();
+    expect(screen.getByTestId('lane-TODO')).toBeInTheDocument();
+
+    await userEvent.selectOptions(select, 'REVIEW');
+    expect(screen.getByText('Review me')).toBeInTheDocument();
+    expect(screen.queryByText('Todo item')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('lane-TODO')).not.toBeInTheDocument();
+    mockedMedia.mockReturnValue(false);
   });
 });

@@ -796,7 +796,10 @@ export default function KanbanBoard() {
               </label>
               {createError && (
                 <div className="kanban-create-error">
-                  <ErrorNotice presented={createError.presented} />
+                  {/* kanban-form-error is the form-error contract the board's
+                      E2E spec (and the red styling) already depends on; the
+                      structured details below keep the served reasons. */}
+                  <ErrorNotice className="kanban-form-error" presented={createError.presented} />
                   {!!createError.details?.reasons?.length && (
                     <ul className="create-error-details">
                       {createError.details.reasons.map((reason) => (

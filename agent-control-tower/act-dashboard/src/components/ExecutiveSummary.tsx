@@ -138,9 +138,13 @@ export default function ExecutiveSummary() {
       ? phaseDetail(agentsPhase) ?? 'No agents'
       : liveAgentCount === 0
         ? 'No agents'
-        : runtimeUniform
-          ? `${composition[0].count} agent${composition[0].count === 1 ? '' : 's'}${draining > 0 ? ` · ${draining} draining` : ''}`
-          : `${composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}${draining > 0 ? ` · ${draining} draining` : ''}`;
+        : `${
+            agentsPhase === 'stale' ? `${phaseDetail(agentsPhase)} · ` : ''
+          }${
+            runtimeUniform
+              ? `${composition[0].count} agent${composition[0].count === 1 ? '' : 's'}${draining > 0 ? ` · ${draining} draining` : ''}`
+              : `${composition.map((c) => `${c.runtime} x${c.count}`).join(', ')}${draining > 0 ? ` · ${draining} draining` : ''}`
+          }`;
 
   const summaryFresh = summaryPhase === 'success' || summaryPhase === 'stale';
   const kanbanFresh = kanbanPhase === 'success' || kanbanPhase === 'stale';
@@ -181,7 +185,13 @@ export default function ExecutiveSummary() {
         <StatCell
           label="Total Runs"
           value={runsFresh ? totalRuns : '—'}
-          detail={summaryFresh ? `${summary?.runningRuns ?? 0} running now` : phaseDetail(summaryPhase) ?? 'Running count unavailable'}
+          detail={
+            runsPhase === 'stale'
+              ? (phaseDetail(runsPhase) as string)
+              : summaryFresh
+                ? `${summary?.runningRuns ?? 0} running now`
+                : phaseDetail(summaryPhase) ?? 'Running count unavailable'
+          }
           variant="purple"
         />
         <StatCell

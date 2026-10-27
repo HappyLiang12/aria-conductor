@@ -1,0 +1,11 @@
+/* Task 12: Configure's reference panes say what this build actually enforces.
+   The note is the only visual addition; the rest of the modal keeps its styles. */
+
+.configure-reference-note {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid var(--amber, #f59e0b);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}

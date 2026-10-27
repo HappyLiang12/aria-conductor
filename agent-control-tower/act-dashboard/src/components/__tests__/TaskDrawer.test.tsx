@@ -585,9 +585,9 @@ describe('TaskDrawer reject confirmation (Task 10)', () => {
 
     await user.click(screen.getByRole('button', { name: 'Reject' }));
     expect(screen.getByRole('dialog', { name: /Reject task/ })).toBeInTheDocument();
-    // A real Escape originates from the dialog's autofocused control, which
-    // sits in the overlay OUTSIDE the aside — the exact shape of the defect.
-    expect(screen.getByRole('button', { name: 'Confirm' })).toHaveFocus();
+    // Task 7: a destructive dialog is cancel-first — the safe exit owns focus,
+    // so a stray Enter dismisses instead of cancelling the card.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
 
     await user.keyboard('{Escape}');
 
@@ -598,5 +598,76 @@ describe('TaskDrawer reject confirmation (Task 10)', () => {
     // The confirmation is gone, so Escape is back to its normal job.
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.getByTestId('task-open').textContent).toBe('false');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7: opening moves focus to the card heading, closing returns it to the
+// opener, and Escape inside an editable draft never closes the drawer.
+// ---------------------------------------------------------------------------
+
+describe('TaskDrawer focus contract (Task 7)', () => {
+  it('focuses the card heading when the drawer opens', async () => {
+    renderDrawer();
+    openTaskDrawerEvent();
+
+    const heading = await screen.findByRole('heading', { name: 'Spec task' });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(document.querySelector('.drawer header h3')).toBe(heading);
+  });
+
+  it('restores the opener when the drawer closes', async () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'Open card';
+    document.body.append(opener);
+    try {
+      renderDrawer();
+      opener.focus();
+      openTaskDrawerEvent();
+      const heading = await screen.findByRole('heading', { name: 'Spec task' });
+      await waitFor(() => expect(heading).toHaveFocus());
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+
+      expect(screen.getByTestId('task-open').textContent).toBe('false');
+      await waitFor(() => expect(opener).toHaveFocus());
+    } finally {
+      opener.remove();
+    }
+  });
+
+  it('Escape inside an editable draft does not close the drawer or lose the text', async () => {
+    const user = userEvent.setup();
+    renderDrawer();
+    openTaskDrawerEvent();
+    await screen.findByText('Spec task');
+
+    const note = screen.getByPlaceholderText(/Add a comment/);
+    await user.type(note, 'keep this draft');
+    fireEvent.keyDown(note, { key: 'Escape' });
+
+    expect(screen.getByTestId('task-open').textContent).toBe('true');
+    expect((note as HTMLTextAreaElement).value).toBe('keep this draft');
+  });
+
+  it('falls back to the close control when the opener is gone', async () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'Open card';
+    document.body.append(opener);
+    try {
+      renderDrawer();
+      opener.focus();
+      openTaskDrawerEvent();
+      await screen.findByText('Spec task');
+      opener.remove();
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+
+      await waitFor(() =>
+        expect(document.querySelector('.drawer .close')).toHaveFocus(),
+      );
+    } finally {
+      opener.remove();
+    }
   });
 });

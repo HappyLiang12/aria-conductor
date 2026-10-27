@@ -88,4 +88,28 @@ describe('useAttentionQueue', () => {
     expect(result.current.rows[0]).toMatchObject({ kind: 'provider', title: 'Broken core' });
     expect(result.current.count).toBe(1);
   });
+
+  it('is an error, not an empty success, when every source fails', async () => {
+    // A failed provider list must not masquerade as "no providers configured":
+    // that pinned probePhase to success and made the error phase unreachable.
+    vi.mocked(listKanbanItems).mockRejectedValue(new Error('board down'));
+    vi.mocked(listRuns).mockRejectedValue(new Error('runs down'));
+    vi.mocked(listAdkProviders).mockRejectedValue(new Error('providers down'));
+
+    const { result } = renderHook(() => useAttentionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.phase).toBe('error'));
+    expect(result.current.count).toBeNull();
+    expect(result.current.rows).toHaveLength(0);
+  });
+
+  it('withholds the count when one source fails but another succeeds', async () => {
+    vi.mocked(listKanbanItems).mockResolvedValue([] as never);
+    vi.mocked(listRuns).mockRejectedValue(new Error('runs down'));
+    vi.mocked(listAdkProviders).mockResolvedValue([] as never);
+
+    const { result } = renderHook(() => useAttentionQueue({ locked: false }), { wrapper });
+    await waitFor(() => expect(result.current.partial).toBe(true));
+    expect(result.current.count).toBeNull();
+    expect(result.current.rows).toHaveLength(0);
+  });
 });

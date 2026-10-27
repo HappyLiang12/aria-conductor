@@ -107,7 +107,7 @@ export function AttentionQueue({
           onAction={retry}
         />
       )}
-      {phase === 'success' && rows.length === 0 && (
+      {phase === 'success' && !partial && rows.length === 0 && (
         <StateNotice kind="empty" title="Nothing needs attention" />
       )}
 

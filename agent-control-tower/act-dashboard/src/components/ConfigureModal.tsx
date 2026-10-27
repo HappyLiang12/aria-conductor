@@ -112,13 +112,6 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
 
   const close = () => setOpen(false);
 
-  // Gates and skills are reference data in this build; there is no editable
-  // policy state to reset. The control stays on Runtime only (Task 12).
-  const resetDefaults = () => {
-    /* no editable local policy state: gates/skills come from the build and the
-       real skill registry, and the runtime pair is re-read from the backend. */
-  };
-
   return (
     <>
       <div
@@ -232,11 +225,6 @@ export function ConfigureModal({ initialTab = 'gates' }: { initialTab?: string }
               : 'Runtime settings stored in the database — changes take effect immediately'}
           </div>
           <div className="actions">
-            {activeTab === 'runtime' && (
-              <button type="button" className="btn" onClick={resetDefaults}>
-                Reset to defaults
-              </button>
-            )}
             <button type="button" className="btn primary" onClick={close}>
               Done
             </button>
@@ -325,8 +313,8 @@ function GatesPane({ gates }: GatesPaneProps) {
               <div className="ttl">{g.label}</div>
               <div className="sub">
                 {g.on
-                  ? 'Human approval required before work flows on'
-                  : 'Auto-flow — agents proceed without human gate'}
+                  ? 'Policy target: human approval before work flows on'
+                  : 'Policy target: auto-flow without a human gate'}
               </div>
             </div>
             <div>
@@ -351,9 +339,9 @@ function GatesPane({ gates }: GatesPaneProps) {
               />
             </div>
             <div>
-              <div className="col-label">{g.on ? 'Required' : 'Optional'}</div>
+              <div className="col-label">{g.on ? 'Required by policy' : 'Optional by policy'}</div>
               <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                {g.on ? 'Blocks until approved' : 'Skipped automatically'}
+                Not enforced in this build
               </div>
             </div>
             <div

@@ -5,6 +5,7 @@ import com.alibaba.opensandbox.sandbox.config.ConnectionConfig;
 import com.alibaba.opensandbox.sandbox.domain.models.execd.filesystem.WriteEntry;
 import com.alibaba.opensandbox.sandbox.domain.services.Filesystem;
 import io.aria.conductor.execution.adk.TaskExecutionException;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
@@ -39,6 +40,7 @@ import static org.mockito.Mockito.when;
  * http://localhost:.../proxy/..." 69ms after create), and an exhausted window
  * must still fail as loudly as the former fixed attempt budget did.
  */
+@Tag("timing")
 class OpenSandboxSdkTest {
 
     private static final String SANDBOX_ID = "sb-1";

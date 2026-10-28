@@ -2,7 +2,11 @@ spring:
   main:
     allow-bean-definition-overriding: true
   datasource:
-    url: jdbc:h2:mem:act_test;MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    # act_test is the shared test schema. The suffix stays a single database for one-lane runs
+    # (empty default = today's behaviour verbatim) and lets concurrent lanes in one worktree keep
+    # their own copy. Suffix, not override, because TestProfileConfigurationTest:21 asserts the
+    # URL contains "jdbc:h2:mem:act_test".
+    url: jdbc:h2:mem:act_test${aria.test.db.suffix:};MODE=MySQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     username: sa
     password:
     driver-class-name: org.h2.Driver

@@ -18,6 +18,7 @@ import io.aria.conductor.execution.runtime.PreparedEnvironment;
 import io.aria.conductor.execution.runtime.RuntimeHandle;
 import io.aria.conductor.execution.runtime.SecretBundle;
 import io.aria.conductor.execution.runtime.sandbox.SandboxLifecycle;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
@@ -52,6 +53,7 @@ import static org.mockito.Mockito.when;
  * the session open is gated on {@code GET /global/health} becoming healthy
  * (observed: {@code POST /session returned status 502} 64ms after launch).
  */
+@Tag("timing")
 class OpenCodeCoreAdapterTest {
 
     private static final UUID RUN_ID = UUID.randomUUID();

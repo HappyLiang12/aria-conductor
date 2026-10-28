@@ -313,18 +313,36 @@ reaching for `mvn clean`.
 
 ## 8. Reproduction commands
 
+All of the numbers above are re-derivable with the tools committed under `scripts/`:
+
 ```bash
-cd /d/project/aria-conductor
-bash spark-output/build-metrics/mt.sh m1-aria-full act-aria test -Dspring.profiles.active=h2
-bash spark-output/build-metrics/mt.sh m3-app-full  act-app   test -Dspring.profiles.active=h2
-bash spark-output/build-metrics/mt.sh m4-exec-full act-execution test -Dspring.profiles.active=h2
-bash spark-output/build-metrics/ab.sh   # m5/m6/m8 act-common A/B + m9 act-app clean pair
-bash spark-output/build-metrics/x.sh    # x1/x2 context-boot isolation
-node spark-output/build-metrics/summarize.mjs <module> <logfile>   # per-class + boot decomposition
+# per-module lanes (m1 act-aria, m3 act-app, m4 act-execution) with the per-class and
+# per-context-boot breakdown:
+bash scripts/build-metrics/measure-module.sh act-aria act-aria test -Dspring.profiles.active=h2
+bash scripts/build-metrics/measure-module.sh act-app  act-app  test -Dspring.profiles.active=h2
+
+# m5/m6 JaCoCo A/B (the -Djacoco.skip=true arm), m7/m8 the Maven floor:
+bash scripts/build-metrics/measure-module.sh common-cov act-common test -Dspring.profiles.active=h2
+bash scripts/build-metrics/measure-module.sh common-bare act-common test -Dspring.profiles.active=h2 -Djacoco.skip=true
+bash scripts/build-metrics/measure-module.sh common-none act-common test -DskipTests
+
+# m9 clean-vs-incremental pair, and x1/x2 single-context isolation:
+bash scripts/build-metrics/measure-module.sh app-clean act-app clean test -Dspring.profiles.active=h2
+bash scripts/build-metrics/measure-module.sh app-x1 act-app test -Dtest=DevSqlControllerH2ProfilePresenceTest -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true -Dspring.profiles.active=h2
+bash scripts/build-metrics/measure-module.sh app-x2 act-app test -Dtest=RunControllerRegressionTest,KanbanHitlMigrationTest -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true -Dspring.profiles.active=h2
+
+# the before/after full-suite pair, with the reactor summary and ambient load sample:
+bash scripts/build-metrics/run-suite.sh before
+
+# lanes, including sharding:
+bash scripts/mvn-lane.sh inner act-aria
+bash scripts/mvn-lane.sh shard 2
 ```
 Per-class numbers come from `target/{surefire,failsafe}-reports/TEST-*.xml`; boot numbers from the
 `Started <Class> in N seconds (process running for M)` lines, which is why they are counted, not
-guessed. Logs retained under `spark-output/build-metrics/logs/`.
+guessed. Run logs are written to `agent-control-tower/target/build-metrics/`, which is git-ignored:
+they are deliberately **not** retained artifacts, so cite the command and re-run it rather than
+pointing at a log path that a fresh clone does not have.
 
 ## 9. Hardware
 
@@ -369,7 +387,7 @@ code, not silicon.
 | `scripts/mvn-lane.sh` | ADDED (untracked). Lanes `inner`/`gate`/`clean`/`itg`/`refresh`; migration staleness guard; deletes `target/jacoco.exec` before coverage-enforcing lanes; prints wall seconds. Every lane was executed: `inner` 10.4 s (act-common, 4 tests) and 10.9 s (act-app, 1 test), `gate` 17.2 s (act-common, 119 tests, ratchet met on a freshly deleted exec) and 52.5 s test step + 6.5 s no-op `-am` refresh (act-app, 63 tests, 0.80/0.60 met), `itg` 14.1 s (act-agent, 4 ITs), staleness guard positive control in §6.1. |
 | `AGENTS.md` | EDITED. Corrected the Flyway high-risk row (the guard is an `*IntegrationTest`, so `mvn test -pl act-app` could never have caught the V59 failure it was mapped to) and added the "Inner loop vs gate" table. |
 | `docs/reviews/2026-10-27-maven-loop-audit.md` | ADDED (this file). |
-| `spark-output/build-metrics/{mt.sh,ab.sh,x.sh,summarize.mjs,logs/*}` | ADDED. Measurement harness + logs, disposable; nothing under it is imported by the build. |
+| `scripts/build-metrics/{measure-module.sh,run-suite.sh,summarize.mjs}` | ADDED on the branch. The measurement harness behind every number in this file; writes its logs to the ignored `agent-control-tower/target/build-metrics/` and is imported by no build. |
 | poms, `.github/workflows/*`, test sources | **UNTOUCHED.** `git status --porcelain` shows no modified tracked file other than `AGENTS.md`; no commits, no branches. |
 
 ## 11. Open questions for the developer

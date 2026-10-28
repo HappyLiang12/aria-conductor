@@ -2,6 +2,7 @@ package io.aria.conductor.app.e2e;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -34,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * the readiness seam is exercised against actual sockets, including a
  * slow-binding peer that only starts listening after the wait has begun.
  */
+@Tag("timing")
 class CoreE2eEndpointReadinessTest {
 
     private static final String CONTROL_TOKEN = "fixture-control-token-0123456789abcdef";

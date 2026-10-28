@@ -9,6 +9,7 @@ import io.aria.conductor.execution.repository.RunWorkspaceLeaseRepository;
 import io.aria.conductor.execution.tool.WorkspaceManager;
 import io.aria.conductor.test.DataJpaTestBase;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +47,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * artifacts captured only after a verified stop proof, and ownership-aware
  * cleanup that never removes user repositories or retained worktrees.
  */
+@Tag("timing")
 class RunWorkspaceServiceTest extends DataJpaTestBase {
 
     @Autowired

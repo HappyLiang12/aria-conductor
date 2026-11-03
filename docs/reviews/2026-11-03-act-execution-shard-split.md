@@ -94,7 +94,9 @@ mvn -o -B -pl <modules> surefire:test -Dsurefire.includesFile=<lane list> -Dtemp
 ```
 
 No lifecycle phase runs, so nothing compiles; the shared `install -DskipTests` immediately before it
-produced the classes and the test resources. Verified from the spike log: the goal-only invocation
+produced the classes and the test resources. `inner` and `timing` invoke the same goal (with
+`test-compile` ahead of it, since a developer may have just edited code) for a different reason - see the
+coverage Minor in section 12. Verified from the spike log: the goal-only invocation
 printed only `--- surefire:3.5.3:test (default-cli) ---` and no `Compiling` line, and the pom's
 `**/*IntegrationTest.java` excludes still held (a listed `MaintenanceControllerIntegrationTest` was not
 run), as did `-DexcludedGroups=timing` (a listed `OpenCodeCoreAdapterTest` was not run).
@@ -144,9 +146,11 @@ module that has test sources but no measured costs (it would run in no lane and 
 still balance, because the arithmetic is measured from the same table).
 
 `node scripts/lane-plan.mjs verify <timing.log> <lane logs…>` reads `plan.json` back and fails after the
-run if a planned class printed no result line, a lane ran a class it was not given, one class ran in two
-lanes, a `@Tag("timing")` class ran inside a lane (i.e. `excludedGroups` silently not taking), or the
-totals do not add up.
+run if a planned class the measurement has seen run printed no result line, a lane ran a class it was not
+given, one class ran in two lanes, a `@Tag("timing")` class ran inside a lane (i.e. `excludedGroups`
+silently not taking), or - the oracle added in the review round of section 12 - a class compiled into
+`target/test-classes` that matches surefire's includes was given to no lane. It prints the number of
+compiled classes it examined (248) so a skipped oracle can never be read as a passed one.
 
 Severity is split by what is actually at stake: anything that would silently lose or duplicate work is
 fatal, and anything that only makes the *balance* stale is a warning. A class the measurement has seen
@@ -154,7 +158,10 @@ run but that printed no result line is fatal; a class with no measured history a
 helper named `*Test` that surefire produces no report for) warns and lets the run stand, because the lane
 was still given it.
 
-Both guards were mutated to prove they fire, not just to prove they pass:
+All three guards were mutated to prove they fire, not just to prove they pass. The last five rows were
+re-run against the surviving K=4 lane logs at `4fb16ea7`, so they are reproducible from a committed tree
+plus one run of the lane (section 10), and section 12 pairs two of them against `64e8d6e0`'s own copy of
+the script to show what the older guard did with the same input.
 
 | mutant | observed | exit |
 |--------|----------|-----:|
@@ -165,11 +172,27 @@ Both guards were mutated to prove they fire, not just to prove they pass:
 | delete that source and `gen` again | the four fragment files come back **byte-identical** to the committed ones | — |
 | drop one class from `plan.json` | `lane1 ran 1 class(es) it was not given: EXTRA …H2ProfileConfigurationTest` | 1 |
 | invent a never-measured class in `plan.json` | `lane1 also listed 1 class(es) never seen in a measured run, which produced no report: …` | 0 |
-| unmutated | `exact cover OK - 108 shardable classes, 4 fragments` and `verify: exact cover across lanes, and the arithmetic matches the single-process total` | 0 |
+| drop `PackCredentialCipherPropertyTest` from lane4 in `plan.json` | `EXTRA io.aria.conductor.execution.credential.PackCredentialCipherPropertyTest` **and** `… is compiled into act-execution/target/test-classes and matches surefire's includes, but no lane was given it and it is not tagged timing - it ran in no lane`, then `failed (2 problem set(s))` | 1 |
+| the same, plus delete the single `-- in …PackCredentialCipherPropertyTest` line it printed, so no log mentions it | the totals still read `2256 + 70 = 2326 vs 2326` and the cover is intact, yet `compiled oracle saw 248 surefire-matching class(es) … 1 of them given to no lane` and `failed (1 problem set(s))`. **This is the case the pre-review guard could not see**: nothing in the plan or the logs names the lost class, so before `4fb16ea7` exactly this run exited 0. | 1 |
+| bump one module's `Tests run:` by 1 in a copy of a lane log (one `@Test` added since the snapshot) | `verify: NOTE the test total moved (2327 vs the 2326 measured at e0ad2d0c). That is expected when a test method was added or removed since; … It is NOT a completeness failure.` | **0** |
+| unmutated | `exact cover OK - 108 shardable classes, 4 fragments` and `verify: exact cover across lanes, and the test total equals the measured single process` | 0 |
+
+The fourth row is the one that matters. The three oracles are complementary, not redundant: source
+discovery (`check`, before Maven) is the only one that can refuse a bad partition *before* spending 75 s;
+the printed `-- in` lines (`verify`) are the only ones that prove a class actually executed; the compiled
+`target/test-classes` enumeration is the only one that can see a class the other two are blind to, because
+both of them are filtered through what the planner already thought of. It runs only on the failure path
+(one `dir` walk per module plus `javap` per candidate), so the passing lane costs nothing for it.
 
 ## 7. Completeness arithmetic, per K
 
-`sum(lanes) + timing == the single-process total`, and the same 8 skipped tests, at every K (all rc=0):
+Class cover is *enforced*; the arithmetic is *reported*. That split is deliberate and came out of the
+review round (see the last two mutants above): `sum(lanes) + timing == the single-process total` is a
+statement about a snapshot taken at `e0ad2d0c`, so treating it as a gate would turn one added `@Test`
+method into a red daily lane and a 199 s re-measurement. What must never drift silently is which *classes*
+ran, and that is what fails the run.
+
+With that said, every run below does add up exactly (all rc=0, same 8 skipped):
 
 | K | per-lane `Tests run` | lanes | timing lane | total | measured single process | skipped |
 |---|----------------------|------:|------------:|------:|------------------------:|--------:|
@@ -179,6 +202,18 @@ Both guards were mutated to prove they fire, not just to prove they pass:
 
 Class counts close the same way: 244 classes planned = 248 measured − 4 tagged timing, and `plan` refuses
 to emit a table where a class is in two lanes.
+
+The K=4 row is the one that survived to `4fb16ea7` and was re-verified there after the guards changed,
+against the committed fragments and the compiled oracle:
+
+```
+verify: lanes ran 241 + 635 + 768 + 612 = 2256, timing lane 70 (the tagged classes hold 70),
+        total 2326 vs the measured snapshot's 2326
+verify: skipped=8 (the measured run skipped 8) and failures+errors=0
+verify: compiled oracle saw 248 surefire-matching class(es) under target/test-classes from D:\wt\lane-bench,
+        every one given to a lane or tagged timing
+verify: exact cover across lanes, and the test total equals the measured single process
+```
 
 ## 8. The measured curve, and where the box gives up
 
@@ -198,28 +233,40 @@ previous sweep's numbers were produced the same way, so the comparison holds.
 | **`shard 4` (act-execution split)** | 59.8 s | 18.5 s | **78.3 s** |
 | **`shard 3` again, from a fresh checkout at `ebcf14c7`** | 65.5 s | 20.8 s | **86.3 s** |
 | **`shard 3` at the branch tip `70e89ad9`** | 62.2 s | 18.4 s | **80.6 s** |
+| **`shard 3` at `4fb16ea7`, twice** | — | — | **78.5 s / 79.8 s** |
+| **`shard 4` at `4fb16ea7`** | 56.7 s | 18.0 s | **74.7 s** |
 
 The baselines and the previous-sweep rows were measured at `e0ad2d0c`. The first three bold rows ran
-from the working tree that became `ebcf14c7` (same scripts, pom and fragments as that commit); the last
-two are fresh `git checkout`s of `ebcf14c7` and `70e89ad9`, which also confirms the lane script behaves
-on a Windows checkout where git hands it over with CRLF line endings. The three `shard 3` runs are the
-honest spread: identical lane work (486 + 975 + 795 every time), 5.7 s between best and worst, most of
-it in the serial timing lane (18.4-20.8 s). Treat the totals as ±5 s, and the completeness arithmetic as
-exact.
+from the working tree that became `ebcf14c7` (same scripts, pom and fragments as that commit); the next
+three are fresh `git checkout`s of `ebcf14c7`, `70e89ad9` and `4fb16ea7`, which also confirms the lane
+script behaves on a Windows checkout where git hands it over with CRLF line endings. The two `shard 3`
+cells at `4fb16ea7` have no lane split because all runs write to one log directory and the K=4 run that
+followed overwrote them; the totals are the script's own summary lines, and the K=4 lane phase is the
+total minus that run's retained `timing` line (18.0 s), which is how the column is defined.
 
-So the split is worth 6.8 s at K=2, 32.1-37.8 s at K=3 and 36.7 s at K=4; against the serial suite,
-K=3 is 2.31-2.47x. The floor is no longer act-execution: at K=4 the heaviest planned lane is act-app +
-act-mcp at 38.5 s, exactly the target this split was aimed at.
+The five K=3 runs are the honest spread: identical lane work (486 + 975 + 795 in every run whose counts
+were retained), 7.8 s between best and worst, a good part of it in the serial timing lane (18.0-20.8 s
+across all runs). Treat the totals as ±5 s, and the class cover as exact.
+
+So the split is worth 6.8 s at K=2, 32.1-39.9 s at K=3 and 36.7-40.3 s at K=4; against the serial suite,
+K=3 is 2.31-2.54x and K=4 2.54-2.66x. The floor is no longer act-execution: at K=4 the heaviest planned
+lane is act-app + act-mcp at 38.5 s, exactly the target this split was aimed at.
 
 **The curve flattens because of memory bandwidth, not cores.** At K=4 the four lanes ran 50.2, 56.0,
 57.8 and 57.4 s (`Total time` from each lane log) against planned costs of 38.5, 39.0, 36.3 and 35.0 s —
-11.7 to 22.4 s of inflation per lane, and the *order inverted*: the lightest planned lane finished
-joint-slowest. All four finished within 7.5 s of each other, which is what a shared bottleneck looks
-like. A sampler every 2 s over the K=4 run recorded free RAM falling from 5,543 MB to **2,826 MB** at
-the 50 s mark (of 15.75 GiB usable), i.e. the four lanes took ~2.7 GB. K=4 is reachable on this box, but
-it costs the headroom a browser and an IDE want, and it buys 2-8 s over K=3 (its single run at 78.3 s
-against three K=3 runs at 80.6-86.3 s, so the gap is not yet proven). Guidance in
-`scripts/mvn-lane.sh` therefore says K=3 by default, K=4 when the box is otherwise idle.
+11.7 to 22.4 s of inflation per lane, and the *order inverted*: the heaviest planned lane (38.5 s) finished
+first at 50.2 s while the lightest (35.0 s) came in second-slowest at 57.4 s. The run at `4fb16ea7`
+reproduced the shape (46.1, 52.9, 54.7, 54.3 s against the same plan, 7.6-19.3 s of inflation) though not
+the level, and again the heaviest went first and the lightest finished second-slowest - 0.4 s off the
+bottom in both runs. All four finished within 7.5 s of each other both times, which is what a shared
+bottleneck looks like. A sampler every 2 s over the first K=4 run recorded free RAM falling
+from 5,543 MB to **2,826 MB** at the 50 s mark (of 15.75 GiB usable), i.e. the four lanes took ~2.7 GB.
+K=4 is reachable on this box, but it costs the headroom a browser and an IDE want.
+
+Against five K=3 runs (78.5-86.3 s) the two K=4 runs (74.7, 78.3 s) gain 0.2-11.6 s: the samples do not
+overlap, but only by 0.2 s at the closest edge, so the honest statement is "a few seconds, worth it only
+when nothing else is running". Guidance in `scripts/mvn-lane.sh` therefore says K=3 by default, K=4 when
+the box is otherwise idle.
 
 One caveat on the predictor itself: planning by summed per-class cost is a *ranking*, not a forecast. The
 cost of a class depends on which contexts its lane already booted (measured: `RunCoreLogTest` took 4.09 s
@@ -236,7 +283,7 @@ on any machine.
 
 ## 9. What this does not fix
 
-- The serial timing lane is now 18.3-18.6 s, i.e. 23 % of the K=4 total. It is serial on purpose;
+- The serial timing lane is now 18.0-20.8 s, i.e. 24 % of the best K=4 total. It is serial on purpose;
   shortening it means making those four classes not bound wall time, which is a test-design change.
 - act-app is the new indivisible task (34.5 s class-sum, 23 classes) with 37 % of it in one class. The
   same fragment treatment applies, and `lane-plan.mjs gen act-app` will do it, but it has not been
@@ -268,7 +315,7 @@ any module log.
 
 ## 11. INFERRED list
 
-- The 32 GB expectation in §8 — no route to that machine, nothing measured.
+- The 32 GB expectation in section 8 — no route to that machine, nothing measured.
 - That memory bandwidth (not CPU, not disk) is the single cause of the K=4 flattening. Evidence is
   circumstantial: 12 threads, only 6 physical, 4 lanes finishing within 7.5 s of each other, 2.8 GB free
   at the worst moment, and one DIMM. A per-cycle stall counter would be needed to call it proven.
@@ -277,3 +324,109 @@ any module log.
   command line was not captured for a lane.
 - That `abstract class` declarations named `*Test` do not produce report lines. Not observed in this
   repository's current set; the rule is there to keep discovery honest if one appears.
+
+## 12. Independent review round (`e0ad2d0c..64e8d6e0` → `4fb16ea7`)
+
+A read-only reviewer audited the shard-split range and returned **REQUEST CHANGES**: two MAJORs and four
+Minors, three of which were fixed and one declined. A fifth item came from self-review. Every finding was
+reproduced against the code or a real log before it was acted on. No test was relaxed, no scenario deleted,
+no timeout widened, and no product or test source is in the range at all (`git diff --name-only
+e0ad2d0c..4fb16ea7` returns no `src/` path). `scripts/lanes` has exactly one commit in the range - `ebcf14c7`,
+which created the four fragments and the cost table - and nothing later touched it, so the fragments the
+K=2/3/4 rows were measured against are byte-for-byte the fragments `4fb16ea7` ships and the timings stay
+comparable across the two SHAs. The one thing this round did
+loosen is the arithmetic gate, and section 7 states why a snapshot cannot be a gate and what enforces
+completeness instead.
+
+**MAJOR 1 - `verify` gated on arithmetic that cannot stay fresh.** It compared the run's test total against
+the frozen snapshot, so adding a single `@Test` method anywhere made every green lane print
+`completeness LOST - 2327 != 2326` and demanded a 199 s re-measurement to unblock an unrelated change.
+Completeness is a property of *classes*, so `verify` now enforces classes and *reports* the arithmetic
+(`NOTE the test total moved … It is NOT a completeness failure`, exit 0). Before and after, same input -
+one module's `Tests run: 172` bumped to 173 in a copy of the real lane1 log, nothing else touched:
+
+```
+64e8d6e0 (before): completeness LOST - 2327 != 2326. No lane may be trusted until this adds up.   rc=1
+4fb16ea7 (after):  NOTE the test total moved (2327 vs the 2326 measured at e0ad2d0c). … It is NOT
+                   a completeness failure.                                                        rc=0
+```
+
+**MAJOR 2 - a class could run in no lane and the run would still be green.** `check`'s oracle is *source*
+discovery: any way a class escapes that regex (declaration sharing a line with its annotation, a record, a
+second top-level type in one file) also escapes the guard, and `verify`'s planned-vs-ran comparison only
+iterates names somebody already planned. Both were real blind spots, not hypothetical - section 5 documents
+two classes the file-name oracle missed. The fix is to consult the oracle surefire itself uses: after the
+run, enumerate `target/test-classes`, apply the pom's includes/excludes, and fail on anything neither
+planned nor tagged timing. `javap` runs only on that failure path, to tell an unrunnable abstract base from
+a genuine orphan. The oracle prints how many classes it saw (248) so a silently skipped check can never be
+read as a passed one, and `RUN_ROOT` follows the logs rather than the script's tree, so a bench checkout is
+checked against its own compiled classes. Before and after, same input - `PackCredentialCipherPropertyTest`
+removed from its lane in `plan.json` *and* its single `-- in` line removed from a copy of the lane log, so
+the totals still balance at 2326 = 2326 and no other check objects:
+
+```
+64e8d6e0 (before): exact cover across lanes, and the arithmetic matches the single-process total   rc=0
+4fb16ea7 (after):  … is compiled into act-execution/target/test-classes … it ran in no lane. …
+                   compiled oracle saw 248 surefire-matching class(es) … 1 of them given to no lane
+                   verify: failed (1 problem set(s))                                               rc=1
+```
+
+**Minor - a lane could grade coverage it never collected.** `jacoco:check`'s `<skip>` is bound to
+`${skip.unit.tests}`, not to `${jacoco.skip}`, so `inner` and `timing` - which then ran the `test` *phase* -
+executed `check` against whatever stale `target/jacoco.exec` was lying around; the retained timing log
+shows `All coverage checks have been met` for a run that collected nothing. Both lanes now run
+`test-compile surefire:test` with `-Djacoco.skip=true`, so `report`/`check` never bind and no agent attaches
+(`Skipping JaCoCo execution because property jacoco.skip is set`, `argLine set to empty`). The pom comment
+that recommended `-Djacoco.skip=true` for filtered runs - which does not stop `check` - now names the flag
+that does. Note `test-compile` still triggers `prepare-agent` (it binds to `initialize`), which is why the
+skip stays on the command line rather than being dropped along with the phase.
+
+**Minor - two lanes could race on `act-execution/.jqwik-database`.** Each lane now passes
+`-Djqwik.database=<its own file>` under `$LOG_DIR`, verified by pointing it somewhere unusual and finding
+the file there. The timing lane needs it too: every jqwik class is filtered out by `-Dgroups=timing`, yet
+the engine still created the default file.
+
+**Minor - stale box-specific attribution in `AGENTS.md`.** The `shard` rows were credited to the SHA the
+*baselines* came from, so a reader could not tell which commit produced which number. Every cell in the
+Happy table now carries its own commit, and the re-measurements at the end of this section replace the older
+cells.
+
+**Self-review catch, not a reviewer finding - a capture-group index shifted by the abstract-skip edit.**
+Adding the modifier group to the discovery regex moved the class name from `m[1]` to `m[2]`, and an
+intermediate working tree still pushed `m[1]`, i.e. the modifier string instead of the name. It was caught
+before that tree was used for measurement, and `64e8d6e0` committed the two lines as a pair
+(`if (/\babstract\b/.test(m[1])) continue;` with `out.push({ name: m[2], timing })`), so nothing wrong
+shipped. Worth recording anyway, because it is why `check` and `plan` are run against the tree instead of
+trusting a diff: a one-character index error in that line makes discovery return garbage names and every
+downstream guard still reports "exact cover OK" over the garbage.
+
+**Declined (the fourth Minor) - "let `plan` append unlisted classes to the lightest lane."** The
+requirement is that the partition be a committed, reviewable list *and* that a class missing from all lanes
+fails loudly. Silently
+adding classes would satisfy both only by drifting the lanes away from the file a human reviewed, and the
+merge friction it saves (two PRs touching `g1..g4`) is already resolved by re-running
+`node scripts/lane-plan.mjs gen act-execution`, which is deterministic and byte-identical for unchanged
+inputs (mutant row five). `check` stays fatal for `MISSING`, and its message names `gen` as the remedy.
+
+After the round, on the same box: `inner act-aria` 9.2 s, `inner act-app -Dtest=RunControllerRegressionTest`
+12.0 s, `timing` 18.0 s, `shard 3` 78.5-79.8 s, `shard 4` 74.7 s - all rc=0 with the full guard output in
+section 7. The two `inner` rows are 1.0 and 1.9 s under the pre-review numbers (10.2 and 13.9 s), which
+arrived with the goal-only switch; each is a single run and the commit changed two things at once (no
+lifecycle phase, and no coverage goals over data the lane never collected), so read the delta as indicative
+rather than as an attributed measurement. The two before/after pairs above are reproducible from a finished
+lane run without re-running Maven, because both mutants act on the logs and `plan.json` that the run leaves
+behind:
+
+```bash
+cd <worktree at 4fb16ea7>            # any tree; the bench copy is fine
+git show 64e8d6e0:scripts/lane-plan.mjs > scripts/pre-fix.mjs   # delete it afterwards
+L=agent-control-tower/target/mvn-lane
+# MAJOR 1: bump one module's summary line in a copy of lane1's log, then compare the two scripts
+sed 's/Tests run: 172, Failures: 0, Errors: 0, Skipped: 0/Tests run: 173, &/' $L/shard-lane1.log > $L/m1.log
+node scripts/pre-fix.mjs verify $L/timing.log $L/m1.log $L/shard-lane{2,3,4}.log   # rc=1
+node scripts/lane-plan.mjs verify $L/timing.log $L/m1.log $L/shard-lane{2,3,4}.log # rc=0 + NOTE
+# MAJOR 2: also drop a class from its lane in plan.json and from the "-- in" line in its lane log
+# (both edits in copies; restore plan.json afterwards from a `plan` run or a saved copy)
+node scripts/pre-fix.mjs verify $L/timing.log $L/shard-lane{1,2,3}.log $L/m2.log   # rc=0  <- the bug
+node scripts/lane-plan.mjs verify $L/timing.log $L/shard-lane{1,2,3}.log $L/m2.log # rc=1
+```

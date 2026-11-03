@@ -456,10 +456,12 @@ expected: 4  but was: 5
     at CoreProgressPumpTest.aDrainAfterStopEmitsNothingAndPerformsNoPoll(CoreProgressPumpTest.java:1133)
 ```
 
-**The branch cannot have caused it.** `git diff --name-only e0ad2d0c..97279dc3` contains no `src/` path at
-all, and that test file was last touched by `605ecbba` (2026-10-26, PR #114). `.github/workflows/ci.yml` is
-unchanged on this branch, so the command that ran it, the group it ran in and the runner it ran on are all
-the same as on `main`.
+**The branch cannot have caused it.** `git diff --name-only e0ad2d0c..HEAD` contains no `src/` path at all,
+and that test file was last touched by `605ecbba` (2026-10-26, PR #114). Across the whole PR the only test
+files touched are six - the cron fix, the four classes that gained `@Tag("timing")`, and
+`application-test.yml` for the lane-local schema - and none of them is this one. `.github/workflows/ci.yml`
+is unchanged on this branch, so the command that ran it, the group it ran in and the runner it ran on are
+all the same as on `main`.
 
 **The nondeterminism is measured, not argued.** Same test code, three pushes whose differences are
 documentation and shell comments:

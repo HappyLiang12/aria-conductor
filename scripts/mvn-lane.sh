@@ -192,7 +192,7 @@ case "$LANE" in
     need_node
     # The guard runs before Maven, so a partition that no longer covers the suite cannot burn a run.
     node "$ROOT/scripts/lane-plan.mjs" check \
-      || die "scripts/lanes is not an exact cover of the suite - fix the partition or re-measure before sharding"
+      || die "scripts/lanes is not an exact cover of the suite - regenerate the fragment(s) with \`node scripts/lane-plan.mjs gen <module>\`, then re-measure if a class is new"
     plan=$(node "$ROOT/scripts/lane-plan.mjs" plan "$K" "$LOG_DIR") || die "lane-plan.mjs plan failed"
 
     lane_n=0; lane_mods=(); lane_inc=(); lane_logs=()

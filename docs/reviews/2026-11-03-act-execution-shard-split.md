@@ -148,16 +148,24 @@ run if a planned class printed no result line, a lane ran a class it was not giv
 lanes, a `@Tag("timing")` class ran inside a lane (i.e. `excludedGroups` silently not taking), or the
 totals do not add up.
 
-Both were mutated to prove they fire, not just to prove they pass:
+Severity is split by what is actually at stake: anything that would silently lose or duplicate work is
+fatal, and anything that only makes the *balance* stale is a warning. A class the measurement has seen
+run but that printed no result line is fatal; a class with no measured history at all (added since, or a
+helper named `*Test` that surefire produces no report for) warns and lets the run stand, because the lane
+was still given it.
 
-| mutant | observed |
-|--------|----------|
-| delete `PackCredentialCipherPropertyTest` from g3 | `MISSING … (in no fragment - it would never run)` + `STALE COST g3.txt header says 17.21s but its classes cost 16.78s`, rc=1 |
-| add a class to two fragments | `DUPLICATE … listed 2 times`, rc=1 |
-| add a name that does not exist | `STALE … no shardable test class by that name exists`, rc=1 |
-| drop one class from `plan.json` | `lane1 ran 1 class(es) it was not given: EXTRA …H2ProfileConfigurationTest`, rc=1 |
-| invent one class in `plan.json` | `lane2 was given 73 classes and ran 72; 1 printed no result`, rc=1 |
-| unmutated | `exact cover OK - 108 shardable classes, 4 fragments`, `verify: exact cover across lanes, and the arithmetic matches the single-process total`, rc=0 |
+Both guards were mutated to prove they fire, not just to prove they pass:
+
+| mutant | observed | exit |
+|--------|----------|-----:|
+| delete `PackCredentialCipherPropertyTest` from g3 | `MISSING … (in no fragment - it would never run. Remedy: node scripts/lane-plan.mjs gen act-execution, …)` plus `STALE COST … g3.txt header says 17.21s but its classes cost 16.78s` | 1 |
+| add one class to two fragments | `DUPLICATE … GitBranchServiceTest listed 2 times` plus `STALE COST … g2.txt … 17.51s` | 1 |
+| add a name with no such class | `STALE … DoesNotExistTest (listed but no shardable test class by that name exists)` | 1 |
+| add a real new test source (`ZZProbeNewTest.java`) | `MISSING io.aria.conductor.execution.ZZProbeNewTest`, so `shard` refuses to start Maven; after `gen` the class is in g4 (packed at 0 s) and `check` is clean | 1 → 0 |
+| delete that source and `gen` again | the four fragment files come back **byte-identical** to the committed ones | — |
+| drop one class from `plan.json` | `lane1 ran 1 class(es) it was not given: EXTRA …H2ProfileConfigurationTest` | 1 |
+| invent a never-measured class in `plan.json` | `lane1 also listed 1 class(es) never seen in a measured run, which produced no report: …` | 0 |
+| unmutated | `exact cover OK - 108 shardable classes, 4 fragments` and `verify: exact cover across lanes, and the arithmetic matches the single-process total` | 0 |
 
 ## 7. Completeness arithmetic, per K
 

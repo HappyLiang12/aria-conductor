@@ -204,16 +204,23 @@ Class counts close the same way: 244 classes planned = 248 measured − 4 tagged
 to emit a table where a class is in two lanes.
 
 The K=4 row is the one that survived to `4fb16ea7` and was re-verified there after the guards changed,
-against the committed fragments and the compiled oracle:
+against the committed fragments and the compiled oracle; K=2 was then re-run at the shipped tip `97279dc3`
+so that all three K values are proven at the commit this branch delivers:
 
 ```
 verify: lanes ran 241 + 635 + 768 + 612 = 2256, timing lane 70 (the tagged classes hold 70),
-        total 2326 vs the measured snapshot's 2326
+        total 2326 vs the measured snapshot's 2326          # K=4 at 4fb16ea7
+verify: lanes ran 776 + 1480 = 2256, timing lane 70 (the tagged classes hold 70),
+        total 2326 vs the measured snapshot's 2326          # K=2 at 97279dc3
 verify: skipped=8 (the measured run skipped 8) and failures+errors=0
 verify: compiled oracle saw 248 surefire-matching class(es) under target/test-classes from D:\wt\lane-bench,
         every one given to a lane or tagged timing
 verify: exact cover across lanes, and the test total equals the measured single process
 ```
+
+The K=3 arithmetic at `4fb16ea7` came from the run reported in section 12 (`486 + 975 + 795 + 70 = 2326`).
+`plan 2` is byte-identical between `64e8d6e0` and `97279dc3` - the review round changed guards, not packing -
+which is why the same 776 / 1480 split appears in both runs.
 
 ## 8. The measured curve, and where the box gives up
 
@@ -235,11 +242,12 @@ previous sweep's numbers were produced the same way, so the comparison holds.
 | **`shard 3` at the branch tip `70e89ad9`** | 62.2 s | 18.4 s | **80.6 s** |
 | **`shard 3` at `4fb16ea7`, twice** | — | — | **78.5 s / 79.8 s** |
 | **`shard 4` at `4fb16ea7`** | 56.7 s | 18.0 s | **74.7 s** |
+| **`shard 2` at the shipped tip `97279dc3`** | 75.9 s | 17.9 s | **93.8 s** |
 
-The baselines and the previous-sweep rows were measured at `e0ad2d0c`. The first three bold rows ran
-from the working tree that became `ebcf14c7` (same scripts, pom and fragments as that commit); the next
-three are fresh `git checkout`s of `ebcf14c7`, `70e89ad9` and `4fb16ea7`, which also confirms the lane
-script behaves on a Windows checkout where git hands it over with CRLF line endings. The two `shard 3`
+The baselines and the previous-sweep rows were measured at `e0ad2d0c`. The three rows that say only
+`(act-execution split)` ran from the working tree that became `ebcf14c7` (same scripts, pom and fragments as
+that commit); every row that names a SHA is a fresh `git checkout` of it, which also confirms the lane script
+behaves on a Windows checkout where git hands it over with CRLF line endings. The two `shard 3`
 cells at `4fb16ea7` have no lane split because all runs write to one log directory and the K=4 run that
 followed overwrote them; the totals are the script's own summary lines, and the K=4 lane phase is the
 total minus that run's retained `timing` line (18.0 s), which is how the column is defined.
@@ -248,9 +256,9 @@ The five K=3 runs are the honest spread: identical lane work (486 + 975 + 795 in
 were retained), 7.8 s between best and worst, a good part of it in the serial timing lane (18.0-20.8 s
 across all runs). Treat the totals as ±5 s, and the class cover as exact.
 
-So the split is worth 6.8 s at K=2, 32.1-39.9 s at K=3 and 36.7-40.3 s at K=4; against the serial suite,
-K=3 is 2.31-2.54x and K=4 2.54-2.66x. The floor is no longer act-execution: at K=4 the heaviest planned
-lane is act-app + act-mcp at 38.5 s, exactly the target this split was aimed at.
+So the split is worth 6.8-9.4 s at K=2, 32.1-39.9 s at K=3 and 36.7-40.3 s at K=4; against the serial suite
+that is 2.12x at K=2, 2.31-2.54x at K=3 and 2.54-2.66x at K=4. The floor is no longer act-execution: at K=4
+the heaviest planned lane is act-app + act-mcp at 38.5 s, exactly the target this split was aimed at.
 
 **The curve flattens because of memory bandwidth, not cores.** At K=4 the four lanes ran 50.2, 56.0,
 57.8 and 57.4 s (`Total time` from each lane log) against planned costs of 38.5, 39.0, 36.3 and 35.0 s —
@@ -283,7 +291,7 @@ on any machine.
 
 ## 9. What this does not fix
 
-- The serial timing lane is now 18.0-20.8 s, i.e. 24 % of the best K=4 total. It is serial on purpose;
+- The serial timing lane is now 17.9-20.8 s, i.e. 24 % of the best K=4 total. It is serial on purpose;
   shortening it means making those four classes not bound wall time, which is a test-design change.
 - act-app is the new indivisible task (34.5 s class-sum, 23 classes) with 37 % of it in one class. The
   same fragment treatment applies, and `lane-plan.mjs gen act-app` will do it, but it has not been
@@ -409,8 +417,9 @@ merge friction it saves (two PRs touching `g1..g4`) is already resolved by re-ru
 inputs (mutant row five). `check` stays fatal for `MISSING`, and its message names `gen` as the remedy.
 
 After the round, on the same box: `inner act-aria` 9.2 s, `inner act-app -Dtest=RunControllerRegressionTest`
-12.0 s, `timing` 18.0 s, `shard 3` 78.5-79.8 s, `shard 4` 74.7 s - all rc=0 with the full guard output in
-section 7. The two `inner` rows are 1.0 and 1.9 s under the pre-review numbers (10.2 and 13.9 s), which
+12.0 s, `timing` 18.0 s, `shard 3` 78.5-79.8 s, `shard 4` 74.7 s, and at the shipped tip `97279dc3` a final
+`shard 2` 93.8 s - all rc=0 with the full guard output in section 7. The two `inner` rows are 1.0 and 1.9 s
+under the pre-review numbers (10.2 and 13.9 s), which
 arrived with the goal-only switch; each is a single run and the commit changed two things at once (no
 lifecycle phase, and no coverage goals over data the lane never collected), so read the delta as indicative
 rather than as an attributed measurement. The two before/after pairs above are reproducible from a finished

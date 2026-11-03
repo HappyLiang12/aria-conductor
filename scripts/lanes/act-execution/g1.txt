@@ -1,0 +1,29 @@
+# act-execution shard fragment 1 of 4 - a surefire includes file (one FQCN per line).
+# cost=17.21s  classes=24
+# measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
+# by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
+
+io.aria.conductor.execution.adk.opencode.OpenCodeHttpClientTest
+io.aria.conductor.execution.adk.opencode.OpenCodePropertiesBindingTest
+io.aria.conductor.execution.approval.ApprovalAnswerServiceTest
+io.aria.conductor.execution.approval.RunEndPermissionSettlerTest
+io.aria.conductor.execution.approval.WriteGrantServiceTest
+io.aria.conductor.execution.controller.ApprovalControllerTest
+io.aria.conductor.execution.controller.ExecutionControllerTest
+io.aria.conductor.execution.controller.ToolPackControllerTest
+io.aria.conductor.execution.credential.PackCredentialServiceTest
+io.aria.conductor.execution.engine.LooksLikeActionRequestTest
+io.aria.conductor.execution.git.GitBranchConfigTest
+io.aria.conductor.execution.housekeeping.HousekeepingServiceExecuteTest
+io.aria.conductor.execution.housekeeping.HousekeepingServiceTest
+io.aria.conductor.execution.kanban.AgentPickerServiceTest
+io.aria.conductor.execution.kanban.KanbanReviewCardListenerTest
+io.aria.conductor.execution.kanban.KanbanServiceAskCountTest
+io.aria.conductor.execution.listener.WorkflowAutoChainerSddTest
+io.aria.conductor.execution.mcp.PlatformMcpAutoApprovalTest
+io.aria.conductor.execution.pipeline.ToolRiskResolverTest
+io.aria.conductor.execution.runtime.CoreConfigurationServiceTest
+io.aria.conductor.execution.runtime.CoreExecutionServiceSandboxLaunchAbortTest
+io.aria.conductor.execution.runtime.CoreRuntimeConfigurationTest
+io.aria.conductor.execution.runtime.RuntimeLedgerTypesTest
+io.aria.conductor.execution.runtime.core.QoderLaunchProfileTest

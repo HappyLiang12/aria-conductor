@@ -7,26 +7,33 @@
 #   scripts/mvn-lane.sh itg    <module> [-Dit.test=PATTERN]  failsafe (integration) tier only
 #   scripts/mvn-lane.sh refresh                              incremental install of every module, no tests
 #   scripts/mvn-lane.sh timing                               the @Tag("timing") classes, serially
-#   scripts/mvn-lane.sh shard K                              K concurrent module-disjoint lanes, then timing
+#   scripts/mvn-lane.sh shard K                              K concurrent lanes over the unit tier, then timing
 #
-# Fan-out cap: keep K <= 2 on a 6-core / 16 GB dev box, 3 only when nothing else is running.
-# Each lane forks one test JVM that loads a whole Spring graph (measured: ~1 GB RSS per act-app
-# lane, and ~4 GB free on this box during a Maven run), and forkCount stays 1 inside a lane
-# because four classes assert on real elapsed time. K > 3 makes lanes starve each other, which
-# shows up as timing flakes rather than as a slower number. CI proves 4 in parallel because
-# .github/workflows/ci.yml:113-124 runs four module groups on four separate runners.
+# Fan-out, measured on Happy (i5-12500 6C/12T, 16 GB DDR5 in ONE channel, SATA SSD) at e0ad2d0c:
+# serial `clean test` 199 s, shard 2 96.4 s, shard 3 81.3 s, shard 4 78.3 s. So K=3 is the default
+# worth reaching for and K=4 buys about 3 s more - the single memory channel, not the 12 threads, is
+# what flattens the curve: at K=4 the four lanes each ran 11-21 s longer than their planned cost,
+# and the box was down to 2.8 GB free at the worst moment. K=1 is the whole tier in one lane, useful
+# as the reference run. CI runs four groups on four separate runners (.github/workflows/ci.yml:113-139)
+# where nothing is shared, which is why the hosted lane can be wider than any local one.
 #
 # Isolation contract for shard lanes:
-#   - one shared `install -DskipTests` first, so no lane pays the ~49 s compile
-#   - lanes get disjoint module lists, so two processes never write one module's target/
+#   - one shared `install -DskipTests` first, so no lane pays the compile and none needs to
+#   - a lane runs `surefire:test` as a GOAL only: it never compiles, which is what makes it safe for
+#     two lanes to share one module's target/ (act-execution is split across lanes on purpose)
+#   - each lane gets -DtempDir=lane<i>, so even surefire's boot jars cannot collide
 #   - ARIA_TEST_DB_SUFFIX=_l<i> gives each lane its own in-memory schema name
+#   - the class lists come from scripts/lanes (committed, cost-derived) and `lane-plan.mjs check`
+#     refuses to start Maven unless they are an exact cover; `verify` re-checks the run itself
 #   - the "timing" tag is excluded from every lane and replayed serially afterwards, so the
 #     suite stays complete while nothing that bounds elapsed time runs under contention
 #   - JaCoCo runs only on the gate/itg lanes, which delete target/jacoco.exec first
 #
 # Optional environment:
-#   MVN_REPO=<path>        private local repository, for concurrent lanes across worktrees
-#   LANE_ID=<name>         suffix the JaCoCo exec file so parallel coverage runs cannot share it
+#   MVN_REPO=<path>   private local repository. Use it for any scratch or throwaway checkout: the
+#                     shared install writes act-*.jar into whatever repo it is given, and pointing a
+#                     bench run at a copy of ~/.m2 keeps the developer's own SNAPSHOT jars untouched.
+#   LANE_ID=<name>    suffix the JaCoCo exec file so parallel coverage runs cannot share it
 set -u
 
 LANE="${1:-}"; ARG2="${2:-}"
@@ -48,18 +55,19 @@ PROFILE=(-Dspring.profiles.active=h2)
 REPO_OPTS=()
 [ -n "${MVN_REPO:-}" ] && REPO_OPTS+=("-Dmaven.repo.local=$MVN_REPO")
 
-# Per-module weights in seconds, measured on this box at 605ecbba (`clean test`, reactor summary)
-# and reduced by the 97.7 s cron wait that P-1 removed from act-aria. They only order the modules,
-# so a stale weight costs balance, never correctness.
-declare -A WEIGHTS=(
-  [act-execution]=125 [act-app]=77 [act-knowledge]=32 [act-common]=27.5
-  [act-agent]=19.3 [act-dashboard-api]=15.2 [act-aria]=14 [act-mcp]=14.6
-  [act-test-support]=2
-)
-MODULES=("${!WEIGHTS[@]}")
-TIMING_MODULES="act-app,act-execution"
-# Classes that bound real elapsed time; kept out of parallel lanes, replayed by the timing lane.
-TIMING_CLASSES="CoreE2eEndpointReadinessTest,OpenCodeCoreAdapterTest,OpenSandboxSdkTest,RunWorkspaceServiceTest"
+# Nothing here hardcodes a module weight, a timing class name or a `-Dtest` pattern any more: the
+# packing lives in scripts/lane-plan.mjs and the partition in scripts/lanes/, because it needs the
+# per-class measurements, float arithmetic, and a completeness guard that no shell recomputation on
+# a different host would reproduce.
+need_node() { command -v node >/dev/null 2>&1 || die "this lane needs node on PATH (scripts/lane-plan.mjs)"; }
+load_timing_plan() {
+  local line
+  need_node
+  line=$(node "$ROOT/scripts/lane-plan.mjs" timing-plan) || die "lane-plan.mjs timing-plan failed"
+  TIMING_MODULES=$(printf '%s' "$line" | cut -f2)
+  TIMING_CLASSES=$(printf '%s' "$line" | cut -f4)
+  [ -n "$TIMING_MODULES" ] || die "timing-plan found no modules with @Tag(\"timing\") classes"
+}
 
 [ -n "$LANE" ] || die "usage: mvn-lane.sh {inner|gate|clean|itg|refresh|timing|shard} [module|K]"
 
@@ -169,6 +177,7 @@ case "$LANE" in
     ;;
 
   timing)
+    load_timing_plan
     echo "mvn-lane: replaying the wall-clock-bounded classes serially: $TIMING_CLASSES"
     run_logged timing "$LOG_DIR/timing.log" -pl "$TIMING_MODULES" test \
       -Djacoco.skip=true -Dgroups=timing \
@@ -178,52 +187,55 @@ case "$LANE" in
 
   shard)
     K="${ARG2:-2}"
-    case "$K" in 1|2|3|4) : ;; *) die "shard takes 1..4 (K > 3 starves lanes on this box)" ;; esac
+    case "$K" in 1|2|3|4) : ;; *) die "shard takes 1..4 (see the fan-out note in this file's header)" ;; esac
+    need_node
+    # The guard runs before Maven, so a partition that no longer covers the suite cannot burn a run.
+    node "$ROOT/scripts/lane-plan.mjs" check \
+      || die "scripts/lanes is not an exact cover of the suite - fix the partition or re-measure before sharding"
+    plan=$(node "$ROOT/scripts/lane-plan.mjs" plan "$K" "$LOG_DIR") || die "lane-plan.mjs plan failed"
 
-    # Longest-processing-time packing: heaviest module first, each module into the currently
-    # lightest lane. Modules are indivisible, so no two lanes ever write one module's target/.
-    sorted=($(for m in "${MODULES[@]}"; do printf '%s %s\n' "${WEIGHTS[$m]}" "$m"; done \
-              | sort -rn -k1 | awk '{print $2}'))
-    lane_lists=(); lane_loads=()
-    for ((i = 0; i < K; i++)); do lane_lists[$i]=""; lane_loads[$i]=0; done
-    for m in "${sorted[@]}"; do
-      lightest=0
-      for ((i = 1; i < K; i++)); do
-        awk -v a="${lane_loads[$i]}" -v b="${lane_loads[$lightest]}" 'BEGIN{exit !(a<b)}' \
-          && lightest=$i
-      done
-      [ -z "${lane_lists[$lightest]}" ] && lane_lists[$lightest]="$m" \
-        || lane_lists[$lightest]="${lane_lists[$lightest]},$m"
-      lane_loads[$lightest]=$(awk -v a="${lane_loads[$lightest]}" -v w="${WEIGHTS[$m]}" \
-        'BEGIN{printf "%.1f", a+w}')
-    done
+    lane_n=0; lane_mods=(); lane_inc=(); lane_logs=()
+    while IFS=$'\t' read -r name cost modules includes classes; do
+      lane_n=$((lane_n + 1))
+      lane_mods[$lane_n]="$modules"
+      lane_inc[$lane_n]="$LOG_DIR/$includes"
+      lane_logs[$lane_n]="$LOG_DIR/shard-lane$lane_n.log"
+      printf '  %-6s %6ss  %3s classes  %s\n' "$name" "$cost" "$classes" "$modules"
+    done <<< "$plan"
+    [ "$lane_n" -eq "$K" ] || die "lane-plan produced $lane_n lanes for K=$K"
 
     echo "mvn-lane: shared compile once, then $K test lanes + the serial timing lane"
-    for ((i = 0; i < K; i++)); do
-      echo "  lane$((i + 1)) load=${lane_loads[$i]}s modules: ${lane_lists[$i]}"
-    done
     run_logged "shard:refresh" "$LOG_DIR/shard-refresh.log" -T 1C install -DskipTests "${REPO_OPTS[@]}" \
       || die "shared install failed; shards would read stale SNAPSHOT jars"
 
     t0=$(date +%s.%N)
     pids=()
-    for ((i = 0; i < K; i++)); do
-      ARIA_TEST_DB_SUFFIX="_l$((i + 1))" mvn -o -B -pl "${lane_lists[$i]}" test \
-        -Djacoco.skip=true -DexcludedGroups=timing -Dsurefire.failIfNoSpecifiedTests=false \
+    for ((i = 1; i <= K; i++)); do
+      # `surefire:test` as a GOAL, not the `test` phase: two lanes may share act-execution's target/
+      # only because neither compiles into it; the shared install already made classes and test
+      # resources. `-Dtest.argline.base=` stops the pom's late-bound `@{argLine}` (JaCoCo's slot, which
+      # prepare-agent never filled here) from reaching java as a literal - the failure PIT hit, see
+      # pom.xml. The includes file is the lane's whole class list, because the property is per Maven
+      # process, not per module: naming only the fragments would run nothing else in the lane.
+      ARIA_TEST_DB_SUFFIX="_l$i" mvn -o -B -pl "${lane_mods[$i]}" surefire:test \
+        -Dsurefire.includesFile="${lane_inc[$i]}" -DtempDir="lane$i" \
+        -Dtest.argline.base= -Djacoco.skip=true -DexcludedGroups=timing \
         "${PROFILE[@]}" ${REPO_OPTS[@]+"${REPO_OPTS[@]}"} \
-        >"$LOG_DIR/shard-lane$((i + 1)).log" 2>&1 &
+        >"${lane_logs[$i]}" 2>&1 &
       pids+=($!)
     done
     rc=0
-    for ((i = 0; i < K; i++)); do
+    for ((i = 1; i <= K; i++)); do
         lrc=0
-        wait "${pids[$i]}" || lrc=$?
+        wait "${pids[$((i - 1))]}" || lrc=$?
         [ "$lrc" -ne 0 ] && rc=1
-        echo "  lane$((i + 1)) rc=$lrc $(sum_tests "$LOG_DIR/shard-lane$((i + 1)).log") log=$LOG_DIR/shard-lane$((i + 1)).log"
+        echo "  lane$i rc=$lrc $(sum_tests "${lane_logs[$i]}") log=${lane_logs[$i]}"
     done
 
     echo "mvn-lane: shards done, replaying the timing lane serially"
     bash "$SCRIPT" timing || rc=1
+    # the loud end: exact cover per lane, no timing class under contention, totals that add up
+    node "$ROOT/scripts/lane-plan.mjs" verify "$LOG_DIR/timing.log" "${lane_logs[@]}" || rc=1
     t1=$(date +%s.%N)
     echo "shard total wall=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')s rc=$rc (K=$K)"
     exit $rc

@@ -83,10 +83,43 @@ no removed provider to select.
 | Full build (skip tests) | `cd agent-control-tower && mvn install -DskipTests` |
 | Container runtime scenario tests | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |
 
-### Inner loop vs gate (measured 2026-10-27, see [docs/reviews/2026-10-27-maven-loop-audit.md](docs/reviews/2026-10-27-maven-loop-audit.md))
+### Inner loop vs gate
 
 `scripts/mvn-lane.sh` encodes the flag combinations below; use it rather than
-re-deriving them. Do not report an unrun tier as verified.
+re-deriving them. Do not report an unrun tier as verified. Lane numbers are box-specific, so
+each table says where it was measured.
+
+**Current daily — Happy: i5-12500 (6C/12T), 16 GB DDR5 in one channel, SATA SSD, warm `~/.m2`,
+measured 2026-11-03 at `e0ad2d0c`; details in [docs/reviews/2026-11-03-act-execution-shard-split.md](docs/reviews/2026-11-03-act-execution-shard-split.md)**
+
+| Lane | Command | Measured |
+|------|---------|----------|
+| inner (one class) | `bash scripts/mvn-lane.sh inner act-app -Dtest=RunControllerRegressionTest` | 13.9 s |
+| inner (one module, coverage off) | `bash scripts/mvn-lane.sh inner act-aria` | 10.2 s |
+| gate (upstream refresh + module + coverage) | `bash scripts/mvn-lane.sh gate act-mcp` | 6.8 s + 3.9 s refresh |
+| gate on the heaviest module | `bash scripts/mvn-lane.sh gate act-app` | 35.2 s + 4.2 s refresh |
+| timing (the 4 wall-clock classes, serial) | `bash scripts/mvn-lane.sh timing` | 18.3-20.8 s |
+| shard 2 lanes | `bash scripts/mvn-lane.sh shard 2` | 96.4 s |
+| shard 3 lanes | `bash scripts/mvn-lane.sh shard 3` | 81.3 s (86.3 s on a repeat run) |
+| shard 4 lanes | `bash scripts/mvn-lane.sh shard 4` | 78.3 s |
+| full unit tier, one process | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | 199 s (reactor 3:17) |
+
+`shard total wall` excludes the shared `install -DskipTests` that runs first (3-4 s warm).
+
+Sharding keeps the suite complete and proves it: lanes run 2256 tests with `-DexcludedGroups=timing`
+and the serial timing lane replays the remaining 70, which is exactly the 2326 one process runs —
+asserted per run by `node scripts/lane-plan.mjs verify`, and asserted *before* Maven starts by
+`check`, which refuses a partition that is not an exact cover of `scripts/lanes`. act-execution is
+split into four cost-derived fragments there, so the floor is act-app's 34.5 s class-sum instead of
+act-execution's 76.8 s; a lane invokes `surefire:test` as a goal (never the `test` phase) so two lanes
+can share one module's `target/` without either compiling into it.
+
+Fan out to 3, not 4: `shard 4` gains 3-8 s over `shard 3` while free RAM drops to 2.8 GB, and the four
+lanes inflated 11.7-22.4 s past their planned cost — the single memory channel is the limit, not the
+12 threads. CI runs four groups because `.github/workflows/ci.yml:113-139` puts each group on its own
+runner, where nothing is shared.
+
+**Previous daily — i5-8400 (6C/6T), 2026-10-27, kept for the deltas rather than the absolutes; details in [docs/reviews/2026-10-27-maven-loop-audit.md](docs/reviews/2026-10-27-maven-loop-audit.md)**
 
 | Lane | Command | Measured |
 |------|---------|----------|
@@ -95,21 +128,13 @@ re-deriving them. Do not report an unrun tier as verified.
 | gate (upstream refresh + module + coverage) | `bash scripts/mvn-lane.sh gate act-common` | 17.4 s |
 | gate on the heaviest module | `bash scripts/mvn-lane.sh gate act-app` | 52.5 s + 6.5 s refresh (incremental) |
 | itg (one failsafe class) | `bash scripts/mvn-lane.sh itg act-agent -Dit.test=WorkflowChainRepositorySliceIntegrationTest` | 14.1 s |
-| timing (the 4 wall-clock classes, serial) | `bash scripts/mvn-lane.sh timing` | 29-41 s |
 | shard 1 lane (install once + full unit tier) | `bash scripts/mvn-lane.sh shard 1` | 250.6 s + refresh |
-| shard 2 lanes | `bash scripts/mvn-lane.sh shard 2` | 181.4 s (1.38x over K=1) |
-| shard 3 lanes | `bash scripts/mvn-lane.sh shard 3` | 156.3 s (1.60x over K=1) |
+| shard 2 lanes (module-only packing) | `bash scripts/mvn-lane.sh shard 2` | 181.4 s (1.38x over K=1) |
+| shard 3 lanes (module-only packing) | `bash scripts/mvn-lane.sh shard 3` | 156.3 s (1.60x over K=1) |
 | full unit tier, one process, cold | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | 332 s (5:32) |
 
-Sharding keeps the suite complete: lanes run 2256 tests with `-DexcludedGroups=timing` and the
-serial timing lane replays the remaining 70, which is exactly the 2326 a single process runs.
-Cap local fan-out at 2-3 here: this box is 6C/6T with ~5 GB free, and each lane forks one JVM
-that loads a whole Spring graph, so K=4 buys contention instead of time (measured: 1.38x at K=2,
-1.60x at K=3, not 2x and 3x). CI proves 4 because `.github/workflows/ci.yml:113-124` puts each
-group on its own runner.
-
 The `gate` lane deletes `target/jacoco.exec` first, so "All coverage checks have been met"
-reflects that run only (verified on act-app at the 0.80/0.60 ratchet).
+reflects that run only (verified on act-app at the 0.80/0.60 ratchet, on both boxes).
 
 - `clean` is not part of the inner loop: it costs +11.4s on act-app alone
   (71s vs 59.6s identical run) and ~49s across the reactor. The one failure mode it

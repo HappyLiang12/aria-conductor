@@ -100,8 +100,8 @@ measured 2026-11-03 at `e0ad2d0c`; details in [docs/reviews/2026-11-03-act-execu
 | gate on the heaviest module | `bash scripts/mvn-lane.sh gate act-app` | 35.2 s + 4.2 s refresh |
 | timing (the 4 wall-clock classes, serial) | `bash scripts/mvn-lane.sh timing` | 18.3-20.8 s |
 | shard 2 lanes | `bash scripts/mvn-lane.sh shard 2` | 96.4 s |
-| shard 3 lanes | `bash scripts/mvn-lane.sh shard 3` | 81.3 s (86.3 s on a repeat run) |
-| shard 4 lanes | `bash scripts/mvn-lane.sh shard 4` | 78.3 s |
+| shard 3 lanes | `bash scripts/mvn-lane.sh shard 3` | 80.6-86.3 s (three runs) |
+| shard 4 lanes | `bash scripts/mvn-lane.sh shard 4` | 78.3 s (one run) |
 | full unit tier, one process | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | 199 s (reactor 3:17) |
 
 `shard total wall` excludes the shared `install -DskipTests` that runs first (3-4 s warm).
@@ -114,7 +114,8 @@ split into four cost-derived fragments there, so the floor is act-app's 34.5 s c
 act-execution's 76.8 s; a lane invokes `surefire:test` as a goal (never the `test` phase) so two lanes
 can share one module's `target/` without either compiling into it.
 
-Fan out to 3, not 4: `shard 4` gains 3-8 s over `shard 3` while free RAM drops to 2.8 GB, and the four
+Fan out to 3, not 4: `shard 4` gains 2-8 s over `shard 3` (one K=4 run against three K=3 runs, so that
+gap is not yet proven) while free RAM drops to 2.8 GB, and the four
 lanes inflated 11.7-22.4 s past their planned cost — the single memory channel is the limit, not the
 12 threads. CI runs four groups because `.github/workflows/ci.yml:113-139` puts each group on its own
 runner, where nothing is shared.

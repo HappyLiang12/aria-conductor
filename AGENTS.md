@@ -91,8 +91,9 @@ each table says where it was measured.
 
 **Current daily — Happy: i5-12500 (6C/12T), 16 GB DDR5 in one channel, SATA SSD, warm `~/.m2`,
 measured 2026-11-03. Each row names the commit its numbers were taken at — `e0ad2d0c` for the serial
-baseline, `ebcf14c7`/`70e89ad9` for the `gate` rows, `4fb16ea7` for the `inner` rows; the `shard` and
-`timing` ranges span `ebcf14c7`..`4fb16ea7` and every value inside the range is a real run. Details in
+baseline, `ebcf14c7`/`70e89ad9` for the `gate` rows, `4fb16ea7` for the `inner` rows and `97279dc3` for the
+K=2 re-run; the `shard` and `timing` ranges span `ebcf14c7`..`97279dc3` and every value inside the range is
+a real run. Details in
 [docs/reviews/2026-11-03-act-execution-shard-split.md](docs/reviews/2026-11-03-act-execution-shard-split.md)**
 
 | Lane | Command | Measured |
@@ -101,8 +102,8 @@ baseline, `ebcf14c7`/`70e89ad9` for the `gate` rows, `4fb16ea7` for the `inner` 
 | inner (one module, coverage off) | `bash scripts/mvn-lane.sh inner act-aria` | 9.2 s (`4fb16ea7`) |
 | gate (upstream refresh + module + coverage) | `bash scripts/mvn-lane.sh gate act-mcp` | 6.8 s + 3.9 s refresh (`ebcf14c7`) |
 | gate on the heaviest module | `bash scripts/mvn-lane.sh gate act-app` | 35.2 s + 4.2 s refresh (`ebcf14c7`) |
-| timing (the 4 wall-clock classes, serial) | `bash scripts/mvn-lane.sh timing` | 18.0-20.8 s (`ebcf14c7`..`4fb16ea7`) |
-| shard 2 lanes | `bash scripts/mvn-lane.sh shard 2` | 96.4 s (`ebcf14c7`) |
+| timing (the 4 wall-clock classes, serial) | `bash scripts/mvn-lane.sh timing` | 17.9-20.8 s (`ebcf14c7`..`97279dc3`) |
+| shard 2 lanes | `bash scripts/mvn-lane.sh shard 2` | 93.8 s (`97279dc3`), 96.4 s (`ebcf14c7`) |
 | shard 3 lanes | `bash scripts/mvn-lane.sh shard 3` | 78.5-86.3 s, five runs (`ebcf14c7`, `70e89ad9`, `4fb16ea7`) |
 | shard 4 lanes | `bash scripts/mvn-lane.sh shard 4` | 74.7-78.3 s, two runs (`ebcf14c7`, `4fb16ea7`) |
 | full unit tier, one process | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | 199 s, reactor 3:17 (`e0ad2d0c`) |

@@ -10,7 +10,8 @@
 #   scripts/mvn-lane.sh shard K                              K concurrent lanes over the unit tier, then timing
 #
 # Fan-out, measured on Happy (i5-12500 6C/12T, 16 GB DDR5 in ONE channel, SATA SSD): serial
-# `clean test` 199 s, shard 2 96.4 s, shard 3 78.5-86.3 s over five runs, shard 4 74.7-78.3 s over two.
+# `clean test` 199 s, shard 2 93.8-96.4 s over two runs, shard 3 78.5-86.3 s over five runs, shard 4
+# 74.7-78.3 s over two.
 # So K=3 is the default worth reaching for and K=4 buys 0.2-11.6 s more - the two samples do not overlap,
 # but only by 0.2 s at the closest edge, so it is a few seconds rather than a step change. The single
 # memory channel, not the 12 threads, is what flattens the curve: at K=4 the four lanes each ran 7.6-22.4 s

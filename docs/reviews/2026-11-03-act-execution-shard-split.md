@@ -197,16 +197,18 @@ previous sweep's numbers were produced the same way, so the comparison holds.
 | **`shard 3` (act-execution split)** | 62.7 s | 18.6 s | **81.3 s** |
 | **`shard 4` (act-execution split)** | 59.8 s | 18.5 s | **78.3 s** |
 | **`shard 3` again, from a fresh checkout at `ebcf14c7`** | 65.5 s | 20.8 s | **86.3 s** |
+| **`shard 3` at the branch tip `70e89ad9`** | 62.2 s | 18.4 s | **80.6 s** |
 
 The baselines and the previous-sweep rows were measured at `e0ad2d0c`. The first three bold rows ran
-from the working tree that became `ebcf14c7` (same scripts, pom and fragments as that commit); the
-fourth is a fresh `git checkout` of `ebcf14c7` itself, which also confirms the lane script behaves on a
-Windows checkout where git hands it over with CRLF line endings. The two `shard 3` runs are the honest
-spread: identical lane work (486 + 975 + 795 both times) and 5 s of difference, all of it in the serial
-timing lane (18.6 s vs 20.8 s). Treat the totals as ±5 s, and the completeness arithmetic as exact.
+from the working tree that became `ebcf14c7` (same scripts, pom and fragments as that commit); the last
+two are fresh `git checkout`s of `ebcf14c7` and `70e89ad9`, which also confirms the lane script behaves
+on a Windows checkout where git hands it over with CRLF line endings. The three `shard 3` runs are the
+honest spread: identical lane work (486 + 975 + 795 every time), 5.7 s between best and worst, most of
+it in the serial timing lane (18.4-20.8 s). Treat the totals as ±5 s, and the completeness arithmetic as
+exact.
 
-So the split is worth 6.8 s at K=2, 32.1-37.1 s at K=3 and 36.7 s at K=4; against the serial suite,
-K=3 is 2.31-2.45x. The floor is no longer act-execution: at K=4 the heaviest planned lane is act-app +
+So the split is worth 6.8 s at K=2, 32.1-37.8 s at K=3 and 36.7 s at K=4; against the serial suite,
+K=3 is 2.31-2.47x. The floor is no longer act-execution: at K=4 the heaviest planned lane is act-app +
 act-mcp at 38.5 s, exactly the target this split was aimed at.
 
 **The curve flattens because of memory bandwidth, not cores.** At K=4 the four lanes ran 50.2, 56.0,
@@ -215,8 +217,8 @@ act-mcp at 38.5 s, exactly the target this split was aimed at.
 joint-slowest. All four finished within 7.5 s of each other, which is what a shared bottleneck looks
 like. A sampler every 2 s over the K=4 run recorded free RAM falling from 5,543 MB to **2,826 MB** at
 the 50 s mark (of 15.75 GiB usable), i.e. the four lanes took ~2.7 GB. K=4 is reachable on this box, but
-it costs the headroom a browser and an IDE want, and it buys 3-8 s over K=3 (the two K=3 runs bracket
-81.3-86.3 s). Guidance in
+it costs the headroom a browser and an IDE want, and it buys 2-8 s over K=3 (its single run at 78.3 s
+against three K=3 runs at 80.6-86.3 s, so the gap is not yet proven). Guidance in
 `scripts/mvn-lane.sh` therefore says K=3 by default, K=4 when the box is otherwise idle.
 
 One caveat on the predictor itself: planning by summed per-class cost is a *ranking*, not a forecast. The

@@ -148,7 +148,6 @@ function readFragment(path) {
 }
 
 function writeFragmentHeader(out, module, index, total, cost, members) {
-  const c = costs.modules[module];
   const lines = [
     `# ${module} shard fragment ${index} of ${total} - a surefire includes file (one FQCN per line).`,
     `# cost=${cost.toFixed(2)}s  classes=${members.length}`,
@@ -168,23 +167,22 @@ function gen(module, groups) {
   const known = new Set(Object.keys(c.byClass));
   const unpriced = all.filter((fq) => !known.has(fq) && !fq.includes('$'));
   if (unpriced.length) {
-    console.error('lane-plan: ' + module + ' has discovered classes with no measured cost (add them by running the'
-      + ' module serially, or they were added since ' + costs.measured.at + '):');
+    // they still get a fragment slot (cost 0, so LPT puts them last) rather than being dropped: a class
+    // added since the measurement must run, even if the balance cannot know how long it takes.
+    console.error(`lane-plan: ${module} has ${unpriced.length} class(es) with no measured cost; packing them at 0s:`);
     for (const u of unpriced) console.error('   ' + u);
-    throw new Error('lane-plan: cannot generate a cost-derived partition');
   }
-  // a nested-class report line is covered by its outer class, and -Dsurefire.includesFile takes the outer name
-  const priced = all.filter((fq) => known.has(fq));
+  // LPT over the whole shardable set: heaviest class into the currently lightest fragment, ties by name
+  const costOf = (fq) => c.byClass[fq] || 0;
   const G = groups || 4;
   const dir = join(LANES_DIR, module);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const buckets = Array.from({ length: G }, () => ({ cost: 0, members: [] }));
-  // longest-processing-time: heaviest class into the currently lightest fragment, ties broken by name
-  const sorted = priced.slice().sort((a, b) => c.byClass[b] - c.byClass[a] || a.localeCompare(b));
+  const sorted = all.slice().sort((a, b) => costOf(b) - costOf(a) || a.localeCompare(b));
   for (const fq of sorted) {
     let light = 0;
     for (let i = 1; i < G; i++) if (buckets[i].cost < buckets[light].cost - 1e-9) light = i;
-    buckets[light].cost += c.byClass[fq];
+    buckets[light].cost += costOf(fq);
     buckets[light].members.push(fq);
   }
   for (let i = 0; i < G; i++) {
@@ -194,8 +192,8 @@ function gen(module, groups) {
   }
   const sum = buckets.reduce((a, b) => a + b.cost, 0);
   const timingSec = timing.reduce((a, fq) => a + (c.byClass[fq] || 0), 0);
-  console.error(`lane-plan: ${module} priced=${priced.length} of ${all.length} shardable, excluded ${timing.length} timing:`
-    + ` ${timing.join(', ')}`);
+  console.error(`lane-plan: ${module} packed ${all.length} shardable classes (${unpriced.length} without a measured cost),`
+    + ` excluded ${timing.length} timing: ${timing.join(', ')}`);
   console.error(`lane-plan: ${module} fragment cost sum=${sum.toFixed(2)}s = classSum ${c.classSumSec}s - timing ${timingSec.toFixed(2)}s`);
 }
 
@@ -234,7 +232,8 @@ function check() {
       bad++;
       console.error(`check: ${module} partition is NOT an exact cover (${seen.size} listed / ${expected.size} discovered`
         + ` / ${Object.keys(c.byClass).length} measured)`);
-      for (const m of missing) console.error(`   MISSING  ${m} (in no fragment - it would never run)`);
+      for (const m of missing) console.error(`   MISSING  ${m} (in no fragment - it would never run.`
+        + ` Remedy: \`node scripts/lane-plan.mjs gen ${module}\`, which packs a class with no measured cost at 0s)`);
       for (const d of dup) console.error(`   DUPLICATE ${d} (an exact cover lists a class once)`);
       for (const s of stale) console.error(`   STALE    ${s} (listed but no shardable test class by that name exists)`);
       for (const u of ranButUndiscovered) console.error(`   UNDISCOVERED ${u} (the measured run executed it, discovery did not find it -`
@@ -275,12 +274,20 @@ function check() {
     const timingSet = new Set(timing);
     const invisible = Object.keys(c.byClass).filter((fq) => !seen.has(fq) && !timingSet.has(fq));
     const neverRan = all.filter((fq) => !(fq in c.byClass));
-    if (invisible.length || neverRan.length) {
+    if (invisible.length) {
       bad++;
-      console.error(`check: ${module} discovery does not match the measured run (${all.length} discovered /`
+      console.error(`check: ${module} ran serially but discovery cannot see it (${all.length} discovered /`
         + ` ${Object.keys(c.byClass).length} measured)`);
-      for (const f of invisible) console.error(`   INVISIBLE ${f} (it ran serially but discovery never yields it - a lane would never run it)`);
-      for (const n of neverRan) console.error(`   NEVER RAN ${n} (discovered, but the measured run produced no report for it)`);
+      for (const f of invisible) console.error(`   INVISIBLE ${f} (a lane would never be given it - completeness would rot silently)`);
+    }
+    if (neverRan.length) {
+      // not fatal: discovery is authoritative for what a lane is *given*, so these classes still run.
+      // Either they are new since the measurement, or surefire produces no report for them (a helper
+      // class named *Test, or one with no test methods). Only the cost model is stale.
+      console.error(`check: ${module} has ${neverRan.length} discovered class(es) with no measured cost - they will`
+        + ' still run, but the balance is estimated without them. If they really do run, re-measure the module and'
+        + ' refresh scripts/lanes/measured-costs.json; if they do not, ignore this line.');
+      for (const n of neverRan) console.error(`   UNMEASURED ${n}`);
     }
   }
   if (bad) throw new Error('check: failed for ' + bad + ' module(s)');
@@ -370,13 +377,22 @@ function verify(args) {
   for (let i = 0; i < laneLogs.length; i++) {
     const planned = new Set(p.lanes[i].classes);
     const ran = ranByLane[i];
+    // a planned class that printed nothing splits two ways: the measurement has seen it run (so the
+    // lane silently skipped real work - fatal), or it has never been measured (a class added since, or
+    // a helper named *Test that surefire produces no report for - worth a line, not a blocked build)
     const missing = [...planned].filter((c) => !ran.has(c));
+    const absent = missing.filter((c) => measuredTests(c));
+    const unmeasured = missing.filter((c) => !measuredTests(c));
     const extra = [...ran].filter((c) => !planned.has(c));
-    if (missing.length) {
+    if (absent.length) {
       bad++;
       console.error(`verify: ${p.lanes[i].name} was given ${planned.size} classes and ran ${ran.size};`
-        + ` ${missing.length} printed no result (surefire matched none of them, so a rename or a bad list went unnoticed)`);
-      for (const m of missing.slice(0, 15)) console.error('   MISSING ' + m);
+        + ` ${absent.length} that the measured run produced printed no result here`);
+      for (const m of absent.slice(0, 15)) console.error('   MISSING ' + m);
+    }
+    if (unmeasured.length) {
+      console.error(`verify: ${p.lanes[i].name} also listed ${unmeasured.length} class(es) never seen in a`
+        + ` measured run, which produced no report: ${unmeasured.slice(0, 5).join(', ')}`);
     }
     if (extra.length) {
       bad++;
@@ -434,6 +450,10 @@ function resolveFirst(p) {
 }
 function knownClass(fq) {
   return Object.values(costs.modules).some((m) => Object.prototype.hasOwnProperty.call(m.byClass, fq));
+}
+function measuredTests(fq) {
+  for (const m of Object.values(costs.modules)) if (fq in m.testsByClass) return m.testsByClass[fq];
+  return 0;
 }
 function countTests(log) {
   const text = readFileSync(log, 'utf8').replace(/\r/g, '');

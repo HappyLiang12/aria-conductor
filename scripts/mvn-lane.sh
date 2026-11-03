@@ -29,7 +29,14 @@
 #     refuses to start Maven unless they are an exact cover; `verify` re-checks the run itself
 #   - the "timing" tag is excluded from every lane and replayed serially afterwards, so the
 #     suite stays complete while nothing that bounds elapsed time runs under contention
-#   - JaCoCo runs only on the gate/itg lanes, which delete target/jacoco.exec first
+#   - coverage is enforced only by gate/clean (unit) and itg (failsafe), each of which deletes
+#     target/jacoco.exec first. The other lanes invoke the surefire GOAL so `jacoco:report`/`check` never
+#     run - `check`'s skip is bound to ${skip.unit.tests}, NOT to ${jacoco.skip}, so the flag alone would
+#     not have stopped it grading a stale accumulated exec - and they also pass -Djacoco.skip=true because
+#     `prepare-agent` binds to `initialize`, which a `test-compile` lane does execute, and without the flag
+#     the agent attaches and appends to that same file
+#   - each shard lane gets its own -Djqwik.database, because jqwik's default file sits next to the module
+#     and two lanes running jqwik classes would race on it
 #
 # Optional environment:
 #   MVN_REPO=<path>   private local repository. Use it for any scratch or throwaway checkout: the
@@ -145,10 +152,16 @@ case "$LANE" in
 
   inner)
     [ -n "$ARG2" ] || die "inner needs a module"
-    # Filtered runs under-cover by design (documented at pom.xml:257-260). The no-match escape
-    # is surefire.failIfNoSpecifiedTests, not failIfNoSpecifiedTests.
-    run_logged "inner:$ARG2" "$LOG_DIR/inner.log" -pl "$ARG2" test \
-      -Djacoco.skip=true -Dsurefire.failIfNoSpecifiedTests=false \
+    # `test-compile` then the surefire GOAL, not the `test` phase: the phase would also run jacoco:report
+    # and jacoco:check, and `check`'s skip is bound to ${skip.unit.tests} rather than ${jacoco.skip}, so it
+    # would grade whatever target/jacoco.exec an earlier run left behind. jacoco.skip is still passed
+    # because prepare-agent binds to `initialize`, which `test-compile` does run: without it the coverage
+    # agent attaches and appends to that same exec file. Filtered runs under-cover by design; `gate` is the
+    # lane that enforces the ratchet, and it deletes the exec first.
+    # The no-match escape is surefire.failIfNoSpecifiedTests, not failIfNoSpecifiedTests.
+    run_logged "inner:$ARG2" "$LOG_DIR/inner.log" -pl "$ARG2" test-compile surefire:test \
+      -Djacoco.skip=true -Dtest.argline.base= -Dsurefire.failIfNoSpecifiedTests=false \
+      -Djqwik.database="$LOG_DIR/jqwik-inner-db" \
       "${PROFILE[@]}" "${REPO_OPTS[@]}" ${EXTRA[@]+"${EXTRA[@]}"}
     exit $?
     ;;
@@ -181,8 +194,13 @@ case "$LANE" in
   timing)
     load_timing_plan
     echo "mvn-lane: replaying the wall-clock-bounded classes serially: $TIMING_CLASSES"
-    run_logged timing "$LOG_DIR/timing.log" -pl "$TIMING_MODULES" test \
-      -Djacoco.skip=true -Dgroups=timing \
+    # same reason as `inner`: goal, not phase, and jacoco.skip so `initialize` attaches no agent.
+    # -Djqwik.database matters even here: with `-Dgroups=timing` every jqwik class is filtered out, yet the
+    # engine still created act-execution/.jqwik-database (measured), so the redirect is what keeps the
+    # module directory clean rather than the set of tests that actually run.
+    run_logged timing "$LOG_DIR/timing.log" -pl "$TIMING_MODULES" test-compile surefire:test \
+      -Djacoco.skip=true -Dtest.argline.base= -Dgroups=timing \
+      -Djqwik.database="$LOG_DIR/jqwik-timing-db" \
       "${PROFILE[@]}" "${REPO_OPTS[@]}" ${EXTRA[@]+"${EXTRA[@]}"}
     exit $?
     ;;
@@ -219,9 +237,13 @@ case "$LANE" in
       # prepare-agent never filled here) from reaching java as a literal - the failure PIT hit, see
       # pom.xml. The includes file is the lane's whole class list, because the property is per Maven
       # process, not per module: naming only the fragments would run nothing else in the lane.
+      # jqwik writes a database next to the module by default (act-execution/.jqwik-database), which is a
+      # shared write between lanes; -Djqwik.database gives each lane its own (verified: the file lands
+      # exactly where it is pointed). No JaCoCo goal runs here at all, so no stale exec data is graded.
       ARIA_TEST_DB_SUFFIX="_l$i" mvn -o -B -pl "${lane_mods[$i]}" surefire:test \
         -Dsurefire.includesFile="${lane_inc[$i]}" -DtempDir="lane$i" \
-        -Dtest.argline.base= -Djacoco.skip=true -DexcludedGroups=timing \
+        -Djqwik.database="$LOG_DIR/jqwik-lane$i-db" \
+        -Dtest.argline.base= -DexcludedGroups=timing \
         "${PROFILE[@]}" ${REPO_OPTS[@]+"${REPO_OPTS[@]}"} \
         >"${lane_logs[$i]}" 2>&1 &
       pids+=($!)

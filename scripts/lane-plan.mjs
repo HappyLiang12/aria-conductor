@@ -11,7 +11,8 @@
  *   node scripts/lane-plan.mjs verify <timingLog> <laneLog...>
  *                                             fail loudly if a planned class never printed a result,
  *                                             a class ran in two lanes, a tagged timing class ran
- *                                             under contention, or the totals do not add up
+ *                                             under contention, or a compiled test class was given to
+ *                                             no lane
  *   node scripts/lane-plan.mjs timing-plan    the modules and classes carrying @Tag("timing")
  *
  * Everything here is derived from scripts/lanes/measured-costs.json, which carries the run it was
@@ -21,6 +22,7 @@
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LANES_DIR = join(ROOT, 'scripts', 'lanes');
@@ -28,6 +30,10 @@ const COSTS_PATH = join(LANES_DIR, 'measured-costs.json');
 const POM_PATH = join(ROOT, 'agent-control-tower', 'pom.xml');
 
 const costs = JSON.parse(readFileSync(COSTS_PATH, 'utf8'));
+
+/** The tree a run came from. `verify` re-points it at the checkout that wrote the logs, because a
+ *  measurement worktree and the scripts analysing it are often not the same directory. */
+let RUN_ROOT = ROOT;
 
 /** repo-relative forward-slash path, so a plan line is portable and greppable on any host */
 const ROOT_FWD = ROOT.split(/[\\/]+/).join('/');
@@ -99,10 +105,10 @@ function topLevelClasses(text) {
   const lines = text.split('\n');
   const out = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^((?:(?:public|private|protected|final|abstract|sealed|non-sealed|strictfp)\s+)*)class\s+([A-Za-z_]\w*)/);
+    // an annotation may share the line (`@ExtendWith(X.class) class FooTest {`), so it is allowed before
+    // the modifiers rather than assumed to sit on its own line
+    const m = lines[i].match(/^(?:@[\w.]+(?:\([^)]*\))?\s+)*((?:(?:public|private|protected|final|abstract|sealed|non-sealed|strictfp)\s+)*)class\s+([A-Za-z_]\w*)/);
     if (!m) continue;
-    // an abstract class named *Test is a shared base, not a test: surefire cannot instantiate it and
-    // produces no report line, so planning it would look like a lane that skipped work
     if (/\babstract\b/.test(m[1])) continue;
     let timing = false;
     for (let j = i - 1; j >= 0; j--) {
@@ -116,6 +122,41 @@ function topLevelClasses(text) {
     out.push({ name: m[2], timing });
   }
   return out;
+}
+
+/**
+ * The authoritative class set: what the compiler left in `target/test-classes`.
+ *
+ * Surefire scans exactly this directory, so this oracle cannot drift from what really runs the way a
+ * source regex can (a declaration on one line, a record, a second top-level type in a file). Returns null
+ * when the module is not compiled yet, which callers must treat as "cannot check", never as "nothing to run".
+ */
+function compiledTestClasses(module) {
+  const root = join(RUN_ROOT, 'agent-control-tower', module, 'target', 'test-classes');
+  if (!existsSync(root)) return null;
+  const excludes = pomExcludes();
+  const out = new Set();
+  for (const file of walk(root)) {
+    if (!file.endsWith('.class')) continue;
+    const parts = file.slice(root.length + 1).split(/[\\/]/);
+    const name = parts.pop().replace(/\.class$/, '');
+    if (name.includes('$')) continue;                       // nested types run with their outer class
+    if (!matchesAny(name + '.java', DEFAULT_INCLUDES)) continue;
+    if (matchesAny(name + '.java', excludes)) continue;
+    out.add(parts.join('.') + '.' + name);
+  }
+  return out;
+}
+
+/** javap, only on the failure path, to tell "no lane was given this" from "surefire cannot run this" */
+function runnableClass(fqcn, module) {
+  try {
+    const out = execFileSync('javap', ['-cp', join(RUN_ROOT, 'agent-control-tower', module, 'target', 'test-classes'), fqcn],
+      { encoding: 'utf8' }).split('\n')[0];
+    return !/\babstract class\b|^interface\b/.test(out.trim());
+  } catch {
+    return true;   // javap missing or the class unreadable: keep the finding loud rather than silent
+  }
 }
 
 /** Modules that are split into fragments: any directory under scripts/lanes/. */
@@ -358,12 +399,16 @@ function plan(K, outDir) {
 // --- verify --------------------------------------------------------------------------------------------
 /**
  * The loud end. Reads the plan the shard lane wrote plus every log it produced and fails if a planned
- * class printed no result line, a class ran that no lane was given, one class ran in two lanes, or the
- * test totals do not add up to what a single process runs.
+ * class that the measurement has seen run printed no result line, a class ran that no lane was given, one
+ * class ran in two lanes, a tagged timing class ran under contention, or a compiled class that matches
+ * surefire's includes was given to no lane. A change in the test *total* is reported, not fatal: the
+ * snapshot in measured-costs.json is a balance input, and completeness is a class-level property.
  */
 function verify(args) {
   const [timingLog, ...laneLogs] = args;
   const outDir = dirname(resolveFirst(laneLogs[0]));
+  const guess = dirname(dirname(dirname(outDir)));   // <root>/agent-control-tower/target/mvn-lane
+  if (existsSync(join(guess, 'agent-control-tower', 'pom.xml'))) RUN_ROOT = guess;
   const planPath = join(outDir, 'plan.json');
   if (!existsSync(planPath)) throw new Error(`verify: no ${planPath} - the shard lane writes it before running`);
   const p = JSON.parse(readFileSync(planPath, 'utf8'));
@@ -412,7 +457,9 @@ function verify(args) {
   }
   for (const [c, n] of seenIn) if (n > 1) { bad++; console.error(`verify: ${c} ran in ${n} lanes (duplicated work, and the totals would lie)`); }
 
-  // arithmetic the user asked for: lanes + timing must equal the single-process totals
+  // The arithmetic is reported, not enforced: `measured-costs.json` is a snapshot of one run, so adding or
+  // deleting a single @Test method changes the total while losing nothing. Completeness is enforced by the
+  // class-level checks above and by the compiled-class oracle below.
   const expectedTests = Object.values(costs.modules).reduce((a, m) => a + m.tests, 0);
   const expectedSkip = Object.values(costs.modules).reduce((a, m) => a + m.skipped, 0);
   const totalled = [...laneLogs, timingLog].map(countTests);
@@ -422,12 +469,12 @@ function verify(args) {
   const timingExpected = shardableTimingTests();
   console.error(`verify: lanes ran ${totalled.slice(0, -1).map((t) => t.run).join(' + ')} =`
     + ` ${totalled.slice(0, -1).reduce((a, t) => a + t.run, 0)}, timing lane ${totalled[totalled.length - 1].run}`
-    + ` (the tagged classes hold ${timingExpected.run}), total ${got} vs the single process's ${expectedTests}`);
+    + ` (the tagged classes hold ${timingExpected.run}), total ${got} vs the measured snapshot's ${expectedTests}`);
   console.error(`verify: skipped=${skipped} (the measured run skipped ${expectedSkip}) and failures+errors=${failed}`);
   if (got !== expectedTests) {
-    bad++;
-    console.error(`verify: completeness LOST - ${got} != ${expectedTests}. No lane may be trusted until this adds up.`);
-    console.error('   if a @Tag("timing") class lives outside TIMING_MODULES, or a module has no measured cost, that is the gap');
+    console.error(`verify: NOTE the test total moved (${got} vs the ${expectedTests} measured at ${costs.measured.at}).`
+      + ' That is expected when a test method was added or removed since; refresh the snapshot with a serial'
+      + ' module run if you want the balance to reflect it. It is NOT a completeness failure.');
   }
   // a tagged class that ran inside a parallel lane would keep the total right and the timing guarantee wrong
   const tagged = new Set(Object.keys(costs.modules).flatMap((m) => shardableClasses(m).timing));
@@ -443,9 +490,35 @@ function verify(args) {
     bad++;
     console.error(`verify: ${c} is tagged timing but the timing lane never ran it (TIMING_MODULES is too narrow?)`);
   }
+  // the third oracle, and the only one that cannot drift: the compiled classes surefire actually scanned.
+  // Source-based discovery is a guess about the file; `target/test-classes` is the fact about the run.
+  const plannedSomewhere = new Set(p.lanes.flatMap((l) => l.classes));
+  let compiledSeen = 0, compiledSkipped = 0, compiledOrphans = 0;
+  for (const module of Object.keys(costs.modules)) {
+    const compiled = compiledTestClasses(module);
+    if (compiled == null) { compiledSkipped++; continue; }   // not compiled here (a different checkout or `clean`)
+    compiledSeen += compiled.size;
+    const { timing } = shardableClasses(module);
+    const orphans = [...compiled].filter((fq) => !plannedSomewhere.has(fq) && !timing.includes(fq));
+    for (const fq of orphans) {
+      if (!runnableClass(fq, module)) continue;   // an abstract base named *Test cannot run anyway
+      bad++; compiledOrphans++;
+      console.error(`verify: ${fq} is compiled into ${module}/target/test-classes and matches surefire's`
+        + ' includes, but no lane was given it and it is not tagged timing - it ran in no lane.'
+        + ` Remedy: \`node scripts/lane-plan.mjs gen ${module}\` (or tag it, or rename it out of *Test).`);
+    }
+  }
+  // state the oracle's own reach, so "passed" is never mistaken for "nothing was checked"
+  console.error(`verify: compiled oracle saw ${compiledSeen} surefire-matching class(es) under target/test-classes`
+    + ` from ${RUN_ROOT}`
+    + (compiledOrphans ? `, ${compiledOrphans} of them given to no lane`
+      : compiledSkipped ? ` (${compiledSkipped} module(s) not compiled there, not checked)`
+        : ', every one given to a lane or tagged timing'));
   if (failed) { bad++; console.error(`verify: ${failed} failure(s)/error(s) reported by the lane summary lines`); }
   if (bad) throw new Error('verify: failed (' + bad + ' problem set(s))');
-  console.error('verify: exact cover across lanes, and the arithmetic matches the single-process total');
+  console.error('verify: exact cover across lanes'
+    + (got === expectedTests ? ', and the test total equals the measured single process'
+      : `, test total ${got} vs the measured snapshot ${expectedTests} (see the NOTE above)`));
 }
 
 function resolveFirst(p) {

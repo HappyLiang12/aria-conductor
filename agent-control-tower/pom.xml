@@ -267,7 +267,10 @@
                         <!-- Bind to test phase so the unit lane (`mvn test`) enforces the ratchet.
                              Skip follows the unit tier switch: integration lane and -DskipTests
                              builds must not evaluate coverage from absent/stale exec data.
-                             Filtered local runs (-Dtest=Foo) under-cover by design: add -Djacoco.skip=true. -->
+                             Filtered local runs under-cover by design, and -Djacoco.skip=true does NOT
+                             silence this goal (its skip is ${skip.unit.tests}): a filtered run has to
+                             invoke the surefire GOAL, the way scripts/mvn-lane.sh does, or the ratchet is
+                             graded against whatever target/jacoco.exec an earlier run left behind. -->
                         <phase>test</phase>
                         <goals>
                             <goal>check</goal>

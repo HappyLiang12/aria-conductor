@@ -473,8 +473,11 @@ documentation and shell comments:
 | `647ea9f9` | 41669664321 | pass (and the whole CI run green) |
 
 Locally it does not reproduce: five repeated runs of the class at `647ea9f9` on an idle Happy all exited 0
-(13.6-13.8 s each), and the class is inside every sharded run reported in section 7 - K=2 at `97279dc3`, K=3
-and K=4 at `4fb16ea7`, all `failures+errors=0`, which is the most contended environment this box can give.
+(13.6-13.8 s each). It also ran green inside the contended lanes - `K=2` at `97279dc3`, `K=3` and `K=4` at
+`4fb16ea7`, all rc=0, and an rc=0 from `verify` means every planned class printed a result line, which is
+what makes the K=3 run evidence even though its log was overwritten by the next run. The two runs whose logs
+still exist show the class printing one: lane4 at K=4, lane2 at K=2. That is the most contended environment
+this box can give, and it is still not the same allocator as a hosted runner.
 
 **Mechanism, read from the code** (`INFERRED`: consistent with everything above, never reproduced here). The
 test snapshots the WireMock request count the moment `pump.stop()` returns

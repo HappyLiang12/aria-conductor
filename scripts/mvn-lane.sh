@@ -9,13 +9,14 @@
 #   scripts/mvn-lane.sh timing                               the @Tag("timing") classes, serially
 #   scripts/mvn-lane.sh shard K                              K concurrent lanes over the unit tier, then timing
 #
-# Fan-out, measured on Happy (i5-12500 6C/12T, 16 GB DDR5 in ONE channel, SATA SSD) at e0ad2d0c:
-# serial `clean test` 199 s, shard 2 96.4 s, shard 3 81.3 s, shard 4 78.3 s. So K=3 is the default
-# worth reaching for and K=4 buys about 3 s more - the single memory channel, not the 12 threads, is
-# what flattens the curve: at K=4 the four lanes each ran 11-21 s longer than their planned cost,
-# and the box was down to 2.8 GB free at the worst moment. K=1 is the whole tier in one lane, useful
-# as the reference run. CI runs four groups on four separate runners (.github/workflows/ci.yml:113-139)
-# where nothing is shared, which is why the hosted lane can be wider than any local one.
+# Fan-out, measured on Happy (i5-12500 6C/12T, 16 GB DDR5 in ONE channel, SATA SSD): serial
+# `clean test` 199 s, shard 2 96.4 s, shard 3 81.3 s and 86.3 s on two runs, shard 4 78.3 s. So K=3 is
+# the default worth reaching for and K=4 buys 3-8 s more - the single memory channel, not the 12
+# threads, is what flattens the curve: at K=4 the four lanes each ran 11-21 s longer than their planned
+# cost, and the box was down to 2.8 GB free at the worst moment. K=1 is the whole tier in one lane,
+# useful as the reference run. CI runs four groups on four separate runners
+# (.github/workflows/ci.yml:113-139) where nothing is shared, which is why the hosted lane can be
+# wider than any local one.
 #
 # Isolation contract for shard lanes:
 #   - one shared `install -DskipTests` first, so no lane pays the compile and none needs to

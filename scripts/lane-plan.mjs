@@ -99,8 +99,11 @@ function topLevelClasses(text) {
   const lines = text.split('\n');
   const out = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(?:(?:public|private|protected|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+([A-Za-z_]\w*)/);
+    const m = lines[i].match(/^((?:(?:public|private|protected|final|abstract|sealed|non-sealed|strictfp)\s+)*)class\s+([A-Za-z_]\w*)/);
     if (!m) continue;
+    // an abstract class named *Test is a shared base, not a test: surefire cannot instantiate it and
+    // produces no report line, so planning it would look like a lane that skipped work
+    if (/\babstract\b/.test(m[1])) continue;
     let timing = false;
     for (let j = i - 1; j >= 0; j--) {
       const t = lines[j].trim();
@@ -110,7 +113,7 @@ function topLevelClasses(text) {
       if (!t || t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('@')) continue;
       break;
     }
-    out.push({ name: m[1], timing });
+    out.push({ name: m[2], timing });
   }
   return out;
 }

@@ -204,8 +204,8 @@ Class counts close the same way: 244 classes planned = 248 measured − 4 tagged
 to emit a table where a class is in two lanes.
 
 The K=4 row is the one that survived to `4fb16ea7` and was re-verified there after the guards changed,
-against the committed fragments and the compiled oracle; K=2 was then re-run at the shipped tip `97279dc3`
-so that all three K values are proven at the commit this branch delivers:
+against the committed fragments and the compiled oracle; K=2 was then re-run at `97279dc3`, so all three K
+values are proven at a commit this branch delivers (the markdown-only commits after it change no lane):
 
 ```
 verify: lanes ran 241 + 635 + 768 + 612 = 2256, timing lane 70 (the tagged classes hold 70),
@@ -219,8 +219,10 @@ verify: exact cover across lanes, and the test total equals the measured single 
 ```
 
 The K=3 arithmetic at `4fb16ea7` came from the run reported in section 12 (`486 + 975 + 795 + 70 = 2326`).
-`plan 2` is byte-identical between `64e8d6e0` and `97279dc3` - the review round changed guards, not packing -
-which is why the same 776 / 1480 split appears in both runs.
+`plan 2` is byte-identical between `64e8d6e0` and `4fb16ea7` - compared by running both versions of the
+script against the same tree - and nothing after `4fb16ea7` touches the planner or the partition (`git
+diff --name-only 4fb16ea7..HEAD` is `AGENTS.md`, this file and `mvn-lane.sh`, and every one of that script's
+changed lines is a comment), which is why the same 776 / 1480 split appears in both runs.
 
 ## 8. The measured curve, and where the box gives up
 
@@ -242,7 +244,7 @@ previous sweep's numbers were produced the same way, so the comparison holds.
 | **`shard 3` at the branch tip `70e89ad9`** | 62.2 s | 18.4 s | **80.6 s** |
 | **`shard 3` at `4fb16ea7`, twice** | — | — | **78.5 s / 79.8 s** |
 | **`shard 4` at `4fb16ea7`** | 56.7 s | 18.0 s | **74.7 s** |
-| **`shard 2` at the shipped tip `97279dc3`** | 75.9 s | 17.9 s | **93.8 s** |
+| **`shard 2` at `97279dc3`** | 75.9 s | 17.9 s | **93.8 s** |
 
 The baselines and the previous-sweep rows were measured at `e0ad2d0c`. The three rows that say only
 `(act-execution split)` ran from the working tree that became `ebcf14c7` (same scripts, pom and fragments as
@@ -419,7 +421,7 @@ merge friction it saves (two PRs touching `g1..g4`) is already resolved by re-ru
 inputs (mutant row five). `check` stays fatal for `MISSING`, and its message names `gen` as the remedy.
 
 After the round, on the same box: `inner act-aria` 9.2 s, `inner act-app -Dtest=RunControllerRegressionTest`
-12.0 s, `timing` 18.0 s, `shard 3` 78.5-79.8 s, `shard 4` 74.7 s, and at the shipped tip `97279dc3` a final
+12.0 s, `timing` 18.0 s, `shard 3` 78.5-79.8 s, `shard 4` 74.7 s, and at `97279dc3` a final
 `shard 2` 93.8 s - all rc=0 with the full guard output in section 7. The two `inner` rows are 1.0 and 1.9 s
 under the pre-review numbers (10.2 and 13.9 s), which
 arrived with the goal-only switch; each is a single run and the commit changed two things at once (no

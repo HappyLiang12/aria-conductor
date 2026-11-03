@@ -332,6 +332,8 @@ any module log.
   command line was not captured for a lane.
 - That `abstract class` declarations named `*Test` do not produce report lines. Not observed in this
   repository's current set; the rule is there to keep discovery honest if one appears.
+- That the `CoreProgressPumpTest` failure reported in section 13 is caused by the mechanism named there.
+  The mechanism is read off the code and the assertion's shape; it was not reproduced on this box.
 
 ## 12. Independent review round (`e0ad2d0c..64e8d6e0` → `4fb16ea7`)
 
@@ -439,3 +441,59 @@ node scripts/lane-plan.mjs verify $L/timing.log $L/m1.log $L/shard-lane{2,3,4}.l
 node scripts/pre-fix.mjs verify $L/timing.log $L/shard-lane{1,2,3}.log $L/m2.log   # rc=0  <- the bug
 node scripts/lane-plan.mjs verify $L/timing.log $L/shard-lane{1,2,3}.log $L/m2.log # rc=1
 ```
+
+## 13. The one hosted failure, and why it is not this branch's
+
+`Java Unit Tests (execution)` went red once, at `97279dc3` (run 41668405877):
+
+```
+[ERROR] Tests run: 34, Failures: 1, Errors: 0, Skipped: 0 -- in io.aria.conductor.execution.runtime.progress.CoreProgressPumpTest
+org.opentest4j.AssertionFailedError: [a halted pump does not even read the message list]
+expected: 4  but was: 5
+    at CoreProgressPumpTest.aDrainAfterStopEmitsNothingAndPerformsNoPoll(CoreProgressPumpTest.java:1133)
+```
+
+**The branch cannot have caused it.** `git diff --name-only e0ad2d0c..97279dc3` contains no `src/` path at
+all, and that test file was last touched by `605ecbba` (2026-10-26, PR #114). `.github/workflows/ci.yml` is
+unchanged on this branch, so the command that ran it, the group it ran in and the runner it ran on are all
+the same as on `main`.
+
+**The nondeterminism is measured, not argued.** Same test code, three pushes whose differences are
+documentation and shell comments:
+
+| head SHA | run | Java Unit Tests (execution) |
+|----------|-----|-----------------------------|
+| `64e8d6e0` | 41661043932 | pass |
+| `97279dc3` | 41668405877 | **fail** - the assertion above |
+| `647ea9f9` | 41669664321 | pass (and the whole CI run green) |
+
+Locally it does not reproduce: five repeated runs of the class at `647ea9f9` on an idle Happy all exited 0
+(13.6-13.8 s each), and the class is inside every sharded run reported in section 7 - K=2 at `97279dc3`, K=3
+and K=4 at `4fb16ea7`, all `failures+errors=0`, which is the most contended environment this box can give.
+
+**Mechanism, read from the code** (`INFERRED`: consistent with everything above, never reproduced here). The
+test snapshots the WireMock request count the moment `pump.stop()` returns
+([CoreProgressPumpTest.java:1124-1127](../../agent-control-tower/act-execution/src/test/java/io/aria/conductor/execution/runtime/progress/CoreProgressPumpTest.java#L1124)),
+then asserts nothing more reached the wire after `drain()` (line 1131-1133). But `stop()` only guarantees the
+worker exited within `DEFAULT_STOP_JOIN_TIMEOUT` = 2 s
+([CoreProgressPump.java:119](../../agent-control-tower/act-execution/src/main/java/io/aria/conductor/execution/runtime/progress/CoreProgressPump.java#L119),
+join at line 374), and when it does not, it logs the consequence itself: *"a progress fragment may still be
+delivered after stop() returned"* (line 379-381). With the test's 20 ms poll interval (line 57) and a 5 s HTTP
+timeout (line 70), one round trip that outlasts the join budget leaves the snapshot behind by exactly one
+request, which is the `4 vs 5` observed. The assertion states the strong contract without establishing its
+own precondition - that the join actually succeeded.
+
+**Why it is not fixed on this branch.** The fix belongs to `act-execution`'s test semantics, and this branch
+has deliberately changed no product or test code; folding a test change into a performance PR would also
+remove the clean "no `src/` diff" argument that currently proves the failure is not ours. Two candidate
+fixes, both of which *tighten* the test rather than relax it, for the owner to choose between:
+
+1. Construct this test's pump with a generous `stopJoinTimeout` (the 9-argument constructor already takes
+   one; the slow-sink test at line 242 uses it) so that when `stop()` returns, the worker really has exited
+   and the snapshot is meaningful.
+2. Let the journal settle before snapshotting - `await().until(() -> requestsToThePumpPath() == previous)`
+   across two samples after `stop()` - which tests the intended property (no *new* poll after the halt)
+   instead of an instantaneous count.
+
+Neither widens the assertion, and neither is a `@Tag("timing")` candidate: the point of the test is a count,
+not a duration. Recorded here rather than silently rerolled until it goes green.

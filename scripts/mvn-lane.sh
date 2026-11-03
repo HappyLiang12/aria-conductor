@@ -19,7 +19,9 @@
 # both runs), and the box was down to 2.8 GB free at the worst moment. K=1 is the whole tier in one lane,
 # useful as the reference run. CI runs four groups on four separate runners
 # (.github/workflows/ci.yml:113-139) where nothing is shared, which is why the hosted lane can be
-# wider than any local one.
+# wider than any local one. Every number above is Happy's: on another box rebuild
+# scripts/lanes/measured-costs.json from one serial run there before trusting the fragment `# cost=`
+# headers, and see AGENTS.md for the previous daily's own table.
 #
 # Isolation contract for shard lanes:
 #   - one shared `install -DskipTests` first, so no lane pays the compile and none needs to

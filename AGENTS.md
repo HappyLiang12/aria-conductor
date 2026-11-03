@@ -142,6 +142,11 @@ nothing is shared.
 | shard 3 lanes (module-only packing) | `bash scripts/mvn-lane.sh shard 3` | 156.3 s (1.60x over K=1) |
 | full unit tier, one process, cold | `cd agent-control-tower && mvn clean test -Dspring.profiles.active=h2` | 332 s (5:32) |
 
+Those `shard` rows predate the act-execution fragments, so the split's effect on that box is unmeasured —
+do not port the Happy numbers to another machine. `scripts/lanes/measured-costs.json` is what `gen` packs
+from, so on a different box rebuild that table from one serial run there first (the recipe is section 10 of
+the review doc); otherwise the `# cost=` headers describe a machine you are not using.
+
 The `gate` lane deletes `target/jacoco.exec` first, so "All coverage checks have been met"
 reflects that run only (verified on act-app at the 0.80/0.60 ratchet, on both boxes).
 

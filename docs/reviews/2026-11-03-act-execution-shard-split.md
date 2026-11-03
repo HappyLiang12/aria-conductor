@@ -177,12 +177,12 @@ the script to show what the older guard did with the same input.
 | bump one module's `Tests run:` by 1 in a copy of a lane log (one `@Test` added since the snapshot) | `verify: NOTE the test total moved (2327 vs the 2326 measured at e0ad2d0c). That is expected when a test method was added or removed since; … It is NOT a completeness failure.` | **0** |
 | unmutated | `exact cover OK - 108 shardable classes, 4 fragments` and `verify: exact cover across lanes, and the test total equals the measured single process` | 0 |
 
-The fourth row is the one that matters. The three oracles are complementary, not redundant: source
+The compiled-oracle row is the one that matters. The three oracles are complementary, not redundant: source
 discovery (`check`, before Maven) is the only one that can refuse a bad partition *before* spending 75 s;
 the printed `-- in` lines (`verify`) are the only ones that prove a class actually executed; the compiled
 `target/test-classes` enumeration is the only one that can see a class the other two are blind to, because
-both of them are filtered through what the planner already thought of. It runs only on the failure path
-(one `dir` walk per module plus `javap` per candidate), so the passing lane costs nothing for it.
+both of them are filtered through what the planner already thought of. It costs the passing lane one
+directory walk per module (`javap` runs only on the failure path), so the guarantee is not paid for twice.
 
 ## 7. Completeness arithmetic, per K
 
@@ -414,9 +414,8 @@ downstream guard still reports "exact cover OK" over the garbage.
 
 **Declined (the fourth Minor) - "let `plan` append unlisted classes to the lightest lane."** The
 requirement is that the partition be a committed, reviewable list *and* that a class missing from all lanes
-fails loudly. Silently
-adding classes would satisfy both only by drifting the lanes away from the file a human reviewed, and the
-merge friction it saves (two PRs touching `g1..g4`) is already resolved by re-running
+fails loudly. Silently adding classes would satisfy both only by drifting the lanes away from the file a
+human reviewed, and the merge friction it saves (two PRs touching `g1..g4`) is already resolved by re-running
 `node scripts/lane-plan.mjs gen act-execution`, which is deterministic and byte-identical for unchanged
 inputs (mutant row five). `check` stays fatal for `MISSING`, and its message names `gen` as the remedy.
 
@@ -431,10 +430,12 @@ lane run without re-running Maven, because both mutants act on the logs and `pla
 behind:
 
 ```bash
-cd <worktree at 4fb16ea7>            # any tree; the bench copy is fine
+cd <worktree at 4fb16ea7 or later>
+MVN_REPO=<copy of ~/.m2> bash scripts/mvn-lane.sh shard 4  # leaves the four lane logs + plan.json
 git show 64e8d6e0:scripts/lane-plan.mjs > scripts/pre-fix.mjs   # delete it afterwards
 L=agent-control-tower/target/mvn-lane
 # MAJOR 1: bump one module's summary line in a copy of lane1's log, then compare the two scripts
+# (the anchor below is lane1's act-common summary line at this snapshot; read the live number off the log)
 sed 's/Tests run: 172, Failures: 0, Errors: 0, Skipped: 0/Tests run: 173, &/' $L/shard-lane1.log > $L/m1.log
 node scripts/pre-fix.mjs verify $L/timing.log $L/m1.log $L/shard-lane{2,3,4}.log   # rc=1
 node scripts/lane-plan.mjs verify $L/timing.log $L/m1.log $L/shard-lane{2,3,4}.log # rc=0 + NOTE

@@ -334,6 +334,9 @@ any module log.
   command line was not captured for a lane.
 - That `abstract class` declarations named `*Test` do not produce report lines. Not observed in this
   repository's current set; the rule is there to keep discovery honest if one appears.
+- What state run A was actually in when `core-workspaces.spec.ts:186` got its 409 (section 14). The rerun of
+  the same commit passed, which proves nondeterminism but not the mechanism, and the Playwright results
+  artifact that would show it could not be downloaded (`503 Egress is over the account limit`).
 - That the `CoreProgressPumpTest` failure in section 13 has a particular cause. Two candidate mechanisms were
   probed against a deliberately slow stub and both are disproven by the measurement; the shipped change makes
   the assertion immune to any pre-halt straggler, but what produced that single extra request on hosted CI is
@@ -541,3 +544,48 @@ still holds for `97279dc3` (which had no `src/` diff at all).
 
 Nothing was relaxed to get green: no timeout widened, no assertion softened, no scenario deleted, and the
 test is not a `@Tag("timing")` candidate because the property is a count, not a duration.
+
+## 14. The second hosted nondeterminism, in a tier this branch does not touch
+
+The push that carried the hardened pump test (`18399159`) went red on a different check: `E2E Playwright
+(shard 1/4)` (job 126306258214, run 41747931321, attempt 1) failed at
+`agent-control-tower/act-dashboard/e2e/core-workspaces.spec.ts:186`:
+
+```
+Error: expect(received).toBe(expected)
+Expected: 200
+Received: 409
+  185 |   const cancelled = await apiCall(request, 'POST', `/runs/${first.id}/cancel`);
+> 186 |   expect(cancelled.status).toBe(200);
+```
+
+Playwright's own retry (`retry1`) failed the same way, and then the identical commit was re-run and passed:
+attempt 2 of that run is `success` in every job - 16 checks, none non-pass. Same SHA, same code, one job fails
+then passes, so the nondeterminism is demonstrated by the rerun rather than argued.
+
+Scope first: this branch touches no `.spec.ts`, no fixture peer and no backend source. The four Java unit
+lanes and the failsafe lane were green in the same attempt, including the hardened pump test, so the lane work
+is not implicated. `409` is also the *designed* answer for cancelling an already-terminal run (the decision
+recorded under PR #114), and the run deadline is 45 minutes
+(`agent-control-tower/act-app/src/main/resources/application.yml:71`), so a deadline sweep did not end the run
+either.
+
+What the failure is compatible with - a hypothesis, not a finding: that spec seeds run A with the
+`pause-resume` peer scenario, waits for `RUNNING`, asserts the refusal of run B in the same directory, and
+only then cancels A as cleanup while also treating that cancel as evidence the verified stop path works. A's
+continued openness comes from the peer's background writer (`mock-opencode.mjs:295-298` starts `streamParts()`
+and the prompt resolves when `writerChain()` returns), so it is "slow to finish", never "cannot finish".
+Between the wait for `RUNNING` (up to 60 s) and polling B to terminal, a fast enough writer can leave A
+already terminal, and the cleanup cancel answers 409.
+
+What was not established, and why: the assertion does not include the response body, so A's actual terminal
+status is unknown, and the `playwright-results-shard-1` artifact that would carry it could not be fetched -
+GitHub returned `503 Egress is over the account limit` on the artifact download, and the job log does not echo
+the run's state. Chasing it further would mean editing the spec just to get a better log, which is a different
+change from the one this branch is about.
+
+Two things would make this spec both honest and stable, neither of them a relaxation: give the cancel
+assertion its body (`expect(cancelled.status, JSON.stringify(cancelled.data)).toBe(200)`), and decide whether
+the test's point is "a RUNNING run cancels exactly" - in which case it must assert A is still `RUNNING`
+immediately before the cancel, or hold A open with a scenario that cannot finish on its own. Recorded as the
+next person's decision rather than silently fixed inside a performance change.

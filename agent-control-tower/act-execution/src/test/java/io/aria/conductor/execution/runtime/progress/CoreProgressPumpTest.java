@@ -32,6 +32,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.findAll;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.resetAllRequests;
 import static com.github.tomakehurst.wiremock.client.WireMock.stubFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
@@ -1111,26 +1112,38 @@ class CoreProgressPumpTest {
      * cancel path stops the pump and must produce nothing afterwards, so a drain called
      * on an already-halted pump performs NO poll at all — not "a poll that happens to
      * emit nothing".
+     *
+     * <p>The property is about the drain, so the measurement window starts at the halt:
+     * this test owns its session id and clears the request journal before calling
+     * {@code drain()}. Counting a shared {@code /session/sess-1/message} path against a
+     * number snapshotted moments earlier also counts whatever else reached that path in
+     * the window - a straggler poll issued before {@code stop()} returned, or another
+     * pump still alive from an earlier test - and on hosted CI that read as a halted-pump
+     * violation ("expected: 4 but was: 5") that no local run, contended or not, could
+     * reproduce. An empty journal after the reset cannot be confused by either.
      */
     @Test
     void aDrainAfterStopEmitsNothingAndPerformsNoPoll() {
-        stubFor(get(urlEqualTo(PATH))
+        String session = "halt-" + runId;
+        String path = "/session/" + session + "/message";
+        stubFor(get(urlEqualTo(path))
                 .willReturn(aResponse().withStatus(200).withBody(body(
                         "{ \"id\": \"r1\", \"type\": \"reasoning\", \"text\": \"outlining\" },"
                                 + "{ \"id\": \"t1\", \"type\": \"text\", \"text\": \"the answer\" }"))));
 
-        startPump();
+        pump = new CoreProgressPump(client, session, runId, agentId, events::add, POLL, COALESCE);
+        pump.start();
         await().atMost(Duration.ofSeconds(3)).until(() -> !events.isEmpty());
         pump.stop();
-
-        int requestsAtHalt = requestsToThePumpPath();
         int eventsAtHalt = events.size();
+
+        resetAllRequests();
 
         pump.drain();
 
-        assertThat(requestsToThePumpPath())
+        assertThat(findAll(getRequestedFor(urlEqualTo(path))))
                 .as("a halted pump does not even read the message list")
-                .isEqualTo(requestsAtHalt);
+                .isEmpty();
         assertThat(events).hasSize(eventsAtHalt);
     }
 

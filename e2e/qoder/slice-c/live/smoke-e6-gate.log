@@ -1,0 +1,6 @@
+# smoke run — restored stack after the S10 restart failure — 2026-09-18T11:34:52Z
+# API_URL=http://localhost:8097 model=efficient git=8f5ed4d
+== 1. seed agent + run (real qoder, zero-credit model) ==
+   agent=20f326ba-665e-4e34-a464-e21246709f11 run=2444537e-23fb-40cc-af7d-a68677af69f2
+== 2. wait (<=180s) for a PENDING ACP_PERMISSION ask of the run ==
+SMOKE FAIL: no PENDING ACP ask appeared within 180s (sandbox path broken)

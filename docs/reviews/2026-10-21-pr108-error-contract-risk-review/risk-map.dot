@@ -1,0 +1,108 @@
+// Risk map for PR #108 (head 504193a3).
+// Source: architecture-visualization:risk-quality-reviewer + graphviz.
+// Evidence: ../2026-10-21-pr108-error-contract-risk-review.md and risk-map-evidence.md.
+// Rendering: `dot -Tsvg risk-map.dot -o risk-map.svg` (Graphviz was not installed when this source was written).
+digraph Pr108ErrorContractRisk {
+  rankdir=TB;
+  graph [fontname="Segoe UI", fontsize=11, nodesep=0.35, ranksep=0.55, compound=true];
+  node [fontname="Segoe UI", fontsize=10, style="rounded,filled", fillcolor="#ffffff"];
+  edge [fontname="Segoe UI", fontsize=9, color="#6b7280"];
+
+  subgraph cluster_contract {
+    label="Contract (act-common)";
+    style="rounded,dashed"; color="#94a3b8";
+    actionable [label="ActionableFailure\n+ ErrorSurface\n(4 values)", shape=box, fillcolor="#e0f2fe"];
+    handler [label="GlobalExceptionHandler\ncode + surface\n(actionable only)", shape=box, fillcolor="#e0f2fe"];
+  }
+
+  subgraph cluster_engine {
+    label="Run engine and coordinator (act-execution)";
+    style="rounded,dashed"; color="#94a3b8";
+    engine [label="AgentLoopEngine\ncompletionError / boundedError", shape=box, fillcolor="#ecfccb"];
+    wrapper [label="awaitTaskResult wraps\nnon-TaskExecutionException", shape=box, fillcolor="#fef9c3"];
+    runctx [label="RunContext\nfirst actionable wins", shape=box, fillcolor="#ecfccb"];
+    deadline [label="CoreExecutionService\ndeadline timer -> verified cancel", shape=box, fillcolor="#ecfccb"];
+    coordinator [label="RunInputCoordinator\nterminationFailures map", shape=box, fillcolor="#fef9c3"];
+  }
+
+  subgraph cluster_persistence {
+    label="Persistence and events (act-common / act-app)";
+    style="rounded,dashed"; color="#94a3b8";
+    v70 [label="V70 runs.error_code\nerror_surface (strings)", shape=cylinder, fillcolor="#f1f5f9"];
+    event [label="RunCompletedEvent\n+ RunResponse", shape=box, fillcolor="#f1f5f9"];
+    v71 [label="V71 seed\naria.tasks.deadline-minutes", shape=cylinder, fillcolor="#f1f5f9"];
+  }
+
+  subgraph cluster_config {
+    label="Configuration and admission";
+    style="rounded,dashed"; color="#94a3b8";
+    controller [label="SystemConfigController\nwrite-time 1-1440 check", shape=box, fillcolor="#fae8ff"];
+    props [label="TaskDeadlineProperties\ngetInt(...,1,1440)", shape=box, fillcolor="#fae8ff"];
+    provider [label="OpenCode provider\nowner legacy fallback", shape=box, fillcolor="#f1f5f9"];
+  }
+
+  subgraph cluster_ui {
+    label="Dashboard (act-dashboard)";
+    style="rounded,dashed"; color="#94a3b8";
+    presentation [label="errorPresentation.ts\nsurface -> action\n+ legacy text matcher", shape=box, fillcolor="#dbeafe"];
+    notice [label="ErrorNotice /\nRunErrorNotice", shape=box, fillcolor="#dbeafe"];
+    panel [label="SystemConfigPanel\nmin/max metadata + Save guard", shape=box, fillcolor="#dbeafe"];
+  }
+
+  subgraph cluster_validation {
+    label="Validation assets";
+    style="rounded,dashed"; color="#94a3b8";
+    unit [label="2,757 backend tests\n514 frontend tests", shape=note, fillcolor="#dcfce7"];
+    ci [label="CI 39603811844\n4/4 Playwright shards", shape=note, fillcolor="#dcfce7"];
+    fault [label="fault-injection.api.spec\nprovider-deadline premise", shape=note, fillcolor="#fef9c3"];
+  }
+
+  subgraph cluster_risks {
+    label="Risks (severity)";
+    style="rounded,bold"; color="#b91c1c";
+    r01 [label="R-01 Medium\nDeadline full path\nnot automated", shape=diamond, fillcolor="#fed7aa"];
+    r02 [label="R-02 Medium\nStale provider-deadline\nE2E premise", shape=diamond, fillcolor="#fed7aa"];
+    r03 [label="R-03 Medium\nSurface/action contract\nduplicated", shape=diamond, fillcolor="#fed7aa"];
+    r04 [label="R-04 Medium\nDeadline range in\n4 places", shape=diamond, fillcolor="#fed7aa"];
+    r05 [label="R-05 Low\nIdentity lost at\nwrapper boundaries", shape=diamond, fillcolor="#e5e7eb"];
+    r06 [label="R-06 Low\nNo failure metrics", shape=diamond, fillcolor="#e5e7eb"];
+    r07 [label="R-07 Low\nMigration immutability\nunguarded", shape=diamond, fillcolor="#e5e7eb"];
+    r08 [label="R-08 Low\nContract undocumented\nfor agents", shape=diamond, fillcolor="#e5e7eb"];
+    r09 [label="R-09 Low\nTermination map\nno sweeper", shape=diamond, fillcolor="#e5e7eb"];
+  }
+
+  actionable -> handler [label="thrown"];
+  handler -> runctx [label="HTTP path\n(not run path)", style=dashed];
+  engine -> runctx [label="addError(Throwable)"];
+  engine -> v70 [label="persists"];
+  engine -> event [label="publishes"];
+  deadline -> coordinator [label="verified stop only"];
+  coordinator -> engine [label="consume on completion"];
+  deadline -> props [label="freezes value"];
+  props -> v71 [label="reads"];
+  controller -> props [label="writes validated value"];
+  panel -> controller [label="PUT value"];
+  event -> presentation [label="RunResponse"];
+  presentation -> notice [label="renders action"];
+  notice -> panel [label="Configure tab"];
+
+  r01 -> deadline [label="unvalidated path", color="#d97706"];
+  r01 -> unit [label="gap", style=dashed, color="#d97706"];
+  r02 -> fault [label="stale premise", color="#d97706"];
+  r02 -> provider [label="wrong knob", style=dashed, color="#d97706"];
+  r03 -> presentation [label="duplicate mapping", color="#d97706"];
+  r03 -> actionable [label="duplicate enum", color="#d97706"];
+  r03 -> v70 [label="immutable strings", style=dashed, color="#d97706"];
+  r04 -> props [label="range", color="#d97706"];
+  r04 -> controller [label="range", color="#d97706"];
+  r04 -> panel [label="range", color="#d97706"];
+  r04 -> v71 [label="range text", color="#d97706"];
+  r05 -> wrapper [label="drops code/surface", color="#6b7280"];
+  r05 -> runctx [label="top-level check only", style=dashed, color="#6b7280"];
+  r06 -> event [label="uninstrumented", style=dashed, color="#6b7280"];
+  r07 -> v70 [label="checksum change", style=dashed, color="#6b7280"];
+  r08 -> actionable [label="no guidance", style=dashed, color="#6b7280"];
+  r09 -> coordinator [label="no sweeper", style=dashed, color="#6b7280"];
+
+  ci -> unit [label="runs"];
+}

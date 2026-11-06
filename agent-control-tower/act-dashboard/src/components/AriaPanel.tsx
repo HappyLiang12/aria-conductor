@@ -1,0 +1,862 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { streamMessage } from '../api/aria';
+import type { StreamError } from '../api/aria';
+import { listApprovals } from '../api/approvals';
+import { apiErrorMessage, isOperatorRejection } from '../api/operatorSession';
+import { cancelRun } from '../api/runs';
+import type { AriaMessage } from '../types';
+import { getLatestConversation, getConversationTimeline, deleteConversation } from '../api/ariaConversations';
+import type { TimelineEntry } from '../api/ariaConversations';
+import { formatTimestamp } from '../utils/formatTime';
+import { useSlashCommands } from '../hooks/useSlashCommands';
+import SlashCommandMenu from './SlashCommandMenu';
+
+// ponytail: localStorage removed — conversation ownership now backend-backed.
+// PANEL_OPEN_KEY retained for UI toggle only (not data).
+const PANEL_OPEN_KEY = 'aria-panel-open';
+
+const CLIENT_TIMEOUT_MS = 600_000; // 10 min — matches backend SSE timeout (Issue #12)
+
+const SUGGESTIONS = [
+  'My schedule today',
+  'Brief me on overnight runs',
+  'What needs my approval?',
+  'Knowledge status summary',
+];
+
+interface PanelMessage extends AriaMessage {
+  id: string;
+  /** Optional UI-only error tag so we can render a retry affordance per-bubble. */
+  error?: boolean;
+  /**
+   * UI-only: the prompt Retry resends. A failed-turn timeline entry carries its
+   * own prompt, so retry works even when nothing was sent from this tab.
+   */
+  retryText?: string;
+  /**
+   * UI-only: the run may still be alive in the background (the client gave up on
+   * a slow stream or a governed tool ask is waiting), so a blind resend of the
+   * prompt must not be offered next to the message.
+   */
+  noRetry?: boolean;
+}
+
+/**
+ * The failure reason of a turn the backend marked FAILED — the only error detail
+ * allowed to claim a turn failed (A4 enriched SSE payload). Everything else
+ * (plain strings, legacy payloads) reports an unknown run state.
+ */
+function turnFailureReason(errorDetail?: StreamError): string | null {
+  if (typeof errorDetail !== 'object' || errorDetail === null || errorDetail.turnFailed !== true) {
+    return null;
+  }
+  return errorDetail.reason || errorDetail.message || 'unknown error';
+}
+
+/** Prefix the backend's synthetic failed-turn timeline entry (A1) carries. */
+const FAILED_TURN_CONTENT_PREFIX = '回合執行失敗：';
+
+/**
+ * A failed turn's synthetic timeline entry is appended the moment the run turns
+ * FAILED, which can trail the engine's own error event by a moment — one short
+ * re-check covers that race (never more; the approvals copy is the fallback).
+ */
+const FAILED_TURN_RECHECK_WAIT_MS = 1500;
+
+/**
+ * Panel-side reconcile for a legacy stream error, whose payload carries no
+ * failed-turn detail (A4 enrichment covers only the stream service's catch; the
+ * engine's own `{"message": ...}` events stay plain). The failed turn still
+ * leaves its synthetic entry in the conversation timeline, so re-read it: when
+ * the last entry is that failure the panel reports the real reason instead of
+ * the misleading approvals copy. Returns null when the timeline is unreadable
+ * or the failure entry has not landed — after ONE bounded re-check.
+ */
+async function readFailedTurnEntry(conversationId: string): Promise<TimelineEntry | null> {
+  const readLastEntry = async (): Promise<TimelineEntry | null> => {
+    try {
+      const timeline = await getConversationTimeline(conversationId);
+      const last = timeline[timeline.length - 1];
+      return last?.error === true ? last : null;
+    } catch {
+      return null; // unreadable timeline = no evidence: keep the approvals copy
+    }
+  };
+  const first = await readLastEntry();
+  if (first) return first;
+  await new Promise((resolve) => setTimeout(resolve, FAILED_TURN_RECHECK_WAIT_MS));
+  return readLastEntry();
+}
+
+function loadOpenState(): boolean {
+  try {
+    return localStorage.getItem(PANEL_OPEN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Compact, allocation-light markdown renderer for assistant bubbles (m2: + tables & horizontal rules). */
+function renderMarkdown(text: string): string {
+  if (!text) return '<p></p>';
+  // m2: guard very large payloads — render verbatim to avoid costly regex passes.
+  if (text.length > 10000) {
+    return `<pre>${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+  }
+  try {
+    // Extract fenced code blocks first so their pipes/dashes aren't parsed as tables/rules.
+    const codeBlocks: string[] = [];
+    let src = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
+      codeBlocks.push(`<pre class="md-code-block"><code>${String(code).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`);
+      return `\u0000CB${codeBlocks.length - 1}\u0000`;
+    });
+    src = src
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    const inline = (s: string): string =>
+      s
+        .replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    const lines = src.split('\n');
+    const out: string[] = [];
+    let inList = false;
+    let inTable = false;
+    let tableHeaderDone = false;
+    const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+    const closeTable = () => { if (inTable) { out.push('</tbody></table>'); inTable = false; tableHeaderDone = false; } };
+    for (const raw of lines) {
+      const line = raw.trimEnd();
+      const trimmed = line.trim();
+      if (trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length > 1) {
+        const cells = trimmed.slice(1, -1).split('|').map((c) => c.trim());
+        const isSeparator = cells.every((c) => /^:?-{2,}:?$/.test(c));
+        if (isSeparator) { continue; }
+        if (!inTable) {
+          closeList();
+          out.push('<table class="md-table"><thead><tr>');
+          for (const c of cells) out.push(`<th>${inline(c)}</th>`);
+          out.push('</tr></thead><tbody>');
+          inTable = true;
+          tableHeaderDone = true;
+        } else {
+          out.push('<tr>');
+          for (const c of cells) out.push(`<td>${inline(c)}</td>`);
+          out.push('</tr>');
+        }
+        continue;
+      }
+      closeTable();
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        closeList();
+        out.push('<hr/>');
+        continue;
+      }
+      let h = line;
+      h = h.replace(/^### (.+)$/, '<h4>$1</h4>');
+      h = h.replace(/^## (.+)$/, '<h3>$1</h3>');
+      h = h.replace(/^# (.+)$/, '<h2>$1</h2>');
+      h = inline(h);
+      if (/^[•\-\*] (.+)$/.test(h)) {
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push(`<li>${h.replace(/^[•\-\*] /, '')}</li>`);
+        continue;
+      }
+      if (/^\d+\. (.+)$/.test(h)) {
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push(`<li>${h.replace(/^\d+\. /, '')}</li>`);
+        continue;
+      }
+      closeList();
+      if (h.trim() === '') { out.push(''); } else { out.push(h); }
+    }
+    closeList();
+    closeTable();
+    let html = out.join('\n');
+    html = html.replace(/\u0000CB(\d+)\u0000/g, (_m, i) => codeBlocks[Number(i)] ?? '');
+    html = html.replace(/\n\n/g, '</p><p>');
+    html = html.replace(/\n/g, '<br/>');
+    if (!html.startsWith('<')) html = `<p>${html}</p>`;
+    return html;
+  } catch {
+    return `<pre>${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+  }
+}
+
+/**
+ * Floating Aria assistant panel — FAB + slide-out chat surface.
+ *
+ * Wired into the global app shell so the operator can summon Aria from any
+ * page without losing route context. Streams responses via Server-Sent Events
+ * (`/api/v1/aria/chat/stream`) and falls back to a per-bubble retry button if
+ * the backend emits an `error` event mid-stream.
+ */
+export function AriaPanel() {
+  const [open, setOpen] = useState<boolean>(() => loadOpenState());
+  const [messages, setMessages] = useState<PanelMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [conversationId, setConversationId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [lastSentMessage, setLastSentMessage] = useState<string | null>(null);
+  const lastSentSkillIdRef = useRef<string | undefined>(undefined); // retry must re-attach the skill directive
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const stackRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false); // M1: suppress the false "connection closed" error after a user cancel
+  const activeRunIdRef = useRef<string | null>(null); // M1: run id for server-side cancellation
+  const [toolElapsed, setToolElapsed] = useState(0); // m3: seconds the current tool has been running
+
+  const isEmpty = messages.length === 0;
+  const slash = useSlashCommands(open);
+  // Hoisted primitive so sendStreamed's closure can depend on the id itself —
+  // the `slash` object is render-scoped and must not be a hook dep (fix 1).
+  const pendingSkillId = slash.pendingSkill?.id;
+
+  // Load conversation from backend on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const summary = await getLatestConversation();
+        if (cancelled) return;
+        if (summary) {
+          setConversationId(summary.conversationId);
+          const timeline = await getConversationTimeline(summary.conversationId);
+          if (cancelled) return;
+          setMessages(timeline.map((t) => ({
+            id: crypto.randomUUID(),
+            // A failed-turn entry (A1) is a synthetic assistant bubble; it carries
+            // the prompt that re-runs the turn so Retry can resend it.
+            role: t.error
+              ? 'assistant' as const
+              : (t.role === 'user' || t.role === 'assistant') ? t.role : 'assistant' as const,
+            content: t.content,
+            timestamp: t.timestamp,
+            ...(t.error ? { error: true, retryText: t.retryPrompt } : {}),
+          })));
+        } else {
+          const fresh = crypto.randomUUID();
+          setConversationId(fresh);
+          console.log(`[Aria] New conversation: ${fresh}`);
+        }
+      } catch (err) {
+        // Backend unavailable — start fresh locally, but say the history was not loaded.
+        if (!cancelled) {
+          setHistoryError(apiErrorMessage(err,
+            'Conversation history unavailable — starting a new conversation.'));
+          setConversationId(crypto.randomUUID());
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Persist open state only (UI toggle, not data)
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_OPEN_KEY, open ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [open]);
+
+  // Auto-scroll on message stack growth
+  useEffect(() => {
+    if (!open) return;
+    const el = stackRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, [messages, busy, activeTool, open]);
+
+  // Focus textarea when panel opens
+  useEffect(() => {
+    if (open) {
+      const t = setTimeout(() => textareaRef.current?.focus(), 60);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [open]);
+
+  // Cancel in-flight stream when component unmounts
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
+  const togglePanel = useCallback(() => setOpen((v) => !v), []);
+  const closePanel = useCallback(() => setOpen(false), []);
+
+  /**
+   * Replaces the old "the request may have timed out. Please try again." text
+   * after the client gave up or the stream died before `done`. A turn the backend
+   * marked FAILED is the known case: its enriched error payload (A4) pinpoints
+   * the failure, so the panel reports that actual reason and re-offers Retry
+   * (the run is provably dead). A legacy stream error (no enrichment) is first
+   * reconciled against the conversation timeline: the failed turn's synthetic
+   * entry (A1) carries the same truth, so it too resolves to the failed-turn
+   * bubble whenever it is present. Only for a run whose state stays unknown —
+   * and always for a timeout — the panel asks the review queue once and reports
+   * what it actually knows: a pending-ask count, "no approval pending", or —
+   * when the operator-only queue refuses the read (401/403) or the probe fails —
+   * that it could not verify. In that unknown case never a retry prompt:
+   * resending would pile a second prompt onto a possibly live run.
+   */
+  const reportRunUncertain = useCallback(
+    async (eventConversationId: string, origin: 'timeout' | 'stream-error', errorDetail?: StreamError) => {
+      if (errorDetail) console.warn('[Aria] stream ended before done:', errorDetail);
+
+      const failureReason = turnFailureReason(errorDetail);
+      if (failureReason !== null) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `⚠ 上一回合失敗：${failureReason}`,
+            timestamp: new Date().toISOString(),
+            error: true,
+            // The turn is provably dead — a resend of its prompt is safe to offer.
+            noRetry: false,
+          },
+        ]);
+        return;
+      }
+
+      // Legacy path (no enriched turnFailed payload — e.g. the engine's own
+      // error events): the timeline's failed-turn entry is the truthful source,
+      // so consult it before falling back to the approvals copy. A timeout is
+      // deliberately excluded — it never proves the run died, so it keeps
+      // today's copy without this read.
+      if (origin === 'stream-error') {
+        const failedEntry = await readFailedTurnEntry(eventConversationId);
+        if (failedEntry) {
+          const reason = failedEntry.content.startsWith(FAILED_TURN_CONTENT_PREFIX)
+            ? failedEntry.content.slice(FAILED_TURN_CONTENT_PREFIX.length)
+            : failedEntry.content;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: `⚠ 上一回合失敗：${reason}`,
+              timestamp: new Date().toISOString(),
+              error: true,
+              // The failed turn is provably dead — Retry resends its own prompt.
+              noRetry: false,
+              retryText: failedEntry.retryPrompt,
+            },
+          ]);
+          return;
+        }
+      }
+
+      let pendingCount: number | null = null; // null until the queue actually answers
+      let checkRefused = false;
+      try {
+        pendingCount = (await listApprovals('PENDING')).length;
+      } catch (err) {
+        // 401/403 = the operator-only route refused this tab (no operator
+        // session); anything else is a real failure. Either way the run state
+        // stays unknown and is reported as such, never as a failure.
+        checkRefused = isOperatorRejection(err);
+        console.warn(`[Aria] pending-approval check ${checkRefused ? 'refused' : 'failed'}:`, err);
+      }
+
+      const paragraphs: string[] = [];
+      if (pendingCount !== null && pendingCount > 0) {
+        paragraphs.push(
+          `Aria may be waiting for your approval — ${pendingCount} pending ask${pendingCount === 1 ? '' : 's'} in the Review Queue. ` +
+            'The request continues in the background; approve or deny there to resume it.',
+        );
+      } else if (pendingCount === 0) {
+        paragraphs.push(
+          'Aria has not answered and no approval is pending — the run may still be alive in the background; check the Runs page.',
+        );
+      } else {
+        paragraphs.push(
+          'Aria may be waiting for your approval — open the Review Queue to check; the request continues in the background.',
+        );
+        if (checkRefused) {
+          paragraphs.push('The pending-approval check was refused (operator-only), so this tab could not verify the queue itself.');
+        }
+      }
+      paragraphs.push(`Conversation ID: \`${eventConversationId}\` (include this when reporting issues)`);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `⚠ ${paragraphs.join('\n\n')}`,
+          timestamp: new Date().toISOString(),
+          error: true,
+          // A client timeout never proves the run died, and a pending ask proves
+          // it is alive and waiting — neither may be answered with a resend.
+          noRetry: origin === 'timeout' || (pendingCount !== null && pendingCount > 0),
+        },
+      ]);
+    },
+    [],
+  );
+
+  const sendStreamed = useCallback(
+    (rawText: string, skillIdOverride?: string | undefined) => {
+      const text = rawText.trim();
+      if (!text || busy) return;
+
+      const skillId = skillIdOverride ?? pendingSkillId;
+
+      // Abort any prior in-flight stream defensively.
+      abortRef.current?.abort();
+      cancelledRef.current = false; // M1: reset per-request cancel state
+      activeRunIdRef.current = null;
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
+      const userMsg: PanelMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Snapshot prior history BEFORE the new message goes on screen.
+      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+      setMessages((prev) => [...prev, userMsg]);
+      setInput('');
+      setBusy(true);
+      setActiveTool(null);
+      setLastSentMessage(text);
+      lastSentSkillIdRef.current = skillId;
+      slash.clearSkill();
+
+      void streamMessage(
+        conversationId,
+        text,
+        history,
+        {
+          onThinking: (runId) => {
+            if (runId) activeRunIdRef.current = runId; // M1: capture run id for cancel
+            setActiveTool(null);
+          },
+          onToolCall: (name) => setActiveTool(name),
+          onToolResult: () => setActiveTool(null),
+          onMessage: (content) => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: 'assistant',
+                content: content || 'No response received.',
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+          },
+          onDone: (data) => {
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            // Adopt the server-issued conversationId so multi-turn context persists (#36).
+            if (data?.conversationId) {
+              setConversationId((prev) => prev || data.conversationId);
+            }
+            setBusy(false);
+            setActiveTool(null);
+          },
+          onError: (errorDetail) => {
+            if (cancelledRef.current) return; // M1: user cancelled — don't show an error bubble
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            setBusy(false);
+            setActiveTool(null);
+            void reportRunUncertain(conversationId, 'stream-error', errorDetail);
+          },
+        },
+        ctrl.signal,
+        { isCancelled: () => cancelledRef.current, skillId },
+      );
+
+      // Client-side timeout: if no response in CLIENT_TIMEOUT_MS, abort the stream
+      // but report the run as unverified (it may be waiting on an approval).
+      timeoutRef.current = setTimeout(() => {
+        ctrl.abort();
+        setBusy(false);
+        setActiveTool(null);
+        void reportRunUncertain(conversationId, 'timeout');
+      }, CLIENT_TIMEOUT_MS);
+    },
+    [busy, messages, conversationId, pendingSkillId, reportRunUncertain],
+  );
+
+  // One-click synthesis (Feature B2): the batch-completion notification composes
+  // the prompt and hands it over as an `aria:compose` window event; the panel
+  // owns the SSE path, so the event goes through sendStreamed like a typed
+  // message. Removing the listener on unmount keeps a stale panel from sending.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const prompt = (e as CustomEvent<{ prompt?: string }>).detail?.prompt;
+      if (typeof prompt === 'string' && prompt.trim()) {
+        // The 彙整 button lives outside the panel: make the panel visible before
+        // the turn runs, otherwise the composed prompt streams with no feedback.
+        setOpen(true);
+        // Residual (accepted, no queue): while a turn is already in flight
+        // sendStreamed drops the composed prompt — the now-visible panel shows
+        // the busy state instead of the click doing nothing on a closed one.
+        sendStreamed(prompt);
+      }
+    };
+    window.addEventListener('aria:compose', handler);
+    return () => window.removeEventListener('aria:compose', handler);
+  }, [sendStreamed]);
+
+  const handleSend = useCallback(() => {
+    sendStreamed(input);
+  }, [input, sendStreamed]);
+
+  const handleRetry = useCallback(() => {
+    if (busy) return;
+    // A failed-turn timeline entry knows its own prompt; a stream-sourced failure
+    // resends the prompt this tab last sent.
+    const retryText = messages[messages.length - 1]?.retryText ?? lastSentMessage;
+    if (!retryText) return;
+    // Drop the trailing error bubble so the retry doesn't pile up duplicates.
+    setMessages((prev) => {
+      if (prev.length === 0 || !prev[prev.length - 1].error) return prev;
+      return prev.slice(0, -1);
+    });
+    sendStreamed(retryText, lastSentSkillIdRef.current);
+  }, [busy, lastSentMessage, messages, sendStreamed]);
+
+  const handleCancel = useCallback(() => {
+    cancelledRef.current = true; // M1: suppress the false close-error bubble
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    abortRef.current?.abort();
+    // M1: cancel the server-side run so it stops consuming tokens (best-effort; runId
+    // is known once the first `thinking` event arrives).
+    if (activeRunIdRef.current) {
+      cancelRun(activeRunIdRef.current).catch((err) => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: 'The server-side cancel could not be confirmed: '
+              + apiErrorMessage(err, 'unknown error'),
+            timestamp: new Date().toISOString(),
+            error: true,
+          },
+        ]);
+      });
+    }
+    setBusy(false);
+    setActiveTool(null);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: 'Request cancelled.',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
+  }, []);
+
+  const handleCopyConversationId = useCallback(() => {
+    navigator.clipboard.writeText(conversationId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      /* ignore clipboard errors */
+    });
+  }, [conversationId]);
+
+  const handleNewConversation = useCallback(() => {
+    if (conversationId) {
+      deleteConversation(conversationId).catch(() => {
+        /* ignore backend errors — clear locally regardless */
+      });
+    }
+    const newConversationId = crypto.randomUUID();
+    setMessages([]);
+    setConversationId(newConversationId);
+    console.log(`[Aria] New conversation: ${newConversationId}`);
+    setInput('');
+    setBusy(false);
+    setActiveTool(null);
+    setLastSentMessage(null);
+    lastSentSkillIdRef.current = undefined;
+    slash.clearSkill();
+  }, [conversationId]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash-command menu keyboard navigation takes priority
+    if (slash.open) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); slash.move(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); slash.move(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        if (slash.items.length > 0) {
+          slash.selectCurrent();
+          setInput(''); // mirror the mouse path — leave no `/xxx` residue (fix 2)
+          return;
+        }
+        // Zero matches: fall through so Enter sends the raw text as a normal message (fix 2).
+      }
+      if (e.key === 'Escape') { e.preventDefault(); slash.dismiss(); return; }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    } else if (e.key === 'Escape') {
+      closePanel();
+    }
+  };
+
+  // Only the trailing bubble may offer a retry; a run-uncertain bubble (noRetry)
+  // must never re-expose a retry control.
+  const lastIsRetryable = useMemo(
+    () => messages.length > 0 && !!messages[messages.length - 1].error && !messages[messages.length - 1].noRetry,
+    [messages],
+  );
+
+  // m3: show elapsed seconds while a tool is running so long calls don't look dead.
+  useEffect(() => {
+    if (!activeTool) {
+      setToolElapsed(0);
+      return undefined;
+    }
+    const start = Date.now();
+    setToolElapsed(0);
+    const id = window.setInterval(() => setToolElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [activeTool]);
+
+  // m2: memoize rendered markdown so it only recomputes when messages change.
+  const messagesHtml = useMemo(() => messages.map((m) => renderMarkdown(m.content)), [messages]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`ai-fab ${open ? 'ai-fab-active' : ''}`}
+        onClick={togglePanel}
+        aria-label={open ? 'Close Aria panel' : 'Open Aria panel'}
+        aria-expanded={open}
+      >
+        <span className="ai-fab-halo" aria-hidden="true" />
+        <span className="ai-fab-glyph" aria-hidden="true">✦</span>
+        <span className="ai-fab-dot" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <section className="ai-panel" role="dialog" aria-label="Aria assistant">
+          <header className="ai-header">
+            <div className="ai-header-stripe" aria-hidden="true" />
+            <div className="ai-avatar" aria-hidden="true">
+              <span>A</span>
+            </div>
+            <div className="ai-header-text">
+              <div className="ai-header-title">Aria</div>
+              <div className="ai-header-sub">
+                <span className="ai-pulse-dot" aria-hidden="true" />
+                {loading ? 'Connecting…' : 'Personal Assistant · always on'}
+              </div>
+            </div>
+            <div className="ai-session-info">
+              <code className="ai-conversation-id" title={conversationId}>
+                {conversationId.slice(0, 8)}...
+              </code>
+              <button
+                type="button"
+                className="ai-copy-btn"
+                onClick={handleCopyConversationId}
+                aria-label="Copy conversation ID"
+                title="Copy conversation ID to clipboard"
+              >
+                {copied ? '✓' : '📋'}
+              </button>
+              <button
+                type="button"
+                className="ai-clear-btn"
+                onClick={handleNewConversation}
+                aria-label="Clear and start new conversation"
+                title="Clear and start new conversation"
+              >
+                Clear
+              </button>
+            </div>
+            <button
+              type="button"
+              className="ai-close"
+              onClick={closePanel}
+              aria-label="Close Aria"
+            >
+              ×
+            </button>
+          </header>
+
+          <div className="ai-stack" ref={stackRef} aria-live="polite" aria-relevant="additions">
+            {isEmpty && (
+              <div className="ai-card ai-empty">
+                <div className="ai-empty-eyebrow">— operator copilot</div>
+                <div className="ai-empty-title">
+                  Good to see you. <em>How can I help?</em>
+                </div>
+                <div className="ai-empty-sub">
+                  I can brief you on agents, runs, approvals, and the knowledge
+                  base — and I can act on what you ask.
+                </div>
+              </div>
+            )}
+
+            {historyError && (
+              <div role="alert" style={{ margin: '8px 12px', color: '#ff8d99', fontSize: 11.5 }}>
+                {historyError}
+              </div>
+            )}
+
+            {messages.map((msg, idx) => (
+              <div key={msg.id} className={`ai-msg ai-msg-${msg.role}`}>
+                <div className="ai-msg-avatar" aria-hidden="true">
+                  {msg.role === 'user' ? 'You' : 'A'}
+                </div>
+                <div className="ai-msg-body">
+                  <div className={`ai-msg-bubble ${msg.error ? 'ai-msg-bubble-error' : ''}`}>
+                    {msg.role === 'assistant' ? (
+                      <div
+                        className="ai-msg-md markdown-content"
+                        dangerouslySetInnerHTML={{ __html: messagesHtml[idx] ?? '' }}
+                      />
+                    ) : (
+                      <div className="ai-msg-text">{msg.content}</div>
+                    )}
+                  </div>
+                  <div className="ai-msg-meta">
+                    {msg.role === 'user' ? 'You' : 'Aria'} ·{' '}
+                    {formatTimestamp(msg.timestamp)}
+                    {msg.error && lastIsRetryable && idx === messages.length - 1 && (
+                      <button
+                        type="button"
+                        className="ai-retry"
+                        onClick={handleRetry}
+                        disabled={busy}
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {busy && (
+              <div className="ai-msg ai-msg-assistant">
+                <div className="ai-msg-avatar" aria-hidden="true">
+                  A
+                </div>
+                <div className="ai-msg-body">
+                  <div className="ai-msg-bubble ai-msg-bubble-thinking">
+                    {activeTool ? (
+                      <div className="ai-tool-tag">
+                        <span className="ai-tool-spark" aria-hidden="true">⟢</span>
+                        Using <code>{activeTool}</code>
+                        <span className="ai-tool-elapsed"> ({toolElapsed}s{toolElapsed >= 30 ? ' · still working…' : ''})</span>
+                      </div>
+                    ) : (
+                      <div className="typing-indicator" aria-label="Aria is thinking">
+                        <span className="typing-dot" />
+                        <span className="typing-dot" />
+                        <span className="typing-dot" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isEmpty && (
+              <div className="ai-suggestions" role="group" aria-label="Suggested prompts">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="ai-sg"
+                    onClick={() => sendStreamed(s)}
+                    disabled={busy}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="ai-compose">
+            {slash.open && (
+              <SlashCommandMenu
+                items={slash.items}
+                activeIndex={slash.activeIndex}
+                onHover={(i) => slash.move(i - slash.activeIndex)}
+                onSelect={(item) => { slash.choose(item); setInput(''); }}
+              />
+            )}
+            {slash.pendingSkill && !slash.open && (
+              <div className="ai-skill-chip">
+                <span>/{slash.pendingSkill.name}</span>
+                <button type="button" onClick={slash.clearSkill} aria-label="Remove skill">✕</button>
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              className="ai-compose-input"
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                slash.onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask Aria anything…  (type / for skills)"
+              rows={2}
+              disabled={busy}
+              aria-controls={slash.open ? 'slash-command-listbox' : undefined}
+              aria-activedescendant={slash.open && slash.items[slash.activeIndex] ? `slash-opt-${slash.items[slash.activeIndex].id}` : undefined}
+            />
+            {busy ? (
+              <button
+                type="button"
+                className="ai-cancel-btn"
+                onClick={handleCancel}
+                aria-label="Cancel request"
+              >
+                <span aria-hidden="true">✕</span>
+                <span>Cancel</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="ai-action-btn"
+                onClick={handleSend}
+                disabled={!input.trim()}
+                aria-label="Send message"
+              >
+                <span className="ai-action-glyph" aria-hidden="true">↗</span>
+                <span className="ai-action-label">Send</span>
+              </button>
+            )}
+          </div>
+          <div className="ai-hint">
+            Aria streams live · acts on the live system · review approvals before destructive moves.
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
+export default AriaPanel;

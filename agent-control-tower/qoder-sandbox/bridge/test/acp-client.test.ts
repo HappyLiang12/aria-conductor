@@ -1,0 +1,865 @@
+/**
+ * B3a vitest suite: drives `AcpClient` against the committed fake CLI
+ * (`test/fixtures/fake-qodercli.mjs`) and pins the protocol facts observed in Slice A
+ * (A3 handshake/MCP config, A4 permission semantics + cancel decision, A5 model
+ * attestation), i.e. the frozen contracts C0.3 (ACP call sequence) and C0.4
+ * (permission option selection) from docs/superpowers/plans/2026-09-17-qoder-cli-provider.md.
+ *
+ * All credentials here are synthetic (`test-worker-token`); the fixture is spawned as
+ * `node <fixture> <scenario>` through `process.execPath` so the suite passes on
+ * Git Bash/Windows as well as Linux.
+ */
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  AcpClient,
+  AcpClosedError,
+  AcpError,
+  AcpRequestTimeoutError,
+  AcpRpcError,
+  CANCEL_METHOD_DECISION,
+  DEFAULT_ARGS,
+  DEFAULT_COMMAND,
+  DEFAULT_CWD,
+  DEFAULT_PLUGIN_DIR,
+  GovernanceStopError,
+  PermissionAlreadyResolvedError,
+  UnknownPermissionRequestError,
+  UnsupportedOptionsError,
+  resolveSpawnPlan,
+  type AcpClientOptions,
+  type AcpEvent,
+  type SessionSpec,
+} from '../src/acp-client.js';
+import {
+  CHILD_ENV_ALLOWLIST,
+  FORBIDDEN_CHILD_ENV_KEYS,
+  assertAllowlistDisjoint,
+  buildChildEnv,
+  forbiddenKeysPresent,
+} from '../src/env.js';
+
+const FIXTURE = fileURLToPath(new URL('./fixtures/fake-qodercli.mjs', import.meta.url));
+const SYNTHETIC_PAT = 'test-worker-token';
+const MODEL = 'efficient';
+const PROMPT = 'Reply with exactly: ok';
+const OPTION_MENU = [
+  { optionId: 'zz_always', name: 'Allow for this session', kind: 'allow_always' },
+  { optionId: 'zz_once', name: 'Allow', kind: 'allow_once' },
+  { optionId: 'zz_reject', name: 'Reject', kind: 'reject_once' },
+];
+
+type EventOf<T extends AcpEvent['type']> = Extract<AcpEvent, { type: T }>;
+
+class EventLog {
+  readonly events: AcpEvent[] = [];
+
+  private readonly waiters: Array<{ match: (event: AcpEvent) => boolean; resolve: (event: AcpEvent) => void }> = [];
+
+  push(event: AcpEvent): void {
+    this.events.push(event);
+    for (const waiter of [...this.waiters]) {
+      if (waiter.match(event)) {
+        this.waiters.splice(this.waiters.indexOf(waiter), 1);
+        waiter.resolve(event);
+      }
+    }
+  }
+
+  /** Wait for the first event of `type` (optionally matching `extra`); also matches past events. */
+  async waitFor<T extends AcpEvent['type']>(
+    type: T,
+    extra?: (event: EventOf<T>) => boolean,
+    timeoutMs = 10_000,
+  ): Promise<EventOf<T>> {
+    const match = (event: AcpEvent): event is EventOf<T> =>
+      event.type === type && (extra ? extra(event as EventOf<T>) : true);
+    const existing = this.events.find(match);
+    if (existing) {
+      return existing;
+    }
+    return new Promise<EventOf<T>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`timed out after ${timeoutMs} ms waiting for ACP event '${type}'`));
+      }, timeoutMs);
+      this.waiters.push({
+        match,
+        resolve: event => {
+          clearTimeout(timer);
+          resolve(event as EventOf<T>);
+        },
+      });
+    });
+  }
+
+  /** Raw lines the fixture received from the client, in order (the outward evidence). */
+  received(): Array<Record<string, unknown>> {
+    return this.events
+      .filter((event): event is EventOf<'notification'> => event.type === 'notification' && event.method === 'fixture/recv')
+      .map(event => JSON.parse(String((event.params as { raw?: unknown } | undefined)?.raw ?? '{}')) as Record<string, unknown>);
+  }
+
+  /** The fixture's startup report (argv, env key names, direct-child pid evidence). */
+  hello(): Promise<{
+    scenario: string;
+    argv: string[];
+    pid: number;
+    ppid: number;
+    cwd: string;
+    envKeys: string[];
+    tokenPresent: boolean;
+  }> {
+    return this.waitFor('notification', event => event.method === 'fixture/hello').then(
+      event => event.params as never,
+    );
+  }
+
+  /** The fixture's scenario completion report. */
+  done(): Promise<{ scenario: string; note: string; facts: Record<string, unknown> }> {
+    return this.waitFor('notification', event => event.method === 'fixture/done').then(
+      event => event.params as never,
+    );
+  }
+}
+
+const createdDirs: string[] = [];
+const createdClients: AcpClient[] = [];
+
+function workspace(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'b3a-'));
+  createdDirs.push(dir);
+  return dir;
+}
+
+function sessionSpec(dir: string): SessionSpec {
+  return {
+    cwd: dir,
+    modelId: MODEL,
+    mcpServers: [
+      {
+        name: 'aria-stub',
+        url: 'http://127.0.0.1:9/mcp',
+        headers: [{ name: 'Authorization', value: `Bearer ${SYNTHETIC_PAT}` }],
+      },
+    ],
+  };
+}
+
+function start(scenario: string, overrides: Partial<AcpClientOptions> = {}) {
+  const dir = workspace();
+  const client = new AcpClient({
+    command: process.execPath,
+    args: [FIXTURE, scenario],
+    cwd: dir,
+    env: {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME ?? 'C:/b3a-home',
+      TERM: 'xterm',
+      QODER_PERSONAL_ACCESS_TOKEN: SYNTHETIC_PAT,
+    },
+    killGraceMs: 500,
+    ...overrides,
+  });
+  createdClients.push(client);
+  const log = new EventLog();
+  client.onEvent(event => log.push(event));
+  return { client, log, dir };
+}
+
+afterEach(async () => {
+  for (const client of createdClients.splice(0)) {
+    try {
+      client.close();
+    } catch {
+      /* already dead */
+    }
+  }
+  await new Promise(resolve => setTimeout(resolve, 100));
+  for (const dir of createdDirs.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      /* a just-killed child may still hold its cwd on Windows */
+    }
+  }
+});
+
+describe('production spawn plan (C0.3 step 1)', () => {
+  it('spawns `qodercli` with argv ["--acp", "--plugin-dir", "/opt/qoder/plugin"] (C0.3 step 1 amended), cwd /workspace, no shell', () => {
+    // C0.3 step 1 amended by coordinator ruling: the spawn argv carries the pinned plugin
+    // dir (design §7.2 requires the bundle loaded explicitly and kept non-writable by the
+    // CLI; `--plugin-dir` + `--acp` is A3-verified, e2e/qoder/slice-a/03-mcp-auth.md:78).
+    expect(DEFAULT_COMMAND).toBe('qodercli');
+    expect(DEFAULT_PLUGIN_DIR).toBe('/opt/qoder/plugin');
+    expect(DEFAULT_ARGS).toEqual(['--acp', '--plugin-dir', DEFAULT_PLUGIN_DIR]);
+    expect(DEFAULT_CWD).toBe('/workspace');
+
+    const plan = resolveSpawnPlan({});
+    expect(plan.command).toBe('qodercli');
+    expect(plan.args).toEqual(['--acp', '--plugin-dir', '/opt/qoder/plugin']);
+    expect(plan.cwd).toBe('/workspace');
+    expect(plan.shell).toBe(false);
+    expect(Object.keys(plan.env).every(key => (CHILD_ENV_ALLOWLIST as readonly string[]).includes(key))).toBe(true);
+    // F8: POSIX spawns the CLI as its own process-group leader so `terminate()` can signal
+    // the whole tree; Windows cannot deliver a signal to a group, so the child stays attached.
+    expect(plan.detached).toBe(process.platform !== 'win32');
+  });
+
+  it('keeps the spawn plan injectable for the fixture (command/args/cwd overrides)', () => {
+    const plan = resolveSpawnPlan({ command: 'node', args: ['fixture.mjs', 'happy'], cwd: '/tmp/ws' });
+    expect(plan.command).toBe('node');
+    expect(plan.args).toEqual(['fixture.mjs', 'happy']);
+    expect(plan.cwd).toBe('/tmp/ws');
+    expect(plan.shell).toBe(false);
+  });
+});
+
+describe('environment allowlist (plan Step 3)', () => {
+  it('forwards only allowlisted keys and drops other providers credentials and DB keys', () => {
+    const child = buildChildEnv({
+      PATH: '/usr/local/bin:/usr/bin',
+      HOME: '/root',
+      LANG: 'C.UTF-8',
+      TERM: 'xterm',
+      QODER_PERSONAL_ACCESS_TOKEN: SYNTHETIC_PAT,
+      DEEPSEEK_API_KEY: 'synthetic-deepseek-key',
+      LLM_API_KEY: 'synthetic-llm-key',
+      OPENAI_API_KEY: 'synthetic-openai-key',
+      ANTHROPIC_API_KEY: 'synthetic-anthropic-key',
+      DATABASE_URL: 'jdbc:postgresql://localhost:5432/aria',
+      SPRING_DATASOURCE_PASSWORD: 'synthetic-db-password',
+      QODER_SDK_ACCESS_TOKEN: 'synthetic-sdk-token',
+      QODER_AGENT_SDK_ENTRYPOINT: '1',
+      NODE_OPTIONS: '--inspect',
+    });
+    expect(child).toEqual({
+      PATH: '/usr/local/bin:/usr/bin',
+      HOME: '/root',
+      LANG: 'C.UTF-8',
+      TERM: 'xterm',
+      QODER_PERSONAL_ACCESS_TOKEN: SYNTHETIC_PAT,
+    });
+    expect(forbiddenKeysPresent(child)).toEqual([]);
+  });
+
+  it('fails closed if the allowlist and the forbidden list ever intersect', () => {
+    const shipped = [...CHILD_ENV_ALLOWLIST, ...FORBIDDEN_CHILD_ENV_KEYS];
+    expect(new Set(shipped).size).toBe(shipped.length);
+    expect(() => assertAllowlistDisjoint(['PATH', 'DEEPSEEK_API_KEY'], FORBIDDEN_CHILD_ENV_KEYS)).toThrowError(
+      /DEEPSEEK_API_KEY/,
+    );
+  });
+
+  it('the spawned CLI child never sees another provider credential (fixture-observed env)', async () => {
+    const { log } = start('happy', {
+      env: {
+        PATH: process.env.PATH,
+        HOME: '/tmp/b3a-home',
+        LANG: 'C.UTF-8',
+        TERM: 'xterm',
+        QODER_PERSONAL_ACCESS_TOKEN: SYNTHETIC_PAT,
+        DEEPSEEK_API_KEY: 'synthetic-deepseek-key',
+        LLM_API_KEY: 'synthetic-llm-key',
+        OPENAI_API_KEY: 'synthetic-openai-key',
+        SPRING_DATASOURCE_PASSWORD: 'synthetic-db-password',
+        DATABASE_URL: 'jdbc:postgresql://localhost:5432/aria',
+        QODER_SDK_ACCESS_TOKEN: 'synthetic-sdk-token',
+      },
+    });
+    const hello = await log.hello();
+    for (const key of [
+      'DEEPSEEK_API_KEY',
+      'LLM_API_KEY',
+      'OPENAI_API_KEY',
+      'SPRING_DATASOURCE_PASSWORD',
+      'DATABASE_URL',
+      'QODER_SDK_ACCESS_TOKEN',
+    ]) {
+      expect(hello.envKeys).not.toContain(key);
+    }
+    expect(hello.envKeys).toContain('PATH');
+    expect(hello.envKeys).toContain('HOME');
+    expect(hello.envKeys).toContain('QODER_PERSONAL_ACCESS_TOKEN');
+    expect(hello.tokenPresent).toBe(true);
+    // Direct child, no shell in between: the fixture is `node <fixture> <scenario>`,
+    // reports the spawned argv verbatim and its parent is this process.
+    expect(hello.argv).toEqual([FIXTURE, 'happy']);
+    expect(hello.ppid).toBe(process.pid);
+  });
+});
+
+describe('C0.3 ACP call sequence against the fake CLI', () => {
+  it('initialize -> session/new -> set_model -> prompt, then a kind-selected nested permission reply', async () => {
+    const { client, log, dir } = start('happy');
+    const created = await client.createSession(sessionSpec(dir));
+    expect(created).toEqual({ sessionId: 'sess-1' });
+
+    client.prompt('sess-1', PROMPT);
+    const permission = await log.waitFor('permission_request');
+    // A4 id-collision: the CLI's own request id equals our pending prompt request id;
+    // dispatch must key on "has `method`?", never on the numeric id.
+    expect(permission.requestId).toBe('4');
+    expect(permission.toolName).toBe('Write');
+    expect(permission.toolCallId).toBe('call_1');
+    expect(permission.title).toBeNull();
+    expect(permission.options).toEqual(OPTION_MENU);
+
+    const decision = client.decide(permission.requestId, true);
+    expect(decision).toEqual({ outcome: 'selected', optionId: 'zz_once' });
+    expect(permission.options.map(option => option.kind)).toContain('allow_always');
+
+    const done = await log.done();
+    expect(done.note).toBe('turn-completed');
+
+    // EXACT outward sequence (fixture-echoed raw lines), including the nested reply
+    // `{outcome:{outcome:'selected',optionId}}` sent on the CLI's own JSON-RPC id (C0.3
+    // step 6 wrapper, exercised on the real CLI four times in A4).
+    expect(log.received()).toEqual([
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: 1 } },
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'session/new',
+        params: {
+          cwd: dir,
+          mcpServers: [
+            {
+              type: 'http',
+              name: 'aria-stub',
+              url: 'http://127.0.0.1:9/mcp',
+              headers: [{ name: 'Authorization', value: `Bearer ${SYNTHETIC_PAT}` }],
+            },
+          ],
+        },
+      },
+      { jsonrpc: '2.0', id: 3, method: 'session/set_model', params: { sessionId: 'sess-1', modelId: MODEL } },
+      {
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'session/prompt',
+        params: { sessionId: 'sess-1', prompt: [{ type: 'text', text: PROMPT }] },
+      },
+      { jsonrpc: '2.0', id: 4, result: { outcome: { outcome: 'selected', optionId: 'zz_once' } } },
+    ]);
+
+    // session/update notifications are surfaced and never answered.
+    expect(
+      log.events
+        .filter((event): event is EventOf<'session_update'> => event.type === 'session_update')
+        .map(event => (event.update as { sessionUpdate?: string }).sessionUpdate),
+    ).toEqual(['tool_call', 'tool_call_update', 'agent_message_chunk']);
+
+    // A5 facts are surfaced, not asserted as cost: the only model attestation is the
+    // post-turn `_meta.quota.model_usage[0].model`; usage counters stay zero.
+    const result = await log.waitFor('prompt_result');
+    const promptResult = result.result as {
+      stopReason: string;
+      usage: Record<string, unknown>;
+      _meta: { quota: { model_usage: Array<{ model: string }> } };
+    };
+    expect(promptResult.stopReason).toBe('end_turn');
+    expect(promptResult._meta.quota.model_usage[0]?.model).toBe('efficient');
+    expect(promptResult.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+
+    // Decisions never fabricate options for unknown or already-resolved requests.
+    expect(() => client.decide('does-not-exist', true)).toThrowError(UnknownPermissionRequestError);
+    expect(() => client.decide(permission.requestId, true)).toThrowError(PermissionAlreadyResolvedError);
+
+    client.close();
+    await expect(client.createSession(sessionSpec(dir))).rejects.toMatchObject({ code: 'CLIENT_CLOSED' });
+  });
+});
+
+describe('C0.4 permission option selection', () => {
+  it('denies with the offered reject_once option (never allow_always, never the first option)', async () => {
+    const { client, log, dir } = start('deny');
+    await client.createSession(sessionSpec(dir));
+    client.prompt('sess-1', PROMPT);
+    const permission = await log.waitFor('permission_request');
+    expect(permission.options.map(option => option.kind)).toEqual(['allow_always', 'allow_once', 'reject_once']);
+
+    expect(client.decide(permission.requestId, false)).toEqual({ outcome: 'selected', optionId: 'zz_reject' });
+    const done = await log.done();
+    expect(done.note).toBe('turn-completed');
+    const replies = log.received().filter(message => message.method === undefined);
+    expect(replies).toEqual([
+      { jsonrpc: '2.0', id: 4, result: { outcome: { outcome: 'selected', optionId: 'zz_reject' } } },
+    ]);
+  });
+
+  it('an allow_always-only offer fails closed: typed UNSUPPORTED_OPTIONS, no reply, no fallback', async () => {
+    const { client, log, dir } = start('allow-always-only');
+    await client.createSession(sessionSpec(dir));
+    client.prompt('sess-1', PROMPT);
+    const permission = await log.waitFor('permission_request');
+    expect(permission.requestId).toBe('cli-perm-77');
+    expect(permission.options.map(option => option.kind)).toEqual(['allow_always']);
+
+    let thrown: unknown;
+    try {
+      client.decide(permission.requestId, true);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(UnsupportedOptionsError);
+    expect((thrown as AcpError).code).toBe('UNSUPPORTED_OPTIONS');
+
+    // The failed approval sent nothing; the request stays pending so a later denial
+    // can still resolve it (C0.4: fail closed, never fall back to allow_always).
+    expect(client.decide(permission.requestId, false)).toEqual({ outcome: 'cancelled', optionId: null });
+    const done = await log.done();
+    expect(done.note).toBe('cancelled-reply-observed');
+
+    const replies = log.received().filter(message => message.method === undefined);
+    expect(replies).toHaveLength(1);
+    // INFERRED, NOT EXERCISED against the real CLI: A4 exercised only the nested
+    // `selected` wrapper; the flat `{outcome:'cancelled'}` form from the probe was never
+    // confirmed. This pins OUR intent (nested wrapper, consistent with the exercised
+    // shape), not the CLI's behavior.
+    expect(replies[0]).toEqual({ jsonrpc: '2.0', id: 'cli-perm-77', result: { outcome: { outcome: 'cancelled' } } });
+  });
+});
+
+describe('unsupported client-method requests', () => {
+  it('answers with an explicit JSON-RPC error and never a fabricated result', async () => {
+    const { client, log } = start('unsupported');
+    const done = await log.done();
+    expect(done.note).toBe('unsupported-refused');
+    expect(done.facts.unsupportedErrorSeen).toBe(true);
+    expect(done.facts.unsupportedResultPresent).toBe(false);
+
+    const response = log.received().find(message => message.method === undefined);
+    expect(response).toEqual({
+      jsonrpc: '2.0',
+      id: 0,
+      error: { code: -32601, message: expect.stringContaining('fs/read_text_file') },
+    });
+    const event = await log.waitFor('unsupported_request');
+    expect(event.method).toBe('fs/read_text_file');
+  });
+});
+
+describe('cancel (A4 CANCEL-METHOD-DECISION)', () => {
+  it('cancels with the session/cancel notification (no id) and leaves the pending request unanswered', async () => {
+    const { client, log, dir } = start('cancel');
+    await client.createSession(sessionSpec(dir));
+    client.prompt('sess-1', PROMPT);
+    const permission = await log.waitFor('permission_request');
+
+    client.cancel('sess-1');
+    const done = await log.done();
+    expect(done.note).toBe('cancelled');
+    expect(done.facts.cancelSeen).toBe(true);
+    expect(done.facts.cancelHadId).toBe(false);
+
+    const cancelMessage = log.received().find(message => message.method === 'session/cancel');
+    expect(cancelMessage).toEqual({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'sess-1' } });
+    expect(cancelMessage).not.toHaveProperty('id');
+
+    // Fail closed: the pending permission request is abandoned, not answered.
+    expect(log.received().filter(message => message.method === undefined)).toHaveLength(0);
+    expect(() => client.decide(permission.requestId, true)).toThrowError(PermissionAlreadyResolvedError);
+
+    const result = await log.waitFor('prompt_result');
+    expect((result.result as { stopReason?: string }).stopReason).toBe('cancelled');
+  });
+
+  it('records the A4 decision text verbatim as a named constant', () => {
+    expect(CANCEL_METHOD_DECISION).toBe(
+      'session/cancel exists as notification only (request form -32601 method not found; notification accepted; pending turn aborted); fallback=none',
+    );
+  });
+});
+
+describe('failure propagation', () => {
+  it('rejects the pending handshake when the CLI exits early', async () => {
+    const { client, log, dir } = start('exit-early');
+    await expect(client.createSession(sessionSpec(dir))).rejects.toMatchObject({
+      code: 'PROCESS_EXITED',
+      detail: { code: 3 },
+    });
+    const exit = await log.waitFor('child_exit');
+    expect(exit.code).toBe(3);
+  });
+
+  it('surfaces a mid-turn process exit', async () => {
+    const { client, log, dir } = start('exit-mid-turn');
+    await client.createSession(sessionSpec(dir));
+    client.prompt('sess-1', PROMPT);
+    const exit = await log.waitFor('child_exit');
+    expect(exit.code).toBe(4);
+
+    // F7: the caller-facing half of the same failure — the pending `session/prompt` is
+    // rejected and its `reject` emits `prompt_error` (src/acp-client.ts:545-562). The
+    // prompt request id is 4 (ids 1-3 are the handshake) and the code is the typed
+    // AcpProcessExitedError code.
+    const promptError = await log.waitFor('prompt_error');
+    expect(promptError.requestId).toBe('4');
+    expect(promptError.code).toBe('PROCESS_EXITED');
+    expect(promptError.message).toBe('the qodercli process exited (code 4, signal null)');
+  });
+
+  it('rejects the handshake when the CLI binary cannot be spawned', async () => {
+    const { client, log, dir } = start('happy', { command: 'definitely-not-a-real-qodercli-binary' });
+    await expect(client.createSession(sessionSpec(dir))).rejects.toMatchObject({ code: 'SPAWN_FAILED' });
+    await log.waitFor('child_error');
+  });
+
+  it('does not hold the event loop after close() when the CLI binary cannot be spawned (B3a re-review)', async () => {
+    // getActiveResourcesInfo() lists referenced timers only (unref'd ones are excluded),
+    // so a referenced kill-escalation timer shows up as exactly one extra 'Timeout'.
+    const timeouts = (): number =>
+      process.getActiveResourcesInfo().filter(resource => resource === 'Timeout').length;
+    const before = timeouts();
+    const { client, log } = start('happy', {
+      command: 'definitely-not-a-real-qodercli-binary',
+      killGraceMs: 60_000,
+    });
+    // close() runs in the same tick as the constructor, i.e. BEFORE the spawn failure is
+    // delivered (spawn errors arrive on a later tick): terminate() therefore creates the
+    // referenced F3 escalation timer while the child is still "alive", and the child then
+    // reports `error` + `close` WITHOUT `exit` (ENOENT) — so only the `close` handler can
+    // clear that timer. This ordering is deterministic; closing after awaiting the failure
+    // would create the timer only after `close` has already fired.
+    client.close();
+    expect(timeouts()).toBe(before + 1);
+    await log.waitFor('child_error');
+    // `close` follows `error` on a later event-loop turn; bounded immediate turns (no
+    // sleeps) give the close handler the chance to clear the timer.
+    for (let turn = 0; turn < 200 && timeouts() > before; turn++) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(timeouts()).toBe(before);
+  });
+
+  it('arms no kill-escalation timer when close() follows a failed spawn (P1)', async () => {
+    // Same technique as the case above: getActiveResourcesInfo() lists referenced timers
+    // only, so a leaked F3 escalation timer shows up as one extra 'Timeout'.
+    const timeouts = (): number =>
+      process.getActiveResourcesInfo().filter(resource => resource === 'Timeout').length;
+    const before = timeouts();
+    const { client, log } = start('happy', {
+      command: 'definitely-not-a-real-qodercli-binary',
+      killGraceMs: 60_000,
+    });
+    // This close() is the LATER one: wait for `child_error` and let the child's `close`
+    // (emitted after `error` on a later event-loop turn) run first, so neither handler will
+    // fire again and a timer armed here could never be cleared for its whole grace window.
+    await log.waitFor('child_error');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    client.close();
+    expect(timeouts()).toBe(before);
+  });
+
+  it('surfaces a JSON-RPC handshake error instead of a silent fallback', async () => {
+    const { client, dir } = start('handshake-error');
+    const rejection = await client.createSession(sessionSpec(dir)).then(
+      () => null,
+      (error: unknown) => error as AcpRpcError,
+    );
+    expect(rejection).toBeInstanceOf(AcpRpcError);
+    expect(rejection?.code).toBe('RPC_ERROR');
+    expect(rejection?.rpcCode).toBe(-32000);
+    expect(rejection?.message).toContain('Authentication required');
+  });
+
+  it('refuses a model that is not in the advertised list (no silent fallback)', async () => {
+    const { client, log, dir } = start('unknown-model');
+    await expect(client.createSession(sessionSpec(dir))).rejects.toMatchObject({ code: 'UNKNOWN_MODEL' });
+    const done = await log.done();
+    expect(done.note).toBe('no-set-model');
+    expect(done.facts.setModelSeen).toBe(false);
+    expect(log.received().some(message => message.method === 'session/set_model')).toBe(false);
+  });
+
+  it('stops the run with a governance error on mode escalation (C0.4)', async () => {
+    const { client, log, dir } = start('mode-escalation');
+    await client.createSession(sessionSpec(dir));
+    client.prompt('sess-1', PROMPT);
+    const governance = await log.waitFor('governance_error');
+    expect(governance.code).toBe('MODE_ESCALATION');
+    expect(governance.message).toContain('acceptEdits');
+    await log.waitFor('child_exit');
+    expect(() => client.prompt('sess-1', PROMPT)).toThrowError(AcpClosedError);
+  });
+
+  it('bounds the handshake with REQUEST_TIMEOUT and close() still terminates a silent CLI (F1)', async () => {
+    const { client, log, dir } = start('silent', { handshakeTimeoutMs: 100 });
+    // The CLI is wedged, not dead: it started and never answers a single request.
+    expect((await log.hello()).scenario).toBe('silent');
+
+    const rejection = await client.createSession(sessionSpec(dir)).then(
+      () => null,
+      (error: unknown) => error as AcpError,
+    );
+    expect(rejection).toBeInstanceOf(AcpRequestTimeoutError);
+    expect(rejection?.code).toBe('REQUEST_TIMEOUT');
+    expect(rejection?.message).toBe('no initialize response within 100 ms');
+
+    // The timed-out handshake must not leave the wedged child behind.
+    client.close();
+    const exit = await log.waitFor('child_exit');
+    expect(exit.code !== null || exit.signal !== null).toBe(true);
+  });
+
+  it('stops the run when session/new reports a non-governed mode, before set_model (F2)', async () => {
+    const { client, log, dir } = start('session-new-escalation');
+    const rejection = await client.createSession(sessionSpec(dir)).then(
+      () => null,
+      (error: unknown) => error as AcpError,
+    );
+    // The caller gets the governance error, not an AcpClosedError from a skipped
+    // session/set_model.
+    expect(rejection).toBeInstanceOf(GovernanceStopError);
+    expect(rejection?.code).toBe('GOVERNANCE_STOP');
+    expect(rejection?.message).toBe(
+      "run stopped by governance: mode escalation observed: currentModeId=acceptEdits (governed mode is 'default')",
+    );
+
+    const governance = await log.waitFor('governance_error');
+    expect(governance.code).toBe('MODE_ESCALATION');
+    expect(governance.detail).toEqual({ currentModeId: 'acceptEdits' });
+    expect(log.received().some(message => message.method === 'session/set_model')).toBe(false);
+    await log.waitFor('child_exit');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'escalates SIGTERM to SIGKILL when the CLI ignores the term signal (F3)',
+    async () => {
+      // Windows cannot deliver a real SIGTERM to a child (`subprocess.kill('SIGTERM')`
+      // terminates immediately there), so the POSIX escalation path is asserted on POSIX.
+      const { client, log } = start('sigterm-ignored', { killGraceMs: 100 });
+      await log.hello();
+      const aliveCount = (): number =>
+        log.events.filter(event => event.type === 'notification' && event.method === 'fixture/alive').length;
+      const sigtermReceived = log.waitFor('notification', event => event.method === 'fixture/sigterm-received');
+      await log.waitFor('notification', event => event.method === 'fixture/alive');
+
+      client.close();
+      // The child survives SIGTERM: it reports the signal and keeps heartbeating while the
+      // referenced escalation timer counts down the grace window.
+      await sigtermReceived;
+      const aliveBefore = aliveCount();
+      const deadline = Date.now() + 5_000;
+      while (aliveCount() <= aliveBefore && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(aliveCount()).toBeGreaterThan(aliveBefore);
+
+      // ... and dies only through the escalation: the observed exit signal is SIGKILL.
+      const exit = await log.waitFor('child_exit');
+      expect(exit.signal).toBe('SIGKILL');
+    },
+  );
+});
+
+describe('stderr redaction (F4)', () => {
+  /** All `stderr` event texts joined in arrival order (what a log reader would see). */
+  function stderrText(log: EventLog): string {
+    return log.events
+      .filter((event): event is EventOf<'stderr'> => event.type === 'stderr')
+      .map(event => event.text)
+      .join('');
+  }
+
+  it('never lets the allowlisted PAT reach stderr events or stderrTail', async () => {
+    const { client, log } = start('stderr-token');
+    const stderr = await log.waitFor('stderr', event => event.text.includes('token='));
+    expect(stderr.text).toContain('qodercli: auth failed');
+    expect(stderr.text).toContain('token=[redacted] (fixture)');
+    expect(stderr.text).not.toContain(SYNTHETIC_PAT);
+
+    // The diagnostics tail is built from the same redacted text.
+    expect(client.stderrTail).toContain('token=[redacted] (fixture)');
+    expect(client.stderrTail).not.toContain(SYNTHETIC_PAT);
+  });
+
+  it('carries a token split across two stderr chunks and flushes the carry on child close (F4 follow-up)', async () => {
+    const { client, log } = start('stderr-token-split');
+    const half = SYNTHETIC_PAT.slice(0, Math.ceil(SYNTHETIC_PAT.length / 2));
+
+    // Chunk 1 is the token's first half, delivered alone (~100 ms before the rest): the
+    // carry holds it back, so the event stops before the partial token.
+    const first = await log.waitFor('stderr', event => event.text.includes('qodercli: auth failed'));
+    expect(first.text).toBe('qodercli: auth failed for token=');
+
+    // The completing half arrives as its own chunk and recombines with the carried first
+    // half, so the token is redacted as a whole (the first half alone is never emitted).
+    const second = await log.waitFor('stderr', event => event.text.includes('(fixture)'));
+    expect(second.text).toBe('[redacted] (fixture)\n');
+
+    // A truncated final write leaves a partial prefix held in the carry; the child then
+    // exits (close() sends SIGTERM) and the `close` handler (process gone, stdio drained)
+    // must flush the carry. Waiting for that flush event is itself the assertion: a silent
+    // drop times out here.
+    const third = await log.waitFor('stderr', event => event.text.includes('retrying'));
+    expect(third.text).toBe('retrying with token=');
+    client.close();
+    const flushed = await log.waitFor('stderr', event => event.text === half);
+    expect(flushed.text).toBe(half);
+    await log.waitFor('child_exit');
+
+    // After exit nothing held back was silently dropped: the surrounding ordinary text is
+    // present, and the split halves were never emitted, so no event can be rejoined into
+    // (and no tail can contain) the token.
+    const text = stderrText(log);
+    expect(text).toBe(`qodercli: auth failed for token=[redacted] (fixture)\nretrying with token=${half}`);
+    expect(text).not.toContain(SYNTHETIC_PAT);
+    expect(text).not.toContain(SYNTHETIC_PAT.slice(Math.ceil(SYNTHETIC_PAT.length / 2)));
+    expect(client.stderrTail).not.toContain(SYNTHETIC_PAT);
+    expect(client.stderrTail).toContain('token=[redacted] (fixture)');
+    expect(client.stderrTail).toContain(`retrying with token=${half}`);
+  });
+
+  it('passes ordinary stderr through complete and unmodified (F4 follow-up)', async () => {
+    const { client, log } = start('stderr-plain');
+    // The last character is a one-character prefix of the token, so the carry holds it
+    // back until the child exits — the carry must not swallow normal stderr output. The
+    // held character must arrive as its own event on `close` (stdio drained).
+    await log.waitFor('stderr', event => event.text.includes('ends with a'));
+    client.close();
+    await log.waitFor('stderr', event => event.text === SYNTHETIC_PAT.slice(0, 1));
+    await log.waitFor('child_exit');
+
+    const expected = `qodercli: warning: plain diagnostic line\nends with a ${SYNTHETIC_PAT.slice(0, 1)}`;
+    const text = stderrText(log);
+    expect(text).toBe(expected);
+    expect(client.stderrTail).toBe(expected);
+    expect(text).not.toContain(SYNTHETIC_PAT);
+  });
+});
+
+describe('process-tree termination (F8)', () => {
+  it('signals the CLI process GROUP first, escalating on the group within the grace window', async () => {
+    const calls: Array<[number, NodeJS.Signals]> = [];
+    const { client, log } = start('happy', {
+      // A Windows host cannot deliver a real group signal, so the sink records instead of
+      // killing: what is under test here is the client's decision, not the kernel's.
+      processGroupKill: true,
+      signalProcess: (pid, signal) => {
+        calls.push([pid, signal]);
+      },
+      killGraceMs: 120,
+    });
+    const started = await log.waitFor('child_started');
+    const pid = started.pid;
+    expect(typeof pid).toBe('number');
+
+    client.terminate();
+    // Group first: the negative pid is the group led by the detached CLI. The group call
+    // succeeded, so no direct-child fallback may appear.
+    expect(calls).toEqual([[-pid!, 'SIGTERM']]);
+
+    // The escalation keeps targeting the group, still without a direct-child call.
+    const deadline = Date.now() + 5_000;
+    while (calls.length < 2 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(calls).toEqual([[-pid!, 'SIGTERM'], [-pid!, 'SIGKILL']]);
+
+    // The recording sink never killed anything: clean the real child up by hand.
+    process.kill(pid!, 'SIGKILL');
+    await log.waitFor('child_exit');
+  });
+
+  it('falls back to the direct child when the group call is unavailable (ESRCH/EPERM)', async () => {
+    for (const code of ['ESRCH', 'EPERM'] as const) {
+      const calls: Array<[number, NodeJS.Signals]> = [];
+      const { client, log } = start('happy', {
+        processGroupKill: true,
+        killGraceMs: 60_000,
+        signalProcess: (pid, signal) => {
+          calls.push([pid, signal]);
+          if (pid < 0) {
+            throw Object.assign(new Error(`group kill failed (${code})`), { code });
+          }
+          // The fallback really terminates the fixture child.
+          process.kill(pid, signal);
+        },
+      });
+      const started = await log.waitFor('child_started');
+      const pid = started.pid as number;
+
+      client.terminate();
+      const exit = await log.waitFor('child_exit');
+      expect(calls).toEqual([[-pid, 'SIGTERM'], [pid, 'SIGTERM']]);
+      expect(exit.code !== null || exit.signal !== null).toBe(true);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'terminates the whole process group, leaving no background descendant behind (F8)',
+    async () => {
+      // POSIX-only: this drives the real kernel group kill, which Windows cannot deliver
+      // (`process.kill` has no negative-pid form there), so it is skipped on Windows. The
+      // client's group-first decision is pinned cross-platform by the two tests above; this
+      // one proves the effect on a real descendant once a POSIX host runs the suite.
+      const dir = workspace();
+      const client = new AcpClient({
+        command: '/bin/sh',
+        args: ['-c', 'sleep 300 & echo $! > descendant.pid; wait'],
+        cwd: dir,
+        killGraceMs: 500,
+        env: { PATH: process.env.PATH },
+      });
+      createdClients.push(client);
+      const log = new EventLog();
+      client.onEvent(event => log.push(event));
+
+      const isAlive = (pid: number): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      const started = await log.waitFor('child_started');
+      const shPid = started.pid as number;
+
+      // The background job writes its own pid; without it the test cannot prove anything.
+      const pidFile = join(dir, 'descendant.pid');
+      let descendantPid: number | null = null;
+      const readDeadline = Date.now() + 5_000;
+      while (descendantPid === null && Date.now() < readDeadline) {
+        try {
+          const parsed = Number(readFileSync(pidFile, 'utf8').trim());
+          descendantPid = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+        } catch {
+          /* the background job has not written its pid yet */
+        }
+        if (descendantPid === null) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      }
+      const descendant = descendantPid as number;
+      expect(descendant).not.toBeNull();
+      expect(isAlive(descendant)).toBe(true);
+
+      try {
+        client.terminate();
+        // SIGTERM reaches the whole group: killing only the direct child would leave
+        // `sleep 300` running, which is exactly the F8 defect.
+        const goneDeadline = Date.now() + 5_000;
+        while (isAlive(descendant) && Date.now() < goneDeadline) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        expect(isAlive(descendant)).toBe(false);
+        expect(isAlive(shPid)).toBe(false);
+      } finally {
+        for (const pid of [descendant, shPid]) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            /* already gone */
+          }
+        }
+      }
+    },
+  );
+});

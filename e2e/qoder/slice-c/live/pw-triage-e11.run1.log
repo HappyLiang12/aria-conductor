@@ -1,0 +1,84 @@
+
+Running 8 tests using 2 workers
+
+  ok 1 [chromium] › e2e\overview-dashboard.spec.ts:9:3 › Overview dashboard › renders executive summary stats and core panels (24.7s)
+  ok 2 [chromium] › e2e\aria-conversation-id-regression.spec.ts:37:1 › non-streaming chat returns runId + conversationId (2.8m)
+  ok 4 [chromium] › e2e\aria-conversation-id-regression.spec.ts:58:1 › GET /api/v1/aria/sessions returns 404 (5.3s)
+  ok 5 [chromium] › e2e\aria-conversation-id-regression.spec.ts:70:1 › DELETE /api/v1/aria/sessions/{id} returns 404 (7.0s)
+  -  6 [chromium] › e2e\aria-conversation-id-regression.spec.ts:82:1 › streaming SSE emits expected events with runId + conversationId
+  x  3 [chromium] › e2e\overview-dashboard.spec.ts:28:3 › Overview dashboard › rail navigation drives the SPA routes (1.9m)
+  ok 7 [chromium] › e2e\aria-conversation-id-regression.spec.ts:142:1 › conversationId is reused across two turns (#36) (2.6m)
+  x  8 [chromium] › e2e\overview-dashboard.spec.ts:28:3 › Overview dashboard › rail navigation drives the SPA routes (retry #1) (37.1s)
+  ok 9 [chromium] › e2e\overview-dashboard.spec.ts:41:3 › Overview dashboard › seeded agent is reflected in Active Agents count after reload (5.4s)
+
+
+  1) [chromium] › e2e\overview-dashboard.spec.ts:28:3 › Overview dashboard › rail navigation drives the SPA routes 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('#panel-exec')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for locator('#panel-exec')
+
+
+      36 |     await page.locator('.rail-btn[data-view="overview"]').click();
+      37 |     await expect(page).toHaveURL(/\/$/);
+    > 38 |     await expect(page.locator('#panel-exec')).toBeVisible();
+         |                                               ^
+      39 |   });
+      40 |
+      41 |   test('seeded agent is reflected in Active Agents count after reload', async ({ page, request }) => {
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\overview-dashboard.spec.ts:38:47
+
+    Test timeout of 120000ms exceeded.
+
+    Error Context: test-results\overview-dashboard-Overvie-422dc-ation-drives-the-SPA-routes-chromium\error-context.md
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('#panel-exec')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for locator('#panel-exec')
+
+
+      36 |     await page.locator('.rail-btn[data-view="overview"]').click();
+      37 |     await expect(page).toHaveURL(/\/$/);
+    > 38 |     await expect(page.locator('#panel-exec')).toBeVisible();
+         |                                               ^
+      39 |   });
+      40 |
+      41 |   test('seeded agent is reflected in Active Agents count after reload', async ({ page, request }) => {
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\overview-dashboard.spec.ts:38:47
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\overview-dashboard-Overvie-422dc-ation-drives-the-SPA-routes-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\overview-dashboard-Overvie-422dc-ation-drives-the-SPA-routes-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\overview-dashboard-Overvie-422dc-ation-drives-the-SPA-routes-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\overview-dashboard-Overvie-422dc-ation-drives-the-SPA-routes-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Slow test file: [chromium] › e2e\aria-conversation-id-regression.spec.ts (5.6m)
+  Consider running tests from slow files in parallel. See: https://playwright.dev/docs/test-parallel
+  1 failed
+    [chromium] › e2e\overview-dashboard.spec.ts:28:3 › Overview dashboard › rail navigation drives the SPA routes 
+  1 skipped
+  6 passed (6.0m)

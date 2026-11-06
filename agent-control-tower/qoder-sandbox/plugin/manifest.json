@@ -1,0 +1,5 @@
+{
+  "name": "aria-pinned",
+  "version": "0.1.0",
+  "description": "Aria Conductor pinned plugin bundle (loaded into qoder-sandbox only via --plugin-dir)"
+}

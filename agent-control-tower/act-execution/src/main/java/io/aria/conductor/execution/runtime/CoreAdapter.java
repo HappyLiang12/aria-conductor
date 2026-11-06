@@ -1,0 +1,49 @@
+package io.aria.conductor.execution.runtime;
+
+import io.aria.conductor.common.runtime.ExecutionMode;
+
+/**
+ * Protocol port of one core (Qoder, OpenCode): what it can do in a given mode,
+ * how it is launched, and how a live session is opened. This is not a second
+ * application provider registry -- existing provider facades delegate to the
+ * shared runtime kernel.
+ */
+public interface CoreAdapter {
+
+    String coreId();
+
+    CoreCapabilities capabilities(ExecutionMode mode);
+
+    /**
+     * Service-level health of this core's runtime prerequisites, with no agent
+     * context (the per-core descriptor behind
+     * {@code GET /api/v1/adk/providers/{id}/health}). A core whose readiness is
+     * verified at launch reports {@code true} here, which is exactly what "no
+     * service-level prerequisite failed" means. A core with a real prerequisite
+     * overrides this.
+     */
+    default boolean serviceHealthy() {
+        return true;
+    }
+
+    LaunchProfile launchProfile(ExecutionSpec spec, PreparedEnvironment environment,
+            SecretBundle credentials);
+
+    CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials);
+
+    /**
+     * The same open, told where to learn that the launch it is waiting on was
+     * <em>provably refused before it spawned anything</em> ({@link LaunchRefusal}).
+     * A core whose session open waits for the launched core to become reachable can
+     * end that wait on the launcher's own reason rather than on its own timeout, and
+     * report the image's sentence to the operator.
+     *
+     * <p>Defaulted, and the default ignores the refusal: a core that opens no such
+     * wait, and a placement that owns no image launcher, must behave exactly as they
+     * did before this overload existed. Only a core with a readiness wait consumes it.
+     */
+    default CoreSession open(RuntimeHandle handle, ExecutionSpec spec, SecretBundle credentials,
+            LaunchRefusal launchRefusal) {
+        return open(handle, spec, credentials);
+    }
+}

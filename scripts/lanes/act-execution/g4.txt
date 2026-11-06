@@ -1,0 +1,41 @@
+# act-execution shard fragment 4 of 4 - a surefire includes file (one FQCN per line).
+# cost=17.21s  classes=36
+# measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
+# by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
+
+io.aria.conductor.execution.approval.PermissionCoordinatorTest
+io.aria.conductor.execution.controller.AdkProviderControllerTest
+io.aria.conductor.execution.controller.CoreCredentialControllerTest
+io.aria.conductor.execution.controller.RunToolCallControllerTest
+io.aria.conductor.execution.credential.CoreCredentialServiceTest
+io.aria.conductor.execution.credential.PackCredentialCipherTest
+io.aria.conductor.execution.engine.CancelRunCompletedRunTest
+io.aria.conductor.execution.engine.RunContextTest
+io.aria.conductor.execution.git.GitBranchServiceTest
+io.aria.conductor.execution.housekeeping.HousekeepingControllerTest
+io.aria.conductor.execution.kanban.ApprovalSettleCardListenerTest
+io.aria.conductor.execution.kanban.DeferredRunStopPendingStopSliceTest
+io.aria.conductor.execution.kanban.KanbanMirrorPoolStarvationTest
+io.aria.conductor.execution.kanban.KanbanServiceEventTest
+io.aria.conductor.execution.kanban.KanbanServiceRunOutcomeTest
+io.aria.conductor.execution.kanban.KanbanServiceTest
+io.aria.conductor.execution.listener.RunExecutionListenerTest
+io.aria.conductor.execution.listener.WorkflowAutoChainerTest
+io.aria.conductor.execution.mcp.McpPropertiesTest
+io.aria.conductor.execution.mcp.SandboxHostResolverTest
+io.aria.conductor.execution.repository.ApprovalAskRepositoryTest
+io.aria.conductor.execution.runtime.AgentExecutionPolicyTest
+io.aria.conductor.execution.runtime.ClarificationQuestionsTest
+io.aria.conductor.execution.runtime.LaunchProfileTest
+io.aria.conductor.execution.runtime.RunAdmissionPropertiesTest
+io.aria.conductor.execution.runtime.RunAdmissionQueueEventsTest
+io.aria.conductor.execution.runtime.RunFinalizerTest
+io.aria.conductor.execution.runtime.TaskDeadlinePropertiesTest
+io.aria.conductor.execution.runtime.host.CoreFailureTextTest
+io.aria.conductor.execution.runtime.host.HostLaunchSecretFileTest
+io.aria.conductor.execution.runtime.host.OwnedProcessControllerTest
+io.aria.conductor.execution.runtime.host.RunCoreLogTest
+io.aria.conductor.execution.security.ActorTokenServiceTest
+io.aria.conductor.execution.security.OperatorAuthorityResolverTest
+io.aria.conductor.execution.security.OperatorSessionServiceTest
+io.aria.conductor.execution.tool.WorkspaceManagerTest

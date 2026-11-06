@@ -1,0 +1,23 @@
+# step: S4 (spec-owned scenario S4)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S4:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 8f5ed4d
+# started: 2026-09-18T11:11:28Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S4] agent=fb0973ff-d2f4-49db-b837-d148cf7f7d71 run=d228f5f0-3659-4467-8ae0-1d0ccc265dfc file=/workspace/e2e-s4-1789729893133-6566.txt ttlMs=120000
+[S4] ask=d5d3e270-a3e2-4512-978e-19fb4a231df7 status=PENDING expiresAt=2026-09-18T11:14:02.163305Z
+[S4] sandbox container=79971eec207d
+[S4] ask expired: status=EXPIRED deliveryState=CANCELLED reason="expired before decision" decidedAt=2026-09-18T11:14:47.442791Z
+[S4] late decide: HTTP 409 body={"code":"EXPIRED","error":"ACP permission ask d5d3e270-a3e2-4512-978e-19fb4a231df7 expired before the decision"}
+[S4] file probe after expiry: exists=false content=null note="test -f failed inside a live container (file absent)"
+[S4] run outcome (recorded, not a success claim): status=COMPLETED finalOutput="I'll create that file with the Write tool.The Write tool call was blocked by the permission system — it returned an error asking \"Allow writing to /workspace/e2e-s4-1789729893133-6566.txt?\" and the write did not go through.\n\nI haven't  totalTokensUsed=0
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:373:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (3.6m)
+
+  1 passed (3.6m)
+
+EXIT=0

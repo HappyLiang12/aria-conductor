@@ -1,0 +1,46 @@
+package io.aria.conductor.agent.dto;
+
+import io.aria.conductor.common.model.WorkflowStep;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import lombok.*;
+
+import java.util.List;
+import java.util.UUID;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class CreateWorkflowRequest {
+
+    @NotBlank(message = "Workflow name is required")
+    private String name;
+
+    private String description;
+
+    @NotEmpty(message = "At least one step is required")
+    @Valid
+    private List<StepDef> steps;
+
+    /**
+     * Set by the governed {@code instantiate_template} path to permit BA/DEV/QA step kinds.
+     * Direct REST/tool callers leave this {@code false}, so {@code createAndStart} rejects SDD
+     * kinds and forces the SPEC_REVIEW gate.
+     */
+    private boolean allowSddSteps;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class StepDef {
+        private UUID agentId;
+        @NotBlank(message = "Prompt template is required for each step")
+        private String promptTemplate;
+        @Builder.Default
+        private int maxIterations = 3;
+        private WorkflowStep.StepKind kind;
+    }
+}

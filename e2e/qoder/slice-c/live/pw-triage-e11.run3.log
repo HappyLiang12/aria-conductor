@@ -1,0 +1,8 @@
+
+Running 3 tests using 1 worker
+
+  ok 1 [chromium] › e2e\overview-dashboard.spec.ts:9:3 › Overview dashboard › renders executive summary stats and core panels (2.3s)
+  ok 2 [chromium] › e2e\overview-dashboard.spec.ts:28:3 › Overview dashboard › rail navigation drives the SPA routes (2.0s)
+  ok 3 [chromium] › e2e\overview-dashboard.spec.ts:41:3 › Overview dashboard › seeded agent is reflected in Active Agents count after reload (2.0s)
+
+  3 passed (7.5s)

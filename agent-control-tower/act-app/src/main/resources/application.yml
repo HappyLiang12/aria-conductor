@@ -1,0 +1,118 @@
+spring:
+  application:
+    name: aria-conductor
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  ai:
+    mcp:
+      server:
+        name: aria-conductor
+        enabled: ${aria.mcp.enabled:true}
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+knowledge:
+  storage:
+    base-path: ./data/knowledge
+  git:
+    base-path: ./data/knowledge-repos
+  mirror:
+    path: ./data/knowledge-mirror
+    stale-threshold-seconds: 120
+
+tools:
+  file:
+    workspace-dir: ${TOOLS_FILE_WORKSPACE_DIR:./data/workspaces}
+
+opencode:
+  sandbox-server-url: http://127.0.0.1:8090
+  sandbox-api-key: ${OPENSANDBOX_API_KEY:}
+  # Total window (ms) one run-owned workspace upload may spend absorbing transient
+  # execd connectivity failures (Windows/WSL published-port relay warm-up observed
+  # to exceed the former ~18s budget). The run still fails loudly after the window.
+  sandbox-upload-window-ms: ${OPENCODE_SANDBOX_UPLOAD_WINDOW_MS:90000}
+  image: aria-conductor/opencode-sandbox:1.1
+  port: 4096
+  # Default repo URL for SDD templates that declare {repoUrl} but the caller omits it (R8-F1).
+  repo-url: ${SDD_REPO_URL:}
+  # Env vars injected into every agent sandbox (e.g. LLM model credentials for opencode)
+  sandbox-env:
+    DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:}
+    LLM_API_KEY: ${LLM_API_KEY:${DEEPSEEK_API_KEY:}}
+    GH_TOKEN: ${GITHUB_TOKEN:${GH_TOKEN:}}
+
+# Qoder provider (B4): OpenSandbox image with the pinned CLI, the compiled sandbox bridge
+# and the plugin bundle baked in. Mirrors the opencode connection config; the in-sandbox
+# bridge listens on 4097 (see agent-control-tower/qoder-sandbox/Dockerfile).
+qoder:
+  sandbox-server-url: http://127.0.0.1:8090
+  sandbox-api-key: ${OPENSANDBOX_API_KEY:}
+  image: aria-conductor/qoder-sandbox:1.0
+
+# Backend-embedded MCP endpoint (spec: docs/superpowers/specs/2026-09-05-mcp-into-opencode-design.md)
+aria:
+  # Mode-neutral run deadline of a coordinated execution attempt
+  # (TaskDeadlineProperties). New runs freeze the operator value at admission;
+  # the operator value lives in System Config (aria.tasks.deadline-minutes,
+  # seeded by V73) and this property is the fallback when no row exists.
+  tasks:
+    deadline-minutes: 45
+  # Concurrent run execution (run admission queue): the rest wait PENDING with
+  # their kanban cards in TODO. 0 disables a limit. Workers never consume the
+  # Aria reservation (default 6 + 1).
+  runs:
+    max-active: ${ARIA_RUNS_MAX_ACTIVE:6}
+    aria-reserved: ${ARIA_RUNS_ARIA_RESERVED:1}
+    # How often the deferred-stop worker re-drives a verified core stop that was refused
+    # after its Kanban card move already committed (DeferredRunStop.retryPendingStops).
+    # The run carries RUN_STOP_PENDING until the stop verifies or the run ends by itself.
+    stop-retry-delay-ms: ${ARIA_RUNS_STOP_RETRY_DELAY_MS:30000}
+  mcp:
+    enabled: ${ARIA_MCP_ENABLED:true}
+    auth-mode: ${ARIA_MCP_AUTH_MODE:none}
+    debug: ${ARIA_MCP_DEBUG:false}
+    token: ${ARIA_MCP_TOKEN:}
+    sandbox-host-address: ${ARIA_MCP_SANDBOX_HOST_ADDRESS:}
+    port: ${ARIA_MCP_PORT:8080}
+    execd-ready-timeout-ms: ${ARIA_MCP_EXECD_READY_TIMEOUT_MS:15000}
+  progress:
+    retention-days: ${ARIA_PROGRESS_RETENTION_DAYS:7}
+    cleanup-cron: ${ARIA_PROGRESS_CLEANUP_CRON:0 30 3 * * *}
+  # Per-core launch configuration. The Qoder bridge refuses a `--cli` that is not
+  # an absolute existing executable and must be told files that exist, so a
+  # configured value is resolved at launch and an unresolvable one refuses the
+  # run loudly by key name. The opencode keys (`aria.cores.opencode.executable`,
+  # `aria.cores.opencode.model`, `aria.cores.opencode.version`) keep their Java
+  # defaults.
+  cores:
+    qoder:
+      # Reviewed model pin of a qoder run. `efficient` is the operator-set default
+      # (the pinned model of the Qoder acceptance); a paid model must be set here
+      # explicitly by the operator.
+      model: ${ARIA_CORES_QODER_MODEL:efficient}
+      # Absolute path of the pinned Qoder CLI. A bare name is resolved against PATH
+      # at launch; the CLI of this machine is
+      # C:\Users\User\.qoder\bin\qodercli\qodercli.exe.
+      executable: ${ARIA_CORES_QODER_EXECUTABLE:qoder}
+      # Absolute path of the built committed bridge entry
+      # (packages/qoder-acp-bridge/dist/main.js; run `pnpm build` there).
+      bridge-entry: ${ARIA_CORES_QODER_BRIDGE_ENTRY:packages/qoder-acp-bridge/dist/main.js}
+  # Run-owned roots. The start scripts export absolute values derived from the
+  # repository root, so a run's worktree, generated configuration and retained
+  # results never depend on the backend process working directory; a relative
+  # configured value is anchored at that working directory.
+  workspaces:
+    runtime-root: ${ARIA_WORKSPACES_RUNTIME_ROOT:./data/workspaces/runs}
+    result-root: ${ARIA_WORKSPACES_RESULT_ROOT:./data/workspaces/results}

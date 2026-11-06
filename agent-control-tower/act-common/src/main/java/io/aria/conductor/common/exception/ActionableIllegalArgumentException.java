@@ -1,0 +1,35 @@
+package io.aria.conductor.common.exception;
+
+import java.util.Objects;
+
+/** A bad request that names the surface the operator must repair. */
+public class ActionableIllegalArgumentException extends IllegalArgumentException implements ActionableFailure {
+
+    private final String code;
+    private final ErrorSurface surface;
+
+    public ActionableIllegalArgumentException(String message, String code, ErrorSurface surface) {
+        super(message);
+        // The identity is consumed as code()/surface() by the engine and the
+        // error handler; a null half would fail far from its creation.
+        this.code = Objects.requireNonNull(code, "code");
+        this.surface = Objects.requireNonNull(surface, "surface");
+    }
+
+    public ActionableIllegalArgumentException(String message, String code, ErrorSurface surface,
+                                              Throwable cause) {
+        super(message, cause);
+        this.code = Objects.requireNonNull(code, "code");
+        this.surface = Objects.requireNonNull(surface, "surface");
+    }
+
+    @Override
+    public String code() {
+        return code;
+    }
+
+    @Override
+    public ErrorSurface surface() {
+        return surface;
+    }
+}

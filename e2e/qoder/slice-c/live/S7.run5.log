@@ -1,0 +1,22 @@
+# step: S7 (spec-owned scenario S7)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S7:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 06caaf0
+# started: 2026-09-18T13:10:40Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S7] control initialize (platform bearer): HTTP 200
+[S7] target ask=3451d4df-2c7e-464c-8544-065be024c5bd status=PENDING runId=e80a65f7-0c4c-455c-9869-aecd4fb1befe
+[S7] unknown worker-shaped bearer on decide_approval: HTTP 401 body=""
+[S7] ask after the rejected attempt: status=PENDING
+[S7] E2E-verified half: unknown worker-shaped bearer rejected HTTP 401 on /mcp (transport), ask unchanged. Integration-test half (NOT E2E): a LIVE worker token reaches the tool seam and is denied OPERATOR_ONLY — act-mcp/src/test/java/io/aria/conductor/mcp/McpWorkerEndpointIntegrationTest.java:261-267 (decide_approval → OPERATOR_ONLY), pinned by ToolPolicyRegistry.java:122-124 and ToolPolicyRegistryTest.java:159.
+[S7] cleanup: card CANCELLED transition HTTP 200
+  ok 1 [chromium] › e2e\qoder-governance-e2e.spec.ts:316:1 › S7: worker self-approval denied — decide_approval unreachable with an unknown worker-shaped MCP bearer (2.2s)
+
+  1 passed (3.4s)
+
+EXIT=0

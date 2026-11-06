@@ -1,0 +1,18 @@
+prerequisite ok: qoder CLI: C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe (1.1.61)
+prerequisite ok: qoder bridge entry: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+prerequisite ok: OpenSandbox endpoint http://localhost:8090 reachable; images podman:localhost/aria-conductor/qoder-sandbox:1.0, podman:localhost/aria-conductor/qoder-sandbox:0.1, podman:localhost/aria-conductor/opensandbox-server:0.1.0-podman, podman:docker.io/opensandbox/server:latest, podman:localhost/aria-conductor/opencode-sandbox:1.1, podman:docker.io/opensandbox/server:v0.2.2, podman:docker.io/opensandbox/execd:v1.0.21, podman:docker.io/opensandbox/server:v0.1.14, podman:docker.io/opensandbox/server:v0.1.0
+prerequisite ok: admitted repository HEAD 737b750a2e0b76a7041fae51de7f76ffbda3d68d
+
+== backend ==
+backend environment pins: ARIA_CORES_QODER_EXECUTABLE=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe | ARIA_WORKSPACES_RESULT_ROOT=C:/Users/<USER>/AppData/Local/Temp/t20-runtime/results | ARIA_WORKSPACES_RUNTIME_ROOT=C:/Users/<USER>/AppData/Local/Temp/t20-runtime
+$ C:\Program Files\PowerShell\7\pwsh.exe -NoProfile -File scripts/start-backend.ps1 -SkipSandbox (backend cwd C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor)
+health: HTTP 200 {"status":"UP"}
+
+== live matrix qoder/SANDBOX ==
+core=qoder mode=SANDBOX os=win32 x64 cli=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe cliVersion=1.1.61 bridge=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+requested model=efficient (qoder pin efficient); usage evidence is recorded, never asserted as zero cost
+qoder runtime credential stored (HTTP 200); the secret is never printed
+agent created: id=490837a8-55a9-4d6a-b3e8-8c55070dfad6 core=qoder mode=SANDBOX workspaceMode=WORKTREE
+agent created: id=8a119d5c-3c86-4b38-8320-35aa6722df14 core=qoder mode=SANDBOX workspaceMode=DIRECT
+run coding-task: id=3a6b8f14-c74c-44d8-a91e-08da3318cc5d status=PENDING
+live-matrix error: TypeError: fetch failed

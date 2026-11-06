@@ -1,0 +1,29 @@
+# act-execution shard fragment 3 of 4 - a surefire includes file (one FQCN per line).
+# cost=17.21s  classes=24
+# measured at e0ad2d0c on Happy (Intel i5-12500 6C/12T, 16GB DDR5 single-channel)
+# by mvn clean test -Dspring.profiles.active=h2 (one process, idle box); regenerate with `node scripts/lane-plan.mjs gen`.
+
+io.aria.conductor.execution.controller.WorkflowYamlControllerTest
+io.aria.conductor.execution.credential.PackCredentialCipherPropertyTest
+io.aria.conductor.execution.dod.DoDServiceSddTest
+io.aria.conductor.execution.engine.AgentLoopEngineWaitingInputTest
+io.aria.conductor.execution.engine.OrphanedRunRecoveryTest
+io.aria.conductor.execution.kanban.AgentRepositoryCandidatesTest
+io.aria.conductor.execution.kanban.DeferredRunStopTest
+io.aria.conductor.execution.kanban.KanbanListenerTransactionTest
+io.aria.conductor.execution.kanban.KanbanReviewAskCreatorTest
+io.aria.conductor.execution.kanban.KanbanTransitionServiceTest
+io.aria.conductor.execution.listener.RunKanbanAutoCreatorTest
+io.aria.conductor.execution.listener.WorkflowAutoCaptureListenerTest
+io.aria.conductor.execution.llm.LlmClientRetryDecoratorTest
+io.aria.conductor.execution.mcp.RunMcpWiringTest
+io.aria.conductor.execution.repository.ApprovalDecisionRepositoryTest
+io.aria.conductor.execution.runtime.CoreExecutionServiceTest
+io.aria.conductor.execution.runtime.RunAdmissionBootstrapTest
+io.aria.conductor.execution.runtime.RunAdmissionQueueTest
+io.aria.conductor.execution.runtime.core.OpenCodeLaunchProfileTest
+io.aria.conductor.execution.runtime.host.OwnerIdentityTest
+io.aria.conductor.execution.runtime.progress.CoreProgressPumpTest
+io.aria.conductor.execution.runtime.sandbox.LaunchObservationTest
+io.aria.conductor.execution.runtime.sandbox.SandboxExecutionBackendTest
+io.aria.conductor.execution.tool.AgentSkillResolverTest

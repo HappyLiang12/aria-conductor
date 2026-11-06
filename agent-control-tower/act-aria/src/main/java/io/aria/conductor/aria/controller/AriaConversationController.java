@@ -1,0 +1,205 @@
+package io.aria.conductor.aria.controller;
+
+import io.aria.conductor.agent.repository.AuditEventRepository;
+import io.aria.conductor.agent.repository.RunRepository;
+import io.aria.conductor.aria.dto.ConversationSummary;
+import io.aria.conductor.aria.dto.TimelineEntry;
+import io.aria.conductor.aria.service.AriaService;
+import io.aria.conductor.common.model.Run;
+import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.SessionTrajectory;
+import io.aria.conductor.execution.repository.SessionTrajectoryRepository;
+import io.aria.conductor.execution.repository.ToolCallRepository;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/v1/aria/conversations")
+public class AriaConversationController {
+
+    private final RunRepository runRepository;
+    private final SessionTrajectoryRepository trajectoryRepository;
+    private final AuditEventRepository auditEventRepository;
+    private final ToolCallRepository toolCallRepository;
+    private final AriaService ariaService;
+    private final io.aria.conductor.agent.service.RunService runService;
+
+    public AriaConversationController(RunRepository runRepository,
+                                       SessionTrajectoryRepository trajectoryRepository,
+                                       AuditEventRepository auditEventRepository,
+                                       ToolCallRepository toolCallRepository,
+                                       AriaService ariaService,
+                                       io.aria.conductor.agent.service.RunService runService) {
+        this.runRepository = runRepository;
+        this.trajectoryRepository = trajectoryRepository;
+        this.auditEventRepository = auditEventRepository;
+        this.toolCallRepository = toolCallRepository;
+        this.ariaService = ariaService;
+        this.runService = runService;
+    }
+
+    /**
+     * Return the most recent conversation, or 204 if none exist.
+     */
+    @GetMapping("/latest")
+    public ResponseEntity<ConversationSummary> getLatest() {
+        List<Run> allRuns = runRepository.findAll();
+        // Find the most recent run that has a non-null conversationId
+        Run latest = allRuns.stream()
+                .filter(r -> r.getConversationId() != null && !r.getConversationId().isBlank())
+                .max(Comparator.comparing(Run::getCreatedAt))
+                .orElse(null);
+
+        if (latest == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        String conversationId = latest.getConversationId();
+        List<Run> conversationRuns = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+
+        ConversationSummary summary = ConversationSummary.builder()
+                .conversationId(conversationId)
+                .lastMessageAt(latest.getCreatedAt())
+                .runCount(conversationRuns.size())
+                .build();
+
+        return ResponseEntity.ok(summary);
+    }
+
+    /**
+     * Return the full timeline of messages for a conversation, aggregated across all its runs.
+     */
+    @GetMapping("/{conversationId}")
+    public ResponseEntity<List<TimelineEntry>> getTimeline(@PathVariable String conversationId) {
+        List<Run> runs = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        if (runs.isEmpty()) {
+            return ResponseEntity.ok(List.of());
+        }
+
+        List<UUID> runIds = runs.stream().map(Run::getId).toList();
+        List<SessionTrajectory> trajectories = trajectoryRepository
+                .findByRunIdInOrderByTurnNumberAsc(runIds);
+
+        // The repository returns trajectories globally ordered by turnNumber; grouping
+        // preserves that within-run order for each run.
+        Map<UUID, List<SessionTrajectory>> trajectoriesByRun = trajectories.stream()
+                .collect(Collectors.groupingBy(SessionTrajectory::getRunId));
+
+        // Assemble per run, in runs order (createdAt asc): a FAILED run's synthetic
+        // error entry lands directly after that run's messages, never after a later run's.
+        List<TimelineEntry> timeline = new ArrayList<>();
+        for (Run run : runs) {
+            for (SessionTrajectory t : trajectoriesByRun.getOrDefault(run.getId(), List.of())) {
+                timeline.add(TimelineEntry.builder()
+                        .role(t.getRole())
+                        .content(t.getContent())
+                        .timestamp(t.getCreatedAt())
+                        .runId(t.getRunId().toString())
+                        .build());
+            }
+            // A failed run that died before producing any trajectory would otherwise be
+            // invisible in the timeline; add one synthetic error entry per FAILED run.
+            if (run.getStatus() == RunStatus.FAILED) {
+                timeline.add(TimelineEntry.builder()
+                        .role("assistant")
+                        .content("回合執行失敗：" + clipError(run.getErrorMessage()))
+                        .timestamp(run.getCompletedAt() != null ? run.getCompletedAt() : run.getUpdatedAt())
+                        .runId(run.getId().toString())
+                        .error(true)
+                        .retryPrompt(run.getPromptSeed())
+                        .build());
+            }
+        }
+
+        return ResponseEntity.ok(timeline);
+    }
+
+    private static final int MAX_ERROR_CHARS = 300;
+
+    private static String clipError(String message) {
+        if (message == null || message.isBlank()) {
+            return "原因不明";
+        }
+        return message.length() > MAX_ERROR_CHARS ? message.substring(0, MAX_ERROR_CHARS) : message;
+    }
+
+    /**
+     * Soft-delete a conversation: cancel all associated runs, then delete trajectories,
+     * tool calls, and audit log entries. Returns 404 if no runs found for the conversationId.
+     */
+    @DeleteMapping("/{conversationId}")
+    @Transactional
+    public ResponseEntity<Void> deleteConversation(@PathVariable String conversationId) {
+        List<Run> runs = runRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+        if (runs.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        List<UUID> runIds = runs.stream().map(Run::getId).toList();
+
+        // Soft-delete: cancel active runs through the verified cancel path; completed/failed
+        // runs are hard-deleted along with their child data since trajectories and tool-calls
+        // will be removed.
+        for (Run run : runs) {
+            RunStatus status = run.getStatus();
+            if (status == RunStatus.RUNNING || status == RunStatus.PENDING
+                    || status == RunStatus.WAITING_INPUT) {
+                // #111: a live run may still be owned by this process's core, so the delete
+                // must go through runService.cancelRun -- the only path that requests and
+                // verifies the core stop before recording CANCELLED. A refused stop aborts
+                // the delete with the mapped 409 before any child data is purged, instead of
+                // relabelling a core that is still alive. A parked WAITING_INPUT run also
+                // must be WOKEN, not just relabelled: the loop thread sits on the
+                // coordinator future, so cancelRun publishes the RunCompletedEvent
+                // (CANCELLED) that completes it.
+                runService.cancelRun(run.getId());
+            }
+        }
+
+        // Delete child data
+        toolCallRepository.deleteByRunIdIn(runIds);
+        trajectoryRepository.deleteByRunIdIn(runIds);
+        auditEventRepository.deleteByConversationId(conversationId);
+
+        log.info("Conversation {} deleted: {} runs, {} runIds affected",
+                conversationId, runs.size(), runIds.size());
+
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Compose (but never run) the one-click synthesis prompt for a completed dispatch
+     * batch (Feature B4). With no body — or no {@code dispatchedByRunId} in it — the
+     * conversation's latest dispatch group is used; an explicit id selects that group
+     * directly. Returns 404 when nothing resolves (unknown conversation, or a group id
+     * without children), 400 for a malformed UUID. The client sends the returned prompt
+     * through the normal chat path.
+     */
+    @PostMapping("/{conversationId}/synthesize")
+    public ResponseEntity<Map<String, String>> synthesize(
+            @PathVariable String conversationId,
+            @RequestBody(required = false) Map<String, String> body) {
+        String rawDispatchedByRunId = body != null ? body.get("dispatchedByRunId") : null;
+        UUID dispatchedByRunId = null;
+        if (rawDispatchedByRunId != null && !rawDispatchedByRunId.isBlank()) {
+            try {
+                dispatchedByRunId = UUID.fromString(rawDispatchedByRunId.trim());
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().build();
+            }
+        }
+        return ariaService.composeSynthesisPrompt(conversationId, dispatchedByRunId)
+                .map(prompt -> ResponseEntity.ok(Map.of("prompt", prompt)))
+                .orElse(ResponseEntity.notFound().build());
+    }
+}

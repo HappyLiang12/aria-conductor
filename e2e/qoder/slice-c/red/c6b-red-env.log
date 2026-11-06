@@ -1,0 +1,11 @@
+$ unset EVIDENCE_DIR; QODER_E2E_PAT=wcp_test_dummy ./e2e/qoder/slice-c/run-all.sh --only S1
+[c6b] ERROR: EVIDENCE_DIR is not set. The harness writes every step log there: export EVIDENCE_DIR=<absolute path> (create it first).
+EXIT=2
+
+$ EVIDENCE_DIR=/tmp/c6b-red-env-evd env -u QODER_E2E_PAT ./e2e/qoder/slice-c/run-all.sh --only S1
+[c6b] ERROR: QODER_E2E_PAT is not set. It is required for every live run (the preflight loads it into the runtime credential store) — export the real qoder PAT inline: QODER_E2E_PAT=... bash ./e2e/qoder/slice-c/run-all.sh. (--dry-run does not need it.)
+EXIT=2
+
+$ EVIDENCE_DIR=/tmp/c6b-red-env-evd/does-not-exist QODER_E2E_PAT=wcp_test_dummy ./e2e/qoder/slice-c/run-all.sh --only S1
+[c6b] ERROR: EVIDENCE_DIR '/tmp/c6b-red-env-evd/does-not-exist' does not exist — create it first (mkdir -p).
+EXIT=2

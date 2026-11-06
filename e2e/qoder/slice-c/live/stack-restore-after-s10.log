@@ -1,0 +1,64 @@
+=== operator-side stack restoration after the S10 restart failure (disclosed in the evidence doc) ===
+=== timestamp: 2026-09-18 18:24:12 +0800 ===
+--- pre-restart note: S10 killed the backend at ~18:15, stop.ps1 skipped the stale frontend pid, start.ps1 aborted on port 5273; PID 2788 (orphaned node/vite) was killed by the operator at 18:22; PID 7432/12576/28024 belong to the foreign worktree C:/Users/User/.qoder/worktrees/app/55ec8d and are untouched ---
+--- pre-restart container inventory (podman ps -a): ---
+95edc8b02fee docker.io/opensandbox/server:latest Up 7 minutes aria-opensandbox
+bcd82460ddf0 localhost/aria-conductor/qoder-sandbox:0.1 Up 9 minutes sandbox-ad63aa44-d561-44aa-ae6e-e14469b1e22a
+--- podman machine list (pre): ---
+NAME                     VM TYPE     CREATED      LAST UP            CPUS        MEMORY      DISK SIZE
+podman-machine-default*  wsl         4 weeks ago  Currently running  3           2GiB        100GiB
+--- podman machine stop/start (R74 prerequisite): ---
+Machine "podman-machine-default" stopped successfully
+stop exit=0
+Starting machine "podman-machine-default"
+
+This machine is currently configured in rootless mode. If your containers
+require root permissions (e.g. ports < 1024), or if you run into compatibility
+issues with non-podman clients, you can switch using the following command:
+
+	podman machine set --rootful
+
+API forwarding listening on: npipe:////./pipe/docker_engine
+
+Docker API clients default to this address. You do not need to set DOCKER_HOST.
+Machine "podman-machine-default" started successfully
+start exit=0
+--- podman ps after machine restart: ---
+95edc8b02fee docker.io/opensandbox/server:latest Exited (0) 8 minutes ago aria-opensandbox
+bcd82460ddf0 localhost/aria-conductor/qoder-sandbox:0.1 Exited (0) 292 years ago sandbox-ad63aa44-d561-44aa-ae6e-e14469b1e22a
+--- stack restart: QODER_MODEL=efficient BACKEND_PORT=8097 SERVER_PORT=8097 VITE_PORT=5273 ARIA_MCP_PORT=8097 OPENSANDBOX_PORT=8090 APPROVALS_TIMEOUT_MS=120000 CONTAINER_RUNTIME=podman PACK_CREDENTIAL_KEY=<inline from pack-key.txt> pwsh -NoProfile -File scripts/start.ps1 -Provider qoder ---
+Aria Conductor - one-click start (local)
+[1/8] Checking environment
+[2/8] Checking .env
+[3/8] Preparing container resources
+[4m>>>> Executing external compose provider "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker-compose.exe". Please see podman-compose(1) for how to disable this message. <<<<
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+[5/8] Starting services
+      MCP auth token written to D:\project\aria-conductor\.run\mcp-token
+[6/8] Waiting for health
+[7/8] Reporting
+
+=========================================================
+  Aria Conductor - READY
+=========================================================
+  Topology : local-dev (backend + frontend on host)
+  Provider : qoder
+  Image    : aria-conductor/qoder-sandbox:0.1
+  MCP auth : token (token file: D:\project\aria-conductor\.run\mcp-token)
+  Runtime  : podman (explicit)
+  OpenSandbox: http://localhost:8090
+  Database : h2 (file)
+---------------------------------------------------------
+  OpenSandbox: http://localhost:8090                    [OK]
+  Backend    : http://localhost:8097                    [OK]
+  Dashboard  : http://localhost:5273                    [OK]
+  Swagger  : http://localhost:8080/swagger-ui.html
+---------------------------------------------------------
+  Logs : .run\backend.log   .run\frontend.log
+  Stop : pwsh -File scripts\stop.ps1
+=========================================================
+[8/8] Done
+All services healthy.

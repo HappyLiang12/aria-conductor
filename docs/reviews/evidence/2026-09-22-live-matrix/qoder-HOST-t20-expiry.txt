@@ -1,0 +1,24 @@
+prerequisite ok: qoder CLI: C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe (1.1.61)
+prerequisite ok: qoder bridge entry: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+prerequisite ok: admitted repository HEAD 7151617b13b20c1774e3458244cc3b7d4d895e2d
+
+== backend ==
+backend environment pins: ARIA_CORES_QODER_EXECUTABLE=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe | ARIA_WORKSPACES_RESULT_ROOT=C:/Users/<USER>/AppData/Local/Temp/t20-runtime/results | ARIA_WORKSPACES_RUNTIME_ROOT=C:/Users/<USER>/AppData/Local/Temp/t20-runtime | JAVA_TOOL_OPTIONS=-Daria.tasks.deadline-minutes=3 -Dapprovals.timeout-ms=180000
+$ C:\Program Files\PowerShell\7\pwsh.exe -NoProfile -File scripts/start-backend.ps1 -SkipSandbox (backend cwd C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor)
+health: HTTP 200 {"status":"UP"}
+
+== live matrix qoder/HOST ==
+core=qoder mode=HOST os=win32 x64 cli=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe cliVersion=1.1.61 bridge=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+requested model=efficient (qoder pin efficient); usage evidence is recorded, never asserted as zero cost
+qoder runtime credential stored (HTTP 200); the secret is never printed
+agent created: id=029bcc4c-3283-4c70-90ae-324bf833e135 core=qoder mode=HOST workspaceMode=WORKTREE
+agent created: id=914e0d0d-d9f3-44bb-b538-6268edf46f15 core=qoder mode=HOST workspaceMode=DIRECT
+run expiry: id=9fbc47a4-39dd-46d8-810e-1a3fdfa98860 status=PENDING
+expiry: ask 6321afeb-4a8c-458d-93f3-8c40b3af211e left undecided (requestedAt=2026-09-26T22:58:02.683828Z expiresAt=2026-09-26T23:00:52Z)
+  [PASS] expiry — an undecided ask expires and writes nothing
+      PASS ask reached a non-PENDING state
+      PASS ask state is EXPIRED
+      PASS expired file absent from disk
+
+live matrix qoder/HOST: verified
+stopping backend process tree

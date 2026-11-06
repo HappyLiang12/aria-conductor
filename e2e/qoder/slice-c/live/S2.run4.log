@@ -1,0 +1,66 @@
+# step: S2 (spec-owned scenario S2)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S2:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: a4ed69a
+# started: 2026-09-18T09:35:58Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S2] card=aac52025-0aa0-4362-be33-a7944acdb78d run=8321da9f-69c7-4528-9070-ea183d67397f file=/workspace/e2e-s2-1789724163196-2381.txt
+[S2] ask1=2726a1a7-0d42-48fc-bfe1-c9c59c6ecec7 status=PENDING source=ACP_PERMISSION toolCallId=null expiresAt=2026-09-18T09:38:22.646583Z
+[S2] ask1 options=[{"optionId":"proceed_always","kind":"allow_always","name":"Allow for this session"},{"optionId":"proceed_once","kind":"allow_once","name":"Allow"},{"optionId":"cancel","kind":"reject_once","name":"Reject"}]
+[S2] sandbox container=6d1a95632e90 (image ancestor filter)
+[S2] ask1 decided: status=APPROVED deliveryState=DELIVERED decision-recorded reason=null
+[S2] write1 probe: exists=true content="hi" note="cat via container exec"
+  x  1 [chromium] › e2e\qoder-adk-e2e.spec.ts:217:1 › S2: write attempt asks, allow once executes, second write asks again (5.8m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S2] card=140997d0-ca20-46a6-ad4e-3989ddbeb639 run=5a26c097-0c22-4a58-b1c6-a51324004355 file=/workspace/e2e-s2-1789724515900-8656.txt
+[S2] ask1=16be698f-3ad6-45aa-b0eb-dcf0dd1c93c1 status=PENDING source=ACP_PERMISSION toolCallId=null expiresAt=2026-09-18T09:44:18.036531Z
+[S2] ask1 options=[{"optionId":"proceed_always","kind":"allow_always","name":"Allow for this session"},{"optionId":"proceed_once","kind":"allow_once","name":"Allow"},{"optionId":"cancel","kind":"reject_once","name":"Reject"}]
+[S2] sandbox container=fbe76c13e860 (image ancestor filter)
+[S2] ask1 decided: status=APPROVED deliveryState=DELIVERED decision-recorded reason=null
+[S2] write1 probe: exists=true content="hi" note="cat via container exec"
+[S2] ask2=5e768ed2-edf6-4448-91f5-e35056bb2ee3 (new ask after the one-use approval) toolCallId=null
+[S2] asks for run 5a26c097-0c22-4a58-b1c6-a51324004355: ["5e768ed2-edf6-4448-91f5-e35056bb2ee3:PENDING","d6e455e3-8683-429a-b7e1-912977cd3b6d:PENDING","16be698f-3ad6-45aa-b0eb-dcf0dd1c93c1:APPROVED"]
+[S2] file after the second (denied) write: exists=true content="hi" note="cat via container exec"
+[S2] run terminal=COMPLETED finalOutput="I'll write the file with the specified content.\n\nNow writing the same file again as the second step.\n\nThe first write succeeded — `/workspace/e2e-s2-1789724515900-8656.txt` contains \"hi\". The s
+  ok 2 [chromium] › e2e\qoder-adk-e2e.spec.ts:217:1 › S2: write attempt asks, allow once executes, second write asks again (retry #1) (42.7s)
+
+
+  1) [chromium] › e2e\qoder-adk-e2e.spec.ts:217:1 › S2: write attempt asks, allow once executes, second write asks again 
+
+    Error: waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within 300000ms; last list=[{"id":"0c656a61-58f3-4fbc-b43b-7e35132382d0","runId":"6fd64f0a-6000-4bd9-9655-287dc6658b5f","toolCallId":null,"status":"PENDING","reason":null,"requestedAt":"2026-09-18T05:42:42.143261Z","decidedAt":null,"expiresAt":null,"approvalType":"TOOL_CALL","content":"Run 6fd64f0a completed (COMPLETED) - awaiting your review: s8-replay-card-1789710128487-918","contentKind":null,"knowledgeItemId":null,"tool
+
+       at qoder-e2e-lib.ts:283
+
+      281 |     await sleep(2_000);
+      282 |   }
+    > 283 |   throw new Error(
+          |         ^
+      284 |     `waitForPendingAcpAsk: no PENDING ACP_PERMISSION ask within ${timeoutMs}ms;`
+      285 |     + ` last list=${JSON.stringify(last)?.slice(0, 400)}`,
+      286 |   );
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:283:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:271:16
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S2-write-att-bd2ed-tes-second-write-asks-again-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-adk-e2e-S2-write-att-bd2ed-tes-second-write-asks-again-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S2-write-att-bd2ed-tes-second-write-asks-again-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S2-write-att-bd2ed-tes-second-write-asks-again-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 flaky
+    [chromium] › e2e\qoder-adk-e2e.spec.ts:217:1 › S2: write attempt asks, allow once executes, second write asks again 
+
+EXIT=0

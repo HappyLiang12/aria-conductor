@@ -1,0 +1,51 @@
+=== operator-side stack restoration before E11 (disclosed in the evidence doc) ===
+=== timestamp: 2026-09-19 05:54:34 +0800 ===
+--- git revision the stack will be built from: 7c8016a ---
+--- pre-restart container inventory (podman ps -a): ---
+95edc8b02fee docker.io/opensandbox/server:latest Exited (0) About an hour ago aria-opensandbox
+b0a87533fac2 localhost/aria-conductor/qoder-sandbox:0.1 Exited (0) 292 years ago sandbox-f6db7706-2333-43b9-9aa9-0292498de11f
+6b4ef45cfa0c localhost/aria-conductor/qoder-sandbox:0.1 Exited (0) 292 years ago sandbox-267b7126-67d9-4e92-8991-7aaf44b8250d
+a7450b41d7f2 localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-27806e48-02c1-41cf-bb30-600d0f34623c
+20476033514d localhost/aria-conductor/opencode-sandbox:1.1 Exited (0) 292 years ago sandbox-13639a2f-013d-4abb-a763-5713760255b6
+--- archive-endpoint probe (the E7/E9 failure class; 500 broken pipe when the WSL VM is wedged): ---
+--- curl present: /usr/bin/curl ---
+HTTP 200
+HTTP 200
+--- stack restart under the R62 env (PACK_CREDENTIAL_KEY inline, never echoed) ---
+stop.ps1 exit=0
+Stopping Aria Conductor services...
+  stopped backend (PID 29980)
+  stopped frontend (PID 12932)
+  stopped OpenSandbox
+Done.
+start.ps1 exit=0
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+[5/8] Starting services
+      MCP auth token written to D:\project\aria-conductor\.run\mcp-token
+[6/8] Waiting for health
+[7/8] Reporting
+
+=========================================================
+  Aria Conductor - READY
+=========================================================
+  Topology : local-dev (backend + frontend on host)
+  Provider : qoder
+  Image    : aria-conductor/qoder-sandbox:0.1
+  MCP auth : token (token file: D:\project\aria-conductor\.run\mcp-token)
+  Runtime  : podman (explicit)
+  OpenSandbox: http://localhost:8090
+  Database : h2 (file)
+---------------------------------------------------------
+  OpenSandbox: http://localhost:8090                    [OK]
+  Backend    : http://localhost:8097                    [OK]
+  Dashboard  : http://localhost:5273                    [OK]
+  Swagger  : http://localhost:8080/swagger-ui.html
+---------------------------------------------------------
+  Logs : .run\backend.log   .run\frontend.log
+  Stop : pwsh -File scripts\stop.ps1
+=========================================================
+[8/8] Done
+All services healthy.

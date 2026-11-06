@@ -1,0 +1,86 @@
+# step: S3 (spec-owned scenario S3)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S3:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 12b4a36
+# started: 2026-09-18T06:04:33Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+  x  1 [chromium] › e2e\qoder-adk-e2e.spec.ts:301:1 › S3: deny produces no side effect and does not cancel the run (6.2s)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+  x  2 [chromium] › e2e\qoder-adk-e2e.spec.ts:301:1 › S3: deny produces no side effect and does not cancel the run (retry #1) (8.3s)
+
+
+  1) [chromium] › e2e\qoder-adk-e2e.spec.ts:301:1 › S3: deny produces no side effect and does not cancel the run 
+
+    Error: TODO→IN_PROGRESS dispatch rejected: {"timestamp":"2026-09-18T06:04:45.844239Z","status":409,"error":"Conflict","message":"Card was modified by another move — refresh and retry."}
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 409
+
+      132 |   });
+      133 |   const moved = await transitionKanban(request, card.id, 'IN_PROGRESS');
+    > 134 |   expect(moved.status, `TODO→IN_PROGRESS dispatch rejected: ${JSON.stringify(moved.data)}`).toBe(200);
+          |                                                                                             ^
+      135 |   let runId: string | undefined = moved.data?.linkedRunId;
+      136 |   if (!runId) {
+      137 |     // Fallback: the transition response shape is not the contract; the card link is.
+        at dispatchWriteCard (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:134:93)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:305:27
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: TODO→IN_PROGRESS dispatch rejected: {"timestamp":"2026-09-18T06:05:03.400844400Z","status":409,"error":"Conflict","message":"Card was modified by another move — refresh and retry."}
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 200
+    Received: 409
+
+      132 |   });
+      133 |   const moved = await transitionKanban(request, card.id, 'IN_PROGRESS');
+    > 134 |   expect(moved.status, `TODO→IN_PROGRESS dispatch rejected: ${JSON.stringify(moved.data)}`).toBe(200);
+          |                                                                                             ^
+      135 |   let runId: string | undefined = moved.data?.linkedRunId;
+      136 |   if (!runId) {
+      137 |     // Fallback: the transition response shape is not the contract; the card link is.
+        at dispatchWriteCard (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:134:93)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:305:27
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S3-deny-prod-7b140-and-does-not-cancel-the-run-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-adk-e2e.spec.ts:301:1 › S3: deny produces no side effect and does not cancel the run 
+
+EXIT=1

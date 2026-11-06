@@ -1,0 +1,162 @@
+package io.aria.conductor.common.exception;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.springframework.core.env.Environment;
+import org.springframework.dao.DataIntegrityViolationException;
+import jakarta.persistence.PersistenceException;
+import java.util.Arrays;
+
+@Slf4j
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    private final Environment env;
+
+    public GlobalExceptionHandler(Environment env) {
+        this.env = env;
+    }
+
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(ResourceNotFoundException ex) {
+        return buildResponse(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidStateTransitionException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidState(InvalidStateTransitionException ex) {
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage());
+    }
+
+    @ExceptionHandler(ApprovalTimeoutException.class)
+    public ResponseEntity<Map<String, Object>> handleApprovalTimeout(ApprovalTimeoutException ex) {
+        return buildResponse(HttpStatus.REQUEST_TIMEOUT, ex.getMessage());
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalState(IllegalStateException ex) {
+        // Governance rejections (e.g. assigning a disabled/non-approved tool or non-SKILL skill)
+        // are client input conflicts, not server errors — return 4xx instead of falling through to 500.
+        return buildResponse(HttpStatus.CONFLICT, ex.getMessage(), ex);
+    }
+
+    @ExceptionHandler(PickupRejectedException.class)
+    public ResponseEntity<Map<String, Object>> handlePickupRejected(PickupRejectedException ex) {
+        // Synchronous pickup/transition rejection: the operator asked for a move that
+        // current state forbids. 409 + structured reason so the UI can say WHY.
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", HttpStatus.CONFLICT.value());
+        body.put("error", HttpStatus.CONFLICT.getReasonPhrase());
+        body.put("message", ex.getMessage());
+        body.put("code", ex.code());
+        body.put("details", ex.details());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Map<String, Object>> handleOptimisticLock(
+            org.springframework.orm.ObjectOptimisticLockingFailureException ex) {
+        // Concurrent modification (e.g. two operators moving the same kanban card):
+        // optimistic-lock miss is a client conflict the caller can resolve by refreshing.
+        log.warn("Optimistic lock conflict: {}", ex.getMessage());
+        return buildResponse(HttpStatus.CONFLICT,
+                "Card was modified by another move — refresh and retry.");
+    }
+
+    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, Object>> handleValidation(
+            org.springframework.web.bind.MethodArgumentNotValidException ex) {
+        String message = ex.getBindingResult().getFieldErrors().stream()
+                .map(e -> e.getField() + ": " + e.getDefaultMessage())
+                .collect(java.util.stream.Collectors.joining("; "));
+        return buildResponse(HttpStatus.BAD_REQUEST, message.isBlank() ? "Validation failed" : message);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handleBadBody(HttpMessageNotReadableException ex) {
+        log.error("Invalid request body", ex);
+        String message = "Invalid request body";
+        if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
+            String detail = ex.getMostSpecificCause().getMessage();
+            if (detail != null && !detail.isBlank()) {
+                message = "Invalid request body: " + detail;
+            }
+        }
+        return buildResponse(HttpStatus.BAD_REQUEST, message);
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrity(DataIntegrityViolationException ex) {
+        log.error("Data integrity violation", ex);
+        String message = "Data integrity violation. Retry; if it persists, check the backend log.";
+        if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
+            String detail = ex.getMostSpecificCause().getMessage();
+            message = "Data integrity violation: " + (detail != null ? detail : "no details");
+        }
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, message);
+    }
+
+    @ExceptionHandler(PersistenceException.class)
+    public ResponseEntity<Map<String, Object>> handlePersistence(PersistenceException ex) {
+        log.error("Persistence error", ex);
+        String message = "Database error. Retry; if it persists, check the backend log.";
+        if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
+            Throwable cause = ex.getCause();
+            String detail = cause != null ? cause.getMessage() : ex.getMessage();
+            message = "Database error: " + (detail != null ? detail : "no details");
+        }
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, message);
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNoResourceFound(NoResourceFoundException ex) {
+        log.debug("No resource found: {}", ex.getMessage());
+        return buildResponse(HttpStatus.NOT_FOUND, "Resource not found: " + ex.getMessage());
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, Object>> handleGeneral(Exception ex) {
+        log.error("Unhandled exception: {} - {}", ex.getClass().getSimpleName(), ex.getMessage(), ex);
+        String message = "An unexpected error occurred. Check the backend log for the stack trace.";
+        if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
+            message = ex.getClass().getSimpleName() + ": " +
+                      (ex.getMessage() != null ? ex.getMessage() : "no details");
+        }
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, message);
+    }
+
+    private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message) {
+        return buildResponse(status, message, null);
+    }
+
+    private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message,
+                                                              Throwable failure) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", status.value());
+        body.put("error", status.getReasonPhrase());
+        body.put("message", message);
+        // Stable next-step contract: the dashboard opens the named surface instead
+        // of matching the human-readable message.
+        if (failure instanceof ActionableFailure actionable) {
+            body.put("code", actionable.code());
+            body.put("surface", actionable.surface().name());
+        }
+        return ResponseEntity.status(status).body(body);
+    }
+}

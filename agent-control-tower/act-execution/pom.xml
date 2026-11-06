@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.aria.conductor</groupId>
+        <artifactId>agent-control-tower</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>act-execution</artifactId>
+    <name>ACT Execution</name>
+    <description>Execution engine module</description>
+
+    <properties>
+        <!-- M1 coverage ratchet (measured 65.5% line / 49.7% branch post-Phase-B, see docs/testing-baseline.md) -->
+        <jacoco.line.minimum>0.58</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.42</jacoco.branch.minimum>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-agent</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- SnakeYAML for direct YAML workflow template parsing -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.aria.conductor</groupId>
+            <artifactId>act-test-support</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- OpenSandbox Java SDK (com.alibaba.opensandbox:sandbox 1.0.18) for the OpenCode provider sandbox lifecycle -->
+        <dependency>
+            <groupId>com.alibaba.opensandbox</groupId>
+            <artifactId>sandbox</artifactId>
+            <version>1.0.18</version>
+        </dependency>
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.1</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Awaitility for concurrency tests (version from Spring Boot BOM) -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- jqwik property-based tests (version managed in parent) -->
+        <dependency>
+            <groupId>net.jqwik</groupId>
+            <artifactId>jqwik</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
+

@@ -1,0 +1,43 @@
+prerequisite ok: qoder CLI: C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe (1.1.61)
+prerequisite ok: qoder bridge entry: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+prerequisite ok: admitted repository HEAD 7151617b13b20c1774e3458244cc3b7d4d895e2d
+
+== backend ==
+backend environment pins: ARIA_CORES_QODER_EXECUTABLE=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe | ARIA_WORKSPACES_RESULT_ROOT=C:/Users/<USER>/AppData/Local/Temp/t20-runtime/results | ARIA_WORKSPACES_RUNTIME_ROOT=C:/Users/<USER>/AppData/Local/Temp/t20-runtime
+$ C:\Program Files\PowerShell\7\pwsh.exe -NoProfile -File scripts/start-backend.ps1 -SkipSandbox (backend cwd C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor)
+health: HTTP 200 {"status":"UP"}
+
+== live matrix qoder/HOST ==
+core=qoder mode=HOST os=win32 x64 cli=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe cliVersion=1.1.61 bridge=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+requested model=efficient (qoder pin efficient); usage evidence is recorded, never asserted as zero cost
+qoder runtime credential stored (HTTP 200); the secret is never printed
+agent created: id=7160d2b9-2b35-4269-8fb0-f836e4e5abb9 core=qoder mode=HOST workspaceMode=WORKTREE
+agent created: id=1a6c80aa-9148-4633-aaa6-e52ae24400cf core=qoder mode=HOST workspaceMode=DIRECT
+run coding-task: id=498a4cbc-4486-43be-bec9-2f1806749ebf status=PENDING
+coding-task: approved ask 75296307-5337-4807-8f14-9b6be901c34a (HTTP 200, askType=APPROVAL)
+  [PASS] coding-task — one real coding task in qoder/HOST
+      PASS run reached COMPLETED
+      PASS file bytes on disk equal the requested content
+      PASS approval ask observed
+      PASS ask approved once
+coding-task file: C:\Users\<USER>\AppData\Local\Temp\t20-runtime\worktrees\498a4cbc-4486-43be-bec9-2f1806749ebf\aria-live-probe.txt bytes="aria-live-qoder-HOST" sha256=b2830b19de8750fc116f9eee849bf7854ed700f8bd9dce13d53be75759637196
+  [PASS] worktree — WORKTREE runs write in a run-owned worktree and leave the admitted repository untouched
+      PASS run-owned worktree exists
+      PASS the run wrote its file inside the run worktree
+      PASS the admitted repository has no run file
+      PASS admitted repository HEAD unchanged
+run approve-once: id=590b79c5-db76-4197-955f-03d690e589d9 status=PENDING
+approve-once: approved first ask 5740005f-6acd-464e-9af4-9dd9b4cf55b4
+  [PASS] approve-once — a one-use grant re-asks for the second write
+      PASS second approval ask observed after the one-use grant
+      PASS run reached COMPLETED
+      PASS final bytes are the second pass
+run deny: id=b2d1ebdc-d239-4366-b733-c69a8502939d status=PENDING
+deny: denied ask c9c9ab0f-6e8c-4f01-be63-f7b7721097b6 (HTTP 200)
+  [PASS] deny — a denial leaves the workspace unwritten
+      PASS denied file absent from disk
+      PASS ask reached DENIED
+      PASS run reached a terminal state
+
+live matrix qoder/HOST: verified
+stopping backend process tree

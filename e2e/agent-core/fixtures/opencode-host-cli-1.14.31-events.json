@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "probe": "e2e/agent-core/probe-native.mjs",
+  "name": "opencode-HOST",
+  "startedAt": "2026-09-22T16:51:50.405Z",
+  "finishedAt": "2026-09-22T16:52:03.153Z",
+  "messages": [],
+  "events": [
+    {
+      "at": "2026-09-22T16:51:51.461Z",
+      "type": "sandbox.prerequisites",
+      "data": {
+        "sandboxEndpoint": "http://127.0.0.1:8090",
+        "sandboxServerReachable": false,
+        "sandboxServerProbe": {
+          "reachable": false,
+          "reason": "ECONNREFUSED"
+        },
+        "sandboxHealth": null,
+        "requestedImage": null,
+        "containerImages": {
+          "docker": {
+            "exitCode": 1,
+            "imageCount": 0,
+            "sandboxLike": []
+          },
+          "podman": {
+            "exitCode": 125,
+            "imageCount": 0,
+            "sandboxLike": []
+          }
+        }
+      }
+    },
+    {
+      "at": "2026-09-22T16:52:03.149Z",
+      "type": "opencode.host_probe",
+      "data": {
+        "argv": [
+          "serve",
+          "--port",
+          "60184",
+          "--hostname",
+          "127.0.0.1"
+        ],
+        "sanitizedXdgRoots": {
+          "XDG_DATA_HOME": "<RUN>\\xdg\\data",
+          "XDG_CONFIG_HOME": "<RUN>\\xdg\\config",
+          "XDG_CACHE_HOME": "<RUN>\\xdg\\cache"
+        },
+        "scrubbedEnvKeys": [
+          "QODERCLI_RUNTIME_PACKAGING",
+          "QODER_AGENT_SDK_ENTRYPOINT",
+          "QODER_AGENT_SDK_VERSION",
+          "QODER_SDK_AUTH_PAYLOAD_FILE",
+          "QODER_SESSION_TYPE",
+          "QODER_WORKER_CWD",
+          "QODER_WORKER_RUNTIME_ASSET_ROOT"
+        ],
+        "serverLog": "Performing one time database migration, may take a few minutes...\r\nsqlite-migration:done\r\nDatabase migration complete.\r\nWarning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.\nopencode server listening on http://127.0.0.1:60184\n",
+        "health": {
+          "status": 200,
+          "body": {
+            "healthy": true,
+            "version": "1.14.31"
+          }
+        },
+        "session": {
+          "status": 200,
+          "id": "<SESSION_ID>"
+        },
+        "authList": {
+          "credentialCount": 0,
+          "raw": "\u001b[90m┌\u001b[39m  Credentials \u001b[90m<RUN>\\xdg\\data\\opencode\\auth.json\n\u001b[90m│\u001b[39m\n\u001b[90m└\u001b[39m  0 credentials\n\n"
+        },
+        "messageAttempt": {
+          "status": 200,
+          "body": "{\"info\":{\"parentID\":\"msg_0ca0814b2001tFYSRXslQ7cPhW\",\"role\":\"assistant\",\"mode\":\"build\",\"agent\":\"build\",\"path\":{\"cwd\":\"<WORKSPACE>\",\"root\":\"/\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"modelID\":\"big-pickle\",\"providerID\":\"opencode\",\"time\":{\"created\":1790095922379,\"completed\":1790095923143},\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"Error from provider (Console): OpenCode 1.18.0 or newer is required to use the free tier\",\"statusCode\":426,\"isRetryable\":false,\"responseHeaders\":{\"cf-placement\":\"remote-ORD\",\""
+        }
+      }
+    }
+  ]
+}

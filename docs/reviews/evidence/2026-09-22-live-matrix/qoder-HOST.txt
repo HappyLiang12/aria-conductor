@@ -1,0 +1,16 @@
+prerequisite ok: qoder CLI: C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe (1.1.61)
+prerequisite ok: admitted repository HEAD c48bfb37e08e3776300e13c932580f8bd07d9875
+
+== backend ==
+backend environment pins: ARIA_CORES_QODER_BRIDGE_ENTRY=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js | ARIA_CORES_QODER_EXECUTABLE=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe | ARIA_CORES_QODER_MODEL=efficient | ARIA_WORKSPACES_RESULT_ROOT=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\agent-control-tower\act-app\data\workspaces\results | ARIA_WORKSPACES_RUNTIME_ROOT=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\agent-control-tower\act-app\data\workspaces\runs
+$ C:\Program Files\PowerShell\7\pwsh.exe -NoProfile -File scripts/start-backend.ps1 -SkipSandbox -AdkProvider opencode (backend cwd C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor)
+health: HTTP 200 {"status":"UP"}
+
+== live matrix qoder/HOST ==
+core=qoder mode=HOST os=win32 x64 cli=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe cliVersion=1.1.61
+requested model=efficient (qoder pin efficient); usage evidence is recorded, never asserted as zero cost
+qoder runtime credential stored (HTTP 401); the secret is never printed
+live-matrix error: Error: credential store refused (HTTP 401)
+    at main (file:///C:/Users/<USER>/.qoder/worktrees/app/f6e6a3/aria-conductor/e2e/agent-core/live-matrix.mjs:866:39)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+stopping backend process tree

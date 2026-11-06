@@ -1,0 +1,22 @@
+-- V74: the part identity of a progress observation (issue #103, Live Activity Stream).
+--
+-- A row of run_progress_events is an OBSERVATION of one message part, and the part is
+-- the thing the stream shows. The pump used to watermark part COUNTS, so a part that
+-- was still streaming was emitted once with whatever text it held at that poll and
+-- every later growth was dropped: a long answer stayed half-shown until run.completed.
+-- It now re-emits when the part's observable content changes or the part reaches its
+-- final state, which only makes sense if the row says WHICH part it observed:
+-- successive observations share part_id and differ only by seq.
+--
+-- Nullable, deliberately:
+--   1. every row written before this migration reads back NULL and keeps its own
+--      identity (seq), so a historical run replays exactly as it did yesterday;
+--   2. a core that reports no part id on GET /session/:id/message produces rows with
+--      no part id either — the pump still bounds the growth by position, and the
+--      consumer falls back to seq instead of inventing an identity.
+-- No index on part_id: the only read path is the ordered replay by (run_id, seq),
+-- which idx_progress_run_seq already serves, and merging happens client-side.
+-- VARCHAR(128) matches the native id length the client already reads (the column is a
+-- copy of a core-supplied string, never a parsed value), and no TIMESTAMPTZ is
+-- introduced: neither MariaDB nor H2 MODE=MySQL accepts it (see V51).
+ALTER TABLE run_progress_events ADD COLUMN IF NOT EXISTS part_id VARCHAR(128);

@@ -1,0 +1,14 @@
+-- V64: repair the SDD role agents seeded with the retired LangChain provider.
+--
+-- V42 seeded the three SDD role agents (ba/dev/qa) with adk_provider='langchain'
+-- while the LangChain ADK runtime still existed; V15 had already used the same
+-- value as the historical default for legacy rows. The runtime was retired with
+-- no fallback: 'langchain' resolves to neither a registered provider nor a
+-- catalog core, so a run against one of these rows fails fail-closed with
+-- "Unsupported ADK provider 'langchain' ... registered providers: [opencode]
+-- (there is no fallback)". V59 deliberately left every legacy adk_provider
+-- untouched ("no other row is changed"), so the repair belongs in this
+-- migration. opencode is the documented default core and the only registered
+-- provider, and admission already defaults a NULL execution_mode to SANDBOX
+-- (DefaultAgentExecutionPolicy), so only the provider column is rewritten here.
+UPDATE agents SET adk_provider = 'opencode' WHERE adk_provider = 'langchain';

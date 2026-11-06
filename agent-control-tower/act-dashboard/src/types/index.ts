@@ -1,0 +1,513 @@
+// === Enums ===
+export type AgentType = 'ADK';
+export type AgentHealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'RETIRED';
+export type RunStatus = 'PENDING' | 'INITIALIZING' | 'RUNNING' | 'PAUSED' | 'WAITING_INPUT' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABORTED';
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
+export type ApprovalType = 'TOOL_CALL' | 'SPEC_REVIEW';
+export type ContentKind = 'MARKDOWN' | 'HTML';
+export type KnowledgeType = 'SKILL' | 'SCRIPT' | 'PROMPT' | 'TOOL' | 'TEMPLATE' | 'GUIDELINE' | 'WORKFLOW' | 'SPEC';
+export type KnowledgeStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETIRED';
+export type ToolCallStatus = 'PENDING' | 'EXECUTING' | 'COMPLETED' | 'FAILED' | 'DENIED';
+export type WorkflowStatus = 'PENDING' | 'RUNNING' | 'WAITING_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type WorkflowStepStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+
+// === Execution core / mode (agent-core agent execution, Tasks 3 + 15) ===
+/**
+ * The governed agent cores. `adkProvider` keeps its field name and becomes the
+ * core identifier; `langchain` is a removed core and is deliberately NOT part
+ * of this union — a stored value outside it renders as an explicit unsupported
+ * state and is never silently remapped to a supported core.
+ */
+export type AgentCore = 'qoder' | 'opencode';
+
+/** Where a run executes: on the backend machine (`HOST`) or in a run-owned sandbox. */
+export type ExecutionMode = 'HOST' | 'SANDBOX';
+
+/** How a Host run obtains its working directory (worktree default, Direct explicit). */
+export type WorkspaceMode = 'WORKTREE' | 'DIRECT';
+
+// === Entities ===
+export interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  agentType: AgentType;
+  role: string;
+  model: string;
+  provider: string;
+  /**
+   * Stored core id (field name kept from the ADK era). Typed for the governed
+   * cores while still accepting a stored removed value (e.g. `langchain`) so
+   * the UI can render it as an explicit unsupported state.
+   */
+  adkProvider?: AgentCore | (string & {});
+  /** Stored execution placement; absent on records predating the mode field. */
+  executionMode?: ExecutionMode;
+  /** Host workspace selection; absent on records predating the field. */
+  workspaceMode?: WorkspaceMode;
+  workspacePath?: string;
+  workspaceBaseRef?: string;
+  config?: Record<string, unknown>;
+  healthStatus: AgentHealthStatus;
+  createdAt: string;
+  skills?: string[];
+  /** Optional: absent on responses from an older backend. */
+  pickupEligible?: boolean;
+  pickupIneligibleReasons?: string[];
+  /** Null until the health reconciler has probed the runtime; absent on an older backend. */
+  lastProbedAt?: string | null;
+}
+
+export interface Run {
+  id: string;
+  agentId: string;
+  status: RunStatus;
+  promptSeed: string;
+  maxIterations: number;
+  totalTokensUsed: number;
+  iterationCount: number;
+  errorMessage: string | null;
+  /** Stable failure identity and repair surface served by the backend. */
+  errorCode?: string | null;
+  errorSurface?: string | null;
+  finalOutput: string | null;
+  createdAt: string;
+  completedAt: string | null;
+  /** The frozen core the run was dispatched on (absent on an older backend or a run without a binding). */
+  coreId?: string | null;
+  /** The frozen execution mode alongside the frozen core; nullability matches coreId. */
+  executionMode?: string | null;
+}
+
+export interface Approval {
+  id: string;
+  runId: string;
+  toolCallId: string | null;
+  status: ApprovalStatus;
+  /**
+   * Human-readable detail. A normalized native permission ask is carried here
+   * by the backend (`Native permission request <req> from session <sid> for
+   * tool <tool> (<NATIVE_TOOL|PLATFORM_MCP>)`), which is how the Review
+   * surface renders the permission kind of such an ask.
+   */
+  reason: string;
+  requestedAt: string;
+  decidedAt: string | null;
+  expiresAt: string;
+  approvalType?: ApprovalType;
+  content?: string;
+  contentKind?: ContentKind;
+  knowledgeItemId?: string;
+  toolName?: string;
+  arguments?: string;
+  riskTier?: string;
+  // HITL ask fields (Kanban redesign): an Approval can be attached to a kanban
+  // card as APPROVAL / QUESTION / REVIEW_REQUEST with rich context + answer.
+  kanbanItemId?: string | null;
+  askType?: 'APPROVAL' | 'QUESTION' | 'REVIEW_REQUEST';
+  /**
+   * Ask provenance (2026-10-05): a CLARIFICATION ask holds a run in
+   * WAITING_INPUT and is answered (Answer & continue + Finalize), never
+   * approved/denied. Optional: absent on responses from an older backend.
+   */
+  source?: 'LEGACY_GATE' | 'ACP_PERMISSION' | 'CLARIFICATION';
+  contextMd?: string | null;
+  optionsJson?: string | null;
+  answer?: string | null;
+}
+
+export interface WorkspaceDiff {
+  runId: string;
+  hasWorkspace: boolean;
+  summary: string;
+  diff: string;
+  truncated: boolean;
+}
+
+export interface KnowledgeItem {
+  id: string;
+  name: string;
+  type: KnowledgeType;
+  description: string;
+  currentVersion: string | number | null;
+  status: KnowledgeStatus;
+  sensitivity: string;
+  createdAt: string;
+}
+
+export interface ToolCall {
+  id: string;
+  runId: string;
+  toolName: string;
+  arguments: string;
+  result: string | null;
+  status: ToolCallStatus;
+  latencyMs: number;
+  createdAt: string;
+}
+
+export interface SessionTrajectory {
+  id: string;
+  runId: string;
+  turnNumber: number;
+  role: string;
+  content: string;
+  toolCalls: string | null;
+  toolCallId?: string;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  createdAt: string;
+}
+
+export interface KnowledgeVersion {
+  id: string;
+  knowledgeItemId: string;
+  version: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  content: string | null;
+  createdAt: string;
+  approvedAt: string | null;
+}
+
+export interface AriaMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+// === API DTOs ===
+export interface CreateAgentRequest {
+  name: string;
+  description?: string;
+  agentType: AgentType;
+  role?: string;
+  model?: string;
+  provider?: string;
+  /** Governed core id; omitted values are resolved by the backend admission policy. */
+  adkProvider?: AgentCore;
+  /** Explicit placement; omitted values are resolved to the documented default. */
+  executionMode?: ExecutionMode;
+  /** Host workspace selection; only meaningful with `executionMode: 'HOST'`. */
+  workspaceMode?: WorkspaceMode;
+  /** Admitted repository (worktree) or explicitly selected directory (direct). */
+  workspacePath?: string;
+  /** Optional base ref; only meaningful for a worktree. */
+  workspaceBaseRef?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface CreateRunRequest {
+  agentId: string;
+  promptSeed: string;
+  maxIterations?: number;
+}
+
+export interface DashboardSummary {
+  activeAgents: number;
+  healthyAgents: number;
+  degradedAgents: number;
+  runningRuns: number;
+  pendingApprovals: number;
+  totalTokensBurned: number;
+}
+
+export interface AgentTelemetry {
+  agentId: string;
+  totalTokensToday: number;
+  callCountToday: number;
+}
+
+export interface ActivityEvent {
+  eventType: string;
+  resourceType: string;
+  resourceId: string;
+  action: string;
+  timestamp: string;
+  conversationId?: string;
+  details?: string;
+}
+
+export interface ApprovalDecision {
+  approved: boolean;
+  reason?: string;
+}
+
+/**
+ * Response body of `POST /api/v1/approvals/{id}/decide`. The endpoint returns a
+ * decision receipt rather than the updated {@link Approval}:
+ * `{ approvalId, approved, status: "processed" }`. Read the Approval back from
+ * `GET /api/v1/approvals/{id}` for its resulting status.
+ */
+export interface ApprovalDecisionReceipt {
+  approvalId: string;
+  approved: boolean;
+  status: string;
+}
+
+export interface CreateKnowledgeRequest {
+  name: string;
+  type: KnowledgeType;
+  description: string;
+  content?: string;
+  yamlContent?: string;
+  sensitivity?: string;
+}
+
+export interface KnowledgeReviewRequest {
+  decision: 'APPROVED' | 'REJECTED';
+  reason?: string;
+}
+
+// === Workflows ===
+export interface WorkflowStepInfo {
+  index: number;
+  agentId: string;
+  promptTemplate: string;
+  status: WorkflowStepStatus;
+  runId: string | null;
+  outputPreview: string | null;
+}
+
+export interface WorkflowChain {
+  id: string;
+  name: string;
+  status: WorkflowStatus;
+  currentStepIndex: number;
+  totalSteps: number;
+  steps: WorkflowStepInfo[];
+  createdAt: string;
+  completedAt: string | null;
+  isTemplate?: boolean;
+  knowledgeItemId?: string | null;
+  description?: string | null;
+}
+
+// === Kanban ===
+// BLOCKED is retired in the backend enum but kept in the union until Task 14
+// removes the last TaskDrawer references (removing it now breaks the build).
+export type KanbanStatus =
+  | 'BACKLOG' | 'TODO' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED' | 'REVIEW' | 'BLOCKED';
+export type KanbanPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export interface KanbanItem {
+  id: string;
+  title: string;
+  description: string | null;
+  status: KanbanStatus;
+  priority: KanbanPriority;
+  assignee: string | null;
+  labels: string | null;
+  linkedRunId: string | null;
+  linkedAgentId: string | null;
+  /**
+   * The linked run's outcome class. Enriched on the listing endpoint only
+   * (COMPLETED | FAILED | ACTIVE | CANCELLED; UNKNOWN when no run is
+   * resolvable); null/absent on payloads that predate the enrichment.
+   */
+  runOutcome?: 'COMPLETED' | 'FAILED' | 'ACTIVE' | 'CANCELLED' | 'UNKNOWN' | null;
+  // HITL fields: assigned template, last pickup error, pending ask count
+  // (null/absent from the API when 0).
+  agentTemplateId?: string | null;
+  lastError?: string | null;
+  pendingAskCount?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateKanbanItemRequest {
+  title: string;
+  description?: string;
+  priority?: KanbanPriority;
+  assignee?: string;
+  labels?: string;
+  linkedRunId?: string;
+  linkedAgentId?: string;
+  // New Task modal target column; backend defaults to TODO.
+  status?: 'TODO' | 'BACKLOG';
+  agentTemplateId?: string;
+}
+
+export interface UpdateKanbanItemRequest {
+  title?: string;
+  description?: string;
+  priority?: KanbanPriority;
+  assignee?: string;
+  labels?: string;
+}
+
+export interface TransitionKanbanRequest {
+  status: KanbanStatus;
+  comment?: string;
+  // Request-changes payload: feedback lands in the re-run prompt.
+  feedback?: string;
+  // Optional template hint applied when the transition triggers a dispatch.
+  agentTemplateId?: string;
+}
+
+// === Report Artifacts (Generative UI) ===
+export type ReportStatus = 'GENERATED' | 'AMENDED' | 'ARCHIVED' | 'INCOMPLETE' | 'MISSING';
+
+export interface ReportArtifact {
+  id: string;
+  title: string;
+  sourceRunId: string | null;
+  owner: string | null;
+  sensitivity: string | null;
+  dataScope: string | null;
+  htmlPath: string | null;
+  htmlUrl: string;
+  version: number;
+  status: ReportStatus;
+  createdAt: string;
+  amendedAt: string | null;
+  amendmentHistory: string | null;
+}
+
+export interface AmendmentEvent {
+  version: number;
+  instruction: string;
+  at: string;
+}
+
+export interface GenerateReportRequest {
+  title: string;
+  description: string;
+  dataScope?: string;
+  owner?: string;
+  sourceRunId?: string;
+  sensitivity?: string;
+}
+
+export interface AmendReportRequest {
+  instruction: string;
+}
+
+// === WebSocket Events ===
+export interface WsEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  timestamp: string;
+}
+
+// === Aria Notifications (Issue #58) ===
+export type NotificationType =
+  | 'run.completed'
+  | 'run.failed'
+  | 'approval.requested'
+  | 'approval.expired'
+  | 'knowledge.submitted'
+  | 'report.generated'
+  | 'reminder'
+  | 'monitor'
+  | 'brief'
+  | 'run.batch.completed';
+
+export interface Notification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  resourceType: string | null;
+  resourceId: string | null;
+  jobId: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface NotificationCount {
+  unreadCount: number;
+}
+
+export type ScheduleType = 'ONE_SHOT' | 'RECURRING';
+
+export type JobCategory = 'REMINDER' | 'MONITOR' | 'BRIEF';
+
+export type JobStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED';
+
+export interface ScheduledJob {
+  id: string;
+  scheduleType: ScheduleType;
+  category: JobCategory;
+  title: string;
+  scheduleExpression: string;
+  notificationTitle: string;
+  notificationBody: string | null;
+  nextFireAt: string | null;
+  lastFiredAt: string | null;
+  status: JobStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateScheduledJobRequest {
+  scheduleType: ScheduleType;
+  category: JobCategory;
+  title: string;
+  scheduleExpression: string;
+  notificationTitle: string;
+  notificationBody?: string;
+}
+
+// === LLM Provider ===
+export type LlmProviderType = 'OPENAI' | 'AZURE' | 'ANTHROPIC' | 'LOCAL';
+
+export interface LlmProvider {
+  id: string;
+  name: string;
+  type: LlmProviderType;
+  baseUrl: string;
+  apiKeyMasked: string;
+  defaultModel: string;
+  defaultMaxTokens: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface CreateLlmProviderRequest {
+  name: string;
+  type: LlmProviderType;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  maxTokens: number;
+}
+
+export interface LlmProviderTestResult {
+  success: boolean;
+  message: string;
+}
+
+// === Agent Template Presets ===
+export interface AgentTemplate {
+  id: string;
+  label: string;
+  agentType: AgentType;
+  role: string;
+  model: string;
+  provider: string;
+  /** Template core; a template from an older backend may still name a removed core. */
+  adkProvider?: AgentCore | (string & {});
+  description: string;
+}
+
+// === Adk Provider (Exchangeable Agent Provider) ===
+export interface AdkProviderInfo {
+  id: string;
+  displayName: string;
+  supportsTaskExecution: boolean;
+  isDefault: boolean;
+  /**
+   * Execution modes the backend catalog declares for this core (the same
+   * source of truth the admission policy validates against). Absent on a
+   * backend that does not declare per-core modes yet — absent is "not
+   * declared", never an invented capability.
+   */
+  executionModes?: ExecutionMode[];
+}
+
+export interface AdkProviderHealth {
+  providerId: string;
+  healthy: boolean;
+}

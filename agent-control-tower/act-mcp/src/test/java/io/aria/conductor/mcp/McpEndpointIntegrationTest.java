@@ -1,0 +1,76 @@
+package io.aria.conductor.mcp;
+
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
+import io.modelcontextprotocol.spec.McpSchema;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest(classes = McpTestBootstrap.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        "aria.mcp.enabled=true",
+        "aria.mcp.auth-mode=none"
+})
+class McpEndpointIntegrationTest {
+
+    @LocalServerPort
+    int port;
+
+    @MockitoBean io.aria.conductor.knowledge.service.WorkflowTemplateService workflowTemplateService;
+    @MockitoBean io.aria.conductor.agent.service.WorkflowService workflowService;
+    @MockitoBean io.aria.conductor.execution.mcp.McpProperties mcpProperties;
+    @MockitoBean io.aria.conductor.knowledge.service.KnowledgeService knowledgeService;
+    @MockitoBean io.aria.conductor.execution.approval.ApprovalQueryService approvalQueryService;
+    @MockitoBean io.aria.conductor.execution.approval.ApprovalGate approvalGate;
+    @MockitoBean io.aria.conductor.execution.approval.PermissionCoordinator permissionCoordinator;
+    @MockitoBean io.aria.conductor.agent.service.AgentService agentService;
+    @MockitoBean io.aria.conductor.agent.service.RunService runService;
+    @MockitoBean io.aria.conductor.agent.service.LlmProviderService llmProviderService;
+    @MockitoBean io.aria.conductor.agent.repository.AgentRepository agentRepository;
+    @MockitoBean io.aria.conductor.agent.repository.RunRepository runRepository;
+    @MockitoBean io.aria.conductor.execution.repository.ApprovalRepository approvalRepository;
+    @MockitoBean io.aria.conductor.execution.repository.PromptCallRepository promptCallRepository;
+    @MockitoBean io.aria.conductor.execution.repository.SessionTrajectoryRepository sessionTrajectoryRepository;
+    @MockitoBean io.aria.conductor.execution.kanban.KanbanService kanbanService;
+    @MockitoBean io.aria.conductor.execution.kanban.KanbanTransitionService kanbanTransitionService;
+    @MockitoBean io.aria.conductor.execution.dod.DoDService dodService;
+    @MockitoBean io.aria.conductor.execution.housekeeping.HousekeepingService housekeepingService;
+    @MockitoBean io.aria.conductor.dashboard.report.ReportService reportService;
+    @MockitoBean io.aria.conductor.knowledge.selfimprove.SkillDefinitionRepository skillDefinitionRepository;
+    @MockitoBean io.aria.conductor.aria.service.NotificationService notificationService;
+    @MockitoBean io.aria.conductor.aria.service.ScheduledJobService scheduledJobService;
+
+    @Test
+    void handshake_listsCuratedTools() {
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port).build())
+                .requestTimeout(java.time.Duration.ofSeconds(10))
+                .build()) {
+            client.initialize();
+            McpSchema.ListToolsResult tools = client.listTools();
+
+            assertThat(tools.tools())
+                    .extracting(McpSchema.Tool::name)
+                    .containsExactlyInAnyOrderElementsOf(McpToolInventory.EXPECTED_TOOL_NAMES);
+        }
+    }
+
+    @Test
+    void callTool_invocationIsAudited() {
+        try (McpSyncClient client = McpClient.sync(
+                HttpClientSseClientTransport.builder("http://localhost:" + port).build())
+                .requestTimeout(java.time.Duration.ofSeconds(10))
+                .build()) {
+            client.initialize();
+            McpSchema.CallToolResult result = client.callTool(
+                    new McpSchema.CallToolRequest("list_knowledge", java.util.Map.of()));
+
+            assertThat(result.isError()).isFalse();
+            assertThat(((McpSchema.TextContent) result.content().get(0)).text()).contains("\"ok\":true");
+        }
+    }
+}

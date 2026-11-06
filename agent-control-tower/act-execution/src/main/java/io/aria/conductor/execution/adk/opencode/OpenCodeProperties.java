@@ -1,0 +1,56 @@
+package io.aria.conductor.execution.adk.opencode;
+
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Configuration for the OpenCode agent provider ({@code opencode.*} prefix).
+ *
+ * <p>A plain {@code @ConfigurationProperties} bean with sensible defaults.
+ */
+@Slf4j
+@Data
+@Component
+@ConfigurationProperties(prefix = "opencode")
+public class OpenCodeProperties {
+
+    /** OpenSandbox server base URL (lifecycle server, not the sandbox-internal serve). */
+    private String sandboxServerUrl = "http://localhost:8080";
+
+    /** Optional API key for the OpenSandbox server (env: OPENSANDBOX_API_KEY). */
+    private String sandboxApiKey = "";
+
+    /**
+     * Total window (ms) one run-owned workspace upload may spend absorbing transient
+     * execd connectivity failures before the run fails loudly. The Windows/WSL
+     * published-port relay has left a fresh sandbox's published execd port
+     * unreachable for 20s+ (observed 2026-10-01 and repeatedly 2026-10-03 while
+     * interleaved runs succeeded immediately), which exhausted the former
+     * five-attempt (~18s) budget. Fresh installs should keep the 90s default.
+     */
+    private long sandboxUploadWindowMs = 90_000L;
+
+    /** Template image with opencode pre-installed. */
+    private String image = "aria-conductor/opencode-sandbox:1.0";
+
+    /** Port the sandbox-internal opencode serve binds to. */
+    private int port = 4096;
+
+    /**
+     * Env vars injected into every agent sandbox (e.g. LLM model credentials
+     * such as DEEPSEEK_API_KEY consumed by opencode inside the sandbox).
+     */
+    private Map<String, String> sandboxEnv = new LinkedHashMap<>();
+
+    /**
+     * Default target repository URL used as a fallback when an SDD workflow
+     * template declares {@code {repoUrl}} but the caller omits it
+     * (env: {@code SDD_REPO_URL}).
+     */
+    private String repoUrl = "";
+}

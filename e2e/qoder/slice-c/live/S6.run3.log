@@ -1,0 +1,21 @@
+# step: S6 (spec-owned scenario S6)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S6:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 0a18d96
+# started: 2026-09-18T07:49:52Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S6] credential status: configured=true patMasked=****(last4 masked) model=efficient updatedAt=2026-09-18T07:49:59.147760Z
+[S6] credential test: success=true model=efficient billable=false costNote="This probe runs no billable inference: it only verifies that a stored credential is configured, decrypts and is non-bla
+[S6] blank-PAT PUT rejected: HTTP 400 body={"timestamp":"2026-09-18T07:50:00.835540100Z","status":400,"error":"Bad Request","message":"pat is required and must not be blank"}
+[S6] after DELETE: configured=false patMasked=null
+[S6] after re-PUT: configured=true patMasked=****(last4 masked)
+  ok 1 [chromium] › e2e\qoder-adk-e2e.spec.ts:434:1 › S6: credential set/mask/remove/test via API and the Providers page (2.6s)
+
+  1 passed (7.7s)
+
+EXIT=0

@@ -1,0 +1,76 @@
+# step: S4 (spec-owned scenario S4)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S4:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 65f8bd9
+# started: 2026-09-18T05:40:33Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+  x  1 [chromium] › e2e\qoder-adk-e2e.spec.ts:357:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (95ms)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+  x  2 [chromium] › e2e\qoder-adk-e2e.spec.ts:357:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow (retry #1) (57ms)
+
+
+  1) [chromium] › e2e\qoder-adk-e2e.spec.ts:357:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow 
+
+    Error: S4 needs a short approval TTL: start the stack with APPROVALS_TIMEOUT_MS (backend key approvals.timeout-ms, AcpPermissionCoordinator.java:156). The default is 1800000ms (30 min) and cannot expire inside this spec.
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 180000
+    Received:    1800000
+
+      362 |     + ' approvals.timeout-ms, AcpPermissionCoordinator.java:156). The default is 1800000ms (30 min)'
+      363 |     + ' and cannot expire inside this spec.',
+    > 364 |   ).toBeLessThanOrEqual(180_000);
+          |     ^
+      365 |
+      366 |   const filePath = sandboxFilePath('s4');
+      367 |   const beforeContainers = listSandboxContainerIds();
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:364:5
+
+    Error Context: test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: S4 needs a short approval TTL: start the stack with APPROVALS_TIMEOUT_MS (backend key approvals.timeout-ms, AcpPermissionCoordinator.java:156). The default is 1800000ms (30 min) and cannot expire inside this spec.
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 180000
+    Received:    1800000
+
+      362 |     + ' approvals.timeout-ms, AcpPermissionCoordinator.java:156). The default is 1800000ms (30 min)'
+      363 |     + ' and cannot expire inside this spec.',
+    > 364 |   ).toBeLessThanOrEqual(180_000);
+          |     ^
+      365 |
+      366 |   const filePath = sandboxFilePath('s4');
+      367 |   const beforeContainers = listSandboxContainerIds();
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-adk-e2e.spec.ts:364:5
+
+    Error Context: test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium-retry1\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium-retry1\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-adk-e2e-S4-expiry-de-94d83--409-EXPIRED-no-stale-allow-chromium-retry1\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › e2e\qoder-adk-e2e.spec.ts:357:1 › S4: expiry delivers a reject, a late decide is a typed 409 EXPIRED, no stale allow 
+
+EXIT=1

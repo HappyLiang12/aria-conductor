@@ -1,0 +1,3 @@
+live-matrix: MISSING PREREQUISITE: OpenSandbox server not reachable at http://127.0.0.1:8090 (no 2xx /health response)
+live-matrix: MISSING PREREQUISITE: no sandbox image present in the local docker/podman image stores
+live-matrix BLOCKED by the environment before launching anything (core=qoder mode=SANDBOX)

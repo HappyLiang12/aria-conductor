@@ -1,0 +1,577 @@
+package io.aria.conductor.dashboard.listener;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.aria.conductor.common.event.AgentCreatedEvent;
+import io.aria.conductor.common.event.ApprovalDecidedEvent;
+import io.aria.conductor.common.event.ApprovalExpiredEvent;
+import io.aria.conductor.common.event.ApprovalRequestedEvent;
+import io.aria.conductor.common.event.AuditLogEvent;
+import io.aria.conductor.common.event.HousekeepingProgressEvent;
+import io.aria.conductor.common.event.KanbanItemAssigningEvent;
+import io.aria.conductor.common.event.KanbanItemCreatedEvent;
+import io.aria.conductor.common.event.KanbanItemTransitionedEvent;
+import io.aria.conductor.common.event.KnowledgeApprovedEvent;
+import io.aria.conductor.common.event.KnowledgeRetiredEvent;
+import io.aria.conductor.common.event.KnowledgeSubmittedEvent;
+import io.aria.conductor.common.event.ReportAmendedEvent;
+import io.aria.conductor.common.event.ReportGeneratedEvent;
+import io.aria.conductor.common.event.RunCompletedEvent;
+import io.aria.conductor.common.event.RunIterationEvent;
+import io.aria.conductor.common.event.RunProgressEvent;
+import io.aria.conductor.common.event.RunStartedEvent;
+import io.aria.conductor.common.event.RunWaitingForInputEvent;
+import io.aria.conductor.common.event.WorkflowAdvancedEvent;
+import io.aria.conductor.common.model.ApprovalStatus;
+import io.aria.conductor.common.model.RunProgressEventEntity;
+import io.aria.conductor.common.model.RunStatus;
+import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.common.repository.RunProgressEventRepository;
+import io.aria.conductor.dashboard.dto.WsBroadcastEvent;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+
+import java.util.List;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Verifies that {@link EventBroadcastListener} maps each domain event to a {@link WsBroadcastEvent}
+ * with the correct type and payload, published to the {@code /topic/events} STOMP destination via a
+ * mocked {@link SimpMessagingTemplate}. Also covers the truncation, null-defaulting and conditional
+ * payload branches, plus the swallow-on-failure behaviour of {@code broadcast}.
+ */
+class EventBroadcastListenerTest {
+
+    private SimpMessagingTemplate messagingTemplate;
+    private RunProgressEventRepository progressRepository;
+    private EventBroadcastListener listener;
+
+    @BeforeEach
+    void setUp() {
+        messagingTemplate = mock(SimpMessagingTemplate.class);
+        progressRepository = mock(RunProgressEventRepository.class);
+        listener = new EventBroadcastListener(messagingTemplate, progressRepository, new ObjectMapper());
+    }
+
+    private WsBroadcastEvent captureBroadcast() {
+        ArgumentCaptor<WsBroadcastEvent> captor = ArgumentCaptor.forClass(WsBroadcastEvent.class);
+        verify(messagingTemplate).convertAndSend(eq("/topic/events"), captor.capture());
+        WsBroadcastEvent event = captor.getValue();
+        assertThat(event.timestamp()).isNotBlank();
+        return event;
+    }
+
+    @Test
+    void onHousekeepingProgress_broadcastsCategoryCountsAndSeq() {
+        listener.onHousekeepingProgress(new HousekeepingProgressEvent(this, "kanban", 3, 1, 7));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("housekeeping.progress");
+        assertThat(event.data()).containsEntry("category", "kanban")
+                .containsEntry("cleared", 3)
+                .containsEntry("failed", 1)
+                .containsEntry("seq", 7L);
+    }
+
+    @Test
+    void onAgentCreated_broadcastsAgentCreated() {
+        UUID agentId = UUID.randomUUID();
+        listener.onAgentCreated(new AgentCreatedEvent(this, agentId, "Scout", "WORKER"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("agent.created");
+        assertThat(event.data()).containsEntry("agentId", agentId.toString())
+                .containsEntry("name", "Scout")
+                .containsEntry("type", "WORKER");
+    }
+
+    @Test
+    void onRunProgress_broadcastsRunProgressWithTruncationAndSeq() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.THINKING, "x".repeat(600), "bash", 7, "prt_think"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.progress");
+        assertThat(event.data())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString())
+                .containsEntry("kind", "THINKING")
+                .containsEntry("toolName", "bash")
+                .containsEntry("partId", "prt_think")
+                .containsEntry("seq", 7L);
+        // 500-char truncation convention (matches onRunIteration)
+        assertThat((String) event.data().get("content")).hasSize(503);
+    }
+
+    /**
+     * Lane H defect 1: the persisted observation is the record the REST backlog
+     * ({@code GET /runs/{id}/progress}) replays, and its column is TEXT. Cutting it to
+     * 500 chars before the insert bought nothing and destroyed replay: the live WS
+     * frame is a bounded VIEW, the stored observation is the record.
+     */
+    @Test
+    void onRunProgress_persistsTheWholeObservation_whileTheBroadcastStaysBounded() {
+        String content = "a".repeat(3200) + "TAIL-OF-THE-ANSWER";
+        listener.onRunProgress(new RunProgressEvent(this, UUID.randomUUID(), UUID.randomUUID(), 3,
+                RunProgressEvent.Kind.ANSWER, content, null, 12, "prt_full"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        String stored = captor.getValue().getContent();
+        assertThat(stored).hasSize(content.length());
+        assertThat(stored).isEqualTo(content);
+        assertThat(stored).endsWith("TAIL-OF-THE-ANSWER");
+
+        // The live frame stays bounded exactly as before: no socket frame grows.
+        assertThat((String) captureBroadcast().data().get("content")).hasSize(503).endsWith("...");
+    }
+
+    /**
+     * A multi-byte observation must be stored whole, not cut mid-codepoint. The emoji
+     * straddles the 500-char boundary on purpose: a substring cut there would split the
+     * surrogate pair, so an intact round-trip proves the stored row is the whole string.
+     */
+    @Test
+    void onRunProgress_persistsAMultiByteObservationWithoutCuttingIt() {
+        String content = "x".repeat(499) + "\uD83D\uDE00" + "tail-\u4E2D\u6587";
+        listener.onRunProgress(new RunProgressEvent(this, UUID.randomUUID(), UUID.randomUUID(), 4,
+                RunProgressEvent.Kind.THINKING, content, null, 13, "prt_utf8"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        String stored = captor.getValue().getContent();
+        assertThat(stored).isEqualTo(content);
+        assertThat(stored.codePointCount(0, stored.length()))
+                .isEqualTo(content.codePointCount(0, content.length()));
+        assertThat(stored).contains("\uD83D\uDE00");
+        assertThat(stored).endsWith("tail-\u4E2D\u6587");
+        assertThat(stored.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .hasSameSizeAs(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void onRunProgress_persistsFragment_thenBroadcasts() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        RunProgressEvent event = new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.THINKING, "thinking fragment", null, 7, "prt_1");
+
+        listener.onRunProgress(event);
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        RunProgressEventEntity saved = captor.getValue();
+        assertThat(saved.getRunId()).isEqualTo(runId);
+        assertThat(saved.getSeq()).isEqualTo(7L);
+        assertThat(saved.getKind()).isEqualTo("THINKING");
+        assertThat(saved.getContent()).isEqualTo("thinking fragment");
+        assertThat(saved.getPartId()).isEqualTo("prt_1");
+        verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
+    }
+
+    /**
+     * Issue #103: both halves of the surface must name the observed part, or the live
+     * frame and the replayed row cannot be merged into one stream line. Persisting the
+     * id (the replay source) and broadcasting it (the live view) are the same write of
+     * the same field, so they are asserted together.
+     */
+    @Test
+    void onRunProgress_persistsAndBroadcastsAnAnswerFragment() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, agentId, 2,
+                RunProgressEvent.Kind.ANSWER, "Consensus needs a majority.", null, 8, "prt_answer"));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        RunProgressEventEntity saved = captor.getValue();
+        assertThat(saved.getKind()).isEqualTo("ANSWER");
+        assertThat(saved.getContent()).isEqualTo("Consensus needs a majority.");
+        assertThat(saved.getSeq()).isEqualTo(8L);
+        assertThat(saved.getPartId()).isEqualTo("prt_answer");
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.progress");
+        assertThat(event.data())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString())
+                .containsEntry("kind", "ANSWER")
+                .containsEntry("seq", 8L)
+                .containsEntry("partId", "prt_answer")
+                .containsEntry("content", "Consensus needs a majority.");
+        assertThat(event.data()).doesNotContainKey("toolName");
+    }
+
+    /**
+     * A core that reports no part id must not become a frame carrying an invented one:
+     * the member is simply absent, which is the drawer's documented signal to fall back
+     * to seq. Same for the persisted row, which keeps part_id NULL.
+     */
+    @Test
+    void onRunProgress_withNoPartIdOmitsTheMemberAndPersistsNull() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunProgress(new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
+                RunProgressEvent.Kind.ANSWER, "no id from the core", null, 4, null));
+
+        ArgumentCaptor<RunProgressEventEntity> captor = ArgumentCaptor.forClass(RunProgressEventEntity.class);
+        verify(progressRepository).save(captor.capture());
+        assertThat(captor.getValue().getPartId()).isNull();
+
+        assertThat(captureBroadcast().data()).doesNotContainKey("partId");
+    }
+
+    @Test
+    void onRunProgress_persistFailure_doesNotBreakBroadcast() {
+        UUID runId = UUID.randomUUID();
+        RunProgressEvent event = new RunProgressEvent(this, runId, UUID.randomUUID(), 1,
+                RunProgressEvent.Kind.THINKING, "frag", null, 3, "prt_1");
+        when(progressRepository.save(any())).thenThrow(new RuntimeException("db down"));
+
+        listener.onRunProgress(event);
+
+        verify(messagingTemplate).convertAndSend(eq("/topic/events"), any(WsBroadcastEvent.class));
+    }
+
+    @Test
+    void onRunStarted_broadcastsRunStarted() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunStarted(new RunStartedEvent(this, runId, agentId));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.started");
+        assertThat(event.data()).containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString());
+    }
+
+    @Test
+    void onRunCompleted_includesStatusAndFinalOutput() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunCompleted(new RunCompletedEvent(this, runId, UUID.randomUUID(),
+                RunStatus.COMPLETED, "done"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.completed");
+        assertThat(event.data()).containsEntry("status", "COMPLETED")
+                .containsEntry("finalOutput", "done");
+    }
+
+    @Test
+    void onRunCompleted_truncatesLongFinalOutput() {
+        String longOutput = "x".repeat(600);
+        listener.onRunCompleted(new RunCompletedEvent(this, UUID.randomUUID(), UUID.randomUUID(),
+                RunStatus.COMPLETED, longOutput));
+
+        WsBroadcastEvent event = captureBroadcast();
+        String finalOutput = (String) event.data().get("finalOutput");
+        assertThat(finalOutput).hasSize(503).endsWith("...");
+    }
+
+    @Test
+    void onRunCompleted_omitsFinalOutputWhenNull() {
+        listener.onRunCompleted(new RunCompletedEvent(this, UUID.randomUUID(), UUID.randomUUID(),
+                RunStatus.FAILED));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.data()).doesNotContainKey("finalOutput");
+        assertThat(event.data()).containsEntry("status", "FAILED");
+    }
+
+    // Waiting-input (2026-10-05): the park broadcast carries the clarification
+    // question so the operator sees what is being asked without a poll.
+    @Test
+    void onRunWaitingForInput_broadcastsRunIdAndQuestion() {
+        UUID runId = UUID.randomUUID();
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, runId, "Which database?"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.waiting_input");
+        assertThat(event.data()).containsEntry("runId", runId.toString())
+                .containsEntry("question", "Which database?");
+    }
+
+    @Test
+    void onRunWaitingForInput_truncatesLongQuestion() {
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, UUID.randomUUID(), "q".repeat(600)));
+
+        WsBroadcastEvent event = captureBroadcast();
+        String question = (String) event.data().get("question");
+        assertThat(question).hasSize(503).endsWith("...");
+    }
+
+    @Test
+    void onRunWaitingForInput_nullQuestion_serializesAsNull() {
+        listener.onRunWaitingForInput(new RunWaitingForInputEvent(this, UUID.randomUUID()));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.waiting_input");
+        assertThat(event.data()).containsEntry("question", null);
+    }
+
+    @Test
+    void onApprovalRequested_broadcastsIds() {
+        UUID approvalId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        UUID toolCallId = UUID.randomUUID();
+        listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, runId, toolCallId));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.requested");
+        assertThat(event.data()).containsEntry("approvalId", approvalId.toString())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("toolCallId", toolCallId.toString())
+                .containsEntry("approvalType", "TOOL_CALL");
+    }
+
+    @Test
+    void onApprovalRequested_nullToolCallId_specReview_noNpe() {
+        UUID approvalId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        listener.onApprovalRequested(new ApprovalRequestedEvent(this, approvalId, runId, null, "SPEC_REVIEW"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.requested");
+        assertThat(event.data()).containsEntry("toolCallId", null)
+                .containsEntry("approvalType", "SPEC_REVIEW");
+    }
+
+    @Test
+    void onApprovalDecided_broadcastsDecisionName() {
+        UUID approvalId = UUID.randomUUID();
+        listener.onApprovalDecided(new ApprovalDecidedEvent(this, approvalId, ApprovalStatus.APPROVED));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.decided");
+        assertThat(event.data()).containsEntry("approvalId", approvalId.toString())
+                .containsEntry("decision", "APPROVED");
+    }
+
+    // UX-6: an expiry that used to be silent must reach the dashboard over WS so the
+    // operator learns the ask is gone, exactly like approval.requested / approval.decided.
+    @Test
+    void onApprovalExpired_broadcastsApprovalIdRunIdAndReason() {
+        UUID approvalId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        listener.onApprovalExpired(new ApprovalExpiredEvent(this, approvalId, runId, "expired before decision"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.expired");
+        assertThat(event.data()).containsEntry("approvalId", approvalId.toString())
+                .containsEntry("runId", runId.toString())
+                .containsEntry("reason", "expired before decision");
+    }
+
+    @Test
+    void onApprovalExpired_nullReason_defaultsToEmptyString() {
+        listener.onApprovalExpired(new ApprovalExpiredEvent(this, UUID.randomUUID(), UUID.randomUUID(), null));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("approval.expired");
+        assertThat(event.data()).containsEntry("reason", "");
+    }
+
+    @Test
+    void onKnowledgeSubmitted_broadcastsItem() {
+        UUID itemId = UUID.randomUUID();
+        listener.onKnowledgeSubmitted(new KnowledgeSubmittedEvent(this, itemId, "SKILL", "Recon"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("knowledge.submitted");
+        assertThat(event.data()).containsEntry("itemId", itemId.toString())
+                .containsEntry("type", "SKILL")
+                .containsEntry("name", "Recon");
+    }
+
+    @Test
+    void onAuditLog_typeIsPrefixedWithEventType() {
+        listener.onAuditLog(new AuditLogEvent(this, "agent.updated", "Agent", "a-1",
+                "UPDATE", "changed model", "conv-9"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("audit.agent.updated");
+        assertThat(event.data()).containsEntry("eventType", "agent.updated")
+                .containsEntry("resourceType", "Agent")
+                .containsEntry("resourceId", "a-1")
+                .containsEntry("action", "UPDATE")
+                .containsEntry("details", "changed model")
+                .containsEntry("conversationId", "conv-9");
+    }
+
+    @Test
+    void onAuditLog_nullDetailsAndConversation_defaultToEmptyStrings() {
+        listener.onAuditLog(new AuditLogEvent(this, "run.deleted", "Run", "r-1",
+                "DELETE", null, null));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.data()).containsEntry("details", "")
+                .containsEntry("conversationId", "");
+    }
+
+    @Test
+    void onReportGenerated_broadcastsMetadata() {
+        listener.onReportGenerated(new ReportGeneratedEvent(this, "rpt-1", "Weekly", "alice"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("report.generated");
+        assertThat(event.data()).containsEntry("reportId", "rpt-1")
+                .containsEntry("title", "Weekly")
+                .containsEntry("owner", "alice");
+    }
+
+    @Test
+    void onReportGenerated_nullOwnerDefaultsToEmpty() {
+        listener.onReportGenerated(new ReportGeneratedEvent(this, "rpt-2", "Ad-hoc", null));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.data()).containsEntry("owner", "");
+    }
+
+    @Test
+    void onReportAmended_broadcastsInstruction() {
+        listener.onReportAmended(new ReportAmendedEvent(this, "rpt-1", "add section"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("report.amended");
+        assertThat(event.data()).containsEntry("reportId", "rpt-1")
+                .containsEntry("instruction", "add section");
+    }
+
+    @Test
+    void onKnowledgeApproved_broadcastsItem() {
+        UUID id = UUID.randomUUID();
+        listener.onKnowledgeApproved(new KnowledgeApprovedEvent(this, id, "Playbook", "PROCEDURE"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("knowledge.approved");
+        assertThat(event.data()).containsEntry("knowledgeId", id.toString())
+                .containsEntry("name", "Playbook")
+                .containsEntry("type", "PROCEDURE");
+    }
+
+    @Test
+    void onKnowledgeRetired_broadcastsItem() {
+        UUID id = UUID.randomUUID();
+        listener.onKnowledgeRetired(new KnowledgeRetiredEvent(this, id, "Old Skill"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("knowledge.retired");
+        assertThat(event.data()).containsEntry("knowledgeId", id.toString())
+                .containsEntry("name", "Old Skill");
+    }
+
+    @Test
+    void onKanbanItemCreated_broadcastsItem() {
+        listener.onKanbanItemCreated(new KanbanItemCreatedEvent(this, "k-1", "Fix bug", "HIGH"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("kanban.created");
+        assertThat(event.data()).containsEntry("itemId", "k-1")
+                .containsEntry("title", "Fix bug")
+                .containsEntry("priority", "HIGH");
+    }
+
+    @Test
+    void onKanbanItemTransitioned_broadcastsTransition() {
+        listener.onKanbanItemTransitioned(new KanbanItemTransitionedEvent(this, "k-1", "TODO", "DOING"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("kanban.transitioned");
+        assertThat(event.data()).containsEntry("itemId", "k-1")
+                .containsEntry("fromStatus", "TODO")
+                .containsEntry("toStatus", "DOING");
+    }
+
+    @Test
+    void onKanbanItemAssigning_broadcastsItemId() {
+        listener.onKanbanItemAssigning(new KanbanItemAssigningEvent(this, "k-1"));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("kanban.assigning");
+        assertThat(event.data()).containsEntry("itemId", "k-1");
+    }
+
+    @Test
+    void onWorkflowAdvanced_includesNextStepWhenNonNegative() {
+        UUID id = UUID.randomUUID();
+        listener.onWorkflowAdvanced(new WorkflowAdvancedEvent(this, id, "Pipeline", 1, 2,
+                WorkflowChain.Status.RUNNING));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("workflow.advanced");
+        assertThat(event.data()).containsEntry("workflowId", id.toString())
+                .containsEntry("workflowName", "Pipeline")
+                .containsEntry("completedStep", 1)
+                .containsEntry("chainStatus", "RUNNING")
+                .containsEntry("nextStep", 2);
+    }
+
+    @Test
+    void onWorkflowAdvanced_omitsNextStepWhenNegative() {
+        listener.onWorkflowAdvanced(new WorkflowAdvancedEvent(this, UUID.randomUUID(), "Pipeline", 3, -1,
+                WorkflowChain.Status.COMPLETED));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.data()).doesNotContainKey("nextStep");
+        assertThat(event.data()).containsEntry("chainStatus", "COMPLETED");
+    }
+
+    @Test
+    void onRunIteration_minimalEvent_containsCoreFieldsOnly() {
+        UUID runId = UUID.randomUUID();
+        UUID agentId = UUID.randomUUID();
+        listener.onRunIteration(new RunIterationEvent(this, runId, agentId, 1, 10));
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat(event.type()).isEqualTo("run.iteration");
+        assertThat(event.data()).containsEntry("runId", runId.toString())
+                .containsEntry("agentId", agentId.toString())
+                .containsEntry("iteration", 1)
+                .containsEntry("maxIterations", 10);
+        assertThat(event.data()).doesNotContainKeys("thinking", "toolCalls", "skills");
+    }
+
+    @Test
+    void onRunIteration_truncatesThinkingAndIncludesToolCallsAndSkills() {
+        String longThinking = "t".repeat(600);
+        RunIterationEvent.ToolCallDetail detail =
+                new RunIterationEvent.ToolCallDetail("web_search", "a".repeat(600), "r".repeat(600));
+        RunIterationEvent iterationEvent = new RunIterationEvent(this, UUID.randomUUID(), UUID.randomUUID(),
+                2, 5, longThinking, List.of(detail), List.of("research"));
+
+        listener.onRunIteration(iterationEvent);
+
+        WsBroadcastEvent event = captureBroadcast();
+        assertThat((String) event.data().get("thinking")).hasSize(503).endsWith("...");
+        assertThat(event.data()).containsEntry("skills", List.of("research"));
+
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> toolCalls =
+                (List<java.util.Map<String, Object>>) event.data().get("toolCalls");
+        assertThat(toolCalls).hasSize(1);
+        assertThat(toolCalls.get(0)).containsEntry("name", "web_search");
+        assertThat((String) toolCalls.get(0).get("arguments")).hasSize(503).endsWith("...");
+        assertThat((String) toolCalls.get(0).get("result")).hasSize(503).endsWith("...");
+    }
+
+    @Test
+    void broadcast_swallowsMessagingFailure() {
+        doThrow(new RuntimeException("broker down"))
+                .when(messagingTemplate).convertAndSend(eq("/topic/events"), (Object) org.mockito.ArgumentMatchers.any());
+
+        assertThatCode(() -> listener.onRunStarted(
+                new RunStartedEvent(this, UUID.randomUUID(), UUID.randomUUID())))
+                .doesNotThrowAnyException();
+    }
+}

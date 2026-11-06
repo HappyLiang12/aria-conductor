@@ -1,0 +1,19 @@
+{
+  "name": "@aria-conductor/qoder-acp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run-bound, mode-neutral Qoder ACP bridge: drives a pinned Qoder CLI child over newline-delimited JSON-RPC and exposes governed HTTP routes to the owning backend.",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

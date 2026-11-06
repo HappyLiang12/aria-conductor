@@ -1,0 +1,19 @@
+# step: preflight (stack health + qoder credential + live zero-credit model pin)
+# command: curl GET http://localhost:8097/actuator/health + GET http://localhost:5273 + GET http://localhost:8090/health + GET/PUT http://localhost:8097/api/v1/adk/providers/qoder/credential (masked; PAT piped via stdin)
+# cwd: /d/project/aria-conductor
+# git: 06caaf0
+# started: 2026-09-18T14:03:59Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
++ GET http://localhost:8097/actuator/health (expect '"status":"UP"')
+  backend health: HTTP 200 body={"status":"UP"}
++ GET http://localhost:5273 (dashboard reachable)
+  dashboard: HTTP 200
++ GET http://localhost:8090/health (OpenSandbox server reachable)
+  opensandbox: HTTP 200 body={"status":"healthy"}
++ GET http://localhost:8097/api/v1/adk/providers/qoder/credential (masked status)
+  credential status: HTTP 200 body={"providerId":"qoder","configured":true,"patMasked":"****f1e1","updatedAt":"2026-09-18T13:10:39.283490Z","model":"efficient"}
+  live configured model: QODER_MODEL='efficient'
++ live model pin check: 'efficient' in {efficient, lite} (plan Global Constraint)
+
+EXIT=0

@@ -1,0 +1,1101 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-22T16:52:03.168Z",
+  "rows": [
+    {
+      "core": "opencode",
+      "mode": "HOST",
+      "status": "blocked",
+      "checks": {
+        "pauseResume": false,
+        "handshake": false,
+        "managedAuth": false,
+        "isolatedConfig": false,
+        "allowOnce": false,
+        "denyWithoutWrite": false,
+        "cancel": false,
+        "writersStopped": false,
+        "stableExport": false
+      },
+      "environment": {
+        "os": "win32 10.0.19045",
+        "platform": "win32",
+        "arch": "x64",
+        "node": "v24.14.1"
+      },
+      "probe": {
+        "file": "e2e/agent-core/probe-native.mjs",
+        "startedAt": "2026-09-22T16:51:50.407Z",
+        "workspace": "<WORKSPACE>",
+        "finishedAt": "2026-09-22T16:52:03.153Z"
+      },
+      "runtime": {
+        "core": "opencode",
+        "binary": "C:\\Users\\<USER>\\AppData\\Roaming\\npm\\opencode.cmd",
+        "version": "1.14.31",
+        "versionSource": "opencode --version",
+        "licenseSource": "npm package opencode-ai (MIT) resolved from the global npm root",
+        "credentialSource": "not configured for this environment",
+        "invocation": "C:\\Program Files\\nodejs\\node.exe C:\\Users\\<USER>\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode",
+        "binaryNote": "npm .cmd shim unwrapped to the package entry (Node cannot spawn .cmd directly on Windows)"
+      },
+      "evidence": {
+        "handshake": {
+          "observed": false,
+          "health": {
+            "healthy": true,
+            "version": "1.14.31"
+          },
+          "sessionCreated": true,
+          "reason": "no model-bound response (HTTP 200, provider error {\"name\":\"APIError\",\"data\":{\"message\":\"Error from provider (Console): OpenCode 1.18.0 or newer is required to use the free tier\",\"statusCode\":426,\"isRetryable\":false,\"responseHeaders\":{\"cf-placement\":\"remote-ORD\",\"cf-ray\")"
+        },
+        "managedAuth": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset; the operator personal provider credential is deliberately excluded by run-owned XDG roots)"
+        },
+        "allowOnce": {
+          "observed": false,
+          "reason": "no model run is possible without a credential; nothing to observe (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset; the operator personal provider credential is deliberately excluded by run-owned XDG roots))"
+        },
+        "denyWithoutWrite": {
+          "observed": false,
+          "reason": "no model run is possible without a credential; nothing to observe (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset; the operator personal provider credential is deliberately excluded by run-owned XDG roots))"
+        },
+        "cancel": {
+          "observed": false,
+          "reason": "no model run is possible without a credential; nothing to observe (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset; the operator personal provider credential is deliberately excluded by run-owned XDG roots))"
+        },
+        "isolatedConfig": {
+          "observed": false,
+          "reason": "OpenCode host configuration isolation (run-owned XDG roots) was applied but hostile-project control was not exercised (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset))"
+        },
+        "pauseResume": {
+          "observed": false,
+          "reason": "no model run and no verified OpenCode process-control workflow (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset))"
+        },
+        "writersStopped": {
+          "observed": false,
+          "reason": "no writer scenario can run without a model result (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset))"
+        },
+        "stableExport": {
+          "observed": false,
+          "reason": "no writer scenario can run without a model result (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset))"
+        }
+      },
+      "observations": {
+        "sandboxPrerequisites": {
+          "sandboxEndpoint": "http://127.0.0.1:8090",
+          "sandboxServerReachable": false,
+          "sandboxServerProbe": {
+            "reachable": false,
+            "reason": "ECONNREFUSED"
+          },
+          "sandboxHealth": null,
+          "requestedImage": null,
+          "containerImages": {
+            "docker": {
+              "exitCode": 1,
+              "imageCount": 0,
+              "sandboxLike": []
+            },
+            "podman": {
+              "exitCode": 125,
+              "imageCount": 0,
+              "sandboxLike": []
+            }
+          }
+        },
+        "openCodeVersion": "1.14.31",
+        "openCodeHostStartup": {
+          "healthHealthy": true,
+          "healthVersion": "1.14.31",
+          "sessionCreated": true,
+          "runOwnedCredentialCount": 0
+        }
+      },
+      "limitations": [
+        "OpenCode Host startup, /global/health and session creation were observed; the combination remains BLOCKED for every behavior that needs a model run"
+      ],
+      "blockedPrerequisite": "no model run and no verified OpenCode process-control workflow (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset)) | not verified in this environment | no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset; the operator personal provider credential is deliberately excluded by run-owned XDG roots) | OpenCode host configuration isolation (run-owned XDG roots) was applied but hostile-project control was not exercised (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset)) | no model run is possible without a credential; nothing to observe (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset; the operator personal provider credential is deliberately excluded by run-owned XDG roots)) | no writer scenario can run without a model result (no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset))",
+      "artifacts": [
+        "e2e/agent-core/fixtures/opencode-host-cli-1.14.31-protocol.jsonl",
+        "e2e/agent-core/fixtures/opencode-host-cli-1.14.31-events.json"
+      ]
+    },
+    {
+      "core": "opencode",
+      "mode": "SANDBOX",
+      "status": "blocked",
+      "checks": {
+        "pauseResume": false,
+        "handshake": false,
+        "managedAuth": false,
+        "isolatedConfig": false,
+        "allowOnce": false,
+        "denyWithoutWrite": false,
+        "cancel": false,
+        "writersStopped": false,
+        "stableExport": false
+      },
+      "environment": {
+        "os": "win32 10.0.19045",
+        "platform": "win32",
+        "arch": "x64",
+        "node": "v24.14.1"
+      },
+      "probe": {
+        "file": "e2e/agent-core/probe-native.mjs",
+        "startedAt": "2026-09-22T16:08:08.109Z",
+        "workspace": "<WORKSPACE>",
+        "finishedAt": "2026-09-22T16:08:09.680Z"
+      },
+      "runtime": {
+        "core": "opencode",
+        "binary": "not launched (sandbox mode)",
+        "version": null,
+        "licenseSource": "npm package opencode-ai (MIT); sandbox image contents not verified",
+        "credentialSource": "not configured for this environment"
+      },
+      "evidence": {
+        "pauseResume": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "handshake": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "managedAuth": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "isolatedConfig": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "allowOnce": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "denyWithoutWrite": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "cancel": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "writersStopped": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "stableExport": {
+          "observed": false,
+          "reason": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        }
+      },
+      "observations": {
+        "sandboxPrerequisites": {
+          "sandboxEndpoint": "http://127.0.0.1:8090",
+          "sandboxServerReachable": false,
+          "sandboxServerProbe": {
+            "reachable": false,
+            "reason": "ECONNREFUSED"
+          },
+          "sandboxHealth": null,
+          "requestedImage": null,
+          "containerImages": {
+            "docker": {
+              "exitCode": 1,
+              "imageCount": 0,
+              "sandboxLike": []
+            },
+            "podman": {
+              "exitCode": 125,
+              "imageCount": 0,
+              "sandboxLike": []
+            }
+          }
+        }
+      },
+      "limitations": [],
+      "blockedPrerequisite": "no run-owned model-provider credential in this environment (DEEPSEEK_API_KEY/LLM key unset); OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman",
+      "artifacts": [
+        "e2e/agent-core/fixtures/opencode-sandbox-cli-unknown-protocol.jsonl",
+        "e2e/agent-core/fixtures/opencode-sandbox-cli-unknown-events.json"
+      ]
+    },
+    {
+      "core": "qoder",
+      "mode": "HOST",
+      "status": "verified",
+      "checks": {
+        "pauseResume": true,
+        "handshake": true,
+        "managedAuth": true,
+        "isolatedConfig": true,
+        "allowOnce": true,
+        "denyWithoutWrite": true,
+        "cancel": true,
+        "writersStopped": true,
+        "stableExport": true
+      },
+      "environment": {
+        "os": "win32 10.0.19045",
+        "platform": "win32",
+        "arch": "x64",
+        "node": "v24.14.1"
+      },
+      "probe": {
+        "file": "e2e/agent-core/probe-native.mjs",
+        "startedAt": "2026-09-22T16:44:31.701Z",
+        "workspace": "<WORKSPACE>",
+        "finishedAt": "2026-09-22T16:47:21.007Z"
+      },
+      "runtime": {
+        "core": "qoder",
+        "binary": "C:\\Users\\<USER>\\.qoder\\bin\\qodercli\\qodercli.exe",
+        "sha256": "8d0c537f26549d57e6eda67a3b79f08b4a40125e2033f645e6dc60fde0ed9c58",
+        "version": "1.1.61",
+        "versionSource": "qodercli --version",
+        "licenseSource": "vendor CLI installed by the operator (see progress ledger); no local license file observed",
+        "credentialSource": "<CREDENTIAL-FILE>"
+      },
+      "evidence": {
+        "handshake": {
+          "observed": true,
+          "protocol": {
+            "transport": "newline-delimited JSON-RPC over stdio (--acp)",
+            "argv": [
+              "--acp",
+              "--config-dir",
+              "<RUN>\\config",
+              "--setting-sources",
+              "project",
+              "--strict-mcp-config",
+              "--mcp-config",
+              "{\"mcpServers\":{}}"
+            ],
+            "initialize": {
+              "protocolVersion": 1,
+              "authMethods": [
+                {
+                  "id": "qodercli-login",
+                  "name": "Use qodercli login",
+                  "description": "Use your existing qodercli login for this agent. If needed, sign in from qodercli first."
+                }
+              ],
+              "agentInfo": {
+                "name": "qoder-cli",
+                "title": "Qoder CLI",
+                "version": "1.1.61"
+              },
+              "agentCapabilities": {
+                "_meta": {
+                  "qoder": {
+                    "promptQueueing": true
+                  }
+                },
+                "loadSession": true,
+                "sessionCapabilities": {
+                  "additionalDirectories": {},
+                  "close": {},
+                  "delete": {},
+                  "fork": {},
+                  "list": {},
+                  "resume": {}
+                },
+                "promptCapabilities": {
+                  "image": true,
+                  "embeddedContext": true
+                },
+                "mcpCapabilities": {
+                  "http": true,
+                  "sse": true
+                }
+              }
+            },
+            "sessionNew": {
+              "sessionId": "<SESSION_ID>",
+              "modes": "default",
+              "models": "efficient",
+              "availableModels": [
+                "efficient",
+                "qmodel_38max",
+                "qfmodel"
+              ]
+            },
+            "setModel": {},
+            "prompt": {
+              "stopReason": "end_turn",
+              "error": null,
+              "acknowledgedModel": "efficient"
+            },
+            "authMethods": [
+              {
+                "id": "qodercli-login",
+                "name": "Use qodercli login",
+                "description": "Use your existing qodercli login for this agent. If needed, sign in from qodercli first."
+              }
+            ],
+            "agentCapabilities": {
+              "_meta": {
+                "qoder": {
+                  "promptQueueing": true
+                }
+              },
+              "loadSession": true,
+              "sessionCapabilities": {
+                "additionalDirectories": {},
+                "close": {},
+                "delete": {},
+                "fork": {},
+                "list": {},
+                "resume": {}
+              },
+              "promptCapabilities": {
+                "image": true,
+                "embeddedContext": true
+              },
+              "mcpCapabilities": {
+                "http": true,
+                "sse": true
+              }
+            }
+          },
+          "pid": 9332
+        },
+        "managedAuth": {
+          "observed": true,
+          "injectedEnvironmentVariable": "QODER_PERSONAL_ACCESS_TOKEN",
+          "credentialInjectedFromFileOnly": true,
+          "credentialValueRedacted": true,
+          "scrubbedEnvKeys": [
+            "QODERCLI_RUNTIME_PACKAGING",
+            "QODER_AGENT_SDK_ENTRYPOINT",
+            "QODER_AGENT_SDK_VERSION",
+            "QODER_SDK_AUTH_PAYLOAD_FILE",
+            "QODER_SESSION_TYPE",
+            "QODER_WORKER_CWD",
+            "QODER_WORKER_RUNTIME_ASSET_ROOT"
+          ],
+          "unauthenticatedSessionError": "{\"code\":-32000,\"message\":\"Authentication required: Authentication is required.\"}",
+          "authenticatedArmObserved": true
+        },
+        "isolatedConfig": {
+          "observed": true,
+          "scrubbedEnvKeys": [
+            "QODERCLI_RUNTIME_PACKAGING",
+            "QODER_AGENT_SDK_ENTRYPOINT",
+            "QODER_AGENT_SDK_VERSION",
+            "QODER_SDK_AUTH_PAYLOAD_FILE",
+            "QODER_SESSION_TYPE",
+            "QODER_WORKER_CWD",
+            "QODER_WORKER_RUNTIME_ASSET_ROOT"
+          ],
+          "runOwnedHome": "<RUN>/home",
+          "runOwnedConfigDir": "<RUN>/config",
+          "configDirEntriesBeforeRun": [
+            ".auth",
+            ".bin",
+            ".cache",
+            ".last-cleanup",
+            ".models",
+            "bin",
+            "installation_id",
+            "logs",
+            "plugins",
+            "projects",
+            "security-resources",
+            "shell-snapshots",
+            "tmp"
+          ],
+          "settingSources": "project",
+          "strictMcpConfig": true,
+          "hostileProjectMcpFile": ".mcp.json (hostile-marker -> 127.0.0.1 marker server)",
+          "hostileLoadsWithoutStrict": true,
+          "hostileLoadsWithStrict": false,
+          "hostileMarkerConnectionsFromMcpList": 3,
+          "hostileMarkerConnectionsDuringAcpSession": 0,
+          "sessionCreatedUnderControlledInvocation": true,
+          "ambientUserAuthInherited": false
+        },
+        "allowOnce": {
+          "observed": true,
+          "offeredPermissionOptions": [
+            [
+              {
+                "optionId": "proceed_always",
+                "name": "Allow for this session",
+                "kind": "allow_always"
+              },
+              {
+                "optionId": "proceed_once",
+                "name": "Allow",
+                "kind": "allow_once"
+              },
+              {
+                "optionId": "cancel",
+                "name": "Reject",
+                "kind": "reject_once"
+              }
+            ]
+          ],
+          "chosenOption": {
+            "optionId": "proceed_once",
+            "name": "Allow",
+            "kind": "allow_once"
+          },
+          "promptStopReason": "end_turn",
+          "promptError": null,
+          "modeUpdates": [],
+          "target": "<WORKSPACE>/probe-allow-once.txt",
+          "fileExistsAfterPrompt": true,
+          "fileSha256": "1ef5d322caac30b2b8495476505413586d51133db0f1f73b4efb4eabe17fd77c",
+          "expectedContentSha256": "1ef5d322caac30b2b8495476505413586d51133db0f1f73b4efb4eabe17fd77c"
+        },
+        "denyWithoutWrite": {
+          "observed": true,
+          "offeredPermissionOptions": [
+            [
+              {
+                "optionId": "proceed_always",
+                "name": "Allow for this session",
+                "kind": "allow_always"
+              },
+              {
+                "optionId": "proceed_once",
+                "name": "Allow",
+                "kind": "allow_once"
+              },
+              {
+                "optionId": "cancel",
+                "name": "Reject",
+                "kind": "reject_once"
+              }
+            ],
+            [
+              {
+                "optionId": "proceed_always_and_save",
+                "name": "Always allow \"printf\"",
+                "kind": "allow_always"
+              },
+              {
+                "optionId": "proceed_once",
+                "name": "Allow",
+                "kind": "allow_once"
+              },
+              {
+                "optionId": "cancel",
+                "name": "Reject",
+                "kind": "reject_once"
+              }
+            ]
+          ],
+          "chosenOption": {
+            "optionId": "cancel",
+            "name": "Reject",
+            "kind": "reject_once"
+          },
+          "promptStopReason": "end_turn",
+          "promptError": null,
+          "modeUpdates": [],
+          "target": "<WORKSPACE>/probe-deny.txt",
+          "fileExistsAfterPrompt": false,
+          "fileSha256": null,
+          "expectedContentSha256": "908873874c892362ebba5b09ee196828b28a9ed39ea8d0274f7c9f413906578e"
+        },
+        "cancel": {
+          "observed": true,
+          "arms": {
+            "beforeSession": {
+              "sent": "session/cancel notification carrying an uncreated session id while a live session was open",
+              "liveSessionOpen": true,
+              "liveSessionStartupUpdate": "available_commands_update",
+              "observedResponse": null,
+              "observedResponseNote": "observed behaviour: the core answered the unknown-session cancel with silence (no response, error or update within 5000 ms)",
+              "processSurvived": true,
+              "workspaceSnapshotSha256": {
+                "before": "5ea71e946389e6a07588ba8cacbad5dd606e6a2272a615b8ffbebc7289296b85",
+                "after": "5ea71e946389e6a07588ba8cacbad5dd606e6a2272a615b8ffbebc7289296b85"
+              },
+              "workspaceBytesUnchanged": true,
+              "sessionUpdatesDuringCancel": 0,
+              "pass": true
+            },
+            "pendingApproval": {
+              "permissionObserved": true,
+              "cancelMethod": "session/cancel notification while a session/request_permission was unanswered",
+              "promptStopReason": "cancelled",
+              "promptError": null,
+              "fileExists": false,
+              "pass": true,
+              "note": "core reported stopReason=cancelled"
+            },
+            "inFlightTool": {
+              "toolCallObserved": true,
+              "cancelMethod": "session/cancel notification immediately after the first tool_call update",
+              "promptStopReason": "cancelled",
+              "promptError": null,
+              "fileExists": false,
+              "pass": true,
+              "note": "cancel without granting requires stopReason=cancelled and no probe-cancel-inflight.txt on disk"
+            }
+          },
+          "cancelMethod": "session/cancel notification (ACP), confirmed by prompt terminal state and filesystem checks"
+        },
+        "pauseResume": {
+          "observed": true,
+          "appliedTo": "live core process tree (qodercli + descendants) during an in-flight tool call",
+          "technique": "identity-validated descendant-tree enumeration (pid + creation time) + NtSuspendProcess/NtResumeProcess",
+          "ownedRecords": [
+            "17776@20260923004625721",
+            "24472@20260923004625727",
+            "1944@20260923004635960",
+            "1280@20260923004635970",
+            "17296@20260923004635974",
+            "24428@20260923004636629",
+            "11608@20260923004636670",
+            "9884@20260923004636725"
+          ],
+          "suspend": {
+            "ok": true,
+            "results": [
+              "17776@20260923004625721:ok",
+              "24472@20260923004625727:ok",
+              "1944@20260923004635960:ok",
+              "1280@20260923004635970:ok",
+              "17296@20260923004635974:ok",
+              "24428@20260923004636629:ok",
+              "11608@20260923004636670:ok",
+              "9884@20260923004636725:ok"
+            ]
+          },
+          "sweep": {
+            "ok": true,
+            "results": [
+              "17776@20260923004625721:ok",
+              "24472@20260923004625727:ok",
+              "1944@20260923004635960:ok",
+              "1280@20260923004635970:ok",
+              "17296@20260923004635974:ok",
+              "24428@20260923004636629:ok",
+              "11608@20260923004636670:ok",
+              "9884@20260923004636725:ok"
+            ]
+          },
+          "resume": {
+            "ok": true,
+            "results": [
+              "17776@20260923004625721:ok",
+              "24472@20260923004625727:ok",
+              "1944@20260923004635960:ok",
+              "1280@20260923004635970:ok",
+              "17296@20260923004635974:ok",
+              "24428@20260923004636629:ok",
+              "11608@20260923004636670:ok",
+              "9884@20260923004636725:ok"
+            ]
+          },
+          "resumeSweep": {
+            "ok": true,
+            "results": [
+              "17776@20260923004625721:ok",
+              "24472@20260923004625727:ok",
+              "1944@20260923004635960:ok",
+              "1280@20260923004635970:ok",
+              "17296@20260923004635974:ok",
+              "24428@20260923004636629:ok",
+              "11608@20260923004636670:ok",
+              "9884@20260923004636725:ok"
+            ]
+          },
+          "byteSamples": {
+            "beforeSuspend": 57,
+            "duringSuspendA": 133,
+            "duringSuspendB": 133,
+            "afterResume": 323
+          },
+          "frozenWhileSuspended": true,
+          "grewAfterResume": true,
+          "nativePauseRpcUsed": false,
+          "remoteInferenceLimit": "process suspension freezes local execution; remote inference already billed server-side is not recalled",
+          "raceLimit": "a child spawned between enumeration and suspension is caught by the re-sweep; a process that re-parents away from the enumerated tree would not be",
+          "pass": true
+        },
+        "writersStopped": {
+          "observed": true,
+          "premiseObserved": "writer kept writing after the prompt-completion event",
+          "preCompletionBytes": 2223,
+          "postCompletionBytes": 2451,
+          "technique": "identity-validated owned records (pid + creation time) terminated via TerminateProcess (8 record(s)) + deepest-first descendant-tree TerminateProcess sweep (0 process(es) still present) + re-enumerated live-tree sweep via TerminateProcess (2 record(s))",
+          "techniqueBasis": "every listed step returned a parseable supervisor response; steps that did not run appear in the run limitations instead",
+          "jobObjectBackstop": {
+            "executedBy": "TerminateJobObject on the run-owned job (control.kill), after the byte-freeze samples were taken",
+            "jobMembersDuringWriter": [
+              24472
+            ],
+            "liveCoreWasJobMember": false
+          },
+          "ownedRecords": [
+            "17776@20260923004625721",
+            "24472@20260923004625727",
+            "1944@20260923004635960",
+            "1280@20260923004635970",
+            "17296@20260923004635974",
+            "24428@20260923004636629",
+            "11608@20260923004636670",
+            "9884@20260923004636725"
+          ],
+          "killOwned": {
+            "ok": true,
+            "results": [
+              "17776@20260923004625721:ok",
+              "24472@20260923004625727:gone",
+              "1944@20260923004635960:gone",
+              "1280@20260923004635970:gone",
+              "17296@20260923004635974:gone",
+              "24428@20260923004636629:gone",
+              "11608@20260923004636670:gone",
+              "9884@20260923004636725:ok"
+            ]
+          },
+          "killSweep": {
+            "ok": true,
+            "terminated": [],
+            "resweep": []
+          },
+          "killRecaptured": {
+            "ok": true,
+            "results": [
+              "17776@20260923004625721:gone",
+              "24472@20260923004625727:gone"
+            ]
+          },
+          "remainingTree": [],
+          "trackedProcesses": [
+            17776,
+            24472,
+            1944,
+            1280,
+            17296,
+            24428,
+            11608,
+            9884
+          ],
+          "liveSurvivors": [],
+          "byteSamples": {
+            "afterKill": 2527,
+            "later": 2527
+          },
+          "bytesFrozenAfterTermination": true,
+          "pass": true
+        },
+        "stableExport": {
+          "observed": true,
+          "snapshotsTakenAfterWriterTermination": 2,
+          "identical": true,
+          "entryCount": 5,
+          "entries": [
+            {
+              "path": ".mcp.json",
+              "size": 119,
+              "sha256": "c4f6e800f3579b8f3a4a9ca879d86eaf7ae6de1c5cedead709008bdfc1328b31"
+            },
+            {
+              "path": "probe-allow-once.txt",
+              "size": 16,
+              "sha256": "1ef5d322caac30b2b8495476505413586d51133db0f1f73b4efb4eabe17fd77c"
+            },
+            {
+              "path": "spawn-writer.mjs",
+              "size": 508,
+              "sha256": "0e212d6c95ee89d8e609a94e72330ec099c792c91a2337a367f409c0169dd92c"
+            },
+            {
+              "path": "ticks.log",
+              "size": 2527,
+              "sha256": "2f42d36baae7355f8fa20e5818eeb502ee4fd3e28b68b14195bcc916478af18f"
+            },
+            {
+              "path": "writer.mjs",
+              "size": 303,
+              "sha256": "27d0f0b801a33922a8822ef5e5e1b015851af62f886487eff06425b9f282402f"
+            }
+          ],
+          "exportFile": "<FIXTURES>/qoder-host-stable-export-1.1.61.json"
+        }
+      },
+      "observations": {
+        "profileSeed": {
+          "source": "<PROFILE-SEED>",
+          "purpose": "explicit input copied into the run-owned HOME (pinned model catalog availability)"
+        },
+        "qoderCliVersion": "1.1.61",
+        "qoderCliSha256": "8d0c537f26549d57e6eda67a3b79f08b4a40125e2033f645e6dc60fde0ed9c58",
+        "scrubbedEnvKeys": [
+          "QODERCLI_RUNTIME_PACKAGING",
+          "QODER_AGENT_SDK_ENTRYPOINT",
+          "QODER_AGENT_SDK_VERSION",
+          "QODER_SDK_AUTH_PAYLOAD_FILE",
+          "QODER_SESSION_TYPE",
+          "QODER_WORKER_CWD",
+          "QODER_WORKER_RUNTIME_ASSET_ROOT"
+        ],
+        "controlTechnique": {
+          "jobObjectMembership": {
+            "verifiedOnControlledTree": true,
+            "evidence": {
+              "label": "job-object-membership",
+              "pid": 15428,
+              "prepare": {
+                "ok": true,
+                "results": [
+                  "15428:ok"
+                ]
+              },
+              "suspend": {
+                "ok": true,
+                "results": [
+                  "ok"
+                ]
+              },
+              "resume": {
+                "ok": true,
+                "results": [
+                  "ok"
+                ]
+              },
+              "byteSamples": {
+                "beforeSuspend": 133,
+                "duringSuspendA": 152,
+                "duringSuspendB": 152,
+                "afterResume": 304
+              },
+              "frozenWhileSuspended": true,
+              "grewAfterResume": true,
+              "pass": true
+            }
+          },
+          "descendantTreeEnumeration": {
+            "verifiedOnControlledTree": true,
+            "evidence": {
+              "label": "descendant-tree-enumeration",
+              "pid": 9920,
+              "prepare": {
+                "ok": true,
+                "pids": [
+                  9920
+                ]
+              },
+              "suspend": {
+                "first": {
+                  "ok": true,
+                  "results": [
+                    "9920:ok"
+                  ]
+                },
+                "second": {
+                  "ok": true,
+                  "results": [
+                    "9920:ok"
+                  ]
+                }
+              },
+              "resume": {
+                "first": {
+                  "ok": true,
+                  "results": [
+                    "9920:ok"
+                  ]
+                },
+                "second": {
+                  "ok": true,
+                  "results": [
+                    "9920:ok"
+                  ]
+                }
+              },
+              "byteSamples": {
+                "beforeSuspend": 152,
+                "duringSuspendA": 152,
+                "duringSuspendB": 152,
+                "afterResume": 304
+              },
+              "frozenWhileSuspended": true,
+              "grewAfterResume": true,
+              "pass": true,
+              "kill": {
+                "ok": true,
+                "terminated": [
+                  "9920:ok"
+                ],
+                "resweep": []
+              },
+              "killByteSamples": {
+                "afterKill": 304,
+                "later": 304
+              },
+              "frozenAfterKill": true,
+              "treeAfterKill": []
+            }
+          },
+          "techniqueSelectedForCore": "descendant-tree enumeration (suspend/resume/terminate)",
+          "jobObjectSelectionBlockedBy": "the job-object assignment did not take effect on the live core process 17776 (every AssignProcessToJobObject attempt was refused: [{\"attempt\":1,\"result\":\"assign_failed:5\"},{\"attempt\":2,\"result\":\"assign_failed:5\"},{\"attempt\":3,\"result\":\"assign_failed:5\"},{\"attempt\":4,\"result\":\"assign_failed:5\"},{\"attempt\":5,\"result\":\"assign_failed:5\"},{\"attempt\":6,\"result\":\"assign_failed:5\"},{\"attempt\":7,\"result\":\"assign_failed:5\"},{\"attempt\":8,\"result\":\"assign_failed:5\"},{\"attempt\":9,\"result\":\"assign_failed:5\"},{\"attempt\":10,\"result\":\"assign_failed:5\"}]); job-object suspension/termination is therefore unavailable for the live core and the live probe relies on identity-validated descendant-tree enumeration, which only reaches already-created descendants"
+        },
+        "jobAssignment": {
+          "assign": {
+            "rootAssigned": false,
+            "membershipBefore": {
+              "harness": {
+                "ok": true,
+                "status": "in_job"
+              },
+              "target": {
+                "ok": true,
+                "status": "in_job"
+              }
+            },
+            "attempts": [
+              {
+                "attempt": 1,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 2,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 3,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 4,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 5,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 6,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 7,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 8,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 9,
+                "result": "assign_failed:5"
+              },
+              {
+                "attempt": 10,
+                "result": "assign_failed:5"
+              }
+            ],
+            "tree": {
+              "ok": true,
+              "results": [
+                "17776:assign_failed:5",
+                "24472:ok"
+              ]
+            },
+            "pids": [
+              15428,
+              24472
+            ],
+            "rootInJob": false
+          },
+          "jobPids": {
+            "ok": true,
+            "pids": [
+              15428,
+              24472
+            ]
+          }
+        },
+        "ownedTreeCapture": {
+          "inFlightToolCall": true,
+          "records": [
+            "17776@20260923004625721",
+            "24472@20260923004625727",
+            "1944@20260923004635960",
+            "1280@20260923004635970",
+            "17296@20260923004635974",
+            "24428@20260923004636629",
+            "11608@20260923004636670",
+            "9884@20260923004636725"
+          ],
+          "procs": [
+            {
+              "pid": 17776,
+              "created": "20260923004625721"
+            },
+            {
+              "pid": 24472,
+              "created": "20260923004625727"
+            },
+            {
+              "pid": 1944,
+              "created": "20260923004635960"
+            },
+            {
+              "pid": 1280,
+              "created": "20260923004635970"
+            },
+            {
+              "pid": 17296,
+              "created": "20260923004635974"
+            },
+            {
+              "pid": 24428,
+              "created": "20260923004636629"
+            },
+            {
+              "pid": 11608,
+              "created": "20260923004636670"
+            },
+            {
+              "pid": 9884,
+              "created": "20260923004636725"
+            }
+          ]
+        },
+        "writerScenario": {
+          "permissionLog": [
+            {
+              "title": "node spawn-writer.mjs ticks.log",
+              "kinds": [
+                "allow_always",
+                "allow_once",
+                "reject_once"
+              ],
+              "chosen": "allow_once"
+            }
+          ],
+          "promptStopReason": "end_turn",
+          "promptError": null
+        }
+      },
+      "limitations": [
+        "plugin/skill provenance, user-level settings precedence and hostile .qoder/settings.json schema were not exhaustively tested",
+        "the pinned core answers a session/cancel for an unknown session with silence (no JSON-RPC response, error or session update within 5000 ms); cancel arm (a) therefore asserts that the live owned tree is untouched rather than a rejection the core does not produce",
+        "the job-object assignment did not take effect on the live core process 17776 ([{\"attempt\":1,\"result\":\"assign_failed:5\"},{\"attempt\":2,\"result\":\"assign_failed:5\"},{\"attempt\":3,\"result\":\"assign_failed:5\"},{\"attempt\":4,\"result\":\"assign_failed:5\"},{\"attempt\":5,\"result\":\"assign_failed:5\"},{\"attempt\":6,\"result\":\"assign_failed:5\"},{\"attempt\":7,\"result\":\"assign_failed:5\"},{\"attempt\":8,\"result\":\"assign_failed:5\"},{\"attempt\":9,\"result\":\"assign_failed:5\"},{\"attempt\":10,\"result\":\"assign_failed:5\"}]); job-object membership was verified on a controlled tree only and the live core is supervised by identity-validated descendant-tree enumeration"
+      ],
+      "blockedPrerequisite": null,
+      "artifacts": [
+        "e2e/agent-core/fixtures/qoder-host-cli-1.1.61-protocol.jsonl",
+        "e2e/agent-core/fixtures/qoder-host-cli-1.1.61-events.json",
+        "e2e/agent-core/fixtures/qoder-host-stable-export-1.1.61.json"
+      ]
+    },
+    {
+      "core": "qoder",
+      "mode": "SANDBOX",
+      "status": "blocked",
+      "checks": {
+        "pauseResume": false,
+        "handshake": false,
+        "managedAuth": false,
+        "isolatedConfig": false,
+        "allowOnce": false,
+        "denyWithoutWrite": false,
+        "cancel": false,
+        "writersStopped": false,
+        "stableExport": false
+      },
+      "environment": {
+        "os": "win32 10.0.19045",
+        "platform": "win32",
+        "arch": "x64",
+        "node": "v24.14.1"
+      },
+      "probe": {
+        "file": "e2e/agent-core/probe-native.mjs",
+        "startedAt": "2026-09-22T16:08:06.432Z",
+        "workspace": "<WORKSPACE>",
+        "finishedAt": "2026-09-22T16:08:07.866Z"
+      },
+      "runtime": {
+        "core": "qoder",
+        "binary": "not launched (sandbox mode)",
+        "version": null,
+        "licenseSource": "vendor CLI installed by the operator; Linux image packaging not verified",
+        "credentialSource": "<CREDENTIAL-FILE>"
+      },
+      "evidence": {
+        "pauseResume": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "handshake": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "managedAuth": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "isolatedConfig": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "allowOnce": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "denyWithoutWrite": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "cancel": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "writersStopped": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        },
+        "stableExport": {
+          "observed": false,
+          "reason": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman"
+        }
+      },
+      "observations": {
+        "sandboxPrerequisites": {
+          "sandboxEndpoint": "http://127.0.0.1:8090",
+          "sandboxServerReachable": false,
+          "sandboxServerProbe": {
+            "reachable": false,
+            "reason": "ECONNREFUSED"
+          },
+          "sandboxHealth": null,
+          "requestedImage": null,
+          "containerImages": {
+            "docker": {
+              "exitCode": 1,
+              "imageCount": 0,
+              "sandboxLike": []
+            },
+            "podman": {
+              "exitCode": 125,
+              "imageCount": 0,
+              "sandboxLike": []
+            }
+          }
+        }
+      },
+      "limitations": [],
+      "blockedPrerequisite": "OpenSandbox server not reachable at http://127.0.0.1:8090 (nothing listens) and no sandbox image present in docker/podman",
+      "artifacts": [
+        "e2e/agent-core/fixtures/qoder-sandbox-cli-unknown-protocol.jsonl",
+        "e2e/agent-core/fixtures/qoder-sandbox-cli-unknown-events.json"
+      ]
+    }
+  ]
+}

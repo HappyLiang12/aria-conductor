@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "producedBy": "probe-native.mjs",
+  "entries": [
+    {
+      "path": ".mcp.json",
+      "size": 119,
+      "sha256": "c4f6e800f3579b8f3a4a9ca879d86eaf7ae6de1c5cedead709008bdfc1328b31"
+    },
+    {
+      "path": "probe-allow-once.txt",
+      "size": 16,
+      "sha256": "1ef5d322caac30b2b8495476505413586d51133db0f1f73b4efb4eabe17fd77c"
+    },
+    {
+      "path": "spawn-writer.mjs",
+      "size": 508,
+      "sha256": "0e212d6c95ee89d8e609a94e72330ec099c792c91a2337a367f409c0169dd92c"
+    },
+    {
+      "path": "ticks.log",
+      "size": 2527,
+      "sha256": "2f42d36baae7355f8fa20e5818eeb502ee4fd3e28b68b14195bcc916478af18f"
+    },
+    {
+      "path": "writer.mjs",
+      "size": 303,
+      "sha256": "27d0f0b801a33922a8822ef5e5e1b015851af62f886487eff06425b9f282402f"
+    }
+  ]
+}

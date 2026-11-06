@@ -1,0 +1,81 @@
+# step: S10 (backend restart interrupts a pending ask (S10))
+# command: bash-owned: kill the backend recorded in .run/backend.pid mid-ask, restart the stack (stop.ps1 + QODER_MODEL=efficient pwsh -NoProfile -File scripts/start.ps1 -Provider qoder), assert the startup-sweep interruption state + expired ask without replay
+# cwd: /d/project/aria-conductor
+# git: a4ed69a
+# started: 2026-09-18T10:14:44Z
+# evidence: D:/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+  1. seed: POST /api/v1/agents (qoder ADK, taskApprovalRequired=false) + POST /api/v1/runs (write trigger)
+  POST /api/v1/agents request: {"name":"c6b-s10-20260918-101444","agentType":"ADK","role":"dev","model":"efficient","adkProvider":"qoder","config":{"taskApprovalRequired":false}}
+  POST /api/v1/agents -> HTTP 201
+  response: {"id":"5e2d26e7-c06c-40f1-a142-e31f6ae15d5a","name":"c6b-s10-20260918-101444","description":null,"agentType":"ADK","role":"dev","model":"efficient","provider":null,"adkProvider":"qoder","config":"{\"harnessProfile\":\"weak-model-safe\",\"taskApprovalRequired\":false}","healthStatus":"HEALTHY","createdAt":"2026-09-18T10:14:45.168360700Z","updatedAt":null,"retiredAt":null,"pickupEligible":true,"pickupIneligibleReasons":[],"lastProbedAt":null,"skills":[],"tools":null}
+  POST /api/v1/runs request: {"agentId":"5e2d26e7-c06c-40f1-a142-e31f6ae15d5a","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-101444.txt whose content is exactly: ready","maxIterations":3}
+  POST /api/v1/runs -> HTTP 201
+  response: {"id":"c11be5de-dbd2-4cb8-b832-ccb72c6143f8","agentId":"5e2d26e7-c06c-40f1-a142-e31f6ae15d5a","status":"PENDING","promptSeed":"Use the Write tool (not a shell command) to create the file /workspace/c6b-s10-20260918-101444.txt whose content is exactly: ready","maxIterations":3,"totalTokensUsed":0,"iterationCount":0,"errorMessage":null,"finalOutput":null,"createdAt":"2026-09-18T10:14:45.793834400Z","updatedAt":null,"completedAt":null}
+     agent=5e2d26e7-c06c-40f1-a142-e31f6ae15d5a run=c11be5de-dbd2-4cb8-b832-ccb72c6143f8
+  2. waiting (<=180s) for a PENDING ACP_PERMISSION ask of run c11be5de-dbd2-4cb8-b832-ccb72c6143f8
+  poll /approvals?status=PENDING (t+1s): no ACP ask for run c11be5de-dbd2-4cb8-b832-ccb72c6143f8 yet
+  poll /approvals?status=PENDING (t+6s): no ACP ask for run c11be5de-dbd2-4cb8-b832-ccb72c6143f8 yet
+  poll /approvals?status=PENDING (t+12s): no ACP ask for run c11be5de-dbd2-4cb8-b832-ccb72c6143f8 yet
+  poll /approvals?status=PENDING (t+17s): no ACP ask for run c11be5de-dbd2-4cb8-b832-ccb72c6143f8 yet
+     pending ask id: 07cad465-07ca-49a8-8e8d-2166ace7354a
+  3. before the kill: run=RUNNING ask=PENDING|PENDING|
+  4. killing the backend recorded in .run/backend.pid (taskkill /T /F — the documented stop path semantics)
++ taskkill /PID 25832 /T /F   (the pwsh wrapper recorded in .run/backend.pid and its tree: mvn spring-boot:run + the JVM)
+SUCCESS: The process with PID 31332 (child process of PID 29888) has been terminated.
+SUCCESS: The process with PID 29888 (child process of PID 15452) has been terminated.
+SUCCESS: The process with PID 15452 (child process of PID 25980) has been terminated.
+SUCCESS: The process with PID 25980 (child process of PID 25832) has been terminated.
+SUCCESS: The process with PID 25832 (child process of PID 13796) has been terminated.
+  taskkill exit=0
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+  waiting for the backend to go down: HTTP 000000
+# FAIL: the backend still answers http://localhost:8097/actuator/health 90s after the kill
+  5. stop.ps1 (releases the frontend port) then start.ps1 -Provider qoder with QODER_MODEL=efficient
++ cd /d/project/aria-conductor && pwsh -NoProfile -File scripts/stop.ps1
+Stopping Aria Conductor services...
+  skipped backend (PID 25832 is no longer running)
+  skipped frontend (PID 18660 is no longer running)
+  stopped OpenSandbox
+Done.
+     stop.ps1 exit=0
++ cd /d/project/aria-conductor && QODER_MODEL=efficient timeout 1500 pwsh -NoProfile -File scripts/start.ps1 -Provider qoder   (QODER_E2E_PAT stripped from the child env)
+Aria Conductor - one-click start (local)
+[1/8] Checking environment
+[2/8] Checking .env
+[3/8] Preparing container resources
+[4m>>>> Executing external compose provider "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker-compose.exe". Please see podman-compose(1) for how to disable this message. <<<<
+
+[0m Container aria-opensandbox Starting 
+ Container aria-opensandbox Started 
+[4/8] Checking ports
+      port 5273 is held by node (PID 2788)
+[31;1mException: [0mD:\project\aria-conductor\scripts\start.ps1:313[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 313 | [0m             [36;1mthrow "Aborted: port $port is still in use."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mAborted: port 5273 is still in use.[0m
+     start.ps1 exit=1 (124 = the 1500s timeout fired)
+# FAIL: the stack did not come back up (start.ps1 exit=1); the remaining post-restart assertions were skipped
+  s10-summary: label=c6b-s10-20260918-101444 agent=5e2d26e7-c06c-40f1-a142-e31f6ae15d5a run=c11be5de-dbd2-4cb8-b832-ccb72c6143f8 ask=07cad465-07ca-49a8-8e8d-2166ace7354a restarted=no
+
+EXIT=1

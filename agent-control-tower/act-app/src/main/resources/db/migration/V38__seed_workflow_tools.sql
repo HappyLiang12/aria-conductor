@@ -1,0 +1,20 @@
+-- V38: Seed executable workflow orchestration tools for Aria (#37).
+-- Mirrors the V33 seed pattern: deterministic IDs, knowledge_items approval proxy, handler_class dispatch.
+-- These are orchestration tools (handler = workflowHandler) added to Aria's allowlist so she can turn a
+-- BA->Dev->QA plan into a real running WorkflowChain instead of only documenting it as knowledge.
+
+-- Knowledge items for approval proxy
+INSERT INTO knowledge_items (id, name, type, description, status, sensitivity, created_at, escalation_count) VALUES
+('c0000001-0000-0000-0000-000000000001', 'Seed tool: create_workflow', 'TOOL', 'Workflow orchestration tool.', 'APPROVED', 'INTERNAL', CURRENT_TIMESTAMP, 0),
+('c0000001-0000-0000-0000-000000000002', 'Seed tool: get_workflow', 'TOOL', 'Workflow orchestration tool.', 'APPROVED', 'INTERNAL', CURRENT_TIMESTAMP, 0),
+('c0000001-0000-0000-0000-000000000003', 'Seed tool: list_workflows', 'TOOL', 'Workflow orchestration tool.', 'APPROVED', 'INTERNAL', CURRENT_TIMESTAMP, 0),
+('c0000001-0000-0000-0000-000000000004', 'Seed tool: cancel_workflow', 'TOOL', 'Workflow orchestration tool.', 'APPROVED', 'INTERNAL', CURRENT_TIMESTAMP, 0),
+('c0000001-0000-0000-0000-000000000005', 'Seed tool: retry_workflow_step', 'TOOL', 'Workflow orchestration tool.', 'APPROVED', 'INTERNAL', CURRENT_TIMESTAMP, 0);
+
+-- Workflow tools (handler = workflowHandler). Orchestration only; TIER_1/READ so no approval gate.
+INSERT INTO tool_definitions (id, name, display_name, description, tier, category, handler_class, parameters, sandbox_mode, timeout_ms, knowledge_item_id, enabled, version, created_at, risk_tier, status, kind) VALUES
+('seed-tool-create_workflow', 'create_workflow', 'create_workflow', 'Create and start an executable multi-agent workflow chain (e.g. BA->Dev->QA). Provide name and a steps array of {agent, promptTemplate} objects, or a yaml definition.', 'TIER_1', 'GENERAL', 'workflowHandler', '{"type":"object","properties":{"name":{"type":"string","description":"Workflow name"},"description":{"type":"string"},"steps":{"type":"array","description":"Ordered steps","items":{"type":"object","properties":{"agent":{"type":"string","description":"Agent id, name, or role"},"promptTemplate":{"type":"string","description":"Prompt for this step; use {previousOutput} to reference the prior step output"},"maxIterations":{"type":"integer"}},"required":["agent","promptTemplate"]}},"yaml":{"type":"string","description":"Alternative YAML workflow definition"}},"required":["name"]}', 'NONE', 60000, 'c0000001-0000-0000-0000-000000000001', TRUE, 1, CURRENT_TIMESTAMP, 'READ', 'APPROVED', 'HANDLER'),
+('seed-tool-get_workflow', 'get_workflow', 'get_workflow', 'Get a workflow chain status and per-step progress (requires id).', 'TIER_1', 'GENERAL', 'workflowHandler', '{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}', 'NONE', 30000, 'c0000001-0000-0000-0000-000000000002', TRUE, 1, CURRENT_TIMESTAMP, 'READ', 'APPROVED', 'HANDLER'),
+('seed-tool-list_workflows', 'list_workflows', 'list_workflows', 'List all workflow chains with status.', 'TIER_1', 'GENERAL', 'workflowHandler', '{"type":"object","properties":{}}', 'NONE', 30000, 'c0000001-0000-0000-0000-000000000003', TRUE, 1, CURRENT_TIMESTAMP, 'READ', 'APPROVED', 'HANDLER'),
+('seed-tool-cancel_workflow', 'cancel_workflow', 'cancel_workflow', 'Cancel a running or pending workflow chain (requires id).', 'TIER_1', 'GENERAL', 'workflowHandler', '{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}', 'NONE', 30000, 'c0000001-0000-0000-0000-000000000004', TRUE, 1, CURRENT_TIMESTAMP, 'READ', 'APPROVED', 'HANDLER'),
+('seed-tool-retry_workflow_step', 'retry_workflow_step', 'retry_workflow_step', 'Retry a failed step in a failed workflow chain (requires id, stepIndex).', 'TIER_1', 'GENERAL', 'workflowHandler', '{"type":"object","properties":{"id":{"type":"string"},"stepIndex":{"type":"integer"}},"required":["id","stepIndex"]}', 'NONE', 30000, 'c0000001-0000-0000-0000-000000000005', TRUE, 1, CURRENT_TIMESTAMP, 'READ', 'APPROVED', 'HANDLER');

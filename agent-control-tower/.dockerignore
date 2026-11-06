@@ -1,0 +1,10 @@
+.m2-local/
+.mvn/
+data/
+target/
+*/target/
+scripts/
+docs/
+README.md
+.gitignore
+.dockerignore

@@ -1,0 +1,42 @@
+prerequisite ok: qoder CLI: C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe (1.1.61)
+prerequisite ok: qoder bridge entry: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+prerequisite ok: admitted repository HEAD e84b35f775983c59ebd04926b1fd2ddebce05c11
+
+== backend ==
+backend environment pins: ARIA_CORES_QODER_EXECUTABLE=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe
+$ C:\Program Files\PowerShell\7\pwsh.exe -NoProfile -File scripts/start-backend.ps1 -SkipSandbox (backend cwd C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor)
+health: HTTP 200 {"status":"UP"}
+
+== live matrix qoder/HOST ==
+core=qoder mode=HOST os=win32 x64 cli=C:\Users\<USER>\.qoder\bin\qodercli\qodercli.exe cliVersion=1.1.61 bridge=C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\packages\qoder-acp-bridge\dist\main.js
+requested model=efficient (qoder pin efficient); usage evidence is recorded, never asserted as zero cost
+qoder runtime credential stored (HTTP 200); the secret is never printed
+agent created: id=4a866c5e-93ce-4b32-a293-1ffc6974e870 core=qoder mode=HOST workspaceMode=WORKTREE
+agent created: id=ed07d0bc-386c-44bf-876c-9f5cf0fff11e core=qoder mode=HOST workspaceMode=DIRECT
+run coding-task: id=3da776c6-2028-4ba4-b6b5-6465e9cfe025 status=PENDING
+coding-task: approved ask 64031237-f757-45f9-94fa-2da28460ad9d (HTTP 200, askType=APPROVAL)
+  [PASS] coding-task — one real coding task in qoder/HOST
+      PASS run reached COMPLETED
+      PASS file bytes on disk equal the requested content
+      PASS approval ask observed
+      PASS ask approved once
+coding-task file: C:\Users\<USER>\.qoder\worktrees\app\f6e6a3\aria-conductor\agent-control-tower\act-app\data\workspaces\runs\worktrees\3da776c6-2028-4ba4-b6b5-6465e9cfe025\aria-live-probe.txt bytes="aria-live-qoder-HOST" sha256=b2830b19de8750fc116f9eee849bf7854ed700f8bd9dce13d53be75759637196
+  [PASS] worktree — WORKTREE runs write in a run-owned worktree and leave the admitted repository untouched
+      PASS run-owned worktree exists
+      PASS the run wrote its file inside the run worktree
+      PASS the admitted repository has no run file
+      PASS admitted repository HEAD unchanged
+run approve-once: id=40d6fc38-cfbb-4ecc-be13-6bf6d93b10a5 status=PENDING
+approve-once: approved first ask 6533c998-a0b7-4db8-a48d-fd4c315c763e
+  [FAIL] approve-once — a one-use grant re-asks for the second write
+      PASS second approval ask observed after the one-use grant
+      PASS run reached COMPLETED
+      FAIL final bytes are the second pass
+run deny: id=72d88ef9-3464-4405-828b-e9d50e6790de status=PENDING
+deny: denied ask 5db012b0-d21b-46ba-b45b-33d87af6e4ad (HTTP 200)
+  [FAIL] deny — a denial leaves the workspace unwritten
+      PASS denied file absent from disk
+      FAIL run did not complete as a success
+run expiry: id=27c84459-b832-43aa-9b50-95667e8cc741 status=PENDING
+expiry: ask 3ad1f3c1-bc82-42d3-9b29-7284b3281813 left undecided (requestedAt=2026-09-26T19:37:40.574038Z expiresAt=2026-09-26T20:22:32Z)
+live-matrix error: TypeError: fetch failed

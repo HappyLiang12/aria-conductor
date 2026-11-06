@@ -1,0 +1,69 @@
+# step: S11 (spec-owned scenario S11)
+# command: npx playwright test e2e/qoder-*.spec.ts --grep "S11:"
+# cwd: /d/project/aria-conductor/agent-control-tower/act-dashboard
+# git: 6e85a01
+# started: 2026-09-18T11:56:28Z
+# evidence: /d/project/aria-conductor/e2e/qoder/slice-c/live
+# ---- output follows ----
+
+Running 1 test using 1 worker
+
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=b6e04635-11b1-465a-b097-c810be3be463 run=603ec39c-52c3-472a-9849-d21e620e7909 marker=s11-marker-1789732593621-1079
+[S11] write ask=b02dc4b9-5cb7-406a-a2aa-05e990e8e57f toolName=mcp__aria__store_knowledge status=PENDING deliveryState=PENDING options=["allow_always","allow_once","reject_once"]
+[S11] decide: HTTP 200 body={"approvalId":"b02dc4b9-5cb7-406a-a2aa-05e990e8e57f","approved":true,"status":"processed","decision":"APPROVED","deliveryState":"DELIVERED"}
+  x  1 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (4.4m)
+[qoder-e2e] live zero-credit model confirmed: qoder.model='efficient'
+[S11] agent=3c31ce25-4bba-470b-80fc-1ccdd3ec60ad run=ec802a66-ca98-4324-bcc6-71f2c6e88e81 marker=s11-marker-1789732858160-1562
+  x  2 [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated (retry #1) (4.8m)
+
+
+  1) [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+    Error: pollUntil timed out for /knowledge after 240000ms; last=[{"id":"a0000001-0000-0000-0000-000000000001","name":"Seed tool: web_search","type":"TOOL","description":"Auto-seeded standard tool.","currentVersion":null,"status":"APPROVED","sensitivity":"INTERNAL","filePath":null,"createdAt":"2026-09-06T15:55:31.896908Z","updatedAt":null,"retiredAt":null,"latest
+
+       at fixtures.ts:201
+
+      199 |     await new Promise((r) => setTimeout(r, intervalMs));
+      200 |   }
+    > 201 |   throw new Error(
+          |         ^
+      202 |     `pollUntil timed out for ${path} after ${timeoutMs}ms; last=${JSON.stringify(last)?.slice(0, 300)}`,
+      203 |   );
+      204 | }
+        at pollUntil (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\fixtures.ts:201:9)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:672:26
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+    Call log:
+      - → GET http://localhost:8097/api/v1/approvals?status=PENDING
+        - user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36
+        - accept: */*
+        - accept-encoding: gzip,deflate,br
+        - Content-Type: application/json
+
+        at apiRequestContext.fetch: connect ECONNREFUSED ::1:8097
+        at requestJson (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:175:30)
+        at waitForPendingAcpAsk (D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-e2e-lib.ts:275:36)
+        at D:\project\aria-conductor\agent-control-tower\act-dashboard\e2e\qoder-governance-e2e.spec.ts:623:15
+
+    Error: ENOENT: no such file or directory, open 'D:\project\aria-conductor\agent-control-tower\act-dashboard\test-results\.playwright-artifacts-1\3d602cbd37c654327ed8d534243eeecb.zip'
+
+    Error Context: test-results\qoder-governance-e2e-S11-p-e068e-ecutions-are-run-correlated-chromium-retry1\error-context.md
+
+  1 failed
+    [chromium] › e2e\qoder-governance-e2e.spec.ts:608:1 › S11: platform-MCP read runs without an ask, the write waits for approval, executions are run-correlated 
+
+EXIT=1

@@ -1,0 +1,27 @@
+{
+  "core": "qoder",
+  "mode": "SANDBOX",
+  "os": "win32 x64",
+  "node": "v24.14.1",
+  "requestedModel": "efficient",
+  "observedModels": [],
+  "cliVersion": null,
+  "startedAt": "2026-09-27T06:07:33.472Z",
+  "status": "failed",
+  "prerequisites": [
+    "qoder CLI: C:\\Users\\<USER>\\.qoder\\bin\\qodercli\\qodercli.exe (1.1.61)",
+    "qoder bridge entry: C:\\Users\\<USER>\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\packages\\qoder-acp-bridge\\dist\\main.js",
+    "OpenSandbox endpoint http://localhost:8090 reachable; images podman:localhost/aria-conductor/qoder-sandbox:1.0, podman:localhost/aria-conductor/qoder-sandbox:0.1, podman:localhost/aria-conductor/opensandbox-server:0.1.0-podman, podman:docker.io/opensandbox/server:latest, podman:localhost/aria-conductor/opencode-sandbox:1.1, podman:docker.io/opensandbox/server:v0.2.2, podman:docker.io/opensandbox/execd:v1.0.21, podman:docker.io/opensandbox/server:v0.1.14, podman:docker.io/opensandbox/server:v0.1.0",
+    "admitted repository HEAD 737b750a2e0b76a7041fae51de7f76ffbda3d68d"
+  ],
+  "results": [],
+  "backendLog": "C:\\Users\\User\\.qoder\\worktrees\\app\\f6e6a3\\aria-conductor\\docs\\reviews\\evidence\\2026-09-22-live-matrix\\qoder-SANDBOX-t20.txt.backend.log",
+  "usage": null,
+  "backendPins": {
+    "ARIA_WORKSPACES_RUNTIME_ROOT": "C:/Users/User/AppData/Local/Temp/t20-runtime",
+    "ARIA_WORKSPACES_RESULT_ROOT": "C:/Users/User/AppData/Local/Temp/t20-runtime/results",
+    "ARIA_CORES_QODER_EXECUTABLE": "C:\\Users\\User\\.qoder\\bin\\qodercli\\qodercli.exe"
+  },
+  "error": "TypeError: fetch failed",
+  "finishedAt": "2026-09-27T06:10:07.000Z"
+}

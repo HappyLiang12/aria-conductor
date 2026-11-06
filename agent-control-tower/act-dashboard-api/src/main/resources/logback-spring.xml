@@ -2,6 +2,8 @@
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
+    <logger name="com.alibaba.opensandbox.sandbox.infrastructure.adapters.service.CommandsAdapter" level="WARN"/>
+
     <springProfile name="!json-logging">
         <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
         <root level="INFO">

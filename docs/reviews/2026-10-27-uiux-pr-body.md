@@ -64,50 +64,55 @@ A read-only reviewer audited the full diff at `342d8775` plus the in-flight draw
 
 | # | Severity | Finding | Fix |
 | --- | --- | --- | --- |
-| H1 | High | A failed `/adk/providers` query was indistinguishable from "no providers"; the queue phase could never be `error` and still showed an all-clear | providers error → `error` phase; empty only on `success` without `partial` (`28899d7c`) |
-| H2 | High | Agent-list failure relabelled every knowledge item "Unattributed" and claimed no agents exist | ownership is withheld until agents load; explicit "ownership unavailable" state with Retry (`0db73e93`) |
-| H3 | High | Overview lost the media-query cascade to `index.css` (three-column layout, 260px board) | compound `.layout.overview-*` selectors + width assertions (`b6adb9cc`) |
-| H4 | High | Escape could not close the drawer from its own focused heading | drawer-local Escape handler that ignores drafts and stacked dialogs (`ceb30dbb`) |
-| M1 | Medium | Configure gate rows still asserted enforcement ("required before work flows on") under a reference-only panel | copy rewritten as policy targets, not enforcement (`3e9742a0`) |
-| M2 | Medium | Runtime tab exposed a "Reset to defaults" button that reset nothing | removed; absence asserted (`3e9742a0`) |
-| M3 | Medium | `draggable={false}` on the card-wide opener removed the pointer drag affordance | the opener is the drag source again; E2E asserts hit-tested `draggable` (`775c49ee`) |
-| M4 | Medium | Tab trap only ran while focus was on Cancel/Confirm; clicking the message let Tab escape | window-level trap that pulls stray focus back to the safe exit (`f17b96c9`) |
-| M5 | Medium | Queue lock dropped focus when the pointer left; one shared `busyId` let a second click duplicate a decision | separate hover/focus lock; per-row busy set with per-call callbacks (`3a8934d6`) |
-| M6 | Medium | A failed transcript fetch rendered "No messages recorded yet" | error notice with Retry (`747debd8`) |
-| M7 | Medium | REVIEW batch presets included cards with pending asks | presets operate on ask-free cards and name the held count (`775c49ee`) |
-| L1 | Low | Executive summary showed stale runtime/runs values without saying they were last-known | stale detail prefixes on both surfaces (`8a4b80f9`) |
+| H1 | High | A failed `/adk/providers` query was indistinguishable from "no providers"; the queue phase could never be `error` and still showed an all-clear | providers error → `error` phase; empty only on `success` without `partial` (`4bf5cf74`) |
+| H2 | High | Agent-list failure relabelled every knowledge item "Unattributed" and claimed no agents exist | ownership is withheld until agents load; explicit "ownership unavailable" state with Retry (`95888c60`) |
+| H3 | High | Overview lost the media-query cascade to `index.css` (three-column layout, 260px board) | compound `.layout.overview-*` selectors + width assertions (`02bed566`) |
+| H4 | High | Escape could not close the drawer from its own focused heading | drawer-local Escape handler that ignores drafts and stacked dialogs (`c3728fba`) |
+| M1 | Medium | Configure gate rows still asserted enforcement ("required before work flows on") under a reference-only panel | copy rewritten as policy targets, not enforcement (`7d5d5ee1`) |
+| M2 | Medium | Runtime tab exposed a "Reset to defaults" button that reset nothing | removed; absence asserted (`7d5d5ee1`) |
+| M3 | Medium | `draggable={false}` on the card-wide opener removed the pointer drag affordance | the opener is the drag source again; E2E asserts hit-tested `draggable` (`ae17f446`) |
+| M4 | Medium | Tab trap only ran while focus was on Cancel/Confirm; clicking the message let Tab escape | window-level trap that pulls stray focus back to the safe exit (`8aba82a1`) |
+| M5 | Medium | Queue lock dropped focus when the pointer left; one shared `busyId` let a second click duplicate a decision | separate hover/focus lock; per-row busy set with per-call callbacks (`e7e386e2`) |
+| M6 | Medium | A failed transcript fetch rendered "No messages recorded yet" | error notice with Retry (`6751891a`) |
+| M7 | Medium | REVIEW batch presets included cards with pending asks | presets operate on ask-free cards and name the held count (`ae17f446`) |
+| L1 | Low | Executive summary showed stale runtime/runs values without saying they were last-known | stale detail prefixes on both surfaces (`a5a217c6`) |
 
 ## Hosted CI findings
 
 The first hosted run (`40551694153`, head `8d38cccc`) failed only `Frontend Build Check`, on `ReviewWorkspace.test.tsx:336`: expected `""` to be `"keep my draft"`. The same suite was green locally and in a clean-room on faster hardware, so this was not retried away.
 
-- **CI-1 — the review heading focus raced the feedback draft.** The heading focus was deferred with `requestAnimationFrame`; on the slower runner that frame landed after the test (or an operator) had focused the Request-changes textarea, so keystrokes went to the heading and the controlled draft stayed empty. Fix `2027711d`: focus synchronously in the opening layout effect, plus a deterministic regression test that holds every frame callback unrun and asserts (a) the heading already has focus in the opening commit and (b) a late frame cannot steal the caret from the draft. RED evidence: against the rAF version the new test fails with focus still on the opener button.
+- **CI-1 — the review heading focus raced the feedback draft.** The heading focus was deferred with `requestAnimationFrame`; on the slower runner that frame landed after the test (or an operator) had focused the Request-changes textarea, so keystrokes went to the heading and the controlled draft stayed empty. Fix `9c2cabd0`: focus synchronously in the opening layout effect, plus a deterministic regression test that holds every frame callback unrun and asserts (a) the heading already has focus in the opening commit and (b) a late frame cannot steal the caret from the draft. RED evidence: against the rAF version the new test fails with focus still on the opener button.
 - The E2E shards never produced signal in that run: they require `frontend-build`'s artifact, so a frontend failure skips them. They run on the fixed head.
 
-The second hosted run (`40552479882`, head `2027711d`) fixed the frontend job and finally exercised every shard: Java lanes, build, smoke, Docker and shards 1, 3, 4 were green; shard 2 failed `kanban-board.spec.ts`.
+The second hosted run (`40552479882`, head `9c2cabd0`) fixed the frontend job and finally exercised every shard: Java lanes, build, smoke, Docker and shards 1, 3, 4 were green; shard 2 failed `kanban-board.spec.ts`.
 
-- **CI-2 — the create-form error lost the `.kanban-form-error` contract.** The structured create error (Task 6) renders through `ErrorNotice` inside a `.kanban-create-error` wrapper, which dropped the class that carried both the red form-error styling and the hosted spec's hook; the board-level slot with that class is suppressed while the modal is open. Fix `0950fd0c`: the create `ErrorNotice` keeps `className="kanban-form-error"`, and the empty-title unit test now asserts the class in addition to the exact text and the no-API-call guarantee. The other failure in that shard (`housekeeping-cleanup`) passed on retry and is not treated as green-by-retry for CI-2.
+- **CI-2 — the create-form error lost the `.kanban-form-error` contract.** The structured create error (Task 6) renders through `ErrorNotice` inside a `.kanban-create-error` wrapper, which dropped the class that carried both the red form-error styling and the hosted spec's hook; the board-level slot with that class is suppressed while the modal is open. Fix `f88d761f`: the create `ErrorNotice` keeps `className="kanban-form-error"`, and the empty-title unit test now asserts the class in addition to the exact text and the no-API-call guarantee. The other failure in that shard (`housekeeping-cleanup`) passed on retry and is not treated as green-by-retry for CI-2.
 
 ## Verification
 
-Verification point: `0950fd0c` (last code commit; the documentation commit that follows is comments only). Commands and results:
+On 2026-11-06 the branch was rebased onto `origin/main` `3975da6b` (29 commits rewritten). The rebased patch is byte-identical to the pre-rebase patch (`git diff origin/main...HEAD` equals the old `git diff 605ecbba...941f4a3d`), and the rebased worktree re-ran install, the full unit suite and the build. Historical run rows below name the runs that actually executed; the last row is the rebased head.
+
+Verification point: `b6ea103b` (rebased code head; the documentation commit that follows is comments only). Commands and results:
 
 | Gate | Command | Result |
 | --- | --- | --- |
 | Unit + coverage | `pnpm --dir agent-control-tower/act-dashboard test -- --coverage` | 72 files / 621 tests passed, exit 0; 74.75% lines / 82.27% branches / 61.16% functions |
 | Build | `pnpm --dir agent-control-tower/act-dashboard build` | `tsc -b` + `vite build`, exit 0 |
-| E2E (new features, artifact-first) | clean-room worktree at `0950fd0c`, `pnpm build`, `pnpm preview --port 4176`, then `BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0` | 20 tests passed (42.4s) at 1440x900 / 1024x768 / 390x844 against the built artifact |
+| E2E (new features, artifact-first) | clean-room worktree at the pre-rebase code head (patch byte-identical to the rebased head), `pnpm build`, `pnpm preview --port 4176`, then `BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0` | 20 tests passed (42.4s) at 1440x900 / 1024x768 / 390x844 against the built artifact |
 | E2E (regression subset, artifact-first) | same preview, `overview-dashboard` (backend-independent cases), `notification-toast`, `configure-modal-close`, `unknown-route` | 6 passed (12.6s) |
-| Clean-room | fresh worktree at `0950fd0c`: `pnpm install --frozen-lockfile`, `pnpm test -- --coverage`, `pnpm build` | install exit 0; 621 tests passed; coverage identical to local; build exit 0; no `dist/` at checkout |
+| Clean-room (rebased) | fresh worktree at `b6ea103b`: `pnpm install --frozen-lockfile`, `pnpm test -- --coverage`, `pnpm build` | install exit 0; 621 tests passed; coverage 74.79/82.2/61.16; build exit 0; no `dist/` at checkout |
 | Independent review | read-only full-diff review, then re-gate after the fix wave | 12 findings fixed; local and clean-room gates re-run |
-| Hosted CI run 1 | run 40551694153 at `8d38cccc` | red: `Frontend Build Check` only; E2E shards were skipped because they need that job's artifact (CI-1) |
-| Hosted CI run 2 | run 40552479882 at `2027711d` | red: shard 2 only, `kanban-board.spec.ts` create-error hook (CI-2); everything else green |
+| Hosted CI run 1 | run 40551694153 (pre-rebase head) | red: `Frontend Build Check` only; E2E shards were skipped because they need that job's artifact (CI-1) |
+| Hosted CI run 2 | run 40552479882 (pre-rebase head) | red: shard 2 only, `kanban-board.spec.ts` create-error hook (CI-2); everything else green |
+| Hosted CI run 3 | run 40554394382 (pre-rebase code head) | green |
+| Hosted CI run 4 | run 40557217605 attempt 2 (pre-rebase docs head) | green |
+| Hosted CI, rebased head | run 42225942108 at `b6ea103b` | green: every job except the expected `TS MCP` skip, including Java lanes, Docker and all four Playwright shards |
 
 The new specs use `page.route` / `page.routeWebSocket` fixtures only: no backend, no LLM, no credentials. Backend-dependent specs (`overview-dashboard` seeded case, `kanban-hitl`, `chat-smoke`, `observability-live`, all journey specs) run in the hosted Playwright shards, not locally.
 
 Artifact checks (screenshots kept locally under `docs/reviews/evidence/2026-10-27-uiux-release/`, not committed): Overview at 1440x900, 1024x768 and 390x844; mobile chat thread; board keyboard opener and dialog focus are covered by the specs above.
 
-Hosted CI: run [40554394382](https://github.com/HappyLiang12/aria-conductor/actions/runs/40554394382) at `0950fd0cf275ae20cc2a50a747c9c7554fb01352` — **green**. Jobs: Frontend Build Check; Detect Changed Trees; Build Backend + Harness Distribution (once); Java Unit Tests (api-mcp-app); Java Unit Tests (common-agent); Java Unit Tests (execution); Java Unit Tests (knowledge-aria); Java Integration Tests (Failsafe); E2E Smoke Test (deterministic harness); Docker Build Verification; E2E Playwright (shard 2/4); E2E Playwright (shard 1/4); E2E Playwright (shard 3/4); E2E Playwright (shard 4/4).
+Hosted CI: run [42225942108](https://github.com/HappyLiang12/aria-conductor/actions/runs/42225942108) at `b6ea103b9621810afe82f388951a6872bcc43c70` — **green** (rebased head: Java lanes, backend build, frontend build/coverage, smoke, Docker and Playwright shards 1-4). The earlier runs in the table above are the pre-rebase history.
 
 ## Deferred (documented, not implemented)
 

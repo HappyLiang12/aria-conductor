@@ -1,7 +1,7 @@
 {
   "task": "Investigate current UI/UX problems and provide enhancement designs",
   "date": "2026-10-24",
-  "phase": "implemented, reviewed, clean-room verified, pushed; hosted CI green at HEAD; PR open, not merged",
+  "phase": "rebased onto origin/main 3975da6b, re-gated, pushed; hosted CI green at the rebased HEAD; PR open, not merged",
   "baseline": {
     "branch": "main",
     "head": "9ab7ebd4cd0f75660b9aee701cde0a9670f20457",
@@ -932,39 +932,43 @@
     ],
     "acceptance": "Evidence identifies source HEAD versus runtime provenance, actual viewports, non-mutating interactions, exact commands and counts; every untested criterion stays NOT VERIFIED. Design follows verified user impact rather than assumed defects."
   },
-  "next": "Report the green CI evidence and stop. Merge is the human decision; the agent must not merge.",
+  "next": "Report the rebase and the green run. Merge is the human decision; the agent must not merge.",
   "implementation_wave": {
     "provenance": "Lead-run implementation wave on branch feat/uiux-decision-first, rebased onto origin/main 605ecbba; all commands run in agent-control-tower/act-dashboard except git.",
     "plan": "docs/superpowers/plans/2026-10-27-decision-first-uiux-repairs.md",
     "branch": "feat/uiux-decision-first",
-    "base": "605ecbba",
-    "verification_point": "0950fd0c",
+    "base": "3975da6b",
+    "verification_point": "b6ea103b",
     "commits": [
-      "04a64d50 feat(uiux): add honest query-state and focus primitives",
-      "7dbc7fef feat(uiux): add decision and attention queues",
-      "9c0b3e8a feat(uiux): decision-first overview with honest summary states",
-      "76fd7f1e feat(uiux): honest board query states and mobile lane selector",
-      "3a5ee76e feat(uiux): keyboard card opener, served create errors, counted batch copy",
-      "e95567d7 feat(uiux): cancel-first destructive dialogs and drawer focus return",
-      "436bc242 feat(uiux): pausable toast live region and real rail links",
-      "8b9a7dde feat(uiux): honest run-conversation copy and single-pane mobile chat",
-      "0802905b fix(uiux): let the Ops grid collapse at the stylesheet breakpoint",
-      "5efaf0c8 fix(uiux): truthful knowledge ownership with an Unattributed bucket",
-      "b8759be3 fix(uiux): make Configure state what this build enforces",
-      "c00dc93f fix(uiux): a failed approvals fetch is an error, not an empty queue",
-      "7c3c76bf fix(uiux): give the phone chat the full width it was promised",
-      "9ad8b2f2 test(uiux): e2e cover the decision-first surfaces on real Chromium",
-      "b6adb9cc fix(uiux): the overview must not inherit the global three-column layout",
-      "541f959e test(uiux): point the Overview regression at the decision queue",
-      "ceb30dbb fix(uiux): Escape must close the drawer from its own focused heading",
-      "28899d7c fix(uiux): attention queue must not hide probe failures behind stale counts",
-      "0db73e93 fix(uiux): knowledge ownership degrades honestly when the agent list fails",
-      "747debd8 fix(uiux): a failed transcript load says so instead of claiming it is empty",
-      "f17b96c9 fix(uiux): the confirm dialog traps focus from anywhere inside it",
-      "3e9742a0 fix(uiux): configure stops advertising a reset that resets nothing",
-      "775c49ee fix(uiux): kanban cards stay draggable and batch actions skip pending asks",
-      "3a8934d6 fix(uiux): each decision row owns its busy state so queues stop re-sorting",
-      "8a4b80f9 fix(uiux): the executive summary marks last-known values as stale"
+      "b6ea103b docs(uiux): record the green hosted run and the two CI findings",
+      "f88d761f fix(uiux): keep the create-form error contract the board spec keys off",
+      "9c2cabd0 fix(uiux): focus the review heading in the opening commit, not a later frame",
+      "70ecba9a docs(uiux): record the plan, review verdict and verification ledger",
+      "a5a217c6 fix(uiux): the executive summary marks last-known values as stale",
+      "e7e386e2 fix(uiux): each decision row owns its busy state so queues stop re-sorting",
+      "ae17f446 fix(uiux): kanban cards stay draggable and batch actions skip pending asks",
+      "7d5d5ee1 fix(uiux): configure stops advertising a reset that resets nothing",
+      "8aba82a1 fix(uiux): the confirm dialog traps focus from anywhere inside it",
+      "6751891a fix(uiux): a failed transcript load says so instead of claiming it is empty",
+      "95888c60 fix(uiux): knowledge ownership degrades honestly when the agent list fails",
+      "4bf5cf74 fix(uiux): attention queue must not hide probe failures behind stale counts",
+      "c3728fba fix(uiux): Escape must close the drawer from its own focused heading",
+      "2c289356 test(uiux): point the Overview regression at the decision queue",
+      "02bed566 fix(uiux): the overview must not inherit the global three-column layout",
+      "cda01a29 test(uiux): e2e cover the decision-first surfaces on real Chromium",
+      "cf41353f fix(uiux): give the phone chat the full width it was promised",
+      "3b4d8007 fix(uiux): a failed approvals fetch is an error, not an empty queue",
+      "641d012e fix(uiux): make Configure state what this build enforces",
+      "5bd0e7f2 fix(uiux): truthful knowledge ownership with an Unattributed bucket",
+      "d49879d0 fix(uiux): let the Ops grid collapse at the stylesheet breakpoint",
+      "16b797ab feat(uiux): honest run-conversation copy and single-pane mobile chat",
+      "23fee745 feat(uiux): pausable toast live region and real rail links",
+      "69b548a0 feat(uiux): cancel-first destructive dialogs and drawer focus return",
+      "487a5ccf feat(uiux): keyboard card opener, served create errors, counted batch copy",
+      "4b843bab feat(uiux): honest board query states and mobile lane selector",
+      "7291a64e feat(uiux): decision-first overview with honest summary states",
+      "64fa80f0 feat(uiux): add decision and attention queues",
+      "14fc3a4c feat(uiux): add honest query-state and focus primitives"
     ],
     "deviations": [
       "ChatPage gained a .chat-page wrapper class (the inline padding had no CSS hook) so phones can drop page padding.",
@@ -986,7 +990,7 @@
       },
       {
         "gate": "e2e-new-artifact-first-post-fix",
-        "command": "clean-room worktree at 0950fd0c; pnpm build; pnpm preview --port 4176; BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0",
+        "command": "clean-room worktree at f88d761f; pnpm build; pnpm preview --port 4176; BASE_URL=http://localhost:4176 CI=1 pnpm exec playwright test e2e/decision-first-overview.spec.ts e2e/kanban-keyboard.spec.ts e2e/mobile-flows.spec.ts e2e/config-knowledge-honesty.spec.ts --project=chromium --workers=1 --retries=0",
         "result": "20 passed (42.4s) at 1440x900 / 1024x768 / 390x844 against the built artifact"
       },
       {
@@ -996,12 +1000,12 @@
       },
       {
         "gate": "clean-room-post-fix",
-        "command": "git worktree add --detach /d/project/aria-uiux-cleanroom4 0950fd0c; pnpm install --frozen-lockfile; pnpm test -- --coverage; pnpm build",
+        "command": "git worktree add --detach /d/project/aria-uiux-cleanroom4 f88d761f; pnpm install --frozen-lockfile; pnpm test -- --coverage; pnpm build",
         "result": "install exit 0; 72 files / 621 tests passed; coverage identical (74.75/82.27/61.16); build exit 0; no dist/ at checkout"
       },
       {
         "gate": "hosted-ci",
-        "result": "see release.ci_run_id (code HEAD); the final docs-only commit gets its own quick run, reported with the PR"
+        "result": "see release.ci_run_id (rebased code HEAD)"
       }
     ],
     "implementation_review": {
@@ -1012,73 +1016,73 @@
           "id": "H1",
           "severity": "high",
           "finding": "A failed /adk/providers query was indistinguishable from no providers; the attention phase could never be error and still showed an all-clear.",
-          "fix": "28899d7c"
+          "fix": "4bf5cf74"
         },
         {
           "id": "H2",
           "severity": "high",
           "finding": "An agent-list failure relabelled every knowledge item Unattributed and claimed no agents exist.",
-          "fix": "0db73e93"
+          "fix": "95888c60"
         },
         {
           "id": "H3",
           "severity": "high",
           "finding": "Overview lost the media-query cascade to index.css (three-column layout, 260px board).",
-          "fix": "b6adb9cc"
+          "fix": "02bed566"
         },
         {
           "id": "H4",
           "severity": "high",
           "finding": "Escape could not close the drawer from its own focused heading.",
-          "fix": "ceb30dbb"
+          "fix": "c3728fba"
         },
         {
           "id": "M1",
           "severity": "medium",
           "finding": "Configure gate rows still asserted enforcement under a reference-only panel.",
-          "fix": "3e9742a0"
+          "fix": "7d5d5ee1"
         },
         {
           "id": "M2",
           "severity": "medium",
           "finding": "Runtime tab exposed a Reset to defaults button that reset nothing.",
-          "fix": "3e9742a0"
+          "fix": "7d5d5ee1"
         },
         {
           "id": "M3",
           "severity": "medium",
           "finding": "draggable=false on the card-wide opener removed the pointer drag affordance.",
-          "fix": "775c49ee"
+          "fix": "ae17f446"
         },
         {
           "id": "M4",
           "severity": "medium",
           "finding": "Tab trap only ran while focus was on Cancel/Confirm; clicking the message let Tab escape.",
-          "fix": "f17b96c9"
+          "fix": "8aba82a1"
         },
         {
           "id": "M5",
           "severity": "medium",
           "finding": "Queue lock dropped focus when the pointer left; one shared busyId let a second click duplicate a decision.",
-          "fix": "3a8934d6"
+          "fix": "e7e386e2"
         },
         {
           "id": "M6",
           "severity": "medium",
           "finding": "A failed transcript fetch rendered \"No messages recorded yet\".",
-          "fix": "747debd8"
+          "fix": "6751891a"
         },
         {
           "id": "M7",
           "severity": "medium",
           "finding": "REVIEW batch presets included cards with pending asks.",
-          "fix": "775c49ee"
+          "fix": "ae17f446"
         },
         {
           "id": "L1",
           "severity": "low",
           "finding": "Executive summary showed stale runtime/runs values without saying they were last-known.",
-          "fix": "8a4b80f9"
+          "fix": "a5a217c6"
         }
       ],
       "test_quality_notes": [
@@ -1128,19 +1132,28 @@
       "Hosted CI has not run in this session yet; the branch is not pushed at ledger write time.",
       "Backend-dependent Playwright specs (kanban-hitl, chat-smoke, observability-live, journey suites, seeded overview case) run only in hosted CI.",
       "Native pointer drag is asserted by hit-test plus draggable state, not by a real mouse drag on CI hardware."
-    ]
+    ],
+    "rebase": {
+      "from_base": "605ecbba",
+      "to_base": "3975da6b13a45a6ea1539d44764c8692046cf2a2",
+      "old_head": "941f4a3d",
+      "new_head": "b6ea103b9621810afe82f388951a6872bcc43c70",
+      "method": "detached worktree at the old head, git rebase origin/main, force-with-lease push; the user working tree was not touched",
+      "patch_identical": "git diff origin/main...HEAD equals git diff 605ecbba...941f4a3d byte for byte (9680 lines); commit SHAs rewritten, product content unchanged",
+      "gate": "pnpm install --frozen-lockfile; pnpm test -- --coverage; pnpm build in the rebased worktree: 621 tests passed, build exit 0, coverage 74.79/82.2/61.16"
+    }
   },
   "release": {
-    "status": "HOSTED_CI_GREEN",
+    "status": "HOSTED_CI_GREEN_AFTER_REBASE",
     "branch": "feat/uiux-decision-first",
-    "base": "605ecbba",
-    "verification_point": "8a4b80f9",
+    "base": "3975da6b",
+    "verification_point": "b6ea103b",
     "pr_body": "docs/reviews/2026-10-27-uiux-pr-body.md",
-    "push": "pushed; upstream feat/uiux-decision-first",
+    "push": "force-with-lease after rebase (old remote head 941f4a3d)",
     "pr_url": "https://github.com/HappyLiang12/aria-conductor/pull/115",
-    "ci_run_id": "40554394382",
-    "ci_head": "0950fd0cf275ae20cc2a50a747c9c7554fb01352",
-    "ci_url": "https://github.com/HappyLiang12/aria-conductor/actions/runs/40554394382",
+    "ci_run_id": "42225942108",
+    "ci_head": "b6ea103b9621810afe82f388951a6872bcc43c70",
+    "ci_url": "https://github.com/HappyLiang12/aria-conductor/actions/runs/42225942108",
     "ci_result": "success",
     "ci_jobs": [
       {
@@ -1152,7 +1165,7 @@
         "conclusion": "success"
       },
       {
-        "name": "Build Backend + Harness Distribution (once)",
+        "name": "Java Unit Tests (knowledge-aria)",
         "conclusion": "success"
       },
       {
@@ -1160,15 +1173,11 @@
         "conclusion": "success"
       },
       {
-        "name": "Java Unit Tests (common-agent)",
-        "conclusion": "success"
-      },
-      {
         "name": "Java Unit Tests (execution)",
         "conclusion": "success"
       },
       {
-        "name": "Java Unit Tests (knowledge-aria)",
+        "name": "Build Backend + Harness Distribution (once)",
         "conclusion": "success"
       },
       {
@@ -1176,12 +1185,12 @@
         "conclusion": "success"
       },
       {
-        "name": "TS MCP Server Tests + Coverage",
-        "conclusion": "skipped"
+        "name": "Java Unit Tests (common-agent)",
+        "conclusion": "success"
       },
       {
-        "name": "E2E Smoke Test (deterministic harness)",
-        "conclusion": "success"
+        "name": "TS MCP Server Tests + Coverage",
+        "conclusion": "skipped"
       },
       {
         "name": "Docker Build Verification",
@@ -1192,7 +1201,11 @@
         "conclusion": "success"
       },
       {
-        "name": "E2E Playwright (shard 1/4)",
+        "name": "E2E Smoke Test (deterministic harness)",
+        "conclusion": "success"
+      },
+      {
+        "name": "E2E Playwright (shard 4/4)",
         "conclusion": "success"
       },
       {
@@ -1200,11 +1213,11 @@
         "conclusion": "success"
       },
       {
-        "name": "E2E Playwright (shard 4/4)",
+        "name": "E2E Playwright (shard 1/4)",
         "conclusion": "success"
       }
     ],
-    "ci_note": "Java lanes and docker-build also ran on this frontend-only PR; every non-skipped job must be success. This run verifies the product code at 0950fd0c; the documentation-only commit that follows changes no product file and gets its own docs-only run, checked on the PR before reporting."
+    "ci_note": "Rebased branch run: Java lanes, backend build, frontend build/coverage, smoke, Docker and all four Playwright shards. This run verifies the rebased product code; the documentation-only commit that follows is checked by its own run on the PR."
   },
   "defects_found_by_ci": [
     {
@@ -1213,7 +1226,7 @@
       "classification": "product defect (timing race), not a flake to retry away",
       "evidence": "hosted run 40551694153, Frontend Build Check annotation: src/components/__tests__/ReviewWorkspace.test.tsx:336 AssertionError: expected \"\" to be \"keep my draft\"; the same suite was green locally and in clean-room because the frame landed earlier on faster hardware",
       "root_cause": "the heading focus was deferred with requestAnimationFrame; on the CI runner the frame landed after the test/operator had focused the Request-changes textarea, so keystrokes went to the heading and the controlled draft stayed empty",
-      "fix": "2027711d - focus synchronously in the opening layout effect; new deterministic test holds every frame callback unrun and asserts the heading already has focus, then asserts a late frame cannot steal the caret from the draft",
+      "fix": "9c2cabd0 - focus synchronously in the opening layout effect; new deterministic test holds every frame callback unrun and asserts the heading already has focus, then asserts a late frame cannot steal the caret from the draft",
       "red_evidence": "vitest ReviewWorkspace.test.tsx -t \"heading focus in the opening commit\" against the rAF version: 1 failed, heading not focused (focus stayed on the opener button)"
     },
     {
@@ -1222,7 +1235,7 @@
       "classification": "product regression from the structured create-error change (Task 6); the hosted spec was the only coverage of the visual form-error slot",
       "evidence": "hosted run 40552479882, E2E Playwright shard 2/4: e2e/kanban-board.spec.ts:71 expect(.kanban-form-error).toHaveText(\"Title is required\") - element(s) not found (failed on retry too); shard summary 1 failed / 1 flaky / 60 passed",
       "root_cause": "the create error was re-rendered through ErrorNotice inside a kanban-create-error wrapper, dropping the kanban-form-error class that carried both the red styling and the spec hook; the board-level slot with that class is suppressed while the modal is open",
-      "fix": "0950fd0c - pass className=\"kanban-form-error\" to the create ErrorNotice and assert the class in the empty-title unit test (text and no-API-call assertions unchanged)",
+      "fix": "f88d761f - pass className=\"kanban-form-error\" to the create ErrorNotice and assert the class in the empty-title unit test (text and no-API-call assertions unchanged)",
       "red_evidence": "unit assertion added against the previous markup fails (closest(.kanban-form-error) is null); hosted shard failure is the end-to-end red"
     }
   ],

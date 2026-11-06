@@ -192,6 +192,39 @@ describe('DecisionPanel normalized asks (Task 15)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Task 6: batch copy states the count and what each action does.
+// ---------------------------------------------------------------------------
+
+describe('DecisionPanel batch copy (Task 6)', () => {
+  it('states the batch count in the Approve-all label', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[gateAsk(), { ...gateAsk(), id: 'a-gate-2' } as Approval]} />);
+    const approveAll = screen.getByRole('button', { name: '✓ Approve all (2)' });
+    expect(approveAll).toBeInTheDocument();
+    expect(approveAll).toHaveAttribute('title', 'Approve 2 eligible asks at once');
+  });
+
+  it('counts only gate asks and still discloses the excluded native permission ask', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[gateAsk(), nativeAsk()]} />);
+    expect(screen.getByRole('button', { name: '✓ Approve all (1)' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 native permission ask not included in Approve all/),
+    ).toBeInTheDocument();
+  });
+
+  it('states that Request changes starts one fresh run', () => {
+    renderPanel(<DecisionPanel item={item} pendingAsks={[gateAsk()]} />);
+    expect(screen.getByRole('button', { name: /request changes \(starts 1 fresh run\)/i })).toBeInTheDocument();
+  });
+});
+
+describe('ShortApprovalView batch copy (Task 6)', () => {
+  it('states that Request changes starts one fresh run', () => {
+    renderPanel(<ShortApprovalView item={item} />);
+    expect(screen.getByRole('button', { name: 'Request changes (starts 1 fresh run)' })).toBeInTheDocument();
+  });
+});
+
 describe('ShortApprovalView', () => {
   it('shows run summary and quick actions for ask-less Review cards', () => {
     renderPanel(<ShortApprovalView item={item} />);

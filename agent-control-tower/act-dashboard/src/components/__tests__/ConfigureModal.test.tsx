@@ -1,10 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigureModal } from '../ConfigureModal';
 import { listAgents, applyFleetRuntime } from '../../api/agents';
 import { listAdkProviders } from '../../api/adk';
+import { listSkills } from '../../api/skills';
 import type { Agent, AdkProviderInfo } from '../../types';
 
 vi.mock('../../api/agents', async () => ({
@@ -15,10 +16,19 @@ vi.mock('../../api/agents', async () => ({
 vi.mock('../../api/adk', () => ({
   listAdkProviders: vi.fn(),
 }));
+vi.mock('../../api/skills', () => ({
+  listSkills: vi.fn(),
+}));
+vi.mock('../../api/systemConfig', () => ({
+  listConfig: vi.fn().mockResolvedValue([]),
+  updateConfig: vi.fn(),
+  resetConfig: vi.fn(),
+}));
 
 const mockedAgents = vi.mocked(listAgents);
 const mockedApply = vi.mocked(applyFleetRuntime);
 const mockedProviders = vi.mocked(listAdkProviders);
+const mockedSkills = vi.mocked(listSkills);
 
 function agent(overrides: Partial<Agent>): Agent {
   return {
@@ -117,5 +127,84 @@ describe('ConfigureModal runtime tab', () => {
     const modeSelect = screen.getByLabelText('Execution mode') as HTMLSelectElement;
     const optionTexts = Array.from(modeSelect.options).map((o) => o.text);
     expect(optionTexts).toEqual(['Select a mode...', 'Host']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 12: Configure states what the build can actually enforce. Skills are a
+// read-only catalog (no invented permission model); gates stay visible as an
+// inert reference; Runtime / LLM / System Config keep their real mutations.
+// ---------------------------------------------------------------------------
+
+async function renderTab(tab: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <ConfigureModal initialTab={tab} />
+    </QueryClientProvider>,
+  );
+  window.dispatchEvent(new CustomEvent('act:open-configure', { detail: { tab } }));
+  await screen.findByRole('dialog', { hidden: true });
+}
+
+describe('ConfigureModal honesty (Task 12)', () => {
+  beforeEach(() => {
+    mockedAgents.mockResolvedValue([]);
+    mockedSkills.mockResolvedValue([
+      { id: 's-1', name: 'browser-use', category: 'Web', description: 'Drive a browser' },
+    ] as never);
+  });
+
+  it('renders skills as a read-only catalog and keeps System Config', async () => {
+    await renderTab('skills');
+
+    expect(await screen.findByText('browser-use')).toBeInTheDocument();
+    expect(
+      screen.getByText('Read-only catalog. No skill permission is editable or enforced in this build.'),
+    ).toBeInTheDocument();
+    // No permission column, select or static RO/USE/RW value may exist.
+    expect(screen.queryByRole('combobox', { name: /permission/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('USE')).not.toBeInTheDocument();
+    expect(screen.getByText('1 skills in the read-only catalog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reset to defaults/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /system config/i })).toBeInTheDocument();
+  });
+
+  it('keeps Gates present but disabled with an honest reference note', async () => {
+    await renderTab('gates');
+
+    expect(screen.getByText(/Reference only — gates are not enforced/)).toBeInTheDocument();
+    const switches = screen.getAllByRole('switch');
+    expect(switches.length).toBeGreaterThan(0);
+    switches.forEach((s) => expect(s).toHaveAttribute('aria-disabled', 'true'));
+
+    const before = switches.map((s) => s.getAttribute('aria-checked'));
+    fireEvent.click(switches[0]);
+    fireEvent.keyDown(switches[0], { key: 'Enter' });
+    expect(switches.map((s) => s.getAttribute('aria-checked'))).toEqual(before);
+
+    screen.getAllByRole('combobox').forEach((c) => expect(c).toBeDisabled());
+    screen.getAllByRole('spinbutton').forEach((i) => expect(i).toBeDisabled());
+    expect(screen.queryByRole('button', { name: /reset to defaults/i })).not.toBeInTheDocument();
+
+    // Row copy must not claim runtime behaviour the build does not enforce.
+    expect(screen.queryByText(/Human approval required before work flows on/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Blocks until approved/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Policy target:/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the real apply control on Runtime and offers no no-op Reset', async () => {
+    await renderTab('runtime');
+
+    expect(await screen.findByRole('button', { name: /apply to all agents/i })).toBeInTheDocument();
+    // There is no editable local policy state, so a Reset button could only lie.
+    expect(screen.queryByRole('button', { name: /reset to defaults/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the System Config panel and its per-key save/reset controls', async () => {
+    await renderTab('config');
+
+    expect((await screen.findAllByTitle(/^Save /)).length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle('Reset to default').length).toBeGreaterThan(0);
   });
 });

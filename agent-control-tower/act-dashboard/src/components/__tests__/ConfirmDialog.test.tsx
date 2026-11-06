@@ -148,3 +148,127 @@ describe('ConfirmDialog', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 7: a destructive dialog is cancel-first. The safe exit receives initial
+// focus, Enter on it dismisses exactly once, Tab cycles inside the dialog, and
+// the opener is restored even when the dialog mounts already open.
+// ---------------------------------------------------------------------------
+
+describe('ConfirmDialog destroy-safe keyboard contract (Task 7)', () => {
+  it('focuses Cancel in a danger dialog and only Cancel fires on Enter', async () => {
+    const user = userEvent.setup();
+    const { onConfirm, onCancel } = setup({ danger: true });
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('keeps Confirm first for a non-danger dialog', () => {
+    setup();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toHaveFocus();
+  });
+
+  it('orders danger actions Cancel then Confirm in the DOM', () => {
+    setup({ danger: true });
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Cancel', 'Confirm']);
+  });
+
+  it('traps Tab when focus was lost to the page body by an inside click', () => {
+    // Clicking the dialog title/message moves focus to <body> in real browsers;
+    // the keydown then targets body, not the dialog. The trap must still fire.
+    setup({ danger: true });
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toHaveFocus();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+
+    expect(cancel).toHaveFocus();
+  });
+
+  it('traps Tab/Shift+Tab inside a danger dialog and never reaches the background', () => {
+    const outside = document.createElement('button');
+    outside.textContent = 'Outside';
+    document.body.append(outside);
+    try {
+      outside.focus();
+
+      setup({ danger: true });
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      const confirm = screen.getByRole('button', { name: 'Confirm' });
+      expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
+      expect(cancel).toHaveFocus();
+
+      fireEvent.keyDown(cancel, { key: 'Tab' });
+      expect(confirm).toHaveFocus();
+      fireEvent.keyDown(confirm, { key: 'Tab' });
+      expect(cancel).toHaveFocus();
+      fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true });
+      expect(confirm).toHaveFocus();
+      fireEvent.keyDown(confirm, { key: 'Tab', shiftKey: true });
+      expect(cancel).toHaveFocus();
+      expect(outside).not.toHaveFocus();
+    } finally {
+      outside.remove();
+    }
+  });
+
+  it('restores the invoker after close even though the dialog mounted open', () => {
+    const invoker = document.createElement('button');
+    invoker.textContent = 'Open';
+    document.body.append(invoker);
+    try {
+      invoker.focus();
+
+      const { unmount } = setup({ danger: true });
+      expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+      unmount();
+      expect(invoker).toHaveFocus();
+    } finally {
+      invoker.remove();
+    }
+  });
+
+  it('restores the opener when the dialog is closed by rerender', () => {
+    const invoker = document.createElement('button');
+    invoker.textContent = 'Open';
+    document.body.append(invoker);
+    try {
+      const { props, rerender } = setup({ open: false });
+      invoker.focus();
+
+      rerender(<ConfirmDialog {...props} open danger />);
+      expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+      rerender(<ConfirmDialog {...props} open={false} danger />);
+      expect(invoker).toHaveFocus();
+    } finally {
+      invoker.remove();
+    }
+  });
+
+  it('dismisses once on Escape without confirming and restores the opener', () => {
+    const invoker = document.createElement('button');
+    invoker.textContent = 'Open';
+    document.body.append(invoker);
+    try {
+      invoker.focus();
+      const { onConfirm, onCancel, props, rerender } = setup({ danger: true });
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      expect(onConfirm).not.toHaveBeenCalled();
+
+      rerender(<ConfirmDialog {...props} open={false} danger />);
+      expect(invoker).toHaveFocus();
+    } finally {
+      invoker.remove();
+    }
+  });
+});

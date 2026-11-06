@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getKanbanItem } from '../api/kanban';
 import { listAsksByKanbanItem } from '../api/approvals';
@@ -48,6 +48,35 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
   // listing-only), so the outcome chip derives from the run this rail already
   // fetches instead of claiming nothing (or worse, completion).
   const runOutcome = item?.runOutcome ?? runOutcomeFromStatus(linkedRun?.status);
+
+  // Task 7 focus contract: the workspace replaces the drawer in place, so the
+  // opener (Expand) is captured on mount and restored on collapse/unmount; the
+  // card heading is the initial focus target once the card is available. The
+  // per-card guard keeps a refetch from stealing focus while the operator types.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const focusedForRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body) {
+      openerRef.current = active;
+    }
+    return () => {
+      const opener = openerRef.current;
+      openerRef.current = null;
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (!item || focusedForRef.current === itemId) return;
+    focusedForRef.current = itemId;
+    // Focus synchronously. A requestAnimationFrame here deferred the focus by
+    // a frame, and on a slow runner the frame landed after the operator had
+    // already clicked into the feedback textarea, stealing the caret: the
+    // draft stayed empty while keystrokes went to the heading (observed on
+    // hosted CI, ReviewWorkspace.test.tsx "Escape while typing").
+    headingRef.current?.focus();
+  }, [item, itemId]);
 
   // Auto-exit when the card leaves REVIEW (e.g. the short-view Approve moved
   // it to DONE): a stale workspace must not linger on a card that no longer
@@ -144,6 +173,8 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
         <div style={{ minWidth: 0 }}>
           <div className="id">TASK · {item.id.slice(0, 8).toUpperCase()}</div>
           <h3
+            ref={headingRef}
+            tabIndex={-1}
             style={{
               margin: 0,
               overflow: 'hidden',
@@ -185,7 +216,6 @@ export function ReviewWorkspace({ itemId }: { itemId: string }) {
             className="btn"
             onClick={closeReviewMode}
             aria-label="Collapse review"
-            autoFocus
           >
             ⤡ Collapse
           </button>

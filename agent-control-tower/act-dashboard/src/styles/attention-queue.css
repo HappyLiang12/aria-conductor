@@ -1,0 +1,21 @@
+/* Decision-first Overview: recovery items below the decision queue. */
+.attention-queue { margin-bottom: 16px; }
+.attention-queue__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.attention-queue__head h2 { margin: 0; font-size: 15px; }
+.attention-queue__count { margin-left: auto; font-size: 20px; font-weight: 800; color: var(--amber); }
+.attention-queue__collapsed { margin: 0; font-size: 13px; color: var(--text-dim); font-weight: 500; }
+.attention-queue__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.attention-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.attention-row__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.attention-row__title { font-size: 13px; overflow-wrap: anywhere; }
+.attention-row__reason { margin: 6px 0 4px; color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
+.attention-row__actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+@media (max-width: 900px) {
+  .attention-row__actions > .btn { width: 100%; }
+  .attention-row__actions { flex-direction: column; align-items: stretch; }
+}

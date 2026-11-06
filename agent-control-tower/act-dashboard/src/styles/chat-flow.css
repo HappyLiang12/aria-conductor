@@ -1,0 +1,89 @@
+/* Task 9: on narrow screens the conversation shell shows one pane at a time.
+   The base .chat-shell (index.css) is a fixed 320px list + fluid transcript on
+   desktop; a single minmax(0, 1fr) track is required here or hiding a pane
+   would leave the transcript squeezed into the old 320px track. */
+
+.chat-page {
+  padding: 16px;
+}
+
+.chat-back {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  margin-right: 2px;
+  background: transparent;
+  border: 1px solid var(--line-2, #26304d);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.chat-back:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+@media (max-width: 900px) {
+  /* The rail still owns 84px on a phone; every pixel of page padding is width
+     the transcript loses, so the conversation surface goes edge to edge. */
+  .chat-page {
+    padding: 0;
+  }
+
+  /* The base .chat-shell rule lives in index.css and is injected after this
+     file, so it wins on equal specificity. Scope every layout override under
+     .chat-page (0,2,0) or the phone would keep the 320px desktop track. */
+  .chat-page .chat-shell {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    min-height: 0;
+    gap: 0;
+  }
+
+  /* minmax(0, 1fr) alone is not enough: a grid item defaults to
+     min-width:auto, so one wide child (a chip row, a long token) would drag the
+     panel past the viewport and reintroduce horizontal scroll. */
+  .chat-page .chat-shell .chat-list-panel,
+  .chat-page .chat-shell .chat-thread-panel {
+    grid-column: 1 / -1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .chat-page .chat-shell .chat-run-context,
+  .chat-page .chat-shell .chat-stack,
+  .chat-page .chat-shell .chat-compose {
+    min-width: 0;
+  }
+
+  .chat-page .chat-shell .chat-thread-panel header {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  /* The list pane owns the viewport height; the thread pane fills what is left
+     of the page so the compose box stays reachable without horizontal scroll. */
+  .chat-shell[data-mobile-pane='list'] .chat-thread-panel {
+    display: none;
+  }
+
+  .chat-shell[data-mobile-pane='thread'] .chat-list-panel {
+    display: none;
+  }
+
+  .chat-shell[data-mobile-pane='list'] .chat-list-panel {
+    height: calc(100dvh - 190px);
+  }
+
+  .chat-shell[data-mobile-pane='thread'] .chat-thread-panel {
+    height: calc(100dvh - 170px);
+  }
+
+  .chat-back {
+    display: inline-flex;
+  }
+}

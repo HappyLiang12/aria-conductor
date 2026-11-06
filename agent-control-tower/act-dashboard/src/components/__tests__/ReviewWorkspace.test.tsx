@@ -343,11 +343,55 @@ describe('ReviewWorkspace (in-place expand, spec 10.3)', () => {
     expect(screen.queryByTestId('review-workspace')).toBeNull();
   });
 
-  it('focuses the Collapse button when the workspace opens (keyboard entry point)', async () => {
+  it('focuses the card heading when the workspace opens (keyboard entry point)', async () => {
     renderWorkspace();
     await openReview();
-    const collapse = await screen.findByRole('button', { name: /collapse/i });
-    expect(document.activeElement).toBe(collapse);
+    const heading = await screen.findByRole('heading', { name: 'Spec task' });
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
+  it('delivers the heading focus in the opening commit and never steals it back', async () => {
+    // Hosted CI failed the draft test above because the focus was deferred to a
+    // requestAnimationFrame: on a slow runner the frame landed after user-event
+    // had focused the feedback textarea, so keystrokes went to the heading and
+    // the draft stayed empty. Hold every frame callback unrun: focus must be in
+    // place without any frame, and flushing a late frame must not steal a caret
+    // that is already in the draft.
+    const frames: FrameRequestCallback[] = [];
+    const rafSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((cb: FrameRequestCallback) => {
+        frames.push(cb);
+        return frames.length;
+      });
+    try {
+      renderWorkspace();
+      await openReview();
+      const heading = await screen.findByRole('heading', { name: 'Spec task' });
+      expect(heading).toHaveFocus();
+
+      const feedback = await screen.findByLabelText('Request-changes feedback');
+      feedback.focus();
+      frames.splice(0).forEach((cb) => cb(0));
+      expect(feedback).toHaveFocus();
+    } finally {
+      rafSpy.mockRestore();
+    }
+  });
+
+  it('restores the opener when the workspace collapses (Task 7)', async () => {
+    const user = userEvent.setup();
+    renderWorkspace();
+    const trigger = screen.getByTestId('open-review');
+    trigger.focus();
+    await user.click(trigger);
+    await screen.findByText('Spec task');
+
+    await user.click(screen.getByRole('button', { name: /collapse/i }));
+
+    // The Expand control lives in the drawer, which stays mounted in the app;
+    // here the harness's trigger stands in for it.
+    expect(trigger).toHaveFocus();
   });
 
   it('auto-exits when the card leaves REVIEW (refetch returns a non-REVIEW status)', async () => {

@@ -3,14 +3,31 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { getSummary } from '../api/dashboard';
 import { getAdkProviderHealth, listAdkProviders } from '../api/adk';
 import type { DashboardSummary } from '../types';
+import { queryPhase, type QueryPhase } from '../utils/queryState';
 import { formatClock } from '../utils/formatTime';
 import { NotificationBell } from './NotificationBell';
 
-function formatTokens(tokens: number | undefined): string {
-  if (!tokens || tokens <= 0) return '0';
+function formatTokens(tokens: number): string {
+  if (tokens <= 0) return '0';
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2)}M`;
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
   return String(tokens);
+}
+
+function kpiValue(
+  phase: QueryPhase,
+  value: number | undefined,
+  format: (n: number) => string = String,
+): string {
+  if (value === undefined || value === null || phase === 'loading') return '—';
+  return format(value);
+}
+
+function kpiTitle(phase: QueryPhase): string | undefined {
+  if (phase === 'loading') return 'Loading';
+  if (phase === 'error') return 'Unavailable';
+  if (phase === 'stale') return 'Last known data; refresh failed';
+  return undefined;
 }
 
 export function TopBar() {
@@ -24,7 +41,7 @@ export function TopBar() {
     return typeof document !== 'undefined' && document.body.classList.contains('light');
   });
 
-  const { data: summary } = useQuery<DashboardSummary>({
+  const { data: summary, isPending, isError, isSuccess } = useQuery<DashboardSummary>({
     queryKey: ['dashboard-summary'],
     queryFn: getSummary,
     refetchInterval: 15_000,
@@ -63,10 +80,12 @@ export function TopBar() {
     } catch { /* localStorage unavailable */ }
   };
 
-  const activeAgents = summary?.activeAgents ?? 0;
-  const runningRuns = summary?.runningRuns ?? 0;
-  const pendingApprovals = summary?.pendingApprovals ?? 0;
-  const tokensBurned = summary?.totalTokensBurned ?? 0;
+  const summaryPhase = queryPhase({ data: summary, isPending, isError, isSuccess });
+  const kpiDetail = kpiTitle(summaryPhase);
+  const activeAgents = summary?.activeAgents;
+  const runningRuns = summary?.runningRuns;
+  const pendingApprovals = summary?.pendingApprovals;
+  const tokensBurned = summary?.totalTokensBurned;
   const healthyProviders = healthResults.filter((r) => r.data?.healthy === true).length;
   // Honesty rule: the badge may only report a verdict it actually has evidence for.
   // `data` is the only field that carries a verdict — a pending probe has none yet and
@@ -98,7 +117,7 @@ export function TopBar() {
       <div className="badges">
         <span className="badge governed">
           <span className="dot" />
-          {activeAgents} {activeAgents === 1 ? 'Agent' : 'Agents'}
+          {activeAgents ?? '—'} {activeAgents === 1 ? 'Agent' : 'Agents'}
         </span>
         <span className={`badge ${providerBadgeClass}`}>
           <span className="dot" />
@@ -107,21 +126,21 @@ export function TopBar() {
       </div>
 
       <div className="top-counters">
-        <div className="kpi brand">
-          <div className="v">{activeAgents}</div>
+        <div className="kpi brand" data-testid="kpi-active-agents" title={kpiDetail}>
+          <div className="v">{kpiValue(summaryPhase, activeAgents)}</div>
           <div className="l">Active Agents</div>
         </div>
-        <div className="kpi">
-          <div className="v">{runningRuns}</div>
+        <div className="kpi" data-testid="kpi-running-runs" title={kpiDetail}>
+          <div className="v">{kpiValue(summaryPhase, runningRuns)}</div>
           <div className="l">Running Runs</div>
         </div>
-        <div className="kpi amber">
-          <div className="v">{pendingApprovals}</div>
+        <div className="kpi amber" data-testid="kpi-pending-approvals" title={kpiDetail}>
+          <div className="v">{kpiValue(summaryPhase, pendingApprovals)}</div>
           <div className="l">Approvals Pending</div>
         </div>
-        <div className="kpi green">
-          <div className="v">{formatTokens(tokensBurned)}</div>
-          <div className="l">Tokens Today</div>
+        <div className="kpi green" data-testid="kpi-tokens" title={kpiDetail}>
+          <div className="v">{kpiValue(summaryPhase, tokensBurned, formatTokens)}</div>
+          <div className="l">Recorded tokens</div>
         </div>
       </div>
 

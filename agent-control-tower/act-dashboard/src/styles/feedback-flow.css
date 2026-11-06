@@ -1,0 +1,22 @@
+/* Task 7 focus contract: programmatically focused headings need a visible ring
+   for keyboard users, and the shared dialog controls keep one consistent ring.
+   Loaded by ConfirmDialog so the drawer, workspace and every modal agree. */
+
+.drawer header h3[tabindex='-1']:focus-visible,
+.review-workspace h3[tabindex='-1']:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.modal-dialog .modal-actions .btn:focus-visible,
+.modal-overlay .modal-actions .btn:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 2px;
+}
+
+/* The focused heading is a reading anchor, not a boxed control: keep the ring
+   but never show a full-width frame around the whole header text. */
+.drawer header h3[tabindex='-1'] {
+  cursor: default;
+}

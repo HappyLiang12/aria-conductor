@@ -98,10 +98,29 @@ test.describe('Workflow system — definition / execution / state machine', () =
 
     const outcomes = await Promise.all(
       ids.map(async (id) => {
+        // Get the workflow to extract the runId from the current step
+        const workflowBefore = await apiCall(request, 'GET', `/workflows/${id}`);
+        const currentStep = workflowBefore.data.steps?.[workflowBefore.data.currentStepIndex];
+        const runId = currentStep?.runId;
+
         const [a, b] = await Promise.all([cancelWorkflow(request, id), cancelWorkflow(request, id)]);
         const successes = [a, b].filter((x) => x.status >= 200 && x.status < 300).length;
         const final = (await apiCall(request, 'GET', `/workflows/${id}`)).data?.status;
-        return { id, successes, statuses: [a.status, b.status], final };
+
+        // AC-5: Verify the run is also cancelled (not just the chain)
+        let runStatus: string | null = null;
+        if (runId && final === 'CANCELLED') {
+          // Poll for up to 5 seconds for the run to reach CANCELLED state
+          runStatus = await pollUntil(
+            request,
+            `/runs/${runId}`,
+            (r: any) => r.status === 'CANCELLED' || r.status === 'COMPLETED' || r.status === 'FAILED' || r.status === 'ABORTED',
+            5_000,
+            200,
+          ).then((r) => r.status).catch(() => null);
+        }
+
+        return { id, successes, statuses: [a.status, b.status], final, runId, runStatus };
       }),
     );
 
@@ -111,6 +130,10 @@ test.describe('Workflow system — definition / execution / state machine', () =
     for (const o of outcomes) {
       expect(Math.max(...o.statuses), `unexpected 5xx: ${JSON.stringify(o)}`).toBeLessThan(500);
       expect(['CANCELLED', 'FAILED', 'COMPLETED']).toContain(o.final);
+      // AC-5: If the chain was cancelled and had a run, the run must also be cancelled
+      if (o.final === 'CANCELLED' && o.runId) {
+        expect(o.runStatus, `run ${o.runId} for cancelled chain ${o.id} should be CANCELLED`).toBe('CANCELLED');
+      }
     }
   });
 

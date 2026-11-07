@@ -10,6 +10,7 @@ import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.common.event.WorkflowAdvancedEvent;
 import io.aria.conductor.common.event.WorkflowCancelledEvent;
+import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.exception.ResourceNotFoundException;
 import io.aria.conductor.common.model.WorkflowChain;
 import io.aria.conductor.common.model.WorkflowStep;
@@ -225,14 +226,27 @@ public class WorkflowService {
         }
 
         List<WorkflowStep> steps = deserializeSteps(chain.getStepsJson());
+        WorkflowStep currentStep = null;
         if (chain.getCurrentStepIndex() < steps.size()) {
-            steps.get(chain.getCurrentStepIndex()).setStatus(WorkflowStep.Status.SKIPPED);
+            currentStep = steps.get(chain.getCurrentStepIndex());
+            currentStep.setStatus(WorkflowStep.Status.SKIPPED);
         }
 
         chain.setStatus(WorkflowChain.Status.CANCELLED);
         chain.setCompletedAt(Instant.now());
         chain.setStepsJson(serializeSteps(steps));
         workflowChainRepository.save(chain);
+
+        // Cancel the in-flight run (if any)
+        if (currentStep != null && currentStep.getRunId() != null) {
+            try {
+                runService.cancelRun(currentStep.getRunId());
+            } catch (InvalidStateTransitionException | ResourceNotFoundException e) {
+                // Run already completed or not found — log and continue
+                log.debug("Could not cancel run {} for chain {}: {}",
+                        currentStep.getRunId(), chainId, e.getMessage());
+            }
+        }
 
         log.info("Workflow chain cancelled: id={}, name={}", chain.getId(), chain.getName());
         eventPublisher.publishEvent(new WorkflowCancelledEvent(this, chain.getId(), chain.getName()));

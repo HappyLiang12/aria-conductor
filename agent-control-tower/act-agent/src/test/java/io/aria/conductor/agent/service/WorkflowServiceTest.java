@@ -5,7 +5,9 @@ import io.aria.conductor.agent.dto.CreateWorkflowRequest;
 import io.aria.conductor.agent.dto.RunResponse;
 import io.aria.conductor.agent.dto.WorkflowResponse;
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
+import io.aria.conductor.common.exception.InvalidStateTransitionException;
 import io.aria.conductor.common.model.WorkflowChain;
+import io.aria.conductor.common.model.WorkflowStep;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,11 +18,13 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -79,5 +83,98 @@ class WorkflowServiceTest {
         ArgumentCaptor<WorkflowChain> captor = ArgumentCaptor.forClass(WorkflowChain.class);
         verify(workflowChainRepository, atLeast(1)).save(captor.capture());
         assertThat(captor.getAllValues().get(0).getName()).isEqualTo("QA-Dev");
+    }
+
+    @Test
+    void cancelWorkflow_withActiveRun_cancelsRun() {
+        UUID chainId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+
+        WorkflowStep step = WorkflowStep.builder()
+                .agentId(UUID.randomUUID())
+                .promptTemplate("Test prompt")
+                .maxIterations(3)
+                .status(WorkflowStep.Status.RUNNING)
+                .runId(runId)
+                .build();
+
+        WorkflowChain chain = WorkflowChain.builder()
+                .id(chainId)
+                .name("test-chain")
+                .status(WorkflowChain.Status.RUNNING)
+                .currentStepIndex(0)
+                .stepsJson(workflowService.serializeSteps(List.of(step)))
+                .createdAt(Instant.now())
+                .build();
+
+        when(workflowChainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowChainRepository.save(any())).thenReturn(chain);
+
+        WorkflowResponse response = workflowService.cancelWorkflow(chainId);
+
+        assertThat(response.getStatus()).isEqualTo(WorkflowChain.Status.CANCELLED);
+        verify(runService).cancelRun(runId);
+    }
+
+    @Test
+    void cancelWorkflow_runAlreadyCompleted_succeeds() {
+        UUID chainId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+
+        WorkflowStep step = WorkflowStep.builder()
+                .agentId(UUID.randomUUID())
+                .promptTemplate("Test prompt")
+                .maxIterations(3)
+                .status(WorkflowStep.Status.RUNNING)
+                .runId(runId)
+                .build();
+
+        WorkflowChain chain = WorkflowChain.builder()
+                .id(chainId)
+                .name("test-chain")
+                .status(WorkflowChain.Status.RUNNING)
+                .currentStepIndex(0)
+                .stepsJson(workflowService.serializeSteps(List.of(step)))
+                .createdAt(Instant.now())
+                .build();
+
+        when(workflowChainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowChainRepository.save(any())).thenReturn(chain);
+        when(runService.cancelRun(runId)).thenThrow(
+                new InvalidStateTransitionException("Run", "COMPLETED", "CANCELLED"));
+
+        WorkflowResponse response = workflowService.cancelWorkflow(chainId);
+
+        assertThat(response.getStatus()).isEqualTo(WorkflowChain.Status.CANCELLED);
+        verify(runService).cancelRun(runId);
+    }
+
+    @Test
+    void cancelWorkflow_withoutRunId_doesNotCallCancelRun() {
+        UUID chainId = UUID.randomUUID();
+
+        WorkflowStep step = WorkflowStep.builder()
+                .agentId(UUID.randomUUID())
+                .promptTemplate("Test prompt")
+                .maxIterations(3)
+                .status(WorkflowStep.Status.PENDING)
+                .build();
+
+        WorkflowChain chain = WorkflowChain.builder()
+                .id(chainId)
+                .name("test-chain")
+                .status(WorkflowChain.Status.PENDING)
+                .currentStepIndex(0)
+                .stepsJson(workflowService.serializeSteps(List.of(step)))
+                .createdAt(Instant.now())
+                .build();
+
+        when(workflowChainRepository.findById(chainId)).thenReturn(Optional.of(chain));
+        when(workflowChainRepository.save(any())).thenReturn(chain);
+
+        WorkflowResponse response = workflowService.cancelWorkflow(chainId);
+
+        assertThat(response.getStatus()).isEqualTo(WorkflowChain.Status.CANCELLED);
+        verify(runService, never()).cancelRun(any());
     }
 }

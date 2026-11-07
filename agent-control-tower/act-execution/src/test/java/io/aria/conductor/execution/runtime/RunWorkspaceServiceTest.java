@@ -1086,6 +1086,43 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
         assertThat(Files.readString(later.localRoot().resolve("tracked.txt"))).isEqualTo("v1\n");
     }
 
+    // ----------------------------------------------- git credential helper configuration
+
+    @Test
+    void configureGitCredentialHelperSetsCredentialHelperInGitRepository() throws Exception {
+        Path repo = temp.resolve("credential-helper-repo");
+        initDisposableRepo(repo);
+
+        service().configureGitCredentialHelper(repo);
+
+        String helper = git(repo, "config", "--get", "credential.helper");
+        assertThat(helper).contains("password=$GH_TOKEN");
+        assertThat(helper).contains("echo");
+    }
+
+    @Test
+    void configureGitCredentialHelperDoesNotThrowForNonGitDirectory() throws Exception {
+        Path nonGit = Files.createDirectories(temp.resolve("not-a-git-repo"));
+
+        // Best-effort: no exception, just a warning logged
+        service().configureGitCredentialHelper(nonGit);
+    }
+
+    @Test
+    void configureGitCredentialHelperDoesNotThrowForNonExistentDirectory() {
+        Path nonExistent = temp.resolve("does-not-exist");
+
+        // Best-effort: no exception, just a warning logged
+        service().configureGitCredentialHelper(nonExistent);
+    }
+
+    @Test
+    void configureGitCredentialHelperDoesNotThrowForNull() {
+        // Null safety: no exception
+        assertThatThrownBy(() -> service().configureGitCredentialHelper(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     /** A lease row with explicit local/source roots, mirroring how the service persists them. */

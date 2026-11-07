@@ -14,36 +14,45 @@ class GitBranchConfigTest {
 
     @Test
     void resolvesTokenFromTheCredentialStore() {
-        PackCredentialService credentials = mock(PackCredentialService.class);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
+        PackCredentialService packCredentials = mock(PackCredentialService.class);
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.GITHUB_TOKEN_KEY))
                 .thenReturn("ghp_from_store");
+        GitCredentialResolver resolver = new GitCredentialResolver(packCredentials);
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(resolver);
 
         assertThat(service.isAvailable()).isTrue();
     }
 
     @Test
     void fallsBackToTheDeprecatedGhTokenAlias() {
-        PackCredentialService credentials = mock(PackCredentialService.class);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
+        PackCredentialService packCredentials = mock(PackCredentialService.class);
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.GITHUB_TOKEN_KEY))
                 .thenReturn(null);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null,
-                GitBranchConfig.DEPRECATED_GH_TOKEN_KEY))
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.DEPRECATED_GH_TOKEN_KEY))
                 .thenReturn("ghp_legacy");
+        GitCredentialResolver resolver = new GitCredentialResolver(packCredentials);
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(resolver);
 
         assertThat(service.isAvailable()).isTrue();
     }
 
     @Test
     void returnsDisabledStubWhenNothingResolves() {
-        PackCredentialService credentials = mock(PackCredentialService.class);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
+        PackCredentialService packCredentials = mock(PackCredentialService.class);
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.GITHUB_TOKEN_KEY))
                 .thenReturn(null);
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.DEPRECATED_GH_TOKEN_KEY))
+                .thenReturn(null);
+        GitCredentialResolver resolver = new GitCredentialResolver(packCredentials);
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(resolver);
 
         assertThat(service.isAvailable()).isFalse();
         assertThatThrownBy(() -> service.createBranch("https://github.com/owner/repo.git", "b"))
@@ -57,11 +66,13 @@ class GitBranchConfigTest {
      */
     @Test
     void degradesToDisabledStubWhenResolveThrows() {
-        PackCredentialService credentials = mock(PackCredentialService.class);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
+        PackCredentialService packCredentials = mock(PackCredentialService.class);
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.GITHUB_TOKEN_KEY))
                 .thenThrow(new RuntimeException("Credential decryption failed"));
+        GitCredentialResolver resolver = new GitCredentialResolver(packCredentials);
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(resolver);
 
         assertThat(service.isAvailable()).isFalse();
         assertThatThrownBy(() -> service.createBranch("https://github.com/owner/repo.git", "b"))
@@ -71,14 +82,16 @@ class GitBranchConfigTest {
     /** Same degradation when the throwing credential row is only reached via the alias. */
     @Test
     void degradesToDisabledStubWhenTheAliasResolveThrows() {
-        PackCredentialService credentials = mock(PackCredentialService.class);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null, GitBranchConfig.GITHUB_TOKEN_KEY))
+        PackCredentialService packCredentials = mock(PackCredentialService.class);
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.GITHUB_TOKEN_KEY))
                 .thenReturn(null);
-        when(credentials.resolve(GitBranchConfig.GIT_PACK_ID, null,
-                GitBranchConfig.DEPRECATED_GH_TOKEN_KEY))
+        when(packCredentials.resolve(GitCredentialResolver.GIT_PACK_ID, null,
+                GitCredentialResolver.DEPRECATED_GH_TOKEN_KEY))
                 .thenThrow(new RuntimeException("Credential decryption failed"));
+        GitCredentialResolver resolver = new GitCredentialResolver(packCredentials);
 
-        GitBranchService service = config.gitBranchService(credentials);
+        GitBranchService service = config.gitBranchService(resolver);
 
         assertThat(service.isAvailable()).isFalse();
         assertThatThrownBy(() -> service.getFile("https://github.com/owner/repo.git", "b", "p.md"))

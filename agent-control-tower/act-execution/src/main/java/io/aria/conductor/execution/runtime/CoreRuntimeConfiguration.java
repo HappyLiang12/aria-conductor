@@ -182,11 +182,12 @@ public class CoreRuntimeConfiguration {
             TaskDeadlineProperties taskDeadlines,
             io.aria.conductor.agent.repository.AgentRepository agentRepository,
             SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters,
-            io.aria.conductor.agent.repository.RunRepository runs) {
+            io.aria.conductor.agent.repository.RunRepository runs,
+            io.aria.conductor.execution.git.GitCredentialResolver gitCredentialResolver) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
                 permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
                 eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters,
-                committedStatusReader(runs));
+                committedStatusReader(runs), gitCredentialResolver);
     }
 
     /** The run row's committed status, read straight from the database (never a cached entity). */

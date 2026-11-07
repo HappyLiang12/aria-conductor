@@ -159,6 +159,12 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * registry record.
      */
     private final RunStatusReader runStatusReader;
+    /**
+     * Resolves the GitHub token for git credential helper configuration. Null in
+     * test conveniences that wire no git integration; those attempts launch
+     * without configuring a credential helper.
+     */
+    private final io.aria.conductor.execution.git.GitCredentialResolver gitCredentialResolver;
 
     /**
      * One monitor per run around the binding row's read-modify-write of the
@@ -263,7 +269,26 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             RunStatusReader runStatusReader) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
                 Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines,
-                agents, trajectories, adapters, runStatusReader);
+                agents, trajectories, adapters, runStatusReader, null);
+    }
+
+    /**
+     * The production constructor with git credential resolution and the run store's
+     * committed status reader (the run's own control timestamps, cleanup window and
+     * deadline scheduler keep their documented defaults).
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters,
+            RunStatusReader runStatusReader,
+            io.aria.conductor.execution.git.GitCredentialResolver gitCredentialResolver) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines,
+                agents, trajectories, adapters, runStatusReader, gitCredentialResolver);
     }
 
     /**
@@ -337,6 +362,30 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             TaskDeadlineProperties taskDeadlines, AgentRepository agents,
             SessionTrajectoryRepository trajectories, CoreAdapters adapters,
             RunStatusReader runStatusReader) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                clock, cleanupWindow, deadlines, inputs, eventPublisher, taskDeadlines, agents,
+                trajectories, adapters, runStatusReader, null);
+    }
+
+    /**
+     * The production constructor with git credential resolution wired:
+     * {@code gitCredentialResolver} provides the token for the workspace credential
+     * helper and the {@code GH_TOKEN} launch environment variable. Null in test
+     * conveniences that wire no git integration.
+     *
+     * @param gitCredentialResolver the git token resolver, or null to skip credential
+     *                              helper configuration and {@code GH_TOKEN} injection
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters,
+            RunStatusReader runStatusReader,
+            io.aria.conductor.execution.git.GitCredentialResolver gitCredentialResolver) {
         this.backends = Objects.requireNonNull(backends, "Backend registry is required");
         this.workspaces = Objects.requireNonNull(workspaces, "Workspace service is required");
         this.finalizer = Objects.requireNonNull(finalizer, "Run finalizer is required");
@@ -355,6 +404,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         this.trajectories = trajectories;
         this.adapters = adapters;
         this.runStatusReader = runStatusReader;
+        this.gitCredentialResolver = gitCredentialResolver;
     }
 
     // ------------------------------------------------------------------ execute
@@ -688,6 +738,9 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         CoreCapabilities capabilities = adapter.capabilities(spec.mode());
         WorkspaceLease lease = workspaces.acquire(spec);
         requireFrozenLeaseMatch(binding, spec, lease);
+        // Configure the git credential helper in the workspace if a token is
+        // available. This is best-effort: a failure logs a warning and continues.
+        configureGitCredentialHelperIfAvailable(lease);
         RunRuntimeRegistry.RunRuntime runtime = runtimes.register(spec, backend, adapter, lease);
         runtime.attach(binding, capabilities);
         try {
@@ -700,6 +753,9 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
                     ? new SecretBundle(null, java.util.Map.of())
                     : credentials.resolve(spec.credentialRef());
             LaunchProfile profile = adapter.launchProfile(spec, environment, secret);
+            // Inject GH_TOKEN and GIT_TERMINAL_PROMPT into the launch environment
+            // so the credential helper configured above can authenticate git operations.
+            profile = withGitEnvironment(profile);
             RuntimeHandle handle = backend.launch(environment, profile);
             // The process exists the moment the launch returned, so the run becomes controllable
             // HERE rather than when its session opens: a cancel arriving during the serve-readiness
@@ -1693,5 +1749,55 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             return "unknown error";
         }
         return throwable.getMessage() != null ? throwable.getMessage() : throwable.toString();
+    }
+
+    /**
+     * Configures the git credential helper in the workspace if a token is
+     * available and the workspace service supports it. Best-effort: a failure
+     * logs a warning and continues.
+     */
+    private void configureGitCredentialHelperIfAvailable(WorkspaceLease lease) {
+        if (gitCredentialResolver == null) {
+            return;
+        }
+        if (!(workspaces instanceof RunWorkspaceService runWorkspaceService)) {
+            return;
+        }
+        if (lease.localRoot() == null) {
+            return;
+        }
+        try {
+            runWorkspaceService.configureGitCredentialHelper(lease.localRoot());
+        } catch (RuntimeException e) {
+            log.warn("Run {}: failed to configure git credential helper in {}: {}",
+                    lease.runId(), lease.localRoot(), e.getMessage());
+        }
+    }
+
+    /**
+     * Returns a launch profile with {@code GH_TOKEN} and {@code GIT_TERMINAL_PROMPT=0}
+     * added to the environment, if a token is available. The credential helper
+     * configured in the workspace reads {@code $GH_TOKEN} to authenticate git
+     * operations. {@code GIT_TERMINAL_PROMPT=0} prevents git from prompting
+     * interactively.
+     *
+     * <p>If no token is available, or if the resolver is not wired, the original
+     * profile is returned unchanged.
+     */
+    private LaunchProfile withGitEnvironment(LaunchProfile profile) {
+        if (gitCredentialResolver == null) {
+            return profile;
+        }
+        java.util.Optional<String> token = gitCredentialResolver.resolveToken();
+        if (token.isEmpty()) {
+            return profile;
+        }
+        Map<String, String> env = new java.util.LinkedHashMap<>(profile.env());
+        env.put("GH_TOKEN", token.get());
+        env.put("GIT_TERMINAL_PROMPT", "0");
+        Set<String> secretValues = new java.util.LinkedHashSet<>(profile.secretValues());
+        secretValues.add(token.get());
+        return new LaunchProfile(profile.argv(), env, profile.workingDirectory(),
+                profile.controlSecretFile(), secretValues);
     }
 }

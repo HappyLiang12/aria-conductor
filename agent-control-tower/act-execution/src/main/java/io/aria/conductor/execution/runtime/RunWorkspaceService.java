@@ -31,6 +31,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static io.aria.conductor.execution.runtime.WorkspaceGuidance.refusal;
 
 /**
@@ -51,6 +54,8 @@ import static io.aria.conductor.execution.runtime.WorkspaceGuidance.refusal;
  * Spring annotation so tests and callers use one explicit constructor.
  */
 public class RunWorkspaceService implements WorkspaceService {
+
+    private static final Logger log = LoggerFactory.getLogger(RunWorkspaceService.class);
 
     /** Process-wide serialization of lease admission and release. */
     private static final ReentrantLock LEASE_LOCK = new ReentrantLock();
@@ -518,6 +523,64 @@ public class RunWorkspaceService implements WorkspaceService {
         } catch (IOException e) {
             return "";
         }
+    }
+
+    /**
+     * Configures a git credential helper in the workspace that reads the token
+     * from the {@code GH_TOKEN} environment variable. The credential helper is
+     * configured locally (in the workspace's git config), so the token value
+     * does not appear on disk.
+     *
+     * <p>This is a best-effort operation: if the workspace is not a git
+     * repository, or if the git config command fails for any reason, a warning
+     * is logged and the method returns without throwing. The core launch can
+     * still proceed; git operations that require authentication will fail with
+     * a clear git error.
+     *
+     * <p>The credential helper syntax ({@code !f() { echo "password=$GH_TOKEN"; }; f})
+     * works on Linux, macOS and Windows (Git for Windows includes a POSIX shell
+     * that interprets the {@code !} prefix).
+     *
+     * @param workspaceRoot the root of the workspace (must be a git repository)
+     */
+    public void configureGitCredentialHelper(Path workspaceRoot) {
+        Objects.requireNonNull(workspaceRoot, "workspaceRoot");
+        if (!Files.isDirectory(workspaceRoot)) {
+            log.warn("Cannot configure git credential helper: workspace is not a directory: {}",
+                    workspaceRoot);
+            return;
+        }
+        // Check if the workspace is a git repository
+        GitResult probe;
+        try {
+            probe = git(workspaceRoot, "rev-parse", "--git-dir");
+        } catch (IOException e) {
+            log.warn("Cannot configure git credential helper in {}: {} (git not available or not a repository)",
+                    workspaceRoot, e.getMessage());
+            return;
+        }
+        if (probe.exitCode() != 0) {
+            log.warn("Cannot configure git credential helper in {}: not a git repository",
+                    workspaceRoot);
+            return;
+        }
+        // Configure the credential helper. The helper references $GH_TOKEN from
+        // the environment, so the token value does not appear in git config files.
+        String credentialHelper = "!f() { echo \"password=$GH_TOKEN\"; }; f";
+        GitResult result;
+        try {
+            result = git(workspaceRoot, "config", "credential.helper", credentialHelper);
+        } catch (IOException e) {
+            log.warn("Failed to configure git credential helper in {}: {}",
+                    workspaceRoot, e.getMessage());
+            return;
+        }
+        if (result.exitCode() != 0) {
+            log.warn("Failed to configure git credential helper in {}: {}",
+                    workspaceRoot, result.output());
+            return;
+        }
+        log.info("Configured git credential helper in {}", workspaceRoot);
     }
 
     // ----------------------------------------------------------------- artifacts

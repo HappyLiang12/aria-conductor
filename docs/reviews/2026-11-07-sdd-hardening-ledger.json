@@ -652,6 +652,16 @@
       "no Windows runner in hosted CI: every job is ubuntu-latest, so the Windows-only F32 tests run only on a Windows developer host",
       "the probe adds one local CIM round trip per unverifiable record; a hung provider is bounded by the supervisor's 120 s command wait (the caller's deadline is checked between round trips), and the worst-case batch latency is unmeasured",
       "no end-to-end stop-proof test over a run whose observed record is recycled by a protected process; the classification is pinned and the proof's mismatch handling is exercised by the fake-supervisor tests"
-    ]
+    ],
+    "gate": {
+      "head": "50b14ae6",
+      "command": "cd agent-control-tower && mvn -B -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2",
+      "result": "BUILD SUCCESS (07:23), exit 0",
+      "totals": "act-common 136, act-agent 312+13, act-execution 1340+94 (6 skipped), act-knowledge 263 (4 skipped)+12, act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172+18, act-app 77+106 -> 2820 tests, 0 failures, 0 errors, 14 skipped",
+      "focused": "F32 unit 16/0/0/0 (0 skipped); embedded-supervisor classification failsafe 1/0/0/0 (0 skipped)",
+      "bridge": "pnpm --dir packages/qoder-acp-bridge test -> 62 passed / 5 files",
+      "dashboard": "pnpm --dir agent-control-tower/act-dashboard test -- --run -> 662 passed / 79 files",
+      "note": "the gate ran at 50b14ae6; c3528ba3 is the code HEAD and the only later change is this ledger"
+    }
   }
 }

@@ -74,6 +74,43 @@ class GlobalExceptionHandlerMvcSliceTest {
                 .andExpect(jsonPath("$.status").value(400));
     }
 
+    /**
+     * F27 end to end through the MVC dispatch path: a stale module class is a
+     * {@link LinkageError}, which is not an {@code Exception} and used to bypass
+     * every handler -- the container rendered a raw
+     * {@code ServletException: Handler dispatch failed} 500. Spring must route it
+     * to the named 503 contract, not the container's 500.
+     */
+    @Test
+    void linkageErrorThrownByAController_returns503WithTheStableContract() throws Exception {
+        mvc.perform(get("/probe/stale-module"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.status").value(503))
+                .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                .andExpect(jsonPath("$.code").value("BACKEND_MODULE_STALE"))
+                .andExpect(jsonPath("$.surface").value("RUNTIME"))
+                .andExpect(jsonPath("$.message")
+                        .value(org.hamcrest.Matchers.containsString("do not match the current checkout")));
+    }
+
+    /** The h2 profile is the only place the stale class name is shown. */
+    @Test
+    void linkageErrorOnH2_namesTheMissingClass() throws Exception {
+        MockEnvironment h2 = new MockEnvironment();
+        h2.setActiveProfiles("h2");
+        MockMvc h2Mvc = MockMvcBuilders
+                .standaloneSetup(new ProbeController())
+                .setControllerAdvice(new GlobalExceptionHandler(h2))
+                .build();
+
+        h2Mvc.perform(get("/probe/stale-module"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("BACKEND_MODULE_STALE"))
+                .andExpect(jsonPath("$.surface").value("RUNTIME"))
+                .andExpect(jsonPath("$.message", org.hamcrest.Matchers.containsString(
+                        "NoClassDefFoundError: io/aria/conductor/common/model/ToolCallResponse")));
+    }
+
     record ProbeBody(String value) {}
 
     @RestController
@@ -92,6 +129,13 @@ class GlobalExceptionHandlerMvcSliceTest {
         @PostMapping("/probe/echo")
         String echo(@RequestBody ProbeBody body) {
             return body.value();
+        }
+
+        /** A stale module class: the exact F27 failure, thrown from the handler. */
+        @GetMapping("/probe/stale-module")
+        String staleModule() {
+            throw new NoClassDefFoundError(
+                    "io/aria/conductor/common/model/ToolCallResponse");
         }
     }
 }

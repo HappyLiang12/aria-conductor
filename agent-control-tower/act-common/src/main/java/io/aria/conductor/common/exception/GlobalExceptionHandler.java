@@ -1,6 +1,7 @@
 package io.aria.conductor.common.exception;
 
 import lombok.extern.slf4j.Slf4j;
+import jakarta.servlet.ServletException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -23,6 +24,9 @@ import java.util.Arrays;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /** Stable code of the stale-module failure; the dashboard keys its action on this. */
+    static final String BACKEND_MODULE_STALE_CODE = "BACKEND_MODULE_STALE";
 
     private final Environment env;
 
@@ -176,17 +180,71 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, message);
     }
 
+    /**
+     * F27: a live backend served classes that did not match the current checkout
+     * ({@code NoClassDefFoundError: io/aria/conductor/common/model/ToolCallResponse})
+     * after a module build while it was running. A {@link LinkageError} is an
+     * {@code Error}, not an {@code Exception}, so the container's dispatcher
+     * wraps it in a {@link ServletException} ("Handler dispatch failed") before
+     * any resolver sees it; the {@code Exception} catch-all below then renders a
+     * misleading generic 500. The operator gets a named 503 that says exactly
+     * what to do instead.
+     *
+     * <p>The h2 detail is the existing pattern of {@link #handleGeneral}: the
+     * class name is developer evidence, not production output.
+     */
+    @ExceptionHandler(LinkageError.class)
+    public ResponseEntity<Map<String, Object>> handleLinkageError(LinkageError ex) {
+        log.error("Stale backend module class: {} - {}", ex.getClass().getSimpleName(), ex.getMessage(), ex);
+        String message = "The backend is running classes that do not match the current checkout";
+        if (Arrays.asList(env.getActiveProfiles()).contains("h2")) {
+            message += " (" + ex.getClass().getSimpleName() + ": "
+                    + (ex.getMessage() != null ? ex.getMessage() : "no details") + ")";
+        }
+        message += ". Restart the backend from the current checkout; a module build while the backend"
+                + " is running can leave stale classes.";
+        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, message,
+                BACKEND_MODULE_STALE_CODE, ErrorSurface.RUNTIME);
+    }
+
+    /**
+     * The dispatcher hands a resolver the <em>wrapper</em> of an {@code Error},
+     * never the {@code Error} itself: a {@link LinkageError} thrown while the
+     * handler runs reaches here as a {@link ServletException} whose cause chain
+     * holds it. This handler is what makes {@link #handleLinkageError} reachable
+     * over HTTP; without it the {@code Exception} catch-all would answer 500 and
+     * hide the actionable cause. A {@code ServletException} without a linkage
+     * cause keeps the existing generic behaviour.
+     */
+    @ExceptionHandler(ServletException.class)
+    public ResponseEntity<Map<String, Object>> handleServletWrappedError(ServletException ex) {
+        LinkageError linkage = linkageErrorIn(ex);
+        if (linkage != null) {
+            return handleLinkageError(linkage);
+        }
+        return handleGeneral(ex);
+    }
+
+    /** The first {@link LinkageError} in the cause chain, or {@code null}. */
+    private static LinkageError linkageErrorIn(Throwable failure) {
+        Throwable current = failure;
+        // A dispatch wrapper is shallow; the bound also makes a cyclic chain safe.
+        for (int depth = 0; current != null && depth < 16; depth++) {
+            if (current instanceof LinkageError linkage) {
+                return linkage;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
     private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message) {
         return buildResponse(status, message, null);
     }
 
     private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message,
                                                               Throwable failure) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("timestamp", Instant.now().toString());
-        body.put("status", status.value());
-        body.put("error", status.getReasonPhrase());
-        body.put("message", message);
+        Map<String, Object> body = baseBody(status, message);
         // Stable next-step contract: the dashboard opens the named surface instead
         // of matching the human-readable message.
         if (failure instanceof ActionableFailure actionable) {
@@ -194,5 +252,22 @@ public class GlobalExceptionHandler {
             body.put("surface", actionable.surface().name());
         }
         return ResponseEntity.status(status).body(body);
+    }
+
+    private ResponseEntity<Map<String, Object>> buildResponse(HttpStatus status, String message,
+                                                              String code, ErrorSurface surface) {
+        Map<String, Object> body = baseBody(status, message);
+        body.put("code", code);
+        body.put("surface", surface.name());
+        return ResponseEntity.status(status).body(body);
+    }
+
+    private Map<String, Object> baseBody(HttpStatus status, String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", Instant.now().toString());
+        body.put("status", status.value());
+        body.put("error", status.getReasonPhrase());
+        body.put("message", message);
+        return body;
     }
 }

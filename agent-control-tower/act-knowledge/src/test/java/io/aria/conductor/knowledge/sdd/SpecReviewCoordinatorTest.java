@@ -2,6 +2,7 @@ package io.aria.conductor.knowledge.sdd;
 
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.config.WorkspaceProperties;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
@@ -101,10 +102,13 @@ class SpecReviewCoordinatorTest {
                 .status(ApprovalStatus.PENDING)
                 .build();
 
+        WorkspaceProperties workspaceProperties = new WorkspaceProperties();
+        workspaceProperties.setResultRoot(runResultRoot.toString());
+
         coordinator = new SpecReviewCoordinator(
                 knowledgeService, itemRepository, versionRepository, approvalRepository,
                 chainRepository, workflowService, eventPublisher, transactionManager,
-                gitBranchService, runResultRoot.toString(), 1800000L);
+                gitBranchService, workspaceProperties, 1800000L);
     }
 
     @Test
@@ -519,5 +523,34 @@ class SpecReviewCoordinatorTest {
         ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
         verify(approvalRepository).save(approvalCaptor.capture());
         assertThat(approvalCaptor.getValue().getContent()).isEqualTo(expected);
+    }
+
+    // ==================== WorkspaceProperties integration ====================
+
+    @Test
+    void onBaStepCompleted_withNonDefaultResultRoot_readsSpecFromConfiguredPath(@TempDir Path customRoot) throws Exception {
+        WorkspaceProperties customProperties = new WorkspaceProperties();
+        customProperties.setResultRoot(customRoot.toString());
+
+        SpecReviewCoordinator customCoordinator = new SpecReviewCoordinator(
+                knowledgeService, itemRepository, versionRepository, approvalRepository,
+                chainRepository, workflowService, eventPublisher, transactionManager,
+                gitBranchService, customProperties, 1800000L);
+
+        String fullSpec = "# Spec\n\n## Requirements\n- Spec from custom result root.";
+        String summary = "Spec ready. SPEC_ID=123e4567-e89b-12d3-a456-426614174000";
+        Path runDir = Files.createDirectories(customRoot.resolve(baRunId.toString()));
+        Files.writeString(runDir.resolve("spec.md"), fullSpec);
+        when(itemRepository.findByName("spec-" + chainId)).thenReturn(Optional.empty());
+        when(knowledgeService.submitKnowledge(any())).thenReturn(specResponse);
+
+        customCoordinator.onBaStepCompleted(new BaStepCompletedEvent(this, chainId, 0, baRunId, summary));
+
+        verify(knowledgeService).submitKnowledge(argThat(r ->
+                r.getType() == KnowledgeType.SPEC && fullSpec.equals(r.getContent())));
+        ArgumentCaptor<Approval> approvalCaptor = ArgumentCaptor.forClass(Approval.class);
+        verify(approvalRepository).save(approvalCaptor.capture());
+        assertThat(approvalCaptor.getValue().getContent()).isEqualTo(fullSpec);
+        assertThat(approvalCaptor.getValue().getContent()).doesNotContain("SPEC_ID=");
     }
 }

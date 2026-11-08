@@ -1,6 +1,7 @@
 package io.aria.conductor.execution.runtime;
 
 import io.aria.conductor.agent.repository.LlmProviderRepository;
+import io.aria.conductor.common.config.WorkspaceProperties;
 import io.aria.conductor.common.runtime.AgentExecutionPolicy;
 import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.execution.adk.opencode.OpenCodeProperties;
@@ -88,11 +89,10 @@ public class CoreRuntimeConfiguration {
     public RunWorkspaceService runWorkspaceService(RunWorkspaceLeaseRepository leases,
             io.aria.conductor.execution.git.GitTokenSource gitTokenSource,
             org.springframework.beans.factory.ObjectProvider<ScratchWorkspaceProvisioner> scratchProvisioners,
-            @Value("${aria.workspaces.runtime-root:./data/workspaces/runs}") String runtimeRoot,
-            @Value("${aria.workspaces.result-root:./data/workspaces/results}") String resultRoot) {
+            WorkspaceProperties workspaceProperties) {
         return new RunWorkspaceService(leases,
-                provisionedRoot(runtimeRoot, "aria.workspaces.runtime-root"),
-                provisionedRoot(resultRoot, "aria.workspaces.result-root"),
+                provisionedRoot(workspaceProperties.getRuntimeRoot(), "aria.workspaces.runtime-root"),
+                provisionedRoot(workspaceProperties.getResultRoot(), "aria.workspaces.result-root"),
                 gitTokenSource, scratchProvisioners.getIfAvailable(() -> ScratchWorkspaceProvisioner.NONE));
     }
 

@@ -2,6 +2,7 @@ package io.aria.conductor.knowledge.sdd;
 
 import io.aria.conductor.agent.repository.WorkflowChainRepository;
 import io.aria.conductor.agent.service.WorkflowService;
+import io.aria.conductor.common.config.WorkspaceProperties;
 import io.aria.conductor.common.event.ApprovalDecidedEvent;
 import io.aria.conductor.common.event.ApprovalRequestedEvent;
 import io.aria.conductor.common.event.BaStepCompletedEvent;
@@ -75,7 +76,7 @@ public class SpecReviewCoordinator {
                                  ApplicationEventPublisher eventPublisher,
                                  PlatformTransactionManager transactionManager,
                                  GitBranchService gitBranchService,
-                                 @Value("${aria.workspaces.result-root:./data/workspaces/results}") String runResultRoot,
+                                 WorkspaceProperties workspaceProperties,
                                  @Value("${approvals.timeout-ms:1800000}") long approvalTimeoutMs) {
         this.knowledgeService = knowledgeService;
         this.itemRepository = itemRepository;
@@ -86,7 +87,7 @@ public class SpecReviewCoordinator {
         this.eventPublisher = eventPublisher;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.gitBranchService = gitBranchService;
-        this.runResultRoot = Path.of(runResultRoot).toAbsolutePath().normalize();
+        this.runResultRoot = Path.of(workspaceProperties.getResultRoot()).toAbsolutePath().normalize();
         this.approvalTimeout = Duration.ofMillis(approvalTimeoutMs);
     }
 
@@ -189,6 +190,7 @@ public class SpecReviewCoordinator {
    /** Startup recovery: re-route APPROVED approvals whose chain is still WAITING_APPROVAL. */
     @EventListener(ApplicationReadyEvent.class)
     public void recoverPendingDecisions() {
+        log.info("SDD spec review configured with result-root: {}", runResultRoot);
         List<Approval> approved = approvalRepository.findByStatusAndApprovalType(
                 ApprovalStatus.APPROVED, Approval.ApprovalType.SPEC_REVIEW);
         for (Approval a : approved) {
@@ -297,6 +299,7 @@ public class SpecReviewCoordinator {
         Path specFile = runResultRoot.resolve(runId.toString()).resolve("spec.md");
         try {
             if (!Files.isRegularFile(specFile)) {
+                log.warn("SDD spec fallback for run {}: file not found at resolved path {}", runId, specFile);
                 return null;
             }
             char[] buffer = new char[MAX_SPEC_CONTENT_LENGTH];
@@ -309,7 +312,8 @@ public class SpecReviewCoordinator {
             }
             return read == 0 ? null : new String(buffer, 0, read);
         } catch (Exception e) {
-            log.warn("Cannot read spec.md from the BA run workspace for run {}: {}", runId, e.getMessage());
+            log.warn("SDD spec fallback for run {}: cannot read spec at resolved path {} due to {}",
+                    runId, specFile, e.getMessage());
             return null;
         }
     }

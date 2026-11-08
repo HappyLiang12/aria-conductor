@@ -1,6 +1,7 @@
 package io.aria.conductor;
 
 import io.aria.conductor.aria.config.AriaProperties;
+import io.aria.conductor.common.config.WorkspaceProperties;
 import io.aria.conductor.dashboard.report.ReportProperties;
 import io.aria.conductor.execution.llm.LlmProperties;
 import org.springframework.boot.SpringApplication;
@@ -17,7 +18,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableConfigurationProperties({
         LlmProperties.class,
         AriaProperties.class,
-        ReportProperties.class
+        ReportProperties.class,
+        WorkspaceProperties.class
 })
 public class ActApplication {
 

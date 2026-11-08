@@ -64,9 +64,19 @@ public class ToolRiskResolver {
             .build();
 
     public RiskTier resolve(String toolName) {
+        // Optional.map treats a null mapper result as empty, which would let a configured row
+        // whose tier is null fall through to the native map (bash -> DESTRUCTIVE). Resolve the
+        // row's null tier to READ here so the configured row always wins; only an absent row
+        // consults nativeTier.
         return cache.get(toolName, name -> toolRepo.findByName(name)
-                .map(ToolDefinition::getRiskTier)
+                .map(ToolRiskResolver::configuredTier)
                 .orElseGet(() -> nativeTier(name)));
+    }
+
+    /** The configured row's tier; a legacy row with no tier is READ. */
+    private static RiskTier configuredTier(ToolDefinition row) {
+        RiskTier tier = row.getRiskTier();
+        return tier == null ? RiskTier.READ : tier;
     }
 
     /** The native ACP tier for a name, or READ when the name is not a native tool. */

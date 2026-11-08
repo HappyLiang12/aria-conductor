@@ -8,9 +8,11 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -490,6 +492,124 @@ class WindowsProcessControllerOrphanAttributionTest {
         assertThat(WindowsProcessController.membersIntroducedSince(null, fresh))
                 .as("a null fresh inventory introduces nothing")
                 .isEmpty();
+    }
+
+    // ------------------------------------------------------------------ handle-free identity (F32)
+
+    /**
+     * F32 (live, 2026-11-08, chain 1ec123e6 / run cd174bb3), critical: the stop proof
+     * sampled {@code 12960@134386217469441531} for a short-lived qoder helper; by proof
+     * time the pid belonged to a protected system process, {@code OpenProcess(
+     * PROCESS_QUERY_LIMITED_INFORMATION)} was refused with access denied (5), and the
+     * record stayed {@code unverifiable:open:5} -- a dead record stranding the run. The
+     * handle-free WMI creation time distinguishes a recycled pid from a live-but-
+     * unopenable writer: this record's expected ticks are 500 s older than the process
+     * now holding the pid, so the record names a process that is gone and the verdict is
+     * the clean {@code mismatch} the Java proof already accepts.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aStaleRecordWhosePidIsNowAProtectedProcessIsMismatch() throws Exception {
+        long ticks = protectedProcessCreationTicks();
+
+        WindowsProcessController controller = new WindowsProcessController();
+        try {
+            assertThat(controller.supervisorCommand("record 4@" + (ticks - 5_000_000_000L)))
+                    .as("F32: a dead record whose pid was recycled by a protected process must not"
+                            + " strand the run as unverifiable forever -- the handle-free creation time"
+                            + " proves the recorded process is gone, so the verdict is mismatch")
+                    .startsWith("mismatch:");
+        } finally {
+            controller.close();
+        }
+    }
+
+    /**
+     * F32, the fail-closed side: a record that still names the protected process is not a
+     * recycled pid. Its observed creation ticks equal the record's expected ticks, so the
+     * handle-free probe confirms the same live process the OS refuses to open and the
+     * verdict must stay {@code unverifiable} -- the stop proof keeps failing closed
+     * rather than certifying a writer it cannot verify as stopped.
+     *
+     * <p>If this host's test identity can actually open PID 4, this test fails instead of
+     * silently passing; the target host cannot (access denied 5).
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aRecordThatStillNamesAProtectedProcessStaysUnverifiable() throws Exception {
+        long ticks = protectedProcessCreationTicks();
+
+        WindowsProcessController controller = new WindowsProcessController();
+        try {
+            assertThat(controller.supervisorCommand("record 4@" + ticks))
+                    .as("a record that still names the protected process is a live writer the OS"
+                            + " cannot open: unknown is not absence, so the verdict must stay unverifiable")
+                    .startsWith("unverifiable:");
+        } finally {
+            controller.close();
+        }
+    }
+
+    /**
+     * The positive control for the F32 fallback: a normal record the OS can open takes the
+     * GetProcessTimes path and still matches. The fallback is only reachable on the
+     * unverifiable branch, so a verifiable identity can never be reclassified by it.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aNormalLiveRecordStillMatches() {
+        WindowsProcessController controller = new WindowsProcessController();
+        try {
+            String self = controller.supervisorCommand("self");
+            assertThat(self)
+                    .as("the supervisor's own record names its live pid and creation ticks")
+                    .matches("\\d+@\\d+");
+            long supervisorPid = ProcessHandle.current().children()
+                    .filter(ProcessHandle::isAlive)
+                    .filter(child -> child.info().command().orElse("").toLowerCase(Locale.ROOT)
+                            .matches(".*(powershell|pwsh)\\.exe"))
+                    .mapToLong(ProcessHandle::pid)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "the controller's supervisor PowerShell process is not a live child of"
+                                    + " the test JVM"));
+            assertThat(self)
+                    .as("`self` must start with the supervisor pid the controller actually started")
+                    .startsWith(supervisorPid + "@");
+            assertThat(controller.supervisorCommand("record " + self))
+                    .as("a verifiable identity must still take the GetProcessTimes path and match")
+                    .isEqualTo("match");
+        } finally {
+            controller.close();
+        }
+    }
+
+    /**
+     * PID 4's creation ticks read independently of the controller: WMI exposes
+     * {@code CreationDate} for the protected System process where {@code OpenProcess}
+     * is refused with error 5. Millisecond precision is well inside the supervisor's
+     * 100 ms tolerance.
+     */
+    private static long protectedProcessCreationTicks() throws Exception {
+        Process probe = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "(Get-CimInstance Win32_Process -Filter 'ProcessId=4').CreationDate.ToString('o')")
+                .redirectErrorStream(true)
+                .start();
+        String output;
+        try (var stream = probe.getInputStream()) {
+            output = new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim();
+        }
+        assertThat(probe.waitFor(60, TimeUnit.SECONDS))
+                .as("the independent WMI fixture query for the protected process must finish")
+                .isTrue();
+        assertThat(probe.exitValue())
+                .as("the independent WMI fixture query must succeed: " + output)
+                .isZero();
+        assertThat(output)
+                .as("the protected process must expose a readable WMI creation time")
+                .isNotBlank();
+        return OffsetDateTime.parse(output).toInstant().toEpochMilli() * 10_000L
+                + 116_444_736_000_000_000L;
     }
 
     // ------------------------------------------------------------------ harness

@@ -1641,7 +1641,11 @@ final class WindowsProcessController implements OwnedProcessController {
               // object is still referenced -- keeps answering GetProcessTimes, so liveness is decided
               // by the exit code and never by the mere presence of the PID). Any other failure leaves
               // the identity unknown, and unknown must never be read as absence: a record shed that way
-              // is a live writer the stop proof would then certify as stopped.
+              // is a live writer the stop proof would then certify as stopped. A protected process
+              // (System, csrss, lsass, ...) answers access denied (5), which says nothing about the
+              // recorded process: its pid may have been recycled by the protected process, or it may
+              // be the protected process itself. Test-Record tells those apart with a handle-free WMI
+              // creation-time probe (F32), never by guessing.
               public static string Identity(int pid) {
                 IntPtr hp = OpenProcess(QueryLimited, false, pid);
                 if (hp == IntPtr.Zero) {
@@ -1718,13 +1722,45 @@ final class WindowsProcessController implements OwnedProcessController {
               if ($identity -eq 'gone' -or $identity.StartsWith('unverifiable')) { return $null }
               return ('{0}@{1}' -f $targetPid, $identity)
             }
+            # Handle-free creation time of the process now holding a pid (F32). WMI exposes
+            # CreationDate for protected processes, whose OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
+            # is refused with access denied (5), and the conversion matches the kernel FILETIME ticks
+            # exactly on the measured host. The three outcomes are deliberate: "<ticks>" when WMI read
+            # the identity, "absent" only when WMI definitively lists no process holding the pid, and
+            # "error" when the query itself failed -- unknown is never absence.
+            function Get-CreationTicksWithoutHandle([int]$targetPid) {
+              try {
+                $p = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction Stop
+                if ($null -eq $p -or $null -eq $p.CreationDate) { return 'absent' }
+                return $p.CreationDate.ToUniversalTime().ToFileTimeUtc().ToString()
+              } catch { return 'error' }
+            }
             function Test-Record([string]$record) {
               $parts = $record.Split('@')
               $targetPid = [int]$parts[0]
               $expected = if ($parts.Count -gt 1) { $parts[1] } else { '' }
               $identity = Get-Identity $targetPid
               if ($identity -eq 'gone') { return 'gone' }
-              if ($identity.StartsWith('unverifiable')) { return $identity }
+              if ($identity.StartsWith('unverifiable')) {
+                # Unknown is not absence, but a protected process makes the refusal ambiguous: the
+                # pid may now be held by System/csrss/lsass (the recorded process is gone) or the
+                # record may name that protected process itself (a live writer we cannot open). Only
+                # a definite, handle-free creation time decides; a failed probe or a malformed
+                # expected identity keeps the original unverifiable verdict. The probe is used only
+                # on this branch and is deliberately not cached.
+                $expectedTicks = 0L
+                if (-not [long]::TryParse($expected, [ref]$expectedTicks)) { return $identity }
+                $probe = Get-CreationTicksWithoutHandle $targetPid
+                if ($probe -eq 'absent') { return 'gone' }
+                if ($probe -eq 'error') { return $identity }
+                # WMI's CreationDate and the kernel FILETIME agree exactly on the measured host, so
+                # the tolerance only absorbs cross-host DateTime conversion jitter. A recycled pid
+                # differs by at least the original process's lifetime (the F32 helper lived ~1.2 s);
+                # a read of the same process cannot differ by 100 ms.
+                $observedTicks = [long]$probe
+                if ([Math]::Abs($observedTicks - $expectedTicks) -le 1000000L) { return $identity }
+                return ('mismatch:' + $targetPid + '@' + $probe)
+              }
               if ($expected -eq '' -or $identity -eq $expected) { return 'match' }
               return ('mismatch:' + $targetPid + '@' + $identity)
             }

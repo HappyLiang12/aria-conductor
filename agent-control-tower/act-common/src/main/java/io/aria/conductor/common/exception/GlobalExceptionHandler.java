@@ -214,8 +214,8 @@ public class GlobalExceptionHandler {
     /**
      * Belt for wrappers that are not cause-walked: Spring 6.2 resolves a handler
      * for the <em>wrapper</em> first and consults the cause only when no handler
-     * matches the wrapper's own type. A {@link ServletException} thrown by a core
-     * is an {@code Exception}, so the catch-all below matches it before the
+     * matches the wrapper's own type. A {@link ServletException} thrown while a
+     * handler runs is an {@code Exception}, so the catch-all below matches it before the
      * one-level cause walk can reach the {@link LinkageError}; this handler is what
      * makes {@link #handleLinkageError} reachable over HTTP (dropping it makes the
      * MVC-slice linkage tests answer 500, see F27). A {@code ServletException}

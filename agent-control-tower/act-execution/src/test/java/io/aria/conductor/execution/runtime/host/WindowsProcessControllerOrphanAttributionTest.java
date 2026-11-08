@@ -18,7 +18,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -171,6 +176,211 @@ class WindowsProcessControllerOrphanAttributionTest {
                 .isFalse();
     }
 
+    /**
+     * F1 (review round 2), critical: the stop proof takes exactly one job inventory,
+     * attributes and kills its members, and only then decides. A member being killed
+     * is still a live process until the OS reports it gone, so it can spawn a child
+     * that inherits the shared job <em>after</em> that inventory. The child is not in
+     * the inventory's unaccounted set, so the proof could return
+     * {@code allWritersStopped=true} while a live job member keeps writing. The
+     * second inventory must fail the proof closed on it.
+     *
+     * <p>The fixture is real: a long-lived {@code ping.exe} is the only supervised
+     * root, and the test JVM spawns a second long-lived {@code ping.exe} in the
+     * window after the first inventory and makes it a member of the same job through
+     * the controller's own supervisor. The injected member was never attributed,
+     * killed or verdict-checked, so only the repeated inventory can see it.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aJobMemberThatAppearsAfterTheOnlyInventoryFailsTheProofClosed() throws Exception {
+        String systemRoot = System.getenv("SystemRoot");
+        assertThat(systemRoot).as("a Windows host always exports SystemRoot").isNotBlank();
+        Path ping = Path.of(systemRoot, "System32", "PING.EXE");
+        assertThat(ping).as("the fixture is the OS ping.exe").isRegularFile();
+
+        Path working = Files.createTempDirectory("host-post-inventory-member");
+        workingDirectories.add(working);
+
+        WindowsProcessController controller = new WindowsProcessController();
+        LaunchProfile profile = new LaunchProfile(
+                List.of(ping.toString(), "-n", "120", "127.0.0.1"),
+                Map.of("SystemRoot", systemRoot, "windir", systemRoot), working.toString());
+        OwnedProcess owned = controller.start(UUID.randomUUID(), profile);
+        Process root = owned.liveProcess();
+        AtomicReference<Process> injected = new AtomicReference<>();
+        cleanups.add(() -> {
+            Process member = injected.get();
+            if (member != null) {
+                member.destroyForcibly();
+                member.waitFor(10, TimeUnit.SECONDS);
+            }
+            root.destroyForcibly();
+            root.waitFor(10, TimeUnit.SECONDS);
+            controller.release(owned);
+            controller.close();
+        });
+        assumeTrue(owned.technique().contains("job-backstop=assign:ok"),
+                "the host JVM already holds the launched root inside another job object, so the run's"
+                        + " shared job never sees it and its inventory cannot be exercised: "
+                        + owned.technique());
+
+        AtomicReference<String> assignment = new AtomicReference<>();
+        controller.afterAttribution = () -> {
+            try {
+                Process member = new ProcessBuilder(ping.toString(), "-n", "120", "127.0.0.1")
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .redirectError(ProcessBuilder.Redirect.DISCARD)
+                        .start();
+                injected.set(member);
+                // The member appears in the shared job only after the first inventory: this
+                // proof never attributed, killed or verdict-checked it.
+                assignment.set(controller.supervisorCommand("assign " + member.pid()));
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException("the injected job member could not be started", e);
+            }
+        };
+
+        StopProof proof = controller.stop(owned, Instant.now().plusSeconds(60));
+
+        String membership = assignment.get();
+        // The supervisor's assign line is "ok" on success (its technique label renders that as
+        // "job-backstop=assign:ok"); the other two forms are accepted so the premise does not hang
+        // on one protocol spelling.
+        assumeTrue("ok".equals(membership) || "assign:ok".equals(membership)
+                        || "ok|assign:ok".equals(membership),
+                "the OS refused the injected process job membership, so the post-inventory member"
+                        + " could not be exercised: " + membership);
+        assertThat(injected.get()).as("the injected member must have been started").isNotNull();
+        assertThat(proof.allWritersStopped())
+                .as("a job member that appeared after the only inventory was never attributed, killed or"
+                        + " verdict-checked, so the proof must fail closed instead of certifying it stopped")
+                .isFalse();
+        assertThat(isAlive(owned.rootPid()))
+                .as("the enumerated root tree is still stopped by the proof")
+                .isFalse();
+        assertThat(isAlive(injected.get().pid()))
+                .as("the proof fails closed rather than guessing: a member it never decided is left alone")
+                .isTrue();
+    }
+
+    /**
+     * F2 (review round 2), major: {@link WindowsProcessController#start} makes the
+     * root a job member before it is registered as supervised. In that window a
+     * concurrent stop sees {@code started.size()==1}, treats the live member as an
+     * attributable orphan of the stopping run and kills it -- cross-run termination
+     * of an in-flight launch. Attribution must count in-flight launches too, so that
+     * window keeps the proof closed and the launching root alive.
+     *
+     * <p>The fixture holds run B in exactly that window with the controller's own
+     * seam (after {@code assign}, before registration), stops run A while B is in
+     * flight, and then lets B finish and stops it: B's own proof must still be true.
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aStopDoesNotKillTheRootOfALaunchThatIsStillInFlight() throws Exception {
+        String systemRoot = System.getenv("SystemRoot");
+        assertThat(systemRoot).as("a Windows host always exports SystemRoot").isNotBlank();
+        Path ping = Path.of(systemRoot, "System32", "PING.EXE");
+        assertThat(ping).as("the fixture is the OS ping.exe").isRegularFile();
+
+        Path working = Files.createTempDirectory("host-in-flight-launch");
+        workingDirectories.add(working);
+
+        WindowsProcessController controller = new WindowsProcessController();
+        LaunchProfile profile = new LaunchProfile(
+                List.of(ping.toString(), "-n", "120", "127.0.0.1"),
+                Map.of("SystemRoot", systemRoot, "windir", systemRoot), working.toString());
+
+        OwnedProcess runA = controller.start(UUID.randomUUID(), profile);
+        Process rootA = runA.liveProcess();
+        cleanups.add(() -> {
+            rootA.destroyForcibly();
+            rootA.waitFor(10, TimeUnit.SECONDS);
+            controller.release(runA);
+            controller.close();
+        });
+        assumeTrue(runA.technique().contains("job-backstop=assign:ok"),
+                "the host JVM already holds the launched root inside another job object: "
+                        + runA.technique());
+
+        CountDownLatch assigned = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Long> runBRootPid = new AtomicReference<>();
+        AtomicReference<OwnedProcess> runB = new AtomicReference<>();
+        AtomicReference<Throwable> runBFailure = new AtomicReference<>();
+        controller.afterAssign = pid -> {
+            runBRootPid.set((long) pid);
+            assigned.countDown();
+            try {
+                release.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+
+        ExecutorService launcher = Executors.newSingleThreadExecutor();
+        cleanups.add(() -> {
+            release.countDown();
+            launcher.shutdownNow();
+            try {
+                launcher.awaitTermination(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        Future<?> startB = launcher.submit(() -> {
+            try {
+                runB.set(controller.start(UUID.randomUUID(), profile));
+            } catch (Throwable failure) {
+                runBFailure.set(failure);
+            }
+        });
+
+        assertThat(assigned.await(30, TimeUnit.SECONDS))
+                .as("run B must reach the window between its job assignment and its registration")
+                .isTrue();
+        long runBPid = runBRootPid.get();
+        cleanups.add(() -> ProcessHandle.of(runBPid).ifPresent(ProcessHandle::destroyForcibly));
+        assertThat(isAlive(runBPid))
+                .as("B's root is a live job member while its launch is in flight")
+                .isTrue();
+
+        StopProof proofA = controller.stop(runA, Instant.now().plusSeconds(60));
+
+        assertThat(proofA.allWritersStopped())
+                .as("B is a live run whose launch is in flight: its root must not be attributed to A as"
+                        + " an orphan, so A's proof fails closed")
+                .isFalse();
+        assertThat(isAlive(runBPid))
+                .as("a stop must never kill the root of a launch that is not registered yet")
+                .isTrue();
+
+        release.countDown();
+        startB.get(30, TimeUnit.SECONDS);
+        assertThat(runBFailure.get()).as("run B must complete its start once the window closes").isNull();
+        OwnedProcess runBStarted = runB.get();
+        assertThat(runBStarted).isNotNull();
+        cleanups.add(() -> {
+            ProcessHandle.of(runBStarted.rootPid()).ifPresent(ProcessHandle::destroyForcibly);
+            controller.release(runBStarted);
+        });
+        assumeTrue(runBStarted.technique().contains("job-backstop=assign:ok"),
+                "run B never became a job member, so the in-flight window has no cross-run claim to"
+                        + " exercise: " + runBStarted.technique());
+        assertThat(isAlive(runBStarted.rootPid()))
+                .as("B's root survived A's stop and is supervised now")
+                .isTrue();
+
+        StopProof proofB = controller.stop(runBStarted, Instant.now().plusSeconds(60));
+
+        assertThat(proofB.allWritersStopped())
+                .as("once B is registered and supervised, its own stop proof must still account for its"
+                        + " writers and be true")
+                .isTrue();
+        assertThat(isAlive(runBStarted.rootPid())).as("B's stopped root is gone").isFalse();
+    }
+
     // ------------------------------------------------------------------ decision helper
 
     /** A real-run root creation identity: FILETIME ticks (100 ns since 1601). */
@@ -239,6 +449,47 @@ class WindowsProcessControllerOrphanAttributionTest {
 
         assertThat(WindowsProcessController.attributableJobMembers(members, ROOT_TICKS, 1))
                 .containsExactly(after, alsoAfter);
+    }
+
+    // ------------------------------------------------------------------ inventory growth helper
+
+    /**
+     * F1: the second inventory has to log what appeared after the first one
+     * distinctly from what was already there -- a member being killed is still a
+     * live process until the OS reports it gone, and the child it spawns inherits
+     * the shared job. The comparison is identity-only.
+     */
+    @Test
+    void aMemberThatFirstAppearsInTheFreshInventoryIsIntroduced() {
+        assertThat(WindowsProcessController.membersIntroducedSince(
+                List.of("35224@134386018254682214", "35928@134386018255000000"),
+                List.of("35224@134386018254682214")))
+                .containsExactly("35928@134386018255000000");
+    }
+
+    @Test
+    void aMemberThatDisappearedFromTheFreshInventoryIsNotIntroduced() {
+        assertThat(WindowsProcessController.membersIntroducedSince(
+                List.of("35224@134386018254682214"),
+                List.of("35224@134386018254682214", "35928@134386018255000000")))
+                .isEmpty();
+    }
+
+    @Test
+    void anAbsentPreviousInventoryIntroducesEveryFreshMember() {
+        List<String> fresh = List.of("35224@134386018254682214", "35928@134386018255000000");
+
+        assertThat(WindowsProcessController.membersIntroducedSince(fresh, null))
+                .as("no previous inventory cannot account for any fresh member")
+                .containsExactlyElementsOf(fresh);
+        assertThat(WindowsProcessController.membersIntroducedSince(fresh, List.of()))
+                .containsExactlyElementsOf(fresh);
+        assertThat(WindowsProcessController.membersIntroducedSince(List.<String>of(), fresh))
+                .as("an empty fresh inventory introduces nothing")
+                .isEmpty();
+        assertThat(WindowsProcessController.membersIntroducedSince(null, fresh))
+                .as("a null fresh inventory introduces nothing")
+                .isEmpty();
     }
 
     // ------------------------------------------------------------------ harness

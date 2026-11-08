@@ -2020,6 +2020,23 @@ class HostExecutionBackendIntegrationTest {
         Thread.sleep(300);
         assertThat(sizeOf(writerLog)).as("the orphaned writer must keep writing").isGreaterThan(before);
 
+        // The premise is asserted before the stop, not inferred from a later liveness check: the
+        // writer is a real job member (it inherited the job through the intermediate) and the
+        // sampler never saw it, so the job inventory is the only thing that can attribute it and
+        // only this run's job-attributed kill can take it down.
+        String writerRecord = controller.supervisorCommand("identity " + writerPid);
+        assertThat(writerRecord)
+                .as("the orphan's OS identity must be readable so the premise is a real record")
+                .startsWith(writerPid + "@");
+        assertThat(controller.jobMemberRecords())
+                .as("the writer must really be a member of the shared job, or the job-attributed kill"
+                        + " this test exercises cannot stop it and the premise would be vacuous")
+                .contains(writerRecord);
+        assertThat(controller.observedRecordContains(runId, writerRecord))
+                .as("the sampler must never have seen the writer, or the job attribution is not what"
+                        + " stopped it")
+                .isFalse();
+
         StopProof proof = controller.stop(owned, Instant.now().plusSeconds(60));
 
         assertThat(proof.runId()).isEqualTo(runId);
@@ -2038,12 +2055,6 @@ class HostExecutionBackendIntegrationTest {
                 .as("a stopped writer can no longer mutate the workspace it was proved stopped over")
                 .isEqualTo(atStop);
         assertThat(sentinel.isAlive()).as("an unrelated process must survive").isTrue();
-
-        // The premise stays non-vacuous: the writer was a real job member (it inherited
-        // the job through the intermediate) and only this run's job-attributed kill could
-        // take it down; an unrelated process above is untouched.
-        controller.close();
-        assertThat(isAlive(writerPid)).isFalse();
     }
 
     /**

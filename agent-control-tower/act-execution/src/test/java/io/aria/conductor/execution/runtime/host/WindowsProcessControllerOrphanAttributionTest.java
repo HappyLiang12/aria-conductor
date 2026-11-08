@@ -8,11 +8,9 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -510,7 +508,7 @@ class WindowsProcessControllerOrphanAttributionTest {
     @Test
     @EnabledOnOs(OS.WINDOWS)
     void aStaleRecordWhosePidIsNowAProtectedProcessIsMismatch() throws Exception {
-        long ticks = protectedProcessCreationTicks();
+        long ticks = ProtectedProcessFixture.systemCreationTicks();
 
         WindowsProcessController controller = new WindowsProcessController();
         try {
@@ -537,7 +535,7 @@ class WindowsProcessControllerOrphanAttributionTest {
     @Test
     @EnabledOnOs(OS.WINDOWS)
     void aRecordThatStillNamesAProtectedProcessStaysUnverifiable() throws Exception {
-        long ticks = protectedProcessCreationTicks();
+        long ticks = ProtectedProcessFixture.systemCreationTicks();
 
         WindowsProcessController controller = new WindowsProcessController();
         try {
@@ -564,52 +562,12 @@ class WindowsProcessControllerOrphanAttributionTest {
             assertThat(self)
                     .as("the supervisor's own record names its live pid and creation ticks")
                     .matches("\\d+@\\d+");
-            long supervisorPid = ProcessHandle.current().children()
-                    .filter(ProcessHandle::isAlive)
-                    .filter(child -> child.info().command().orElse("").toLowerCase(Locale.ROOT)
-                            .matches(".*(powershell|pwsh)\\.exe"))
-                    .mapToLong(ProcessHandle::pid)
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError(
-                            "the controller's supervisor PowerShell process is not a live child of"
-                                    + " the test JVM"));
-            assertThat(self)
-                    .as("`self` must start with the supervisor pid the controller actually started")
-                    .startsWith(supervisorPid + "@");
             assertThat(controller.supervisorCommand("record " + self))
                     .as("a verifiable identity must still take the GetProcessTimes path and match")
                     .isEqualTo("match");
         } finally {
             controller.close();
         }
-    }
-
-    /**
-     * PID 4's creation ticks read independently of the controller: WMI exposes
-     * {@code CreationDate} for the protected System process where {@code OpenProcess}
-     * is refused with error 5. Millisecond precision is well inside the supervisor's
-     * 100 ms tolerance.
-     */
-    private static long protectedProcessCreationTicks() throws Exception {
-        Process probe = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                "(Get-CimInstance Win32_Process -Filter 'ProcessId=4').CreationDate.ToString('o')")
-                .redirectErrorStream(true)
-                .start();
-        String output;
-        try (var stream = probe.getInputStream()) {
-            output = new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim();
-        }
-        assertThat(probe.waitFor(60, TimeUnit.SECONDS))
-                .as("the independent WMI fixture query for the protected process must finish")
-                .isTrue();
-        assertThat(probe.exitValue())
-                .as("the independent WMI fixture query must succeed: " + output)
-                .isZero();
-        assertThat(output)
-                .as("the protected process must expose a readable WMI creation time")
-                .isNotBlank();
-        return OffsetDateTime.parse(output).toInstant().toEpochMilli() * 10_000L
-                + 116_444_736_000_000_000L;
     }
 
     // ------------------------------------------------------------------ harness

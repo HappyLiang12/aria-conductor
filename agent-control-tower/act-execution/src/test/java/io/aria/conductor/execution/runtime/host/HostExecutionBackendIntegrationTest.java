@@ -24,7 +24,6 @@ import io.aria.conductor.execution.runtime.RuntimeRecoveryCoordinator;
 import io.aria.conductor.execution.runtime.StopProof;
 import io.aria.conductor.execution.runtime.WorkspaceLease;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -1840,10 +1839,14 @@ class HostExecutionBackendIntegrationTest {
      * staged script and command channel every control action uses). PID 4 (System)
      * is a live process whose {@code PROCESS_QUERY_LIMITED_INFORMATION} open is
      * refused with access denied (5), not with the definite absence of a dead PID
-     * (87), so the script must answer {@code unverifiable:open:5} -- never
-     * {@code gone}. The positive controls pin both sides of the distinction: a live
-     * identity the OS can read is verified and matches, and a real absence is still
-     * gone, so a script that always answers either way fails here.
+     * (87), so a record that still names PID 4 must answer {@code unverifiable:open:5}
+     * -- never {@code gone}. A stale record whose pid was recycled by PID 4 is a
+     * different case: the handle-free creation-time probe proves the recorded process
+     * is gone and answers {@code mismatch} (F32, pinned by
+     * {@code WindowsProcessControllerOrphanAttributionTest}). The positive controls pin
+     * both sides of the remaining distinction: a live identity the OS can read is
+     * verified and matches, and a real absence is still gone, so a script that always
+     * answers either way fails here.
      */
     @Test
     @EnabledOnOs(OS.WINDOWS)
@@ -1867,14 +1870,12 @@ class HostExecutionBackendIntegrationTest {
                 .as("a definite absence is still classified gone")
                 .isEqualTo("gone");
 
-        String refused = controller.supervisorCommand("record 4@1");
-        // A readable PID 4 (e.g. this JVM running as LocalSystem) answers with the
-        // creation identity, which differs from the record's expected one: the
-        // access-denied branch cannot be exercised there. A "gone" answer is NOT an
-        // environment limit -- it is exactly the regression this test exists for.
-        Assumptions.assumeFalse(refused.startsWith("mismatch"),
-                "pid 4 (System) is readable by this test identity (" + refused + "):"
-                        + " the access-denied classification cannot be exercised here");
+        // F32: the record must still name PID 4 itself. A record with stale ticks would
+        // now (correctly) resolve to mismatch through the handle-free creation-time probe,
+        // which is pinned by WindowsProcessControllerOrphanAttributionTest; this test
+        // keeps the raw refused-open classification of the process the record names.
+        String refused = controller.supervisorCommand(
+                "record 4@" + ProtectedProcessFixture.systemCreationTicks());
         assertThat(refused)
                 .as("a refused OS query is not a definite absence: reading it as gone is the"
                         + " fail-open classification the stop proof must never inherit")

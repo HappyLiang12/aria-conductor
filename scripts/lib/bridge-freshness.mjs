@@ -229,4 +229,6 @@ function main(argv) {
   return result.code;
 }
 
-process.exit(main(process.argv.slice(2)));
+// Set the exit code and let the event loop drain: process.exit() can truncate the
+// reason already written to a piped stdout, and the callers parse that reason.
+process.exitCode = main(process.argv.slice(2));

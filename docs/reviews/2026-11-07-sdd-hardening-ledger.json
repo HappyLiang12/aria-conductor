@@ -591,7 +591,15 @@
       "fixed_in": ["784322c8", "68bcce37", "9ef81553", "535867e3", "e6fb6633",
                    "2576c21d", "a9d4eb5b", "8afe2a24", "4f31e734", "68ef9568",
                    "ebdcbde6", "b9792062"],
-      "re_review": "pending at this ledger write"
+      "re_review": "APPROVE at 6d85390a: both blockers closed, all ten follow-ups addressed or documented, no new correctness defect; two non-blocking minors fixed in 9a5a0101 (stdout drain) and 532b9078 (committed gate evidence)",
+      "re_review_findings": [
+        "minor: bridge-freshness.mjs used process.exit(), which could truncate a piped reason; now sets process.exitCode and lets the event loop drain",
+        "minor: the ledger cited an untracked /tmp gate log; the command, totals and per-module counts are now the committed evidence (the older round's log line was corrected too)"
+      ],
+      "accepted_test_gaps": [
+        "the F25 real-OS tests are Windows-only; the ubuntu hosted matrix gates the helper tests but skips the job-object fixtures (they ran locally with 0 skipped)",
+        "the bash rebuild path and its mtime fallback are pinned structurally and by shared-helper tests; the ps1 path is behaviorally tested"
+      ]
     },
     "gate": {
       "head": "b9792062",

@@ -44,8 +44,11 @@ class ReportStepTreeGuardTest {
         assertThat(violation.get())
                 .contains("may be truncated")
                 .contains("but not " + ReportStepTreeGuard.REPORT_PATH)
-                .contains("300 removal(s)")
-                .contains("File0.java");
+                .contains("The page shows 300 removal(s), 300 outside "
+                        + ReportStepTreeGuard.REPORT_PATH
+                        + " (first: agent-control-tower/src/main/File0.java,"
+                        + " agent-control-tower/src/main/File1.java,"
+                        + " agent-control-tower/src/main/File2.java, ...)");
     }
 
     @Test

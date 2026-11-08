@@ -36,15 +36,25 @@ if [ "$SKIP_SANDBOX" = "true" ] && [ -z "$ADK_PROVIDER" ]; then
 fi
 ADK_PROVIDER="${ADK_PROVIDER:-opencode}"
 
-# ── Run-owned absolute paths (fix round 1: never cwd-relative) ──
+# ── Run-owned absolute paths (F30: outside the checkout, never cwd-relative) ──
 # A run's worktree, generated configuration and retained results are owned by the
 # backend's run roots, and the qoder bridge entry is a committed artifact of the
-# repository. All three are exported as absolute paths derived from this
-# repository root, so they do not depend on the working directory the Spring Boot
-# process happens to run in (mvn spring-boot:run -pl act-app runs in act-app/).
-# An operator-provided value always wins.
-export ARIA_WORKSPACES_RUNTIME_ROOT="${ARIA_WORKSPACES_RUNTIME_ROOT:-$BACKEND_DIR/act-app/data/workspaces/runs}"
-export ARIA_WORKSPACES_RESULT_ROOT="${ARIA_WORKSPACES_RESULT_ROOT:-$BACKEND_DIR/act-app/data/workspaces/results}"
+# repository. The run roots default to a user-scoped location OUTSIDE this checkout
+# ($LOCALAPPDATA/AriaConductor/workspaces on Windows; $HOME/.aria-conductor/workspaces
+# otherwise), so a bare git command in a run's scratch directory cannot resolve to the
+# operator repository. Paths are absolute and do not depend on the working directory
+# the Spring Boot process happens to run in (mvn spring-boot:run -pl act-app runs in
+# act-app/). An operator-provided value (including one loaded from .env) always wins.
+# shellcheck source=lib/workspace-roots.sh
+source "$SCRIPT_DIR/lib/workspace-roots.sh"
+workspace_roots="$(resolve_workspace_roots)" || {
+    echo "ERROR: cannot resolve the workspace roots: set LOCALAPPDATA or HOME, or set ARIA_WORKSPACES_RUNTIME_ROOT and ARIA_WORKSPACES_RESULT_ROOT explicitly." >&2
+    exit 1
+}
+export ARIA_WORKSPACES_RUNTIME_ROOT="${workspace_roots%%|*}"
+export ARIA_WORKSPACES_RESULT_ROOT="${workspace_roots#*|}"
+echo "  Workspace runtime root: $ARIA_WORKSPACES_RUNTIME_ROOT"
+echo "  Workspace result root : $ARIA_WORKSPACES_RESULT_ROOT"
 if [ -z "${ARIA_CORES_QODER_BRIDGE_ENTRY:-}" ] && [ -f "$PROJECT_ROOT/packages/qoder-acp-bridge/dist/main.js" ]; then
     export ARIA_CORES_QODER_BRIDGE_ENTRY="$PROJECT_ROOT/packages/qoder-acp-bridge/dist/main.js"
 fi

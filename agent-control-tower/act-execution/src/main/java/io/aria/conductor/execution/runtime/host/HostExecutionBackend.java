@@ -551,7 +551,7 @@ public class HostExecutionBackend implements ExecutionBackend {
      * service, a wrong binding -- is definitive and refuses the launch
      * immediately. The failure carries no secret value.
      */
-    private static void authenticateRuntimeEndpoint(PreparedEnvironment environment, String controlSecret) {
+    private void authenticateRuntimeEndpoint(PreparedEnvironment environment, String controlSecret) {
         URI target = environment.endpoint().resolve(SESSION_ROUTE);
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(AUTHENTICATION_CONNECT_TIMEOUT)
@@ -603,10 +603,30 @@ public class HostExecutionBackend implements ExecutionBackend {
         }
     }
 
-    private static IllegalStateException authenticationFailure(PreparedEnvironment environment, String detail) {
-        return new IllegalStateException("The runtime endpoint of run " + environment.runId()
-                + " did not authenticate the run's control secret (" + detail
-                + "); the runtime was terminated instead of being trusted on its executable name");
+    private IllegalStateException authenticationFailure(PreparedEnvironment environment, String detail) {
+        RunCoreLog coreLog = coreLogs.get(environment.runId());
+        Path coreLogPath = coreLog != null ? coreLog.path() : null;
+        return new IllegalStateException(
+                authenticationFailureMessage(environment.runId(), detail, coreLogPath));
+    }
+
+    /**
+     * The control-secret handshake failure. F31: the handshake detail alone hid
+     * the bridge's own error, which only the run-owned core log holds (the live
+     * case was {@code E_USAGE Unknown flag: --child-env-file}). The message names
+     * that file so the operator can find the real cause; it names the path only
+     * and never quotes contents, which can carry paths and other run detail. The
+     * text stays one bounded line.
+     */
+    static String authenticationFailureMessage(UUID runId, String detail, Path coreLogPath) {
+        StringBuilder message = new StringBuilder("The runtime endpoint of run ").append(runId)
+                .append(" did not authenticate the run's control secret (").append(detail)
+                .append("); the runtime was terminated instead of being trusted on its executable name.");
+        if (coreLogPath != null) {
+            message.append(" The bridge's own error is in the run-owned core log at ")
+                    .append(coreLogPath).append('.');
+        }
+        return message.toString();
     }
 
     /** Bounded read of the runtime's answer: a listener cannot make this unbounded. */

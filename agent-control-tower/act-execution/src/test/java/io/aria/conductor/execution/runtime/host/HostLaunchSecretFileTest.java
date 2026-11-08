@@ -248,7 +248,14 @@ class HostLaunchSecretFileTest {
         assertThatThrownBy(() -> backend.launch(environment, profile))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("did not authenticate")
-                .hasMessageContaining("status 401");
+                .hasMessageContaining("status 401")
+                // F31: the operator needs the run-owned core log, where the bridge's
+                // own error (invisible in the handshake detail) was written.
+                .hasMessageContaining(
+                        RunCoreLog.pathIn(fixture.runtimeRoot(), fixture.runId()).toString())
+                .satisfies(ex -> assertThat(ex.getMessage().length())
+                        .as("the failure text stays bounded; it names the log, it does not quote it")
+                        .isLessThan(1024));
 
         assertThat(probes)
                 .as("a refusal of the run's control secret is definitive, not retried")

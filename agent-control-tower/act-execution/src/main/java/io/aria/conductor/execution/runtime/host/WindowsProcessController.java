@@ -993,6 +993,11 @@ final class WindowsProcessController implements OwnedProcessController {
         return supervisor().command(line);
     }
 
+    /** Test-visible: the pid of the live supervision channel (starts it if needed). */
+    long supervisorPid() {
+        return supervisor().process.pid();
+    }
+
     /**
      * Starts the one sampler this controller ever runs (latched): the tree of every
      * supervised run is sampled while it is live.
@@ -1728,8 +1733,8 @@ final class WindowsProcessController implements OwnedProcessController {
             # creation times differed by at most 0.8 microseconds. The three outcomes are deliberate:
             # "<ticks>" when WMI read the identity, "absent" only when WMI lists no process holding the
             # pid, and "error" when the query failed or the listed instance carries no readable creation
-            # time -- unknown is never absence. The operation timeout stops a hung WMI provider from
-            # consuming the caller's cleanup window.
+            # time -- unknown is never absence. The operation timeout bounds the query where the
+            # provider honours the session timeout; the caller's deadline remains the backstop.
             function Get-CreationTicksWithoutHandle([int]$targetPid) {
               try {
                 $p = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -OperationTimeoutSec 5 -ErrorAction Stop
@@ -1760,11 +1765,14 @@ final class WindowsProcessController implements OwnedProcessController {
                 if ($probe -eq 'absent') { return 'gone' }
                 if ($probe -eq 'error') { return $identity }
                 # Compare local wall-clock times, not UTC: ToUniversalTime() resolves the DST
-                # fall-back repeated hour with the standard offset and can shift a same-process read
-                # by an hour, which would turn a fail-closed verdict into a false mismatch. A wall-clock
-                # comparison can only err toward "same", which stays fail-closed. The 10 ms tolerance
-                # is over 10x the fixture's millisecond truncation and over 10,000x the measured
-                # WMI/kernel difference; only a helper that lived under 10 ms can remain a false red.
+                # fall-back repeated hour with the standard offset and could shift a same-process read
+                # by an hour, which would turn a fail-closed verdict into a false mismatch. The
+                # wall-clock form can only err toward "same": in the repeated hour it collapses two
+                # UTC instants one hour apart, so a recycled pid created exactly one hour after the
+                # record can stay unverifiable (a one-hour-per-year false red, never a false clean).
+                # The 10 ms tolerance is over 10x the fixture's millisecond truncation and over
+                # 10,000x the measured WMI/kernel difference; only a helper that lived under 10 ms
+                # can remain a false red.
                 $observedLocal = [DateTime]::FromFileTimeUtc([long]$probe).ToLocalTime()
                 $expectedLocal = [DateTime]::FromFileTimeUtc($expectedTicks).ToLocalTime()
                 if ([Math]::Abs($observedLocal.Ticks - $expectedLocal.Ticks) -le 100000L) { return $identity }

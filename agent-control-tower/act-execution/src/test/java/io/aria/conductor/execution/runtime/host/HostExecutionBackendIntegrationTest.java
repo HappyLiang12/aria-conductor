@@ -1856,8 +1856,8 @@ class HostExecutionBackendIntegrationTest {
 
         String self = controller.supervisorCommand("self");
         assertThat(self)
-                .as("the supervisor's own live identity is readable")
-                .matches("\\d+@\\d+");
+                .as("the supervisor's own record names the live supervision channel")
+                .startsWith(controller.supervisorPid() + "@");
         assertThat(controller.supervisorCommand("record " + self))
                 .as("a readable identity still compares as a match")
                 .isEqualTo("match");

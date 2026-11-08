@@ -12,6 +12,8 @@ $BackendDir = Join-Path $ProjectRoot "agent-control-tower"
 
 # Shared container-runtime helpers (Load-DotEnv, Resolve-ContainerRuntime)
 . (Join-Path $PSScriptRoot "lib/container-runtime.ps1")
+# Pure startup checks (Resolve-WorkspaceRoots, Get-BridgeDistProblem)
+. (Join-Path $PSScriptRoot "lib/startup-checks.ps1")
 Load-DotEnv $ProjectRoot
 
 # -SkipSandbox means no container runtime is available: default the provider to the
@@ -23,18 +25,25 @@ if ($SkipSandbox -and -not $PSBoundParameters.ContainsKey('AdkProvider')) {
 }
 $sandboxMode = $AdkProvider -eq "opencode" -and -not $SkipSandbox
 
-# ── Run-owned absolute paths (fix round 1: never cwd-relative) ──
+# ── Run-owned absolute paths (F30: outside the checkout, never cwd-relative) ──
 # A run's worktree, generated configuration and retained results are owned by the
 # backend's run roots, and the qoder bridge entry is a committed artifact of the
-# repository. All three are exported as absolute paths derived from this
-# repository root, so they do not depend on the working directory the Spring Boot
-# process happens to run in (mvn spring-boot:run -pl act-app runs in act-app/).
-# An operator-provided value always wins.
+# repository. The run roots default to a user-scoped location OUTSIDE this checkout
+# (LOCALAPPDATA\AriaConductor\workspaces on Windows; $HOME/.aria-conductor/workspaces
+# otherwise), so a bare `git` in a run's scratch directory cannot resolve to the
+# operator repository and the result clones never land inside it. Paths are absolute
+# and do not depend on the working directory the Spring Boot process happens to run in
+# (mvn spring-boot:run -pl act-app runs in act-app/). An operator-provided value
+# (ARIA_WORKSPACES_RUNTIME_ROOT / ARIA_WORKSPACES_RESULT_ROOT, including one loaded
+# from .env) always wins.
+$runtimeRootFromOperator = [bool]$env:ARIA_WORKSPACES_RUNTIME_ROOT
+$resultRootFromOperator = [bool]$env:ARIA_WORKSPACES_RESULT_ROOT
+$workspaceRoots = Resolve-WorkspaceRoots
 if (-not $env:ARIA_WORKSPACES_RUNTIME_ROOT) {
-    $env:ARIA_WORKSPACES_RUNTIME_ROOT = Join-Path $BackendDir "act-app/data/workspaces/runs"
+    $env:ARIA_WORKSPACES_RUNTIME_ROOT = $workspaceRoots.RuntimeRoot
 }
 if (-not $env:ARIA_WORKSPACES_RESULT_ROOT) {
-    $env:ARIA_WORKSPACES_RESULT_ROOT = Join-Path $BackendDir "act-app/data/workspaces/results"
+    $env:ARIA_WORKSPACES_RESULT_ROOT = $workspaceRoots.ResultRoot
 }
 $bridgeEntry = Join-Path $ProjectRoot "packages/qoder-acp-bridge/dist/main.js"
 if (-not $env:ARIA_CORES_QODER_BRIDGE_ENTRY -and (Test-Path -LiteralPath $bridgeEntry -PathType Leaf)) {
@@ -64,6 +73,13 @@ if ($javaVersion -notmatch '"21') {
 $mvnVersion = (mvn -version 2>&1 | Select-Object -First 1)
 Write-Host "  Maven : $mvnVersion"
 
+# F30: print where the run roots resolved, so the operator can see the clones land
+# outside the checkout (an operator-provided value is marked as such).
+$runtimeRootOrigin = if ($runtimeRootFromOperator) { "operator" } else { "default" }
+$resultRootOrigin = if ($resultRootFromOperator) { "operator" } else { "default" }
+Write-Host "  Workspace runtime root: $($env:ARIA_WORKSPACES_RUNTIME_ROOT) [$runtimeRootOrigin]"
+Write-Host "  Workspace result root : $($env:ARIA_WORKSPACES_RESULT_ROOT) [$resultRootOrigin]"
+
 # ── Qoder HOST launch preflight (F3/F4/F10/F13) ──
 # The run launcher clears the process environment, so the core's shell sees only
 # the PATH this backend was started with (plus aria.cores.toolchain-path). Report
@@ -82,9 +98,42 @@ if (Test-Path -LiteralPath $qoderCli -PathType Container) {
 } else {
     Write-Host "  qoder CLI: not found under $qoderCli (a HOST qoder run needs ARIA_CORES_QODER_EXECUTABLE then)." -ForegroundColor DarkGray
 }
-$bridgeDist = Join-Path $ProjectRoot "packages/qoder-acp-bridge/dist/main.js"
-if (-not (Test-Path -LiteralPath $bridgeDist -PathType Leaf)) {
-    Write-Warning "The committed qoder bridge is not built ($bridgeDist). Build it with: pnpm --dir packages/qoder-acp-bridge build. The default property resolves against the repository root, not the backend working directory."
+# F31: a stale packages/qoder-acp-bridge/dist after a merge makes the run-owned core
+# fail with "E_USAGE Unknown flag: --child-env-file" while the API surfaces only the
+# generic control-secret handshake failure. Verify the bridge dist before launching;
+# rebuild it when pnpm is available, otherwise stop with the exact commands.
+$bridgeDir = Join-Path $ProjectRoot "packages/qoder-acp-bridge"
+$bridgeProblem = Get-BridgeDistProblem -BridgeDir $bridgeDir
+if ($bridgeProblem) {
+    Write-Warning "The qoder bridge dist is not fresh: $bridgeProblem"
+    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+        Write-Host "  Rebuilding the bridge: pnpm install --frozen-lockfile && pnpm build" -ForegroundColor Yellow
+        Push-Location $bridgeDir
+        try {
+            pnpm install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "pnpm install --frozen-lockfile failed in $bridgeDir"
+                exit 1
+            }
+            pnpm build
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "pnpm build failed in $bridgeDir"
+                exit 1
+            }
+        } finally {
+            Pop-Location
+        }
+        $bridgeProblem = Get-BridgeDistProblem -BridgeDir $bridgeDir
+        if ($bridgeProblem) {
+            Write-Error "The qoder bridge is still not fresh after a rebuild: $bridgeProblem"
+            exit 1
+        }
+        Write-Host "  qoder bridge rebuilt: dist/main.js is fresh." -ForegroundColor DarkGray
+    } else {
+        Write-Error ("The qoder bridge dist is not fresh and pnpm is not installed. Rebuild it manually (do not use npm or yarn):" +
+            "`n  cd $bridgeDir`n  pnpm install --frozen-lockfile`n  pnpm build")
+        exit 1
+    }
 }
 foreach ($tool in @("gh", "jq")) {
     if (Get-Command $tool -ErrorAction SilentlyContinue) {

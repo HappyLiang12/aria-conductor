@@ -38,7 +38,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -294,9 +293,24 @@ class RunWorkspaceServiceTest extends DataJpaTestBase {
 
     @Test
     void anSshUrlWithTheGitUserIsNotTreatedAsUserinfo() {
-        assertThatCode(() -> RunWorkspaceService.requireSafeCloneArguments(
-                "ssh://git@example.invalid/org/repo.git", null))
-                .doesNotThrowAnyException();
+        assertThat(RunWorkspaceService.requireSafeCloneArguments(
+                "  ssh://git@example.invalid/org/repo.git  ", null))
+                .isEqualTo("ssh://git@example.invalid/org/repo.git");
+    }
+
+    @Test
+    void userinfoVariantsWithWhitespaceOrAnotherSchemeAreRefused() {
+        for (String repository : List.of(
+                " https://user:token@example.invalid/org/repo.git",
+                "https:/user:token@example.invalid/org/repo.git",
+                "ftp://user:token@example.invalid/org/repo.git",
+                "git+https://user:token@example.invalid/org/repo.git",
+                "ssh://user:token@example.invalid/org/repo.git")) {
+            assertThatThrownBy(() -> RunWorkspaceService.requireSafeCloneArguments(repository, null))
+                    .as("repository %s", repository)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("must not include userinfo");
+        }
     }
 
     @Test

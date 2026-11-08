@@ -89,8 +89,9 @@ function listDelimiter(
   for (const value of [inherited, extra]) {
     if (typeof value !== 'string' || value.length === 0) continue;
     if (value.includes(';')) return ';';
-    if (value.startsWith('/') || value.includes(':/')) return ':';
+    if (value.startsWith('/')) return ':';
     if (/^[A-Za-z]:[\\/]/.test(value) || value.includes('\\')) return ';';
+    if (value.includes(':/')) return ':';
   }
   return ';';
 }

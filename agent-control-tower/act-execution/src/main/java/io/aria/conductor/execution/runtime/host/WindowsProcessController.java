@@ -1729,12 +1729,13 @@ final class WindowsProcessController implements OwnedProcessController {
             }
             # Handle-free creation time of the process now holding a pid (F32). WMI exposes
             # CreationDate for protected processes, whose OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
-            # is refused with access denied (5). Across 225 readable processes the WMI and kernel
-            # creation times differed by at most 0.8 microseconds. The three outcomes are deliberate:
-            # "<ticks>" when WMI read the identity, "absent" only when WMI lists no process holding the
-            # pid, and "error" when the query failed or the listed instance carries no readable creation
-            # time -- unknown is never absence. The operation timeout bounds the query where the
-            # provider honours the session timeout; the caller's deadline remains the backstop.
+            # is refused with access denied (5). The measured WMI/kernel creation-time difference is
+            # far below a millisecond. The three outcomes are deliberate: "<ticks>" when WMI read the
+            # identity, "absent" only when WMI lists no process holding the pid, and "error" when the
+            # query failed or the listed instance carries no readable creation time -- unknown is never
+            # absence. The operation timeout bounds the query where the provider honours the session
+            # timeout; a hung command is bounded by the supervisor's 120 s command wait, with the
+            # caller's deadline checked between round trips.
             function Get-CreationTicksWithoutHandle([int]$targetPid) {
               try {
                 $p = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -OperationTimeoutSec 5 -ErrorAction Stop
@@ -1770,9 +1771,9 @@ final class WindowsProcessController implements OwnedProcessController {
                 # wall-clock form can only err toward "same": in the repeated hour it collapses two
                 # UTC instants one hour apart, so a recycled pid created exactly one hour after the
                 # record can stay unverifiable (a one-hour-per-year false red, never a false clean).
-                # The 10 ms tolerance is over 10x the fixture's millisecond truncation and over
-                # 10,000x the measured WMI/kernel difference; only a helper that lived under 10 ms
-                # can remain a false red.
+                # The 10 ms tolerance is over 10x the fixture's millisecond truncation and far above
+                # the measured WMI/kernel difference; only a helper that lived under 10 ms can remain
+                # a false red.
                 $observedLocal = [DateTime]::FromFileTimeUtc([long]$probe).ToLocalTime()
                 $expectedLocal = [DateTime]::FromFileTimeUtc($expectedTicks).ToLocalTime()
                 if ([Math]::Abs($observedLocal.Ticks - $expectedLocal.Ticks) -le 100000L) { return $identity }

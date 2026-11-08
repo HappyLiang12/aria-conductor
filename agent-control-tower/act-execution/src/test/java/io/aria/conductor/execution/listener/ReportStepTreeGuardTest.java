@@ -82,6 +82,19 @@ class ReportStepTreeGuardTest {
     }
 
     @Test
+    void aHeadCommitThatDoesNotTouchTheReport_isNotJudged() {
+        // A PASS whose report capture did not push a commit leaves the DEV head on
+        // the branch. Its refactor removals are not the report step's tree move.
+        List<ChangedFile> devRefactor = IntStream.range(0, ReportStepTreeGuard.MAX_REMOVALS + 1)
+                .mapToObj(i -> new ChangedFile("agent-control-tower/src/main/File" + i + ".java",
+                        ChangeType.REMOVED))
+                .toList();
+
+        assertThat(guard.violation(new TreeDiff("sdd/chain-1", "parent", "dev-head", devRefactor)))
+                .isEmpty();
+    }
+
+    @Test
     void noTreeToJudge_isAccepted() {
         assertThat(guard.violation(null)).isEmpty();
         assertThat(guard.violation(new TreeDiff("sdd/chain-1", "parent", "head", List.of()))).isEmpty();

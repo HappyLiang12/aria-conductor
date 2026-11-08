@@ -55,21 +55,44 @@ export const EXTRA_PATH_VARIABLE = 'ARIA_CORE_EXTRA_PATH';
 
 /**
  * Prepend `extra` entries to `inherited`, both read as platform-delimited lists
- * (`;` on Windows, `:` elsewhere). Entries are emitted verbatim, so POSIX-form
- * (`/c/Users/User/bin`) and Windows-form (`C:\Users\User\bin`) entries both
- * survive; empty entries are dropped and the inherited value is never dropped.
+ * (`;` on Windows, `:` elsewhere). The launcher on Windows deliberately sends
+ * the qoder shell's POSIX form (`:`-joined, `/c/...` entries), so the delimiter
+ * is chosen from the values themselves rather than from `process.platform`:
+ * joining a POSIX list on `;` would merge every inherited entry after the first
+ * and every extra directory after the first into one invalid entry. Native
+ * Windows lists (`;`, drive paths) keep the native delimiter. Entries are
+ * emitted verbatim, so POSIX-form and Windows-form entries both survive; empty
+ * entries are dropped and the inherited value is never dropped.
  */
 export function composeChildPath(
   inherited: string | undefined,
   extra: string | undefined,
   platform: NodeJS.Platform,
 ): string | undefined {
-  const delimiter = platform === 'win32' ? ';' : ':';
+  const delimiter = listDelimiter(inherited, extra, platform);
   const entries = [
     ...splitPathList(extra, delimiter),
     ...splitPathList(inherited, delimiter),
   ];
   return entries.length === 0 ? undefined : entries.join(delimiter);
+}
+
+function listDelimiter(
+  inherited: string | undefined,
+  extra: string | undefined,
+  platform: NodeJS.Platform,
+): string {
+  if (platform !== 'win32') return ':';
+  // The inherited PATH is the base list and decides the style. The extra list is
+  // consulted only when the inherited value is absent, so a mixed caller cannot
+  // turn a POSIX base into a native list (or vice versa).
+  for (const value of [inherited, extra]) {
+    if (typeof value !== 'string' || value.length === 0) continue;
+    if (value.includes(';')) return ';';
+    if (value.startsWith('/') || value.includes(':/')) return ':';
+    if (/^[A-Za-z]:[\\/]/.test(value) || value.includes('\\')) return ';';
+  }
+  return ';';
 }
 
 function splitPathList(value: string | undefined, delimiter: string): string[] {

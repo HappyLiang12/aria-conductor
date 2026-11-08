@@ -70,6 +70,15 @@ public final class ReportStepTreeGuard {
         if (diff == null || diff.files().isEmpty()) {
             return Optional.empty();
         }
+        // The branch head is the QA report commit only when that commit actually
+        // touches the report. A PASS whose report capture did not push a commit
+        // leaves the DEV head in place; judging that commit would fail a legitimate
+        // PASS for removals the report step never made. No report move, no guard.
+        boolean reportTouched = diff.files().stream()
+                .anyMatch(file -> REPORT_PATH.equals(normalize(file.path())));
+        if (!reportTouched) {
+            return Optional.empty();
+        }
         List<String> removals = diff.files().stream()
                 .filter(file -> file.type() == ChangeType.REMOVED)
                 .map(ChangedFile::path)

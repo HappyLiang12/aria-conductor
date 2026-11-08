@@ -70,6 +70,19 @@ class CredentialRedactorTest {
     }
 
     @Test
+    void masksNamedSecretValuesInsideAnEscapedJsonString() {
+        // A tool can pass a JSON document as a string argument; its inner quotes
+        // are escaped. The named-secret rule must still reach the value.
+        String arguments = "{\"outer\":\"{\\\"token\\\":\\\"hunter2\\\"}\"}";
+        String redacted = CredentialRedactor.redact(arguments);
+        assertThat(redacted)
+                .doesNotContain("hunter2")
+                .contains("[REDACTED]")
+                .contains("\"outer\"");
+        assertThat(CredentialRedactor.redact(redacted)).isEqualTo(redacted);
+    }
+
+    @Test
     void redactionIsIdempotent() {
         String once = CredentialRedactor.redact("{\"token\":\"ghp_abcdefghijklmnopqrstuvwxyz012345\"}");
         assertThat(CredentialRedactor.redact(once)).isEqualTo(once);

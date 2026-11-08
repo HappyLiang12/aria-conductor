@@ -111,6 +111,22 @@ class GlobalExceptionHandlerMvcSliceTest {
                         "NoClassDefFoundError: io/aria/conductor/common/model/ToolCallResponse")));
     }
 
+    /**
+     * F27 guard: a dispatch failure with no linkage cause keeps the generic 500 shape. The
+     * stale-module branch answers only a real {@link LinkageError}, so no unrelated
+     * {@link jakarta.servlet.ServletException} may ever be relabelled as a stale backend module.
+     */
+    @Test
+    void nonLinkageDispatchFailure_returnsTheGeneric500WithoutTheStaleModuleContract() throws Exception {
+        mvc.perform(get("/probe/dispatch-boom"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.status").value(500))
+                .andExpect(jsonPath("$.code").doesNotExist())
+                .andExpect(jsonPath("$.surface").doesNotExist())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString(
+                        "An unexpected error occurred")));
+    }
+
     record ProbeBody(String value) {}
 
     @RestController
@@ -136,6 +152,12 @@ class GlobalExceptionHandlerMvcSliceTest {
         String staleModule() {
             throw new NoClassDefFoundError(
                     "io/aria/conductor/common/model/ToolCallResponse");
+        }
+
+        /** A dispatch failure that carries no linkage cause; the F27 branch must not claim it. */
+        @GetMapping("/probe/dispatch-boom")
+        String dispatchBoom() throws jakarta.servlet.ServletException {
+            throw new jakarta.servlet.ServletException("boom");
         }
     }
 }

@@ -25,7 +25,11 @@ import java.util.Arrays;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    /** Stable code of the stale-module failure; the dashboard keys its action on this. */
+    /**
+     * A stable identity for the stale-module failure. The dashboard selects its repair action
+     * from the served {@code surface} ({@code RUNTIME} → Configure → Runtime), not from the code;
+     * the code is the failure's stable identity across releases.
+     */
     static final String BACKEND_MODULE_STALE_CODE = "BACKEND_MODULE_STALE";
 
     private final Environment env;
@@ -186,7 +190,7 @@ public class GlobalExceptionHandler {
      * after a module build while it was running. A {@link LinkageError} is an
      * {@code Error}, not an {@code Exception}, so the container's dispatcher
      * wraps it in a {@link ServletException} ("Handler dispatch failed") before
-     * any resolver sees it; the {@code Exception} catch-all below then renders a
+     * any resolver sees it; the {@code Exception} catch-all would then render a
      * misleading generic 500. The operator gets a named 503 that says exactly
      * what to do instead.
      *
@@ -208,13 +212,15 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * The dispatcher hands a resolver the <em>wrapper</em> of an {@code Error},
-     * never the {@code Error} itself: a {@link LinkageError} thrown while the
-     * handler runs reaches here as a {@link ServletException} whose cause chain
-     * holds it. This handler is what makes {@link #handleLinkageError} reachable
-     * over HTTP; without it the {@code Exception} catch-all would answer 500 and
-     * hide the actionable cause. A {@code ServletException} without a linkage
-     * cause keeps the existing generic behaviour.
+     * Belt for wrappers that are not cause-walked: Spring 6.2 resolves a handler
+     * for the <em>wrapper</em> first and consults the cause only when no handler
+     * matches the wrapper's own type. A {@link ServletException} thrown by a core
+     * is an {@code Exception}, so the catch-all below matches it before the
+     * one-level cause walk can reach the {@link LinkageError}; this handler is what
+     * makes {@link #handleLinkageError} reachable over HTTP (dropping it makes the
+     * MVC-slice linkage tests answer 500, see F27). A {@code ServletException}
+     * without a linkage cause keeps the existing generic behaviour, so the branch
+     * never relabels an unrelated dispatch failure.
      */
     @ExceptionHandler(ServletException.class)
     public ResponseEntity<Map<String, Object>> handleServletWrappedError(ServletException ex) {

@@ -1280,6 +1280,107 @@ class CoreExecutionServiceTest {
     }
 
     /**
+     * F26a: the binding store failing between the refused cancel and the launch abort's settlement
+     * must not abort the settlement. The runtime is already classified CANCELLED, the stop was
+     * verified, so authority is revoked and the run store still commits CANCELLED -- and the
+     * launch keeps its {@link RunTerminatedDuringLaunchException} contract instead of surfacing the
+     * store's failure (which a second abort would answer with a pending control over a settled run).
+     */
+    @Test
+    void aBindingStoreFailureDuringTheSettlementStillSettlesTheRunAndKeepsTheLaunchContract() {
+        java.util.concurrent.atomic.AtomicReference<RunStatus> committed =
+                new java.util.concurrent.atomic.AtomicReference<>(RunStatus.RUNNING);
+        CoreExecutionService runStoreAware = serviceWithRunStore(committed);
+        java.util.concurrent.atomic.AtomicReference<RunRuntimeRegistry.RunRuntime> aborted =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        backend.duringLaunch = () -> {
+            assertThat(runStoreAware.cancel(RUN).toCompletableFuture().join().verified()).isFalse();
+            aborted.set(runtimes.find(RUN).orElseThrow());
+            // The binding store goes down after the refusal and before the launch abort settles.
+            when(bindings.findById(RUN)).thenThrow(new IllegalStateException("binding store down"));
+        };
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(session.prompted).as("a cancelled launch never prompts its core").isNull();
+        assertThat(backend.stopProofs).as("the settlement never stops the verified stop a second time")
+                .containsExactly(new StopProof(RUN, true));
+        assertThat(recordedSteps).as("destroy and release happen exactly once")
+                .containsExactly("acquire", "prepare", "launch-profile", "launch",
+                        "stop-writers", "destroy", "release");
+        assertThat(aborted.get().writersVerifiedStopped()).isTrue();
+        assertThat(aborted.get().controlState()).as("the runtime keeps its CANCELLED classification")
+                .isEqualTo("CANCELLED");
+        assertThat(aborted.get().pendingControl())
+                .as("a settled cancellation records no pending control").isEmpty();
+        assertThat(committed.get()).as("the run store still commits the verified CANCELLED")
+                .isEqualTo(RunStatus.CANCELLED);
+        verify(actorTokens).revokeRun(RUN);
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /**
+     * F26a: a run store that refuses the CANCELLED write (a race with another terminal writer)
+     * cannot change the launch's outcome either -- the runtime is already settled CANCELLED, the
+     * write is reported at WARN, and the launch still throws its own terminal exception.
+     */
+    @Test
+    void aRunStoreRefusalDuringTheSettlementCannotChangeTheLaunchOutcome() {
+        java.util.concurrent.atomic.AtomicReference<RunStatus> committed =
+                new java.util.concurrent.atomic.AtomicReference<>(RunStatus.RUNNING);
+        io.aria.conductor.agent.service.RunCancellationWriter cancellations =
+                mock(io.aria.conductor.agent.service.RunCancellationWriter.class);
+        when(cancellations.cancel(RUN))
+                .thenThrow(new IllegalStateException("run store refused the CANCELLED write"));
+        CoreExecutionService runStoreAware = serviceWithRunStore(committed, cancellations);
+        backend.duringLaunch = () -> assertThat(runStoreAware.cancel(RUN).toCompletableFuture().join().verified())
+                .isFalse();
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+        assertThat(backend.stopProofs).as("a refused run-store write never stops the core again")
+                .containsExactly(new StopProof(RUN, true));
+        assertThat(committed.get()).as("the refused write leaves the committed row as it was")
+                .isEqualTo(RunStatus.RUNNING);
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /**
+     * F26b: an abort whose stop was already verified (the core is stopped, the environment
+     * destroyed and the lease released) is idempotent. A second abort -- the launch's generic catch
+     * after a settlement failure, or any other re-entry -- stops, destroys and releases nothing
+     * again and records no pending control over a settled run.
+     */
+    @Test
+    void aSecondAbortOfAVerifiedAbortStopsDestroysAndReleasesNothingAgain() {
+        WorkspaceLease lease = workspaces.acquire(spec());
+        RunRuntimeRegistry.RunRuntime runtime = runtimes.register(spec(), backend, adapter, lease);
+        runtime.attach(binding, adapter.capabilities(ExecutionMode.HOST));
+        runtime.handleAttached(new RuntimeHandle(RUN, ExecutionMode.HOST, "env-1", "run-owner-identity",
+                URI.create("http://127.0.0.1:9311/")));
+
+        service.abortLaunch(runtime, lease);
+
+        assertThat(runtime.writersVerifiedStopped()).isTrue();
+        assertThat(recordedSteps).containsExactly("acquire", "stop-writers", "destroy", "release");
+        assertThat(backend.stopProofs).containsExactly(new StopProof(RUN, true));
+
+        service.abortLaunch(runtime, lease);
+
+        assertThat(backend.stopProofs).as("a verified stop is never stopped twice")
+                .containsExactly(new StopProof(RUN, true));
+        assertThat(recordedSteps).as("nothing is destroyed or released a second time")
+                .containsExactly("acquire", "stop-writers", "destroy", "release");
+        assertThat(runtime.pendingControl()).as("a settled abort records no pending control").isEmpty();
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /**
      * The coordinator whose run store reports (and, once settled, commits) one run status. The
      * reader is the production seam for "what does the committed row say"; the settlement is the
      * run store's atomic CANCELLED writer.
@@ -1294,6 +1395,13 @@ class CoreExecutionServiceTest {
             committed.set(RunStatus.CANCELLED);
             return null;
         });
+        return serviceWithRunStore(committed, cancellations);
+    }
+
+    /** The same coordinator with a caller-supplied run-store writer (e.g. one that refuses). */
+    private CoreExecutionService serviceWithRunStore(
+            java.util.concurrent.atomic.AtomicReference<RunStatus> committed,
+            io.aria.conductor.agent.service.RunCancellationWriter cancellations) {
         return new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
                 new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
                 CLOCK, Duration.ofMinutes(5), new ManualDeadlineScheduler(), coordinator, eventPublisher,

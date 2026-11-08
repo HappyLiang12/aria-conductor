@@ -100,39 +100,53 @@ if (Test-Path -LiteralPath $qoderCli -PathType Container) {
 }
 # F31: a stale packages/qoder-acp-bridge/dist after a merge makes the run-owned core
 # fail with "E_USAGE Unknown flag: --child-env-file" while the API surfaces only the
-# generic control-secret handshake failure. Verify the bridge dist before launching;
-# rebuild it when pnpm is available, otherwise stop with the exact commands.
-$bridgeDir = Join-Path $ProjectRoot "packages/qoder-acp-bridge"
-$bridgeProblem = Get-BridgeDistProblem -BridgeDir $bridgeDir
-if ($bridgeProblem) {
-    Write-Warning "The qoder bridge dist is not fresh: $bridgeProblem"
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        Write-Host "  Rebuilding the bridge: pnpm install --frozen-lockfile && pnpm build" -ForegroundColor Yellow
-        Push-Location $bridgeDir
-        try {
-            pnpm install --frozen-lockfile
-            if ($LASTEXITCODE -ne 0) {
-                Write-Error "pnpm install --frozen-lockfile failed in $bridgeDir"
+# generic control-secret handshake failure. The bridge only runs for a qoder core, so
+# verify its dist before launching that provider; rebuild it when pnpm is available,
+# otherwise stop with the exact commands.
+if ($AdkProvider -eq 'qoder') {
+    $bridgeDir = Join-Path $ProjectRoot "packages/qoder-acp-bridge"
+    $bridgeFreshnessHelper = Join-Path $PSScriptRoot "lib/bridge-freshness.mjs"
+    $bridgeProblem = Get-BridgeDistProblem -BridgeDir $bridgeDir
+    if ($bridgeProblem) {
+        Write-Warning "The qoder bridge dist is not fresh: $bridgeProblem"
+        if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+            Write-Host "  Rebuilding the bridge: pnpm install --frozen-lockfile && pnpm build" -ForegroundColor Yellow
+            Push-Location $bridgeDir
+            try {
+                # Clear dist first: tsc writes into it, and a failed build must not leave a
+                # partial dist that looks usable (tsconfig also sets noEmitOnError).
+                Remove-Item -LiteralPath (Join-Path $bridgeDir "dist") -Recurse -Force -ErrorAction SilentlyContinue
+                pnpm install --frozen-lockfile
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "pnpm install --frozen-lockfile failed in $bridgeDir"
+                    exit 1
+                }
+                pnpm build
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "pnpm build failed in $bridgeDir"
+                    exit 1
+                }
+            } finally {
+                Pop-Location
+            }
+            if (Get-Command node -ErrorAction SilentlyContinue) {
+                # Record the build inputs so the next start compares hashes, not mtimes.
+                node $bridgeFreshnessHelper write $bridgeDir | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Could not write the bridge build manifest; the next start falls back to the mtime check."
+                }
+            }
+            $bridgeProblem = Get-BridgeDistProblem -BridgeDir $bridgeDir
+            if ($bridgeProblem) {
+                Write-Error "The qoder bridge is still not fresh after a rebuild: $bridgeProblem"
                 exit 1
             }
-            pnpm build
-            if ($LASTEXITCODE -ne 0) {
-                Write-Error "pnpm build failed in $bridgeDir"
-                exit 1
-            }
-        } finally {
-            Pop-Location
-        }
-        $bridgeProblem = Get-BridgeDistProblem -BridgeDir $bridgeDir
-        if ($bridgeProblem) {
-            Write-Error "The qoder bridge is still not fresh after a rebuild: $bridgeProblem"
+            Write-Host "  qoder bridge rebuilt: dist/main.js is fresh." -ForegroundColor DarkGray
+        } else {
+            Write-Error ("The qoder bridge dist is not fresh and pnpm is not installed. Rebuild it manually (do not use npm or yarn):" +
+                "`n  cd $bridgeDir`n  pnpm install --frozen-lockfile`n  pnpm build")
             exit 1
         }
-        Write-Host "  qoder bridge rebuilt: dist/main.js is fresh." -ForegroundColor DarkGray
-    } else {
-        Write-Error ("The qoder bridge dist is not fresh and pnpm is not installed. Rebuild it manually (do not use npm or yarn):" +
-            "`n  cd $bridgeDir`n  pnpm install --frozen-lockfile`n  pnpm build")
-        exit 1
     }
 }
 foreach ($tool in @("gh", "jq")) {

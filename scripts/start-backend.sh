@@ -55,8 +55,99 @@ export ARIA_WORKSPACES_RUNTIME_ROOT="${workspace_roots%%|*}"
 export ARIA_WORKSPACES_RESULT_ROOT="${workspace_roots#*|}"
 echo "  Workspace runtime root: $ARIA_WORKSPACES_RUNTIME_ROOT"
 echo "  Workspace result root : $ARIA_WORKSPACES_RESULT_ROOT"
-if [ -z "${ARIA_CORES_QODER_BRIDGE_ENTRY:-}" ] && [ -f "$PROJECT_ROOT/packages/qoder-acp-bridge/dist/main.js" ]; then
-    export ARIA_CORES_QODER_BRIDGE_ENTRY="$PROJECT_ROOT/packages/qoder-acp-bridge/dist/main.js"
+
+# ── Qoder ACP bridge dist preflight (F31) ──
+# A stale packages/qoder-acp-bridge/dist after a merge makes the run-owned core fail
+# with "E_USAGE Unknown flag: --child-env-file" while the API surfaces only the generic
+# control-secret handshake failure. The check is gated on the qoder provider (the bridge
+# only runs for a qoder core): a fresh dist is left untouched, a stale one is rebuilt
+# when pnpm is available, otherwise the script stops with the exact commands.
+BRIDGE_DIR="$PROJECT_ROOT/packages/qoder-acp-bridge"
+BRIDGE_FRESHNESS_HELPER="$SCRIPT_DIR/lib/bridge-freshness.mjs"
+
+# Prints a reason and returns 0 when the bridge dist is stale/missing, or returns 1
+# when it is fresh. The shared node helper decides via the dist/.build-inputs hash
+# manifest when node is available; without node, or for a checkout that predates the
+# manifest, the legacy mtime comparison is the documented fallback.
+bridge_dist_problem() {
+    local dir="$1" reason="" status=0 newer=() file name joined=""
+    local dist_main="$dir/dist/main.js"
+
+    if [ ! -f "$dist_main" ]; then
+        printf 'dist/main.js is missing under %s\n' "$dir"
+        return 0
+    fi
+
+    if command -v node >/dev/null 2>&1 && [ -f "$BRIDGE_FRESHNESS_HELPER" ]; then
+        if reason="$(node "$BRIDGE_FRESHNESS_HELPER" check "$dir" 2>/dev/null)"; then
+            return 1
+        else
+            status=$?
+        fi
+        if [ "$status" -eq 1 ]; then
+            printf '%s\n' "$reason"
+            return 0
+        fi
+    fi
+
+    if [ -d "$dir/src" ]; then
+        while IFS= read -r -d '' file; do
+            if [ "$file" -nt "$dist_main" ]; then
+                newer+=("${file#"$dir"/}")
+            fi
+        done < <(find "$dir/src" -type f -print0)
+    fi
+    for name in package.json tsconfig.json pnpm-lock.yaml; do
+        if [ -f "$dir/$name" ] && [ "$dir/$name" -nt "$dist_main" ]; then
+            newer+=("$name")
+        fi
+    done
+    if [ "${#newer[@]}" -gt 0 ]; then
+        for file in "${newer[@]}"; do
+            if [ -z "$joined" ]; then joined="$file"; else joined="$joined, $file"; fi
+        done
+        printf 'dist/main.js is older than: %s\n' "$joined"
+        return 0
+    fi
+    return 1
+}
+
+if [ "$ADK_PROVIDER" = "qoder" ]; then
+    bridge_problem=""
+    if bridge_problem="$(bridge_dist_problem "$BRIDGE_DIR")"; then
+        echo "WARNING: the qoder bridge dist is not fresh: $bridge_problem"
+        if command -v pnpm >/dev/null 2>&1; then
+            echo "  Rebuilding the bridge: pnpm install --frozen-lockfile && pnpm build"
+            # Clear dist first: tsc writes into it, and a failed build must not leave a
+            # partial dist that looks usable (tsconfig also sets noEmitOnError).
+            rm -rf "$BRIDGE_DIR/dist"
+            if ! (cd "$BRIDGE_DIR" && pnpm install --frozen-lockfile && pnpm build); then
+                echo "ERROR: rebuilding the qoder bridge failed in $BRIDGE_DIR" >&2
+                exit 1
+            fi
+            # Record the build inputs so the next start compares hashes, not mtimes.
+            if command -v node >/dev/null 2>&1 && [ -f "$BRIDGE_FRESHNESS_HELPER" ]; then
+                if ! node "$BRIDGE_FRESHNESS_HELPER" write "$BRIDGE_DIR" >/dev/null; then
+                    echo "WARNING: could not write the bridge build manifest; the next start falls back to the mtime check."
+                fi
+            fi
+            if bridge_problem="$(bridge_dist_problem "$BRIDGE_DIR")"; then
+                echo "ERROR: the qoder bridge is still not fresh after a rebuild: $bridge_problem" >&2
+                exit 1
+            fi
+            echo "  qoder bridge rebuilt: dist/main.js is fresh."
+        else
+            echo "ERROR: the qoder bridge dist is not fresh and pnpm is not installed. Rebuild it manually (do not use npm or yarn):" >&2
+            echo "  cd $BRIDGE_DIR" >&2
+            echo "  pnpm install --frozen-lockfile" >&2
+            echo "  pnpm build" >&2
+            exit 1
+        fi
+    fi
+fi
+
+if [ -z "${ARIA_CORES_QODER_BRIDGE_ENTRY:-}" ] && [ -f "$BRIDGE_DIR/dist/main.js" ]; then
+    export ARIA_CORES_QODER_BRIDGE_ENTRY="$BRIDGE_DIR/dist/main.js"
 fi
 
 # Prerequisites check

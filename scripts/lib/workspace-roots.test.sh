@@ -74,5 +74,35 @@ else
     pass=$((pass + 1)); printf 'PASS: start-backend.sh no longer defaults inside the checkout\n'
 fi
 
+# 8. F31 wiring: both start scripts preflight the qoder bridge dist, gate it on the
+# qoder provider, clear dist before rebuilding, and keep tsc from leaving a partial
+# dist. The bridge freshness helper is shared by the two scripts.
+start_ps1="$SCRIPT_DIR/../start-backend.ps1"
+tsconfig="$SCRIPT_DIR/../../packages/qoder-acp-bridge/tsconfig.json"
+
+assert_contains() {
+    local file="$1" pattern="$2" label="$3"
+    if grep -qF "$pattern" "$file"; then
+        pass=$((pass + 1)); printf 'PASS: %s\n' "$label"
+    else
+        fail=$((fail + 1)); printf 'FAIL: %s\n' "$label" >&2
+    fi
+}
+
+assert_contains "$start_script" 'bridge-freshness.mjs' \
+    'start-backend.sh shares the bridge freshness helper'
+assert_contains "$start_script" 'ADK_PROVIDER" = "qoder"' \
+    'start-backend.sh gates the bridge preflight on the qoder provider'
+assert_contains "$start_script" 'rm -rf "$BRIDGE_DIR/dist"' \
+    'start-backend.sh removes dist before rebuilding'
+assert_contains "$start_ps1" 'bridge-freshness.mjs' \
+    'start-backend.ps1 shares the bridge freshness helper'
+assert_contains "$start_ps1" "AdkProvider -eq 'qoder'" \
+    'start-backend.ps1 gates the bridge preflight on the qoder provider'
+assert_contains "$start_ps1" 'Join-Path $bridgeDir "dist"' \
+    'start-backend.ps1 removes dist before rebuilding'
+assert_contains "$tsconfig" '"noEmitOnError": true' \
+    'the bridge tsconfig stops tsc from emitting on type errors'
+
 printf 'RESULT: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -187,6 +187,11 @@ public class CoreRuntimeConfiguration {
      * core session and before prompting, so a cancel that was recorded while the
      * run was still unregistered stops the core the launch started instead of
      * leaving it running behind a CANCELLED row (#111 fix round 2).
+     *
+     * <p>The run store's atomic cancellation writer is wired alongside it: a cancel
+     * that landed before the core handle existed was refused at request time but is
+     * settled CANCELLED by the in-flight launch once its abort verifies (F26), so
+     * the run no longer stays RUNNING until the operator cancels a second time.
      */
     @Bean
     @Primary
@@ -199,11 +204,12 @@ public class CoreRuntimeConfiguration {
             TaskDeadlineProperties taskDeadlines,
             io.aria.conductor.agent.repository.AgentRepository agentRepository,
             SessionTrajectoryRepository trajectoryRepository, CoreAdapters coreAdapters,
-            io.aria.conductor.agent.repository.RunRepository runs) {
+            io.aria.conductor.agent.repository.RunRepository runs,
+            io.aria.conductor.agent.service.RunCancellationWriter runCancellations) {
         return new CoreExecutionService(backends, workspaceService, runFinalizer, runRuntimeRegistry,
                 permissions, coreCredentials, actorTokens, bindings, runInputCoordinator,
                 eventPublisher, taskDeadlines, agentRepository, trajectoryRepository, coreAdapters,
-                committedStatusReader(runs));
+                committedStatusReader(runs), runCancellations);
     }
 
     /** The run row's committed status, read straight from the database (never a cached entity). */

@@ -16,6 +16,7 @@ import io.aria.conductor.common.runtime.ExecutionMode;
 import io.aria.conductor.common.runtime.WorkspaceKind;
 import io.aria.conductor.common.runtime.WorkspaceMode;
 import io.aria.conductor.agent.repository.AgentRepository;
+import io.aria.conductor.agent.service.RunCancellationWriter;
 import io.aria.conductor.execution.adk.TaskExecutionException;
 import io.aria.conductor.execution.approval.NativePermission;
 import io.aria.conductor.execution.approval.PermissionChoice;
@@ -164,6 +165,13 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * registry record.
      */
     private final RunStatusReader runStatusReader;
+    /**
+     * The run store's single atomic CANCELLED writer, or null in a wiring without the run store.
+     * The launch abort uses it to settle a run whose cancel could not be verified at request time
+     * (F26): only after the abort's stop is verified does the run record the terminal transition,
+     * using the same writer {@code RunService.cancelRun} uses once its stop verifies.
+     */
+    private final RunCancellationWriter runCancellations;
 
     /**
      * The bridge event telemetry sink (F17/F9), or null when this wiring serves no
@@ -274,8 +282,26 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             SessionTrajectoryRepository trajectories, CoreAdapters adapters,
             RunStatusReader runStatusReader) {
         this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                inputs, eventPublisher, taskDeadlines, agents, trajectories, adapters, runStatusReader, null);
+    }
+
+    /**
+     * The production constructor with both halves of the run store's terminal settlement: the
+     * committed-status reader and the atomic CANCELLED writer a verified launch abort uses to
+     * settle a request-time-refused launch-window cancel (F26). The run's own control timestamps,
+     * cleanup window and deadline scheduler keep their documented defaults.
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters,
+            RunStatusReader runStatusReader, RunCancellationWriter runCancellations) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
                 Clock.systemUTC(), Duration.ofMinutes(5), DEADLINES, inputs, eventPublisher, taskDeadlines,
-                agents, trajectories, adapters, runStatusReader);
+                agents, trajectories, adapters, runStatusReader, runCancellations);
     }
 
     /**
@@ -349,6 +375,27 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
             TaskDeadlineProperties taskDeadlines, AgentRepository agents,
             SessionTrajectoryRepository trajectories, CoreAdapters adapters,
             RunStatusReader runStatusReader) {
+        this(backends, workspaces, finalizer, runtimes, permissions, credentials, actorTokens, bindings,
+                clock, cleanupWindow, deadlines, inputs, eventPublisher, taskDeadlines, agents,
+                trajectories, adapters, runStatusReader, null);
+    }
+
+    /**
+     * The production constructor with both halves of the run store's terminal settlement wired: the
+     * committed-status reader ({@link #runStatusReader}) and the atomic CANCELLED writer
+     * ({@link #runCancellations}). The writer is what lets a verified launch abort settle a run
+     * CANCELLED after its request-time refusal (F26), instead of leaving it RUNNING until a second
+     * cancel.
+     */
+    public CoreExecutionService(ExecutionBackendRegistry backends, WorkspaceService workspaces,
+            RunFinalizer finalizer, RunRuntimeRegistry runtimes,
+            PermissionCoordinator permissions, CoreCredentialService credentials,
+            ActorTokenService actorTokens, RunExecutionBindingRepository bindings,
+            Clock clock, Duration cleanupWindow, ScheduledExecutorService deadlines,
+            RunInputCoordinator inputs, ApplicationEventPublisher eventPublisher,
+            TaskDeadlineProperties taskDeadlines, AgentRepository agents,
+            SessionTrajectoryRepository trajectories, CoreAdapters adapters,
+            RunStatusReader runStatusReader, RunCancellationWriter runCancellations) {
         this.backends = Objects.requireNonNull(backends, "Backend registry is required");
         this.workspaces = Objects.requireNonNull(workspaces, "Workspace service is required");
         this.finalizer = Objects.requireNonNull(finalizer, "Run finalizer is required");
@@ -367,6 +414,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
         this.trajectories = trajectories;
         this.adapters = adapters;
         this.runStatusReader = runStatusReader;
+        this.runCancellations = runCancellations;
     }
 
     /**
@@ -824,15 +872,68 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
      * Refuses a launch whose run already ended: the handle attached so far is stopped through the
      * verified abort path, destroyed and released, and the attempt never reaches a prompt. A stop
      * that cannot be verified keeps the fail-closed pending control {@link #abortLaunch} records.
+     *
+     * <p>F26: a cancel that landed before the core handle existed was honestly refused at request
+     * time (no writer stop could be proven) but left a launch-cancel request on this runtime. When
+     * this attempt's own abort proves the stop, the attempt settles the run CANCELLED in the same
+     * operation -- recording the state, revoking the run's authority and the termination identity,
+     * and committing the run store's terminal transition. The settlement is skipped when the abort
+     * did not verify the stop (the fail-closed pending control stands) and when the committed row
+     * is already terminal (another actor settled it; it is never relabelled).
      */
     private void requireLaunchNotTerminated(RunRuntimeRegistry.RunRuntime runtime, WorkspaceLease lease) {
         if (!launchWasTerminated(runtime)) {
             return;
         }
+        boolean launchCancel = runtime.launchCancelRequested();
+        boolean abortRanHere = false;
         if (!runtime.writersVerifiedStopped()) {
             abortLaunch(runtime, lease);
+            abortRanHere = true;
+        }
+        // Only this attempt's verified abort settles the cancel it refused earlier: a cancel whose
+        // own verified path already settled the run (the handle existed then) is not re-recorded.
+        if (launchCancel && abortRanHere && runtime.writersVerifiedStopped()
+                && committedRunStillLive(runtime.spec().runId())) {
+            settleCancelAfterVerifiedLaunchAbort(runtime);
         }
         throw new RunTerminatedDuringLaunchException(runtime.spec().runId());
+    }
+
+    /**
+     * True only when the run store's committed row is readable and not terminal. An absent reader
+     * (a wiring without the run store) or a row that already ended proves nothing, so the launch
+     * abort fails closed and records no second terminal transition.
+     */
+    private boolean committedRunStillLive(UUID runId) {
+        RunStatus committed = committedRunStatus(runId);
+        return committed != null && !TERMINAL_RUN_STATUSES.contains(committed);
+    }
+
+    /**
+     * The terminal settlement a refused launch-window cancel could not perform at request time,
+     * using the same verified transition a verified cancel records: the runtime is marked
+     * CANCELLED, the binding records the observed state, worker authority is revoked, the run's
+     * termination identity is recorded for the loop, and -- once the stop is proven -- the run
+     * store commits CANCELLED through its one atomic writer.
+     */
+    private void settleCancelAfterVerifiedLaunchAbort(RunRuntimeRegistry.RunRuntime runtime) {
+        UUID runId = runtime.spec().runId();
+        runtime.recordVerifiedStop(STATE_CANCELLED);
+        persistState(runtime, STATE_CANCELLED);
+        actorTokens.revokeRun(runId);
+        inputs.recordTerminationIntent(runId, runtime.launchCancelReason(),
+                runtime.launchCancelCode(), runtime.launchCancelSurface());
+        if (runCancellations != null) {
+            try {
+                runCancellations.cancel(runId);
+            } catch (RuntimeException e) {
+                // The core is stopped and the runtime record is settled either way; a run store
+                // that refuses the write (a race with another terminal writer) keeps its row.
+                log.warn("Run {}: the verified launch abort settled the runtime but the run store"
+                        + " refused the CANCELLED record: {}", runId, messageOf(e));
+            }
+        }
     }
 
     private void requireFrozenMatch(RunExecutionBinding binding, ExecutionSpec spec, CoreAdapter adapter) {
@@ -1206,7 +1307,7 @@ public class CoreExecutionService implements RuntimeActivity, PermissionReplySin
     private CompletionStage<ControlAck> cancelUnattachedLaunch(RunRuntimeRegistry.RunRuntime runtime,
             String reason, String code, String surface) {
         UUID runId = runtime.spec().runId();
-        runtime.requestLaunchCancel();
+        runtime.requestLaunchCancel(reason, code, surface);
         if (runtime.handle() == null) {
             recordPendingControl(runtime, ControlState.STOPPED, "Stop refused for run " + runId
                     + ": its run-owned core had not launched yet, so no writer stop can be proven;"

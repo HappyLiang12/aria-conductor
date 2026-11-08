@@ -129,6 +129,12 @@ class CoreExecutionServiceTest {
         int launchCalls;
         boolean destroyed;
         Runnable duringStopWriters;
+        /**
+         * Runs while {@code backend.launch} is still in flight -- before the handle is returned, so
+         * the runtime record carries no handle yet. This is the F26 window: a cancel landing here is
+         * refused and only the launch attempt's later abort can settle the run.
+         */
+        Runnable duringLaunch;
         /** Overridden per test: the round-trip migration pin needs a SANDBOX twin. */
         ExecutionMode declaredMode = ExecutionMode.HOST;
 
@@ -148,6 +154,9 @@ class CoreExecutionServiceTest {
         public RuntimeHandle launch(PreparedEnvironment environment, LaunchProfile profile) {
             recordedSteps.add("launch");
             launchCalls++;
+            if (duringLaunch != null) {
+                duringLaunch.run(); // the operator's cancel lands before this launch returns a handle
+            }
             return new RuntimeHandle(RUN, ExecutionMode.HOST, environment.environmentId(),
                     "run-owner-identity", environment.endpoint());
         }
@@ -1178,6 +1187,117 @@ class CoreExecutionServiceTest {
         assertThat(backend.stopProofs).isEmpty();
         assertThat(backend.destroyed).isFalse();
         assertThat(binding.getRuntimeState()).isNull();
+    }
+
+    /**
+     * F26: a cancel that lands before the core handle exists cannot prove a stop at request time and
+     * is honestly refused, but the in-flight launch it told to stop must settle the run CANCELLED
+     * as soon as its abort verifies -- no second cancel, and the run never stays RUNNING behind a
+     * stopped core.
+     */
+    @Test
+    void aCancelBeforeTheHandleExistsSettlesCancelledOnceTheLaunchAbortVerifies() {
+        java.util.concurrent.atomic.AtomicReference<RunStatus> committed =
+                new java.util.concurrent.atomic.AtomicReference<>(RunStatus.RUNNING);
+        CoreExecutionService runStoreAware = serviceWithRunStore(committed);
+        java.util.concurrent.atomic.AtomicReference<ControlAck> refused = new java.util.concurrent.atomic.AtomicReference<>();
+        // The cancel lands after the runtime registered and before backend.launch returned its
+        // handle: exactly the window the live run e02f5226 was cancelled in.
+        backend.duringLaunch = () -> {
+            refused.set(runStoreAware.cancel(RUN).toCompletableFuture().join());
+            assertThat(runStoreAware.pendingControl(RUN)).get()
+                    .extracting(RunRuntimeRegistry.ControlRequest::failureReason)
+                    .asString().contains("had not launched yet");
+        };
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(refused.get().verified()).isFalse();
+        assertThat(session.prompted).as("a launch cancelled before its handle existed never prompts").isNull();
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "stop-writers", "destroy", "release");
+        assertThat(backend.destroyed).isTrue();
+        assertThat(workspaces.releasedProof).isEqualTo(new StopProof(RUN, true));
+        assertThat(binding.getRuntimeState()).isEqualTo("CANCELLED/BACKEND_SUSPEND");
+        assertThat(committed.get()).as("the run store settles CANCELLED with the verified abort")
+                .isEqualTo(RunStatus.CANCELLED);
+        verify(actorTokens).revokeRun(RUN);
+        assertThat(runtimes.find(RUN)).isEmpty();
+    }
+
+    /**
+     * F26 fail-closed: when the launch abort's stop is not verified, the run is not settled -- it
+     * stays RUNNING, no CANCELLED is written, no authority is revoked and the pending control
+     * remains so the operator still sees the refusal.
+     */
+    @Test
+    void aLaunchAbortThatCannotVerifyItsStopLeavesTheRunRunningAndThePendingControl() {
+        java.util.concurrent.atomic.AtomicReference<RunStatus> committed =
+                new java.util.concurrent.atomic.AtomicReference<>(RunStatus.RUNNING);
+        CoreExecutionService runStoreAware = serviceWithRunStore(committed);
+        // Both bounded abort attempts refuse the stop proof.
+        backend.proofs.add(new StopProof(RUN, false));
+        backend.proofs.add(new StopProof(RUN, false));
+        backend.duringLaunch = () -> runStoreAware.cancel(RUN).toCompletableFuture().join();
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class)
+                .hasMessageContaining("already terminal");
+
+        assertThat(session.prompted).isNull();
+        assertThat(recordedSteps).containsExactly("acquire", "prepare", "launch-profile", "launch",
+                "stop-writers", "stop-writers");
+        assertThat(binding.getRuntimeState()).as("an unverified abort persists no CANCELLED").isNull();
+        assertThat(committed.get()).as("the run keeps RUNNING when the stop cannot be proven")
+                .isEqualTo(RunStatus.RUNNING);
+        assertThat(runtimes.find(RUN)).isPresent();
+        assertThat(runStoreAware.pendingControl(RUN)).get()
+                .extracting(RunRuntimeRegistry.ControlRequest::failureReason)
+                .asString().contains("were not verified stopped");
+        verify(actorTokens, never()).revokeRun(RUN);
+    }
+
+    /**
+     * F26 identity: the settlement records the cancel's own reason/code/surface, exactly as the
+     * verified cancel path does, so the run carries the operator's termination identity.
+     */
+    @Test
+    void aLaunchCancelCarriesItsReasonCodeAndSurfaceToTheSettlement() {
+        java.util.concurrent.atomic.AtomicReference<RunStatus> committed =
+                new java.util.concurrent.atomic.AtomicReference<>(RunStatus.RUNNING);
+        CoreExecutionService runStoreAware = serviceWithRunStore(committed);
+        backend.duringLaunch = () -> runStoreAware.cancel(RUN, "Operator cancelled the run",
+                "RUN_CANCELLED_BY_OPERATOR", "RUNTIME").toCompletableFuture().join();
+
+        assertThatThrownBy(() -> runStoreAware.openRuntime(spec(), adapter))
+                .isInstanceOf(RunTerminatedDuringLaunchException.class);
+
+        assertThat(coordinator.consumeTerminationFailure(RUN))
+                .isEqualTo(new RunInputCoordinator.TerminationFailure(
+                        "Operator cancelled the run", "RUN_CANCELLED_BY_OPERATOR", "RUNTIME"));
+    }
+
+    /**
+     * The coordinator whose run store reports (and, once settled, commits) one run status. The
+     * reader is the production seam for "what does the committed row say"; the settlement is the
+     * run store's atomic CANCELLED writer.
+     */
+    private CoreExecutionService serviceWithRunStore(
+            java.util.concurrent.atomic.AtomicReference<RunStatus> committed) {
+        io.aria.conductor.agent.service.RunCancellationWriter cancellations =
+                mock(io.aria.conductor.agent.service.RunCancellationWriter.class);
+        when(cancellations.cancel(RUN)).thenAnswer(invocation -> {
+            assertThat(committed.get()).as("the settlement writes only a non-terminal run")
+                    .isEqualTo(RunStatus.RUNNING);
+            committed.set(RunStatus.CANCELLED);
+            return null;
+        });
+        return new CoreExecutionService(new ExecutionBackendRegistry(List.of(backend)), workspaces,
+                new RunFinalizer(workspaces, CLOCK), runtimes, permissions, credentials, actorTokens, bindings,
+                CLOCK, Duration.ofMinutes(5), new ManualDeadlineScheduler(), coordinator, eventPublisher,
+                taskDeadlines, null, null, null, ignored -> committed.get(), cancellations);
     }
 
     /** The run store's control port over one real coordinator instance. */

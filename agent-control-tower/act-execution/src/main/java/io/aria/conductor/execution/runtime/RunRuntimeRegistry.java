@@ -47,6 +47,9 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
         private volatile CoreSession session;
         private volatile boolean writersVerifiedStopped;
         private volatile boolean launchCancelRequested;
+        private volatile String launchCancelReason;
+        private volatile String launchCancelCode;
+        private volatile String launchCancelSurface;
         private volatile ControlRequest pendingControl;
         private volatile String controlState = ControlState.RUNNING.name();
         private volatile boolean finalized;
@@ -112,6 +115,23 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
             return launchCancelRequested;
         }
 
+        /**
+         * The termination identity the launch cancel was issued with, recorded with the request so
+         * the launch attempt can settle the run with the operator's own reason/code/surface. Read
+         * only after {@link #launchCancelRequested()} is true (the volatile flag is stored last).
+         */
+        public String launchCancelReason() {
+            return launchCancelReason;
+        }
+
+        public String launchCancelCode() {
+            return launchCancelCode;
+        }
+
+        public String launchCancelSurface() {
+            return launchCancelSurface;
+        }
+
         /** The control state as last verified by the runtime (never an unverified request). */
         public String controlState() {
             return controlState;
@@ -161,9 +181,20 @@ public final class RunRuntimeRegistry implements RuntimeActivity {
          * Records the cancel of a run whose launch is still in flight, so the attempt stops what
          * it launched instead of prompting it. Kept separate from the verified-stop facts: this is
          * a request the in-flight attempt acts on, not a stop the backend confirmed.
+         *
+         * <p>The termination identity is stored before the flag, so an attempt that observes the
+         * request also observes the values it must settle the run with.
          */
-        void requestLaunchCancel() {
+        void requestLaunchCancel(String reason, String code, String surface) {
+            this.launchCancelReason = reason;
+            this.launchCancelCode = code;
+            this.launchCancelSurface = surface;
             this.launchCancelRequested = true;
+        }
+
+        /** Compatibility for callers with no termination identity to carry. */
+        void requestLaunchCancel() {
+            requestLaunchCancel(null, null, null);
         }
 
         void recordVerifiedControl(String state) {

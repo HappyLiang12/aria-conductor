@@ -9,6 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,5 +81,59 @@ class ToolRiskResolverTest {
     void requiresApprovalFalseForUnknownTool() {
         when(toolRepo.findByName("unknown")).thenReturn(Optional.empty());
         assertThat(resolver.requiresApproval("unknown")).isFalse();
+    }
+
+    // ------------------------------------------------- native ACP tools (F28)
+
+    @Test
+    void resolveReturnsDestructiveForNativeBashRegardlessOfCase() {
+        when(toolRepo.findByName("Bash")).thenReturn(Optional.empty());
+        when(toolRepo.findByName("bash")).thenReturn(Optional.empty());
+
+        assertThat(resolver.resolve("Bash")).isEqualTo(RiskTier.DESTRUCTIVE);
+        assertThat(resolver.resolve("bash")).isEqualTo(RiskTier.DESTRUCTIVE);
+    }
+
+    @Test
+    void resolveReturnsPushForNativeWriteAndEdit() {
+        when(toolRepo.findByName("Write")).thenReturn(Optional.empty());
+        when(toolRepo.findByName("Edit")).thenReturn(Optional.empty());
+
+        assertThat(resolver.resolve("Write")).isEqualTo(RiskTier.PUSH);
+        assertThat(resolver.resolve("Edit")).isEqualTo(RiskTier.PUSH);
+    }
+
+    @Test
+    void resolveReturnsReadForNativeReadOnlyTools() {
+        for (String tool : List.of("Read", "Glob", "Grep", "LS", "WebFetch", "WebSearch")) {
+            when(toolRepo.findByName(tool)).thenReturn(Optional.empty());
+            assertThat(resolver.resolve(tool)).as(tool).isEqualTo(RiskTier.READ);
+        }
+    }
+
+    @Test
+    void nativeToolNamesAreCaseInsensitive() {
+        when(toolRepo.findByName("BASH")).thenReturn(Optional.empty());
+        when(toolRepo.findByName("wEbFeTcH")).thenReturn(Optional.empty());
+
+        assertThat(resolver.resolve("BASH")).isEqualTo(RiskTier.DESTRUCTIVE);
+        assertThat(resolver.resolve("wEbFeTcH")).isEqualTo(RiskTier.READ);
+    }
+
+    @Test
+    void configuredRowStillOverridesTheNativeTier() {
+        ToolDefinition tool = ToolDefinition.builder().name("bash").riskTier(RiskTier.READ).build();
+        when(toolRepo.findByName("bash")).thenReturn(Optional.of(tool));
+
+        assertThat(resolver.resolve("bash")).isEqualTo(RiskTier.READ);
+    }
+
+    @Test
+    void requiresApprovalTrueForNativeDestructiveAndPushTools() {
+        when(toolRepo.findByName("Bash")).thenReturn(Optional.empty());
+        when(toolRepo.findByName("Write")).thenReturn(Optional.empty());
+
+        assertThat(resolver.requiresApproval("Bash")).isTrue();
+        assertThat(resolver.requiresApproval("Write")).isTrue();
     }
 }

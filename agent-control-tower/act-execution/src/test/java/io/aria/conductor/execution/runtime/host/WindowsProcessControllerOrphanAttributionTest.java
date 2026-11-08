@@ -590,8 +590,9 @@ class WindowsProcessControllerOrphanAttributionTest {
         try {
             String self = controller.supervisorCommand("self");
             assertThat(self)
-                    .as("the supervisor's own record names its live pid and creation ticks")
-                    .matches("\\d+@\\d+");
+                    .as("the supervisor's own record names the live supervision channel the"
+                            + " controller started")
+                    .startsWith(controller.supervisorPid() + "@");
             assertThat(controller.supervisorCommand("record " + self))
                     .as("a verifiable identity must still take the GetProcessTimes path and match")
                     .isEqualTo("match");

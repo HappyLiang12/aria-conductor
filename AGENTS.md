@@ -68,6 +68,7 @@ no removed provider to select.
 | Host backend process control (`runtime/host/`) | Orphaned core processes, unverified stop | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*Host*"` |
 | OpenCode sandbox / OpenSandbox | Sandbox creation failure, endpoint unreachable | `cd agent-control-tower && mvn test -pl act-execution -Dtest="*OpenCode*"` |
 | Container runtime selection (`scripts/lib/container-runtime.*`) | podman socket/config mismatch blocks opencode sandbox | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |
+| Start-script path resolution / bridge preflight (`scripts/lib/workspace-roots.sh`, `scripts/lib/startup-checks.ps1`) | Run roots land inside the checkout, or a stale qoder bridge dist fails the core at startup after a merge | `bash scripts/lib/workspace-roots.test.sh && pwsh -NoProfile -File scripts/lib/startup-checks.test.ps1` |
 
 ## Validation Command Mapping
 
@@ -82,6 +83,8 @@ no removed provider to select.
 | Core cutover contract checks | `node --test e2e/agent-core/cutover-contract.test.mjs` |
 | Full build (skip tests) | `cd agent-control-tower && mvn install -DskipTests` |
 | Container runtime scenario tests | `pwsh -NoProfile -File e2e/container-runtime-e2e.ps1 && bash e2e/container-runtime-e2e.sh` |
+| Start-script self-tests (bash) | `bash scripts/lib/workspace-roots.test.sh` |
+| Start-script self-tests (pwsh) | `pwsh -NoProfile -File scripts/lib/startup-checks.test.ps1` |
 
 ### Inner loop vs gate
 

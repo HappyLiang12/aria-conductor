@@ -5,7 +5,7 @@
   "scope": "Playwright specs under agent-control-tower/act-dashboard/e2e/ plus the LangChain/Python-dependent Java and CI test entry points that the cutover/removal tasks (T17-T20) affect. This is an inventory with replacement mapping, not a whole-repo test census.",
   "rule": "A spec or test entry may only be removed on cutover when its business purpose is carried by the mapped replacement. Credential-gated or disabled cases are listed explicitly in disabledOrGated; every retained business purpose there must land in a runnable deterministic replacement.",
   "notes": [
-    "Case-count rule (recount performed mechanically on 2026-09-23, fix round B, with a node script over the `path` values below): a `cases` value counts Playwright case declarations in the spec file text - a bare `test('...')` or a modifier declaration `test.skip('...')` / `test.fixme('...')` / `test.fail('...')` / `test.only('...')` / `test.slow('...')` whose first argument is a string literal, at any nesting depth. Cases inside `test.describe` and `test.describe.skip` suites are counted; a whole-file `test.describe.skip` makes every case in the file a disabled case but still counts it. Suites (`test.describe`, `test.describe.configure`) and hooks (`test.beforeEach/afterEach/beforeAll/afterAll`, `test.use`, `test.step`, `test.extend`) are not case declarations, and a runtime `test.skip(condition, '...')` inside a case body does not add a case. Recount total across the 62 specs: 245 case declarations; 15 entries disagreed with their previous value and were corrected."
+    "Case-count rule (recount performed mechanically on 2026-11-08 after adding pack-credential.api.spec.ts; previous recount 2026-09-23, fix round B): a `cases` value counts Playwright case declarations in the spec file text - a bare `test('...')` or a modifier declaration `test.skip('...')` / `test.fixme('...')` / `test.fail('...')` / `test.only('...')` / `test.slow('...')` whose first argument is a string literal, at any nesting depth. Cases inside `test.describe` and `test.describe.skip` suites are counted; a whole-file `test.describe.skip` makes every case in the file a disabled case but still counts it. Suites (`test.describe`, `test.describe.configure`) and hooks (`test.beforeEach/afterEach/beforeAll/afterAll`, `test.use`, `test.step`, `test.extend`) are not case declarations, and a runtime `test.skip(condition, '...')` inside a case body does not add a case. Recount total across the 63 specs: 248 case declarations (62 specs / 245 cases before the pack-credential addition)."
   ],
   "replacementArtifacts": {
     "coreExecutionModes": "agent-control-tower/act-dashboard/e2e/core-execution-modes.spec.ts (T17)",
@@ -368,6 +368,16 @@
       "replacement": "retained unchanged",
       "rationale": "Dashboard aggregation.",
       "status": "retain"
+    },
+    {
+      "id": "pw:pack-credential.api.spec.ts",
+      "path": "agent-control-tower/act-dashboard/e2e/pack-credential.api.spec.ts",
+      "cases": 6,
+      "purpose": "Pack credential storage and resolution path (API + UI): store, per-agent override, validation, GitCredentialCard UI store and empty-input validation.",
+      "runtimeAffected": true,
+      "replacement": "new spec covering the retained credential path after PR #109 deleted the governance specs",
+      "rationale": "The git handoff resolves its token from pack-git-0001 stored credentials; this spec closes the gap left by the deleted git-pack-governance.spec.ts (credential case only, not the retired registration/risk-tier assertions).",
+      "status": "new"
     },
     {
       "id": "pw:real-llm-scenarios.spec.ts",
@@ -1467,6 +1477,11 @@
       "agent-control-tower/act-dashboard/e2e/agent-dev-workflow-governance.spec.ts - trimmed to the approvals-API/Review-badge case (1 case)"
     ],
     "supersedes": "The perPurposeStatus and removalGate records above describe the cutover state at 2026-09-25/27. Their residuals for the three deleted specs are closed by retirement, not carried: no run-owned replacement exists for tool-pack registration, tool risk tiers or harness-profile tool removal.",
-    "retainedCoverage": "core-execution-modes.spec.ts, core-permissions.spec.ts and core-workspaces.spec.ts remain the run-owned coverage; the approvals enrichment case remains in agent-dev-workflow-governance.spec.ts."
+    "retainedCoverage": "core-execution-modes.spec.ts, core-permissions.spec.ts and core-workspaces.spec.ts remain the run-owned coverage; the approvals enrichment case remains in agent-dev-workflow-governance.spec.ts.",
+    "credentialGapClosed": {
+      "date": "2026-11-08",
+      "spec": "agent-control-tower/act-dashboard/e2e/pack-credential.api.spec.ts",
+      "scope": "The retained pack credential path (pack-git-0001 GITHUB_TOKEN storage and resolution) now has E2E coverage, closing the gap left by the deleted git-pack-governance.spec.ts. The deleted spec's credential case was absent; the new spec covers store, per-agent override, validation, and the GitCredentialCard UI."
+    }
   }
 }

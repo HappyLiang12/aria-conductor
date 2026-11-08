@@ -43,7 +43,25 @@ assert_eq '/srv/aria/runs|/home/test/.aria-conductor/workspaces/results' \
     "$(resolve_workspace_roots)" 'one operator root keeps the other default'
 unset ARIA_WORKSPACES_RUNTIME_ROOT
 
-# 5. The bash entry point consumes the helper; the old in-checkout literal is gone.
+# 5. Both operator roots are honored even when no default base exists (F30: no
+# LOCALAPPDATA and no HOME). The operator value always wins, so the base is not needed.
+assert_eq '/srv/aria/runs|/srv/aria/results' \
+    "$(LOCALAPPDATA='' HOME='' \
+        ARIA_WORKSPACES_RUNTIME_ROOT='/srv/aria/runs' \
+        ARIA_WORKSPACES_RESULT_ROOT='/srv/aria/results' \
+        resolve_workspace_roots)" \
+    'both operator roots, no base'
+
+# 6. With no base, an unset root is still an error: only a fully operator-provided
+# pair can skip the default base.
+if (LOCALAPPDATA='' HOME='' ARIA_WORKSPACES_RUNTIME_ROOT='/srv/aria/runs' \
+        ARIA_WORKSPACES_RESULT_ROOT='' resolve_workspace_roots) >/dev/null 2>&1; then
+    fail=$((fail + 1)); printf 'FAIL: missing result root without a base must fail\n' >&2
+else
+    pass=$((pass + 1)); printf 'PASS: missing result root without a base still fails\n'
+fi
+
+# 7. The bash entry point consumes the helper; the old in-checkout literal is gone.
 start_script="$SCRIPT_DIR/../start-backend.sh"
 if grep -q 'workspace-roots.sh' "$start_script"; then
     pass=$((pass + 1)); printf 'PASS: start-backend.sh sources the helper\n'

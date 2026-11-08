@@ -124,6 +124,9 @@ class WorkflowAutoChainerQaTreeGuardTest {
                 .contains("may be truncated")
                 .contains(GitHandoffMetadata.branchName(chain.getId()));
         verify(workflowService, never()).advanceWorkflow(any(), anyInt(), any());
+        verify(eventPublisher, never()).publishEvent(any(WorkflowAdvancedEvent.class));
+        verify(dodService, never()).review(anyString(), anyString(), anyString(), anyBoolean(),
+                any(), anyString(), anyString());
     }
 
     @Test

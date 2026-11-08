@@ -87,34 +87,46 @@ public final class ReportStepTreeGuard {
         // PASS for removals the report step never made. No report move, no guard.
         boolean reportTouched = diff.files().stream()
                 .anyMatch(file -> REPORT_PATH.equals(normalize(file.path())));
+        List<String> removals = diff.files().stream()
+                .filter(file -> file.type() == ChangeType.REMOVED)
+                .map(ChangedFile::path)
+                .toList();
+        List<String> outsideReport = removals.stream()
+                .filter(path -> !REPORT_PATH.equals(normalize(path)))
+                .toList();
         if (diff.files().size() >= GITHUB_FILE_LIST_LIMIT) {
             // GitHub returns at most 300 files for one commit. The incident commit
             // removed 300 files and added the report; the page held the removals but
             // not qa_report.md, so the report-touched branch never ran. The same cap
             // can hide removals when the report is present. A full page is therefore
             // ambiguous in both directions and the guard fails closed.
-            return Optional.of("QA report commit on branch '" + diff.branchName() + "' lists "
-                    + diff.files().size() + " changed files "
-                    + (reportTouched ? "including " : "but not ") + REPORT_PATH
-                    + "; GitHub caps a commit's file list at " + GITHUB_FILE_LIST_LIMIT
-                    + ", so this page may be truncated and its removals cannot be verified."
-                    + " Restore any files the step removed and commit ONLY " + REPORT_PATH
-                    + " with an explicit pathspec, then retry the step.");
+            StringBuilder reason = new StringBuilder("QA report commit on branch '")
+                    .append(diff.branchName()).append("' lists ")
+                    .append(diff.files().size()).append(" changed files ")
+                    .append(reportTouched ? "including " : "but not ").append(REPORT_PATH)
+                    .append("; GitHub caps a commit's file list at ").append(GITHUB_FILE_LIST_LIMIT)
+                    .append(", so this page may be truncated and its removals cannot be"
+                            + " verified.");
+            if (!removals.isEmpty()) {
+                reason.append(" The page shows ").append(removals.size()).append(" removal(s)");
+                if (!outsideReport.isEmpty()) {
+                    reason.append(", ").append(outsideReport.size()).append(" outside ")
+                            .append(REPORT_PATH).append(" (first: ").append(sample(outsideReport))
+                            .append(')');
+                }
+                reason.append('.');
+            }
+            reason.append(" Restore any files the step removed and commit ONLY ")
+                    .append(REPORT_PATH)
+                    .append(" with an explicit pathspec, then retry the step.");
+            return Optional.of(reason.toString());
         }
         if (!reportTouched) {
             return Optional.empty();
         }
-        List<String> removals = diff.files().stream()
-                .filter(file -> file.type() == ChangeType.REMOVED)
-                .map(ChangedFile::path)
-                .toList();
         if (removals.isEmpty()) {
             return Optional.empty();
         }
-
-        List<String> outsideReport = removals.stream()
-                .filter(path -> !REPORT_PATH.equals(normalize(path)))
-                .toList();
 
         if (outsideReport.isEmpty() && removals.size() <= MAX_REMOVALS) {
             return Optional.empty();

@@ -43,7 +43,9 @@ class ReportStepTreeGuardTest {
         assertThat(violation).isPresent();
         assertThat(violation.get())
                 .contains("may be truncated")
-                .contains("but not " + ReportStepTreeGuard.REPORT_PATH);
+                .contains("but not " + ReportStepTreeGuard.REPORT_PATH)
+                .contains("300 removal(s)")
+                .contains("File0.java");
     }
 
     @Test

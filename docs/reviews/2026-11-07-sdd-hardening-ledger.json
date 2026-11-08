@@ -538,5 +538,78 @@
     "QA prompt: name the repository's real test command and the -Djacoco.skip=true rule for filtered Maven runs",
     "exercise R5/R9 live on the next DEFECT round",
     "follow-up: act-app's CoreE2eQoderAdapter keeps an older copy of the CLI path resolution (flagged by the R10 lane)"
-  ]
+  ],
+  "round2_live_fixes": {
+    "date": "2026-11-08",
+    "branch": "fix/round2-live-findings",
+    "base": "9577fc99",
+    "source_findings": "docs/reviews/2026-11-08-live-sdd-round2-findings.md",
+    "findings": ["F25", "F26", "F27", "F28", "F29", "F30", "F31"],
+    "lanes": [
+      {
+        "lane": "A",
+        "findings": ["F25"],
+        "commits": ["4198cdd3", "ebdcbde6", "b9792062"],
+        "scope": "shared-job attribution: a second inventory after the attributed kill fails the proof closed on members it never decided; in-flight launches (assign -> registration) count as supervised so a stop cannot kill another run's launching root; the flipped integration test now asserts the writer is a real job member before the stop",
+        "red": "at 016ae487: WindowsProcessControllerOrphanAttributionTest 12 run / 2 failures -- a true proof over a member injected after the only inventory, and A's stop attributed and killed an in-flight B root (0 skipped; both fixtures are real OS processes with assign:ok)",
+        "green": "WindowsProcessControllerOrphanAttributionTest 12/0/0/0 (0 skipped); HostExecutionBackendIntegrationTest#stopAttributesAnOrphanedJobMemberToTheOnlySupervisedRunAndStopsIt 1/0/0/0; full HostExecutionBackendIntegrationTest 47/47 before integration"
+      },
+      {
+        "lane": "B",
+        "findings": ["F26", "F27", "F28", "F29"],
+        "commits": ["2576c21d", "a9d4eb5b", "8afe2a24", "4f31e734", "68ef9568"],
+        "scope": "F26: a binding-store failure during the settlement no longer escapes and re-enters abortLaunch; abortLaunch is idempotent after a verified stop; the dead no-arg requestLaunchCancel is removed. F27: the ServletException wrapper is kept because dropping it made the MVC slice answer 500 instead of 503 on the real dispatch path; its comments now describe the wrapper-first resolution, and a non-linkage ServletException keeps the generic 500. F28: a configured null-tier row resolves READ and wins over the native map. F29: the per-prompt report is a testable ReportedUsage value object and the unused total is gone.",
+        "red": "F26 settlement test failed with IllegalStateException 'binding store down' instead of RunTerminatedDuringLaunchException and the second abort produced 2 stop proofs; F28 null-tier bash resolved DESTRUCTIVE; F29 ReportedUsage did not exist (test-compile RED)",
+        "green": "CoreExecutionServiceTest 67/0, ToolRiskResolverTest 15/0, QoderCoreSessionReportedUsageTest 7/0; act-common GlobalExceptionHandler tests 36/0; full HostExecutionBackendIntegrationTest 47/47 for the F25 class was lane A"
+      },
+      {
+        "lane": "C",
+        "findings": ["F30", "F31", "self-tests-in-CI"],
+        "commits": ["784322c8", "68bcce37", "9ef81553", "535867e3", "e6fb6633"],
+        "scope": "both operator workspace roots are self-sufficient without LOCALAPPDATA/HOME; bash F31 parity and qoder-provider gating in both entry points; dist cleared before a rebuild and tsc noEmitOnError; dependency-free build-input hash manifest (dist/.build-inputs) with a documented mtime fallback; script self-tests wired into CI and AGENTS.md",
+        "green": "workspace-roots.test.sh 15 passed / 0 failed; startup-checks.test.ps1 38 assertions; bridge-freshness check/mutation/fallback cases covered by the 38; bash -n and git diff --check clean; YAML parsed with PyYAML"
+      }
+    ],
+    "independent_review": {
+      "date": "2026-11-08",
+      "head": "71bf48c2",
+      "verdict": "block",
+      "blocking": [
+        "F25 critical: only one job inventory -- an attributed member can spawn a job-inheriting child between that inventory and its death, and a clean unaccounted set then certifies a live writer stopped",
+        "F25 major: start() assigns the root to the shared job before registering it; a concurrent stop sees started.size()==1 and attributes/kills the in-flight run's root"
+      ],
+      "minors": [
+        "F25 flipped integration test ended with a vacuous close/kill-on-close assertion",
+        "F26 persistState and run-store failure paths, double-abort overlap, dead no-arg requestLaunchCancel",
+        "F27 redundant ServletException wrapper and the 'dashboard keys on code' comment",
+        "F28 configured null-tier row fell through to the native map",
+        "F29 unused reported total, no negative/precedence tests",
+        "F30 resolve_workspace_roots failed with operator-only roots and no base",
+        "F31 no .sh parity, mtime-only freshness, noEmitOnError, unconditional preflight",
+        "script self-tests were not in CI and not in the AGENTS validation mapping"
+      ],
+      "fixed_in": ["784322c8", "68bcce37", "9ef81553", "535867e3", "e6fb6633",
+                   "2576c21d", "a9d4eb5b", "8afe2a24", "4f31e734", "68ef9568",
+                   "ebdcbde6", "b9792062"],
+      "re_review": "pending at this ledger write"
+    },
+    "gate": {
+      "head": "b9792062",
+      "command": "cd agent-control-tower && mvn -B -pl act-execution,act-agent,act-aria,act-app -am verify -Dspring.profiles.active=h2",
+      "result": "BUILD SUCCESS (07:31), exit 0",
+      "totals": "2573 unit + 243 failsafe = 2816 tests, 0 failures, 0 errors, 14 skipped",
+      "per_module": "act-common 136, act-agent 312+13, act-execution 1336+94 (6 skipped), act-knowledge 263 (4 skipped)+12, act-dashboard-api 90, act-aria 187 (4 skipped), act-mcp 172+18, act-app 77+106",
+      "focused": "F25 12/0/0/0; flipped IT 1/0/0/0; F26-F29 89/0 + act-common 36/0; scripts 15 passed + 38 assertions",
+      "log": "/tmp/round2-review-full-gate.log (untracked local evidence)"
+    },
+    "residuals": [
+      "F25: a job-invisible writer (assign refused, breakaway child) remains outside the proof; the second inventory fails closed rather than re-killing a member it never decided; one extra job round trip per stop",
+      "F25: attribution is still forbidden while any other run or launch exists; that case stays fail-closed by design (per-run isolation ruling)",
+      "F26: a run-store refusal after a verified launch abort keeps the store row where it was and only logs; the core is stopped and the runtime is CANCELLED (fail-closed, not re-driven)",
+      "F27: the explicit ServletException wrapper is required on Spring 6.2 for the dispatch path (dropping it returns 500); a serialization-time Error outside the dispatcher was not re-exercised live",
+      "F29: terminal usage members must be JSON numbers; a present but non-numeric terminal member now yields null rather than a coerced value (no committed fixture is affected)",
+      "F31: the new CI job relies on the hosted runner preinstalling pwsh and node (INFERRED until the first hosted run); the ps1 rebuild path was not executed end-to-end locally",
+      "the round-2 live E2E was not rerun on this branch; the fixes are pinned by unit/real-OS/integration tests, and the live stack was left untouched this wave"
+    ]
+  }
 }
